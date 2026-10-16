@@ -10,77 +10,11 @@ jobs:
     env:
       W: https://dottie.vidershub.workers.dev
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Probe
+      - name: Search grounding on generateContent
         run: |
-          echo "== /health"; curl -sS -w '\nHTTP %{http_code}\n' "$W/health"
-          echo "== /config"; curl -sS -w '\nHTTP %{http_code}\n' "$W/config"
-          echo "== /live-token"; curl -sS -X POST -w '\nHTTP %{http_code}\n' "$W/live-token" | sed -E 's/"token":"[^"]+"/"token":"<redacted>"/'
-          echo "== /chat"; curl -sS -X POST -H 'content-type: application/json' -w '\nHTTP %{http_code}\n' "$W/chat" \
-            -d '{"contents":[{"role":"user","parts":[{"text":"Say hi in two words."}]}]}' | head -c 1500; echo
-          echo "== models"; curl -sS -H 'x-goog-api-key: x' "$W/gemini/v1beta/models?pageSize=1000" \
-            | grep -oE '"name": *"models/[^"]+"' | sed -E 's/.*models\///; s/"//' | sort | tr '\n' ' '; echo
-          echo "== models (bidi)"; curl -sS -H 'x-goog-api-key: x' "$W/gemini/v1beta/models?pageSize=1000" \
-            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);for(const m of j.models||[])if((m.supportedGenerationMethods||[]).includes("bidiGenerateContent"))console.log(m.name)}catch(e){console.log(s.slice(0,800))}})'
-      - name: Live session like the app
-        run: |
-          echo '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCADIAUADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD6pooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACisvWNW/s7UNDtfJ8z+07xrTdvx5eLeabdjHP+p244+9ntg5//CX2UN/q9texzRvY3gtEWCKS4kmH2eGYuEjUsAPOCnggYBz8wFAHSUVyWoeNIYLySO1t0u7fZpUkc6TYWRb66eAEcHhQu/r82ccda1tH8SaVrF1Jb6fctLKimQbonQSIG2l42YASLnjcpI5HPIoA16K4PSvH7/2Roeq+I9Pt9M07WbZZ7WWC7a5IdovNETr5ancVDY27slSOpGXa78TNI0tJWjgv7oR6feXzhLSVShtvL3RuCmUJ8wHLYAGCfvLkA7qiueHi/S1+0CWSbzIphEYYrWeSYfuo5fmjEe8YSVCeCF3AEg8DctLmG8tIbq1lSa3mRZI5EOVdWGQQe4INAEtFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAGH4n8OWniKXR/7QSCa1sLw3b288IlSb9xLEFIPAwZQ2cH7vvkctefC6wN/c3WnrpMIe5lmhtrjS0mt4Vkgt42Aj3KN262Vwwx95gQckn0WigDibvwKWYCz1BIY0ttLgRWtQcGxuTOhwrKMNuKlQBjgj0q34X8JSaLdWDz6gt1Bpli2nWEaweWY4GaMnzG3He2IohkBfunjmurooA86j+HV5NoGg6XqmtwzJoMcB05oLExbZ4QojmkBkbeQFxtBUYZvbEmo/DyfUDqU11q8f2vU7S/tLx0tCFYXMUEYMa7zs2C2i6ls/N0zkeg0UAefap8Ov7R1O41O4u9NuL+aZ5SLvTBPAu+3toXxG0n3t1qrK27gMVOep7fSbKPTNLs7GE5itYUgQ7VXIVQBwoAHToAB6VaooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//9k=' | base64 -d > frame.jpg
-          cat > live.mjs <<'JS'
-          import fs from "node:fs";
-          const W = process.env.W;
-          const [model, variant] = process.argv.slice(2);
-          const t = await (await fetch(W + "/live-token", { method: "POST" })).json(); t.model = model;
-          const url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token);
-          const obj = { type: "OBJECT" };
-          const setup = { setup: {
-            model: "models/" + t.model,
-            generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } },
-            systemInstruction: { parts: [{ text: "You are Dottie, a friendly screen companion. Keep answers short." }] },
-            tools: [
-              { functionDeclarations: [
-                { name: "point_at_element", description: "Point", parameters: { type: "OBJECT", properties: { x: { type: "INTEGER", description: "x" }, y: { type: "INTEGER", description: "y" }, label: { type: "STRING", description: "l" } }, required: ["x","y","label"] } },
-                { name: "send_to_higher_model", description: "Hand off", parameters: { type: "OBJECT", properties: { question: { type: "STRING", description: "q" } }, required: ["question"] } },
-                { name: "start_clicky_task", description: "Task", parameters: { type: "OBJECT", properties: { clicky_name: { type: "STRING", description: "n" }, task: { type: "STRING", description: "t" } }, required: ["task"] } }
-              ] },
-              { googleSearch: {} }
-            ],
-            realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            contextWindowCompression: { slidingWindow: {} },
-            sessionResumption: {}
-          } };
-          if (variant === "minimal") setup.setup = { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] } };
-          if (variant === "nosearch") setup.setup.tools = [setup.setup.tools[0]];
-          const ws = new WebSocket(url);
-          const send = (m) => ws.send(JSON.stringify(m));
-          const done = setTimeout(() => { console.log("timeout after 20s"); process.exit(0); }, 20000);
-          let audioBytes = 0, out = "";
-          ws.onopen = () => { console.log("== " + model + " " + variant); send(setup); };
-          ws.onmessage = async (e) => {
-            const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
-            const m = JSON.parse(s);
-            if (m.setupComplete) {
-              console.log("setupComplete");
-              send({ realtimeInput: { activityStart: {} } });
-              send({ realtimeInput: { video: { mimeType: "image/jpeg", data: fs.readFileSync("frame.jpg").toString("base64") } } });
-              send({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: Buffer.alloc(32000).toString("base64") } } });
-              send({ realtimeInput: { text: "What does my screen say?" } });
-              send({ realtimeInput: { activityEnd: {} } });
-              return;
-            }
-            const sc = m.serverContent;
-            if (sc?.modelTurn?.parts) for (const p of sc.modelTurn.parts) if (p.inlineData) audioBytes += p.inlineData.data.length;
-            if (sc?.outputTranscription?.text) out += sc.outputTranscription.text;
-            if (m.toolCall) console.log("toolCall", JSON.stringify(m.toolCall).slice(0, 300));
-            if (sc?.turnComplete) { console.log("turnComplete; audio b64 chars", audioBytes, "; said:", out); clearTimeout(done); ws.close(); return; }
-            if (!sc?.modelTurn && !sc?.outputTranscription) console.log("msg", s.slice(0, 300));
-          };
-          ws.onclose = (e) => { console.log("close", e.code, e.reason); process.exit(0); };
-          ws.onerror = (e) => console.log("error", e.message || e);
-          JS
-          for m in gemini-3.8-live gemini-3.1-flash-live-preview gemini-2.5-flash-native-audio-latest; do
-            for v in minimal nosearch full; do node live.mjs $m $v; sleep 1; done
+          for m in gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite; do
+            code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
+              "$W/gemini/v1beta/models/$m:generateContent" \
+              -d '{"contents":[{"role":"user","parts":[{"text":"What is the top headline on bbc.com right now? One sentence."}]}],"tools":[{"googleSearch":{}}]}')
+            echo "$m -> $code $(python3 -c "import json,sys;d=json.load(open('out.txt'));c=d.get('candidates',[{}])[0];print('ERR',d['error']['message'][:160]) if 'error' in d else print(''.join(p.get('text','') for p in c.get('content',{}).get('parts',[]) if not p.get('thought'))[:200].replace(chr(10),' '),'| grounded:', bool(c.get('groundingMetadata',{}).get('groundingChunks')))" 2>&1)"
           done
