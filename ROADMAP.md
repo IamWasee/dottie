@@ -59,7 +59,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Settings: on/off and a custom words list
 - ✅ Learn corrections automatically (`DictationCorrectionLearner`): after a paste, Dottie reads the field through Accessibility for 45 seconds. When you replace a dictated word with a similar one that isn't an everyday word (a name, a brand, jargon), it goes into a learned dictionary, the notch says "Added to your dictionary" with a Remove button, and later dictation is told the spelling. Settings lists the learned words
 - ✅ Language picker (`DictationLanguage`, `DictationLanguageCatalog`): auto-detect by default, or pin one of 50 languages in Settings; `/dictate` tells Gemini to write in it and never translate
-- ⬜ Streaming partial text
+- ✅ Streaming partial text (`DictationLiveTranscriber`): while you hold the dictation key, a listen-only Gemini Live session (turn opened, never closed, so it never answers) streams its transcript of the microphone into the notch. The typed text still comes from `/dictate`. Switch in Settings
 - ⬜ Try it for real on a Mac
 
 ## Phase 7: accounts and integrations (optional for a personal clone)

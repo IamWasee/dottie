@@ -150,9 +150,19 @@ struct NotchRootView: View {
     private var listeningContent: some View {
         HStack(spacing: 12) {
             NotchEyeView(mood: .listening)
-            Text(notchPresenter.activityLabel)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
+            // While dictating, the words heard so far replace the label; the
+            // tail stays visible as the line fills up.
+            if notchPresenter.liveCaptionText.isEmpty {
+                Text(notchPresenter.activityLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+            } else {
+                Text(notchPresenter.liveCaptionText)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.92))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
             Spacer(minLength: 0)
             NotchWaveformView(audioPowerLevel: notchPresenter.audioPowerLevel)
         }

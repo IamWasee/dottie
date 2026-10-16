@@ -254,6 +254,7 @@ private struct HomeSettingsView: View {
     @State private var isCheckingServer = false
     @AppStorage(DictationDictionary.learnsCorrectionsDefaultsKey) private var learnsDictationCorrections = true
     @AppStorage(DictationLanguageCatalog.autoDetectDefaultsKey) private var isDictationLanguageAutoDetected = true
+    @AppStorage(DictationLiveTranscriber.enabledDefaultsKey) private var showsDictationLiveText = true
     @AppStorage(DictationLanguageCatalog.languageCodeDefaultsKey) private var dictationLanguageCode = DictationLanguageCatalog.defaultLanguageCode
     @ObservedObject private var dictationDictionary = DictationDictionary.shared
 
@@ -354,6 +355,11 @@ private struct HomeSettingsView: View {
                             .font(.system(size: 12))
                     }
                     settingsHint("Hold the shortcut, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
+                    settingsRow(label: "Show my words in the notch as I speak") {
+                        Toggle("", isOn: $showsDictationLiveText)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
                     settingsRow(label: "Detect the language automatically") {
                         Toggle("", isOn: $isDictationLanguageAutoDetected)
                             .labelsHidden()
