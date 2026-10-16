@@ -219,6 +219,9 @@ private struct HomeSettingsView: View {
     @ObservedObject var conversationStore: ConversationStore
 
     private let availableVoiceNames = ["Kore", "Puck", "Aoede", "Charon", "Fenrir", "Leda", "Orus", "Zephyr"]
+    private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
+    // Same key ClickyComputerUse.isAlwaysAllowed reads.
+    @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
 
     var body: some View {
         ScrollView {
@@ -265,6 +268,21 @@ private struct HomeSettingsView: View {
                         .toggleStyle(.switch)
                     }
                     settingsHint("With the cursor off, it only appears while you're talking to Clicky.")
+                }
+
+                settingsGroup(title: "Using your Mac") {
+                    settingsRow(label: "Computer-use driver") {
+                        Text(isCuaDriverInstalled ? "Installed" : "Not installed")
+                            .foregroundColor(isCuaDriverInstalled ? DS.Colors.textSecondary : DS.Colors.warningText)
+                    }
+                    settingsRow(label: "Let Clickys click and type without asking") {
+                        Toggle("", isOn: $isComputerUseAlwaysAllowed)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    settingsHint(isCuaDriverInstalled
+                        ? "Clickys can always look at your apps. With this off, they ask in the notch before they click or type."
+                        : "Clickys operate apps through cua-driver. Install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
                 }
 
                 settingsGroup(title: "Connection") {

@@ -17,6 +17,7 @@ The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — 
 - **Voice companion (live mode, default)**: Gemini Live (`gemini-3.8-live`) over a WebSocket opened with a single-use ephemeral token from the Worker. Manual activity detection: hotkey press sends `activityStart` + a JPEG frame, release sends `activityEnd`. Output is 24kHz PCM played as it streams. Pointing is the `point_at_element` tool (0–1000 coordinates on the frame).
 - **Classic mode (`CompanionVoiceMode=classic`)**: Apple Speech → Gemini Flash vision (SSE via Worker `/chat`) → Gemini TTS (Worker `/tts`), with v0's `[POINT:]` tags
 - **Background agents ("Clickys")**: each agent turn runs Google's Gemini CLI headless (`gemini -p … -o stream-json --approval-mode yolo`, `--session-id` then `--resume`) in the agent's folder under `~/Library/Application Support/ClickyClone/Clickys/<slug>/`. `GOOGLE_GEMINI_BASE_URL` points it at the Worker's `/gemini` passthrough and `GEMINI_CLI_HOME` at a clone-owned `.cli-home`, so the user's own `~/.gemini` is untouched. Live hands work over with the `start_clicky_task` tool; results show as a notch card.
+- **Computer use**: when `cua-driver` is installed, it's registered in Gemini CLI's settings as the `computer-use` MCP server (`cua-driver mcp --direct --embedded`, so it inherits the app's permissions). Each turn sets `CLICKY_CUA_POLICY_FILE` to a look-only or look-and-act policy; act is used only for turns the user allowed or with "Always allow". Agents ask with a `<COMPUTER_USE_REQUEST>` block, which becomes an Allow / Always / Not now card.
 - **Model names**: set on the Worker in `wrangler.toml` `[vars]`, not in the app
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
@@ -39,7 +40,7 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 Worker secrets: `GEMINI_API_KEY`, optional `APP_SHARED_SECRET` (checked against the `x-clicky-secret` header)
 Worker vars: `GEMINI_LIVE_MODEL`, `GEMINI_CHAT_MODEL`, `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`
 
-App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionVoiceMode`, `OnboardingVideoURL`, `PostHogAPIKey`, optional `GeminiCLIPath` and `GeminiAgentModel`
+App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionVoiceMode`, `OnboardingVideoURL`, `PostHogAPIKey`, optional `GeminiCLIPath`, `GeminiAgentModel` and `CuaDriverPath`
 
 ### Key Architecture Decisions
 
@@ -73,6 +74,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
 | `GeminiCLIAgentRuntime.swift` | ~330 | Finds and runs Gemini CLI for one agent turn, parses its stream-json events, stops turns. |
 | `ClickyRoster.swift` | ~350 | The agents: roster, workspaces (`AGENTS.md`, `output/`, `tmp/`), transcripts, sending messages, finish callbacks. |
+| `ClickyComputerUse.swift` | ~220 | Computer use: finds cua-driver, writes its look-only and look-and-act policies, the MCP server entry, the shared agent instructions, and parses permission requests. |
 | `HomeClickysView.swift` | ~400 | Home → Clickys: agent list, new Clicky form, chat with tool activity. |
 | `ConversationStore.swift` | ~85 | Persists the conversation shown on Home as JSON in Application Support. |
 | `ClickyWorkerConfiguration.swift` | ~45 | Reads the Worker URL and shared secret from Info.plist; adds the auth header. |

@@ -41,6 +41,9 @@ final class NotchPresenter: ObservableObject {
     /// Who the card is from when it isn't Clicky itself (a background
     /// Clicky reporting back). Nil for normal answers.
     @Published private(set) var lastResponseTitle: String?
+    /// Set when the card is a background Clicky asking to use the Mac; the
+    /// card then shows Allow / Always / Not now.
+    @Published private(set) var computerUseRequestAgentID: UUID?
     @Published var draftText = ""
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
@@ -49,10 +52,11 @@ final class NotchPresenter: ObservableObject {
     /// Set by CompanionManager.
     var onSubmitTypedMessage: ((String) -> Void)?
     var onOpenHome: (() -> Void)?
+    var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
     /// Agent reports that arrived while the notch was busy with a voice turn.
-    private var pendingAgentUpdates: [(title: String, text: String)] = []
+    private var pendingAgentUpdates: [(title: String, text: String, computerUseRequestAgentID: UUID?)] = []
 
     // MARK: - Inputs from the companion
 
@@ -87,6 +91,7 @@ final class NotchPresenter: ObservableObject {
         }
         lastResponseText = trimmedResponseText
         lastResponseTitle = nil
+        computerUseRequestAgentID = nil
         surface = .textResponse
         startAutoDismiss()
     }
@@ -99,11 +104,18 @@ final class NotchPresenter: ObservableObject {
 
     /// A background Clicky finished. Shown as a card right away if the notch
     /// is free, otherwise after the current voice turn.
-    func showAgentUpdate(title: String, text: String) {
+    func showAgentUpdate(title: String, text: String, computerUseRequestAgentID: UUID? = nil) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
-        pendingAgentUpdates.append((title: title, text: trimmedText))
+        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: computerUseRequestAgentID))
         showNextPendingAgentUpdateIfIdle()
+    }
+
+    func answerComputerUseRequest(isAllowed: Bool, alwaysAllow: Bool = false) {
+        guard let agentID = computerUseRequestAgentID else { return }
+        computerUseRequestAgentID = nil
+        onAnswerComputerUseRequest?(agentID, isAllowed, alwaysAllow)
+        collapse()
     }
 
     private func showNextPendingAgentUpdateIfIdle() {
@@ -111,8 +123,13 @@ final class NotchPresenter: ObservableObject {
         let nextUpdate = pendingAgentUpdates.removeFirst()
         lastResponseText = nextUpdate.text
         lastResponseTitle = nextUpdate.title
+        computerUseRequestAgentID = nextUpdate.computerUseRequestAgentID
         surface = .textResponse
         startAutoDismiss()
+        // A permission question waits for an answer instead of timing out.
+        if nextUpdate.computerUseRequestAgentID != nil {
+            isAutoDismissPaused = true
+        }
     }
 
     // MARK: - User actions
