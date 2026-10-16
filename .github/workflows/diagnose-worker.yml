@@ -10,11 +10,15 @@ jobs:
     env:
       W: https://dottie.vidershub.workers.dev
     steps:
-      - name: Search grounding on generateContent
+      - name: URL context on generateContent
         run: |
           for m in gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite; do
             code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
               "$W/gemini/v1beta/models/$m:generateContent" \
-              -d '{"contents":[{"role":"user","parts":[{"text":"What is the top headline on bbc.com right now? One sentence."}]}],"tools":[{"googleSearch":{}}]}')
+              -d '{"contents":[{"role":"user","parts":[{"text":"Read https://en.wikipedia.org/wiki/Special:Random and tell me its title."}]}],"tools":[{"urlContext":{}}]}')
             echo "$m -> $code $(python3 -c "import json,sys;d=json.load(open('out.txt'));c=d.get('candidates',[{}])[0];print('ERR',d['error']['message'][:160]) if 'error' in d else print(''.join(p.get('text','') for p in c.get('content',{}).get('parts',[]) if not p.get('thought'))[:200].replace(chr(10),' '),'| grounded:', bool(c.get('groundingMetadata',{}).get('groundingChunks')))" 2>&1)"
           done
+      - name: DuckDuckGo html
+        run: |
+          curl -sS -A 'Mozilla/5.0' -w '\nHTTP %{http_code}\n' 'https://html.duckduckgo.com/html/?q=bbc+news+today' -o ddg.html; grep -c 'result__a' ddg.html || true; grep -o 'class="result__a"[^>]*>[^<]*' ddg.html | head -3
+          curl -sS -w '\nHTTP %{http_code}\n' 'https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=gemini+live&format=json&srlimit=2' | head -c 300; echo
