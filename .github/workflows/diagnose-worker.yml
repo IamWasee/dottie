@@ -1,24 +1,27 @@
 name: Diagnose Worker
-# Temporary: checks the deployed Worker and Gemini from a GitHub runner.
+# Temporary: runs the voice-web-search Worker locally and tries /search.
 on:
   push:
     branches: [diagnose-worker]
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      W: https://dottie.vidershub.workers.dev
+    timeout-minutes: 8
     steps:
-      - name: URL context on generateContent
+      - uses: actions/checkout@v4
+        with:
+          ref: voice-web-search
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Search through a local Worker
+        working-directory: worker
         run: |
-          for m in gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite; do
-            code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
-              "$W/gemini/v1beta/models/$m:generateContent" \
-              -d '{"contents":[{"role":"user","parts":[{"text":"Read https://en.wikipedia.org/wiki/Special:Random and tell me its title."}]}],"tools":[{"urlContext":{}}]}')
-            echo "$m -> $code $(python3 -c "import json,sys;d=json.load(open('out.txt'));c=d.get('candidates',[{}])[0];print('ERR',d['error']['message'][:160]) if 'error' in d else print(''.join(p.get('text','') for p in c.get('content',{}).get('parts',[]) if not p.get('thought'))[:200].replace(chr(10),' '),'| grounded:', bool(c.get('groundingMetadata',{}).get('groundingChunks')))" 2>&1)"
+          npm ci --silent
+          (npx wrangler dev --port 8787 > dev.log 2>&1 &)
+          for i in $(seq 1 60); do curl -s localhost:8787/health >/dev/null && break; sleep 1; done
+          for q in "bbc news today" "weather in London" "latest swift version" "xqzv nonsense qqq"; do
+            echo "== $q"
+            curl -sS -G --data-urlencode "q=$q" localhost:8787/search | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("source",j.source,"results",(j.results||[]).length);for(const r of (j.results||[]).slice(0,3))console.log(" -",r.title,"|",r.url,"|",r.snippet.slice(0,90));console.log(" top:",j.topPage?j.topPage.url+" "+j.topPage.text.length+" chars: "+j.topPage.text.slice(0,200):"none")})'
           done
-      - name: DuckDuckGo html
-        run: |
-          curl -sS -A 'Mozilla/5.0' -w '\nHTTP %{http_code}\n' 'https://html.duckduckgo.com/html/?q=bbc+news+today' -o ddg.html; grep -c 'result__a' ddg.html || true; grep -o 'class="result__a"[^>]*>[^<]*' ddg.html | head -3
-          curl -sS -w '\nHTTP %{http_code}\n' 'https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=gemini+live&format=json&srlimit=2' | head -c 300; echo
+          tail -5 dev.log
