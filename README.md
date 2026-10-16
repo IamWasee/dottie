@@ -68,6 +68,8 @@ Dots can always look at your apps, but they ask before they click or type: an Al
 
 To have a Dot repeat a task, just say how often ("check my repos for new issues every morning"). It does the task once and sets up a routine; each later run's answer lands in its chat and the notch. Routines run while your Mac is awake and Dottie is open, and you can run, pause or delete them from the Dot's chat.
 
+The notch keeps you posted: a blue light pulses beside it while a Dot works, and a number shows how many have something new. Hover the notch to see each Dot's latest line, and click one to open its chat.
+
 Skills are saved instructions a Dot follows when a task calls for them, like your report format or the steps of a chore. Make them in Home → Skills, add a skill folder you downloaded, or tell a Dot "remember how to do this" and it saves one itself. Turn skills on per Dot from the ✨ menu in its chat.
 
 ### 3. Build and run

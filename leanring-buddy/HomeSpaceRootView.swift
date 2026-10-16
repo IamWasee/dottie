@@ -56,6 +56,12 @@ struct HomeSpaceRootView: View {
         }
         .background(DS.Colors.background)
         .preferredColorScheme(.dark)
+        .onReceive(clickyRoster.$agentIDRequestedInHome) { requestedAgentID in
+            // The notch asked to show a Dot; HomeClickysView selects it.
+            if requestedAgentID != nil {
+                selectedSection = .clickys
+            }
+        }
     }
 
     private var iconRail: some View {

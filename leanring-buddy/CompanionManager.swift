@@ -110,6 +110,7 @@ final class CompanionManager: ObservableObject {
     /// Hold right Option to dictate into any app.
     let dictationController = ClickyDictationController()
     private var dictationCancellables: Set<AnyCancellable> = []
+    private var clickyRosterCancellable: AnyCancellable?
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
     private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
@@ -991,6 +992,22 @@ final class CompanionManager: ObservableObject {
             self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
         }
 
+        // objectWillChange fires before the change lands; hopping to the
+        // next main-queue turn reads the new values.
+        clickyRosterCancellable = clickyRoster.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateNotchDotSummaries()
+            }
+        updateNotchDotSummaries()
+
+        notchPresenter.onOpenDot = { [weak self] agentID in
+            guard let self else { return }
+            self.clickyRoster.requestShowInHome(agentID: agentID)
+            self.notchPresenter.isHovering = false
+            self.openHomeWindow()
+        }
+
         notchPresenter.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed, alwaysAllow in
             guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
             if isAllowed {
@@ -999,6 +1016,55 @@ final class CompanionManager: ObservableObject {
                 self.clickyRoster.declineComputerUse(for: requestingAgent)
             }
         }
+    }
+
+    /// What the notch shows about the Dots: working ones first, then ones
+    /// with something new, then the most recently active.
+    private func updateNotchDotSummaries() {
+        let dotSummaries = clickyRoster.agents.map { agent -> NotchDotSummary in
+            let status: NotchDotSummary.Status
+            if clickyRoster.isRunning(agent) {
+                status = .working
+            } else if agent.hasUnreadReply == true {
+                status = .hasNew
+            } else {
+                status = .idle
+            }
+            return NotchDotSummary(
+                id: agent.id,
+                name: agent.name,
+                status: status,
+                lastLine: notchLastLine(for: agent, status: status)
+            )
+        }
+        let statusOrder: [NotchDotSummary.Status: Int] = [.working: 0, .hasNew: 1, .idle: 2]
+        let lastActivityByAgentID = Dictionary(uniqueKeysWithValues: clickyRoster.agents.map { ($0.id, $0.lastActivityAt) })
+        let sortedDotSummaries = dotSummaries.sorted { firstSummary, secondSummary in
+            let firstOrder = statusOrder[firstSummary.status] ?? 2
+            let secondOrder = statusOrder[secondSummary.status] ?? 2
+            if firstOrder != secondOrder { return firstOrder < secondOrder }
+            return (lastActivityByAgentID[firstSummary.id] ?? .distantPast) > (lastActivityByAgentID[secondSummary.id] ?? .distantPast)
+        }
+        if sortedDotSummaries != notchPresenter.dotSummaries {
+            notchPresenter.dotSummaries = sortedDotSummaries
+        }
+    }
+
+    private func notchLastLine(for agent: ClickyAgent, status: NotchDotSummary.Status) -> String {
+        let transcript = clickyRoster.transcriptsByAgentID[agent.id] ?? []
+        if status == .working {
+            // While working, the latest tool it ran says the most.
+            if let latestTool = transcript.last(where: { $0.kind == .tool }) {
+                return latestTool.text
+            }
+            return "working…"
+        }
+        let latestItem = transcript.last { $0.kind == .assistant || $0.kind == .error || $0.kind == .computerUseRequest }
+        guard let latestItem else { return agent.purpose.isEmpty ? "no work yet" : agent.purpose }
+        let firstLine = latestItem.text
+            .components(separatedBy: .newlines)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        return latestItem.kind == .computerUseRequest ? "wants to use your Mac" : firstLine
     }
 
     // MARK: - Notch and Typed Messages
