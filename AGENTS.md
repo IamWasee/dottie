@@ -95,6 +95,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | On-device transcription backed by Apple's Speech framework (classic mode). |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~300 | System-wide shortcut monitor. Owns the `CGEvent` tap, holds the current talk and dictation shortcuts, and publishes press/release transitions. |
+| `ClickyNotifications.swift` | ~170 | macOS notifications for Dots: one per Dot (replaced by its next reply, cleared once read), Allow / Don't Allow buttons for computer-use requests, clicks open the Dot in Home. |
 | `ClickyHotkeys.swift` | ~400 | `ClickyHotkey` (a shortcut, its matching and display), `ClickyHotkeyRecorder`, and the Settings recorder field. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |

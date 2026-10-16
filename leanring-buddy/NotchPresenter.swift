@@ -163,6 +163,15 @@ final class NotchPresenter: ObservableObject {
         collapse()
     }
 
+    /// The question was answered somewhere else (a notification button), so
+    /// stop asking it here.
+    func dropComputerUseRequest(forAgentID agentID: UUID) {
+        pendingAgentUpdates.removeAll { $0.computerUseRequestAgentID == agentID }
+        guard computerUseRequestAgentID == agentID else { return }
+        computerUseRequestAgentID = nil
+        collapse()
+    }
+
     private func showNextPendingAgentUpdateIfIdle() {
         guard surface == .compact, !pendingAgentUpdates.isEmpty else { return }
         let nextUpdate = pendingAgentUpdates.removeFirst()

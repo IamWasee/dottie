@@ -244,6 +244,7 @@ private struct HomeSettingsView: View {
     @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
     // Same keys ClickyDictationController reads.
     @AppStorage("clickyDictationEnabled") private var isDictationEnabled = true
+    @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true
     @AppStorage(ClickyDictationController.customWordsDefaultsKey) private var dictationCustomWords = ""
 
     var body: some View {
@@ -314,6 +315,12 @@ private struct HomeSettingsView: View {
                         .toggleStyle(.switch)
                     }
                     settingsHint("With the cursor off, it only appears while you're talking to Dottie.")
+                    settingsRow(label: "Notify me when a Dot finishes or needs me") {
+                        Toggle("", isOn: $areDotNotificationsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    settingsHint("Shown while you're in another app. Click one to open that Dot; a request to use your Mac can be answered right from it.")
                 }
 
                 settingsGroup(title: "Dictation") {
