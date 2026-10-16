@@ -135,4 +135,16 @@ enum ClickyAnalytics {
             "error": error
         ])
     }
+
+    // MARK: - Clone additions
+
+    /// User pressed Escape to cut the companion off mid-answer.
+    static func trackEscapeInterrupt() {
+        capture("escape_interrupt")
+    }
+
+    /// Gemini Live handed a question to the stronger model.
+    static func trackHigherModelHandoff() {
+        capture("send_to_higher_model")
+    }
 }

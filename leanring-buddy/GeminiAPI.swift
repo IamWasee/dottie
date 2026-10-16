@@ -18,6 +18,7 @@ final class GeminiAPI {
 
     private let apiURL: URL
     /// Optional model override. nil means "use the Worker's GEMINI_CHAT_MODEL".
+    /// The Worker also understands the alias "higher" (GEMINI_HIGHER_MODEL).
     var model: String?
     private let session: URLSession
 
@@ -86,7 +87,8 @@ final class GeminiAPI {
         systemPrompt: String,
         conversationHistory: [(userPlaceholder: String, assistantResponse: String)],
         userPrompt: String,
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        modelOverride: String?
     ) -> [String: Any] {
         // Gemini calls the assistant role "model".
         var contents: [[String: Any]] = []
@@ -113,8 +115,8 @@ final class GeminiAPI {
             "contents": contents,
             "generationConfig": ["maxOutputTokens": maxOutputTokens]
         ]
-        if let model {
-            body["model"] = model
+        if let requestedModel = modelOverride ?? model {
+            body["model"] = requestedModel
         }
         return body
     }
@@ -126,6 +128,8 @@ final class GeminiAPI {
         systemPrompt: String,
         conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
         userPrompt: String,
+        modelOverride: String? = nil,
+        maxOutputTokens: Int = 1024,
         onTextChunk: @MainActor @Sendable (String) -> Void
     ) async throws -> (text: String, duration: TimeInterval) {
         let startTime = Date()
@@ -136,7 +140,8 @@ final class GeminiAPI {
             systemPrompt: systemPrompt,
             conversationHistory: conversationHistory,
             userPrompt: userPrompt,
-            maxOutputTokens: 1024
+            maxOutputTokens: maxOutputTokens,
+            modelOverride: modelOverride
         )
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData

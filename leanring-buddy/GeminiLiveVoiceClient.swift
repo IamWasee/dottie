@@ -61,6 +61,9 @@ final class GeminiLiveVoiceClient {
     var onUserTranscriptUpdate: (@MainActor (String) -> Void)?
     /// Something went wrong mid-turn (network, auth, server closed).
     var onTurnError: (@MainActor (Error) -> Void)?
+    /// The model handed a question to a stronger model (send_to_higher_model).
+    /// Returns the text Live should speak. Runs while Live waits.
+    var onHigherModelRequest: (@MainActor (_ question: String) async -> String)?
 
     // MARK: - Configuration
 
@@ -102,6 +105,11 @@ final class GeminiLiveVoiceClient {
     private(set) var isModelTurnInProgress = false
     /// Set when the server sends goAway mid-turn: close as soon as the turn ends.
     private var shouldDisconnectAfterCurrentTurn = false
+    /// Set by Escape: drop the rest of this answer's audio until the turn ends.
+    private var isDiscardingModelAudioForCurrentTurn = false
+    /// Tool calls still being worked on (e.g. a higher-model request). The
+    /// response watchdog stays quiet while any are pending.
+    private var pendingFunctionCallTasks: [String: Task<Void, Never>] = [:]
 
     init() {
         let configuration = URLSessionConfiguration.default
@@ -120,6 +128,8 @@ final class GeminiLiveVoiceClient {
         currentTurnUserTranscript = ""
         currentTurnModelTranscript = ""
         hasModelStartedSpeakingThisTurn = false
+        isDiscardingModelAudioForCurrentTurn = false
+        cancelPendingFunctionCalls()
         isUserTurnOpen = true
         isModelTurnInProgress = true
 
@@ -182,12 +192,23 @@ final class GeminiLiveVoiceClient {
         audioPlayer.stopImmediately()
     }
 
+    /// Escape pressed: silence the current answer and ignore whatever audio
+    /// is still in flight for it. The session stays open; the turn finishes
+    /// quietly on the server side.
+    func cancelCurrentModelResponse() {
+        isDiscardingModelAudioForCurrentTurn = true
+        cancelPendingFunctionCalls()
+        audioPlayer.stopImmediately()
+    }
+
     var isModelAudioPlaying: Bool {
         audioPlayer.isPlaying
     }
 
     func disconnect() {
         cancelIdleDisconnect()
+        cancelPendingFunctionCalls()
+        responseWatchdogTask?.cancel()
         connectionTask?.cancel()
         connectionTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
@@ -272,7 +293,10 @@ final class GeminiLiveVoiceClient {
             ],
             "systemInstruction": ["parts": [["text": composeSystemInstruction()]]],
             "tools": [
-                ["functionDeclarations": [Self.pointAtElementFunctionDeclaration]],
+                ["functionDeclarations": [
+                    Self.pointAtElementFunctionDeclaration,
+                    Self.sendToHigherModelFunctionDeclaration
+                ]],
                 ["googleSearch": [String: Any]()]
             ],
             // Push-to-talk decides when the user's turn starts and ends, not
@@ -334,6 +358,23 @@ final class GeminiLiveVoiceClient {
                 ]
             ],
             "required": ["x", "y", "label"]
+        ]
+    ]
+
+    /// Mirrors shipped Clicky's send_to_higher_model: the fast voice model
+    /// hands off questions that need careful reading or reasoning.
+    private static let sendToHigherModelFunctionDeclaration: [String: Any] = [
+        "name": "send_to_higher_model",
+        "description": "Hand a question to a slower, smarter model that gets fresh full-resolution screenshots of every screen. Use it when the answer needs careful reading of small text, code, a long document or dense UI, multi-step reasoning, math, or precise step-by-step instructions. Don't use it for casual chat or quick answers you're confident about. Before calling, say a few words like \"let me take a closer look\". The result is the answer: say it to the user in your own voice, keeping its meaning.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "question": [
+                    "type": "STRING",
+                    "description": "The user's question, restated so it stands on its own, with any context from the conversation that the smarter model needs."
+                ]
+            ],
+            "required": ["question"]
         ]
     ]
 
@@ -429,6 +470,13 @@ final class GeminiLiveVoiceClient {
             handleToolCall(toolCall)
         }
 
+        if let toolCallCancellation = serverMessage["toolCallCancellation"] as? [String: Any],
+           let cancelledFunctionCallIDs = toolCallCancellation["ids"] as? [String] {
+            for cancelledFunctionCallID in cancelledFunctionCallIDs {
+                pendingFunctionCallTasks.removeValue(forKey: cancelledFunctionCallID)?.cancel()
+            }
+        }
+
         if let sessionResumptionUpdate = serverMessage["sessionResumptionUpdate"] as? [String: Any],
            (sessionResumptionUpdate["resumable"] as? Bool) == true,
            let newHandle = sessionResumptionUpdate["newHandle"] as? String,
@@ -468,6 +516,7 @@ final class GeminiLiveVoiceClient {
                       let pcmAudioData = Data(base64Encoded: base64AudioData) else {
                     continue
                 }
+                guard !isDiscardingModelAudioForCurrentTurn else { continue }
                 if !hasModelStartedSpeakingThisTurn {
                     hasModelStartedSpeakingThisTurn = true
                     onModelSpeechStarted?()
@@ -482,8 +531,10 @@ final class GeminiLiveVoiceClient {
 
         if (serverContent["turnComplete"] as? Bool) == true {
             isModelTurnInProgress = false
-            let finishedUserTranscript = currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            let finishedModelTranscript = currentTurnModelTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            // An answer cut off with Escape isn't remembered as said.
+            let wasCancelledByUser = isDiscardingModelAudioForCurrentTurn
+            let finishedUserTranscript = wasCancelledByUser ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let finishedModelTranscript = wasCancelledByUser ? "" : currentTurnModelTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript)
             if shouldDisconnectAfterCurrentTurn {
                 disconnect()
@@ -496,37 +547,85 @@ final class GeminiLiveVoiceClient {
     private func handleToolCall(_ toolCall: [String: Any]) {
         guard let functionCalls = toolCall["functionCalls"] as? [[String: Any]] else { return }
 
-        var functionResponses: [[String: Any]] = []
         for functionCall in functionCalls {
             let functionName = functionCall["name"] as? String ?? ""
-            let functionCallID = functionCall["id"] as? String ?? ""
+            let functionCallID = functionCall["id"] as? String ?? UUID().uuidString
             let functionArguments = functionCall["args"] as? [String: Any] ?? [:]
 
-            if functionName == "point_at_element",
-               let normalizedX = (functionArguments["x"] as? NSNumber)?.doubleValue,
-               let normalizedY = (functionArguments["y"] as? NSNumber)?.doubleValue {
-                let pointRequest = GeminiLivePointRequest(
-                    normalizedX: normalizedX,
-                    normalizedY: normalizedY,
-                    elementLabel: functionArguments["label"] as? String
-                )
-                onPointRequest?(pointRequest)
-                functionResponses.append([
-                    "id": functionCallID,
-                    "name": functionName,
-                    "response": ["result": "the cursor is now pointing at it. keep talking to the user."]
-                ])
-            } else {
-                functionResponses.append([
-                    "id": functionCallID,
-                    "name": functionName,
-                    "response": ["error": "unknown function"]
-                ])
+            switch functionName {
+            case "point_at_element":
+                handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "send_to_higher_model":
+                handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            default:
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                     response: ["error": "unknown function"])
             }
         }
+    }
 
+    private func handlePointAtElementCall(functionCallID: String, functionArguments: [String: Any]) {
+        guard let normalizedX = (functionArguments["x"] as? NSNumber)?.doubleValue,
+              let normalizedY = (functionArguments["y"] as? NSNumber)?.doubleValue else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "point_at_element",
+                                 response: ["error": "x and y are required"])
+            return
+        }
+
+        if !isDiscardingModelAudioForCurrentTurn {
+            onPointRequest?(GeminiLivePointRequest(
+                normalizedX: normalizedX,
+                normalizedY: normalizedY,
+                elementLabel: functionArguments["label"] as? String
+            ))
+        }
         // Answer right away so the model carries on speaking.
-        enqueueOrSend(message: ["toolResponse": ["functionResponses": functionResponses]])
+        sendFunctionResponse(functionCallID: functionCallID, functionName: "point_at_element",
+                             response: ["result": "the cursor is now pointing at it. keep talking to the user."])
+    }
+
+    /// Hands the question to a stronger model with fresh screenshots. Live
+    /// waits for the answer, then speaks it in its own voice.
+    private func handleSendToHigherModelCall(functionCallID: String, functionArguments: [String: Any]) {
+        let question = (functionArguments["question"] as? String) ?? currentTurnUserTranscript
+        guard let onHigherModelRequest else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "send_to_higher_model",
+                                 response: ["error": "the deeper model isn't available. answer as best you can yourself."])
+            return
+        }
+
+        pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
+            let higherModelAnswer = await onHigherModelRequest(question)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
+            self.sendFunctionResponse(
+                functionCallID: functionCallID,
+                functionName: "send_to_higher_model",
+                response: ["result": higherModelAnswer]
+            )
+        }
+    }
+
+    private func sendFunctionResponse(functionCallID: String, functionName: String, response: [String: Any]) {
+        // Counts as activity for the watchdog: the model may take a moment to
+        // start speaking after a slow tool result.
+        lastServerMessageReceivedAt = Date()
+        enqueueOrSend(message: [
+            "toolResponse": [
+                "functionResponses": [[
+                    "id": functionCallID,
+                    "name": functionName,
+                    "response": response
+                ]]
+            ]
+        ])
+    }
+
+    private func cancelPendingFunctionCalls() {
+        for pendingFunctionCallTask in pendingFunctionCallTasks.values {
+            pendingFunctionCallTask.cancel()
+        }
+        pendingFunctionCallTasks.removeAll()
     }
 
     private func handleConnectionLost(error: Error) {
@@ -553,6 +652,7 @@ final class GeminiLiveVoiceClient {
             while true {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self, self.isModelTurnInProgress, !self.isUserTurnOpen else { return }
+                guard self.pendingFunctionCallTasks.isEmpty else { continue }
                 let lastActivity = max(turnEndedAt, self.lastServerMessageReceivedAt)
                 if Date().timeIntervalSince(lastActivity) > Self.responseTimeoutSeconds {
                     print("⚠️ Gemini Live: no response for \(Int(Self.responseTimeoutSeconds))s, dropping connection")

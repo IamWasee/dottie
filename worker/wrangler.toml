@@ -9,5 +9,8 @@ compatibility_date = "2024-09-23"
 [vars]
 GEMINI_LIVE_MODEL = "gemini-3.8-live"
 GEMINI_CHAT_MODEL = "gemini-3.8-flash"
+# Used when the voice model hands off a hard question (send_to_higher_model).
+# Point it at a Pro model if your API tier allows it.
+GEMINI_HIGHER_MODEL = "gemini-3.8-flash"
 GEMINI_TTS_MODEL = "gemini-3.8-flash-lite-tts"
 GEMINI_TTS_VOICE = "Kore"

@@ -136,6 +136,7 @@ final class CompanionManager: ObservableObject {
     private var currentResponseTask: Task<Void, Never>?
 
     private var shortcutTransitionCancellable: AnyCancellable?
+    private var escapeKeyCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
@@ -344,6 +345,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         shortcutTransitionCancellable?.cancel()
+        escapeKeyCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
         accessibilityCheckTimer?.invalidate()
@@ -517,6 +519,13 @@ final class CompanionManager: ObservableObject {
     }
 
     private func bindShortcutTransitions() {
+        escapeKeyCancellable = globalPushToTalkShortcutMonitor
+            .escapeKeyPressedPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.handleEscapeInterrupt()
+            }
+
         shortcutTransitionCancellable = globalPushToTalkShortcutMonitor
             .shortcutTransitionPublisher
             .receive(on: DispatchQueue.main)
@@ -665,6 +674,9 @@ final class CompanionManager: ObservableObject {
     pointing:
     you have a small blue triangle cursor that can fly to and point at things on screen, using the point_at_element tool. use it whenever pointing would genuinely help — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app. err on the side of pointing, because it makes your help way more concrete. don't point for general knowledge questions or at something obvious they're already looking at.
     the tool takes x and y from 0 to 1000 across the whole frame (0,0 is the top-left corner, 1000,1000 the bottom-right) and a short label. call it once, then keep talking as if you're gesturing at it, e.g. "see that button up here? click it."
+
+    going deeper:
+    you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -683,6 +695,11 @@ final class CompanionManager: ObservableObject {
 
         liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript in
             self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript)
+        }
+
+        liveVoiceClient.onHigherModelRequest = { [weak self] question in
+            guard let self else { return "the deeper model isn't available right now. answer as best you can." }
+            return await self.answerWithHigherModel(question: question)
         }
 
         liveVoiceClient.onTurnError = { [weak self] error in
@@ -776,6 +793,109 @@ final class CompanionManager: ObservableObject {
                 self.voiceState = .idle
                 self.scheduleTransientHideIfNeeded()
             }
+        }
+    }
+
+    // MARK: - Escape Interrupt
+
+    /// Escape cuts the companion off: stops speech, abandons the answer in
+    /// flight, and drops a recording without sending it. Does nothing while
+    /// the companion is idle, so Escape keeps working normally elsewhere.
+    private func handleEscapeInterrupt() {
+        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying
+        guard isCompanionBusy else { return }
+
+        print("⎋ Escape interrupt")
+        ClickyAnalytics.trackEscapeInterrupt()
+
+        pendingKeyboardShortcutStartTask?.cancel()
+        pendingKeyboardShortcutStartTask = nil
+        if buddyDictationManager.isDictationInProgress {
+            buddyDictationManager.cancelCurrentDictation()
+        }
+
+        currentResponseTask?.cancel()
+        currentResponseTask = nil
+        liveTurnPlaybackDrainTask?.cancel()
+        liveVoiceClient.cancelCurrentModelResponse()
+        stopAllSpeechPlayback()
+        clearDetectedElementLocation()
+
+        isLiveTurnInFlight = false
+        voiceState = .idle
+        scheduleTransientHideIfNeeded()
+    }
+
+    // MARK: - Higher Model Hand-off
+
+    /// System prompt for the stronger model that answers send_to_higher_model.
+    /// Its text goes back to Gemini Live, which says it out loud.
+    private static let higherModelSystemPrompt = """
+    you're the careful, thorough brain behind clicky, a voice companion on the user's mac. the fast voice model handed you a question it wanted a closer look at. you get full screenshots of every screen. your answer goes back to the voice model, which will say it out loud to the user.
+
+    rules:
+    - answer the question directly and correctly. read small text, code and dense ui carefully.
+    - write for the ear: plain sentences, no markdown, no lists, no code blocks. describe code changes in words.
+    - be as short as the question allows: usually two to five sentences. give precise steps when steps are needed.
+    - if the screenshots don't contain what's needed, say what you'd need instead of guessing.
+
+    pointing: if pointing at one ui element would help, append a tag at the very end: [POINT:x,y:label] with integer pixel coordinates in that screenshot's coordinate space (top-left is 0,0; images are labeled with their dimensions), and :screenN if it isn't on the cursor screen. otherwise append [POINT:none].
+    """
+
+    /// Answers a hand-off from Gemini Live with a stronger model and fresh
+    /// screenshots. Points the cursor if the answer says to, and returns the
+    /// text for Live to speak. Errors come back as instructions for Live to
+    /// relay, so the user always hears something.
+    private func answerWithHigherModel(question: String) async -> String {
+        print("🧠 Higher model hand-off: \(question)")
+        ClickyAnalytics.trackHigherModelHandoff()
+
+        do {
+            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            let labeledImages = screenCaptures.map { capture in
+                let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
+                return (data: capture.imageData, label: capture.label + dimensionInfo)
+            }
+            let historyForAPI = conversationHistory.map { entry in
+                (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
+            }
+
+            let (fullResponseText, responseDuration) = try await geminiAPI.analyzeImageStreaming(
+                images: labeledImages,
+                systemPrompt: Self.higherModelSystemPrompt,
+                conversationHistory: historyForAPI,
+                userPrompt: question,
+                modelOverride: "higher",
+                maxOutputTokens: 2048,
+                onTextChunk: { _ in }
+            )
+            print("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
+
+            let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
+            let targetScreenCapture: CompanionScreenCapture? = {
+                if let screenNumber = parseResult.screenNumber,
+                   screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                    return screenCaptures[screenNumber - 1]
+                }
+                return screenCaptures.first(where: { $0.isCursorScreen })
+            }()
+            if let pointCoordinate = parseResult.coordinate, let targetScreenCapture, isLiveTurnInFlight {
+                detectedElementScreenLocation = Self.globalScreenLocation(
+                    forScreenshotPixel: pointCoordinate,
+                    in: targetScreenCapture
+                )
+                detectedElementDisplayFrame = targetScreenCapture.displayFrame
+                ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
+            }
+
+            let answerText = parseResult.spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return answerText.isEmpty
+                ? "the deeper look came back empty. tell the user briefly and answer as best you can from what you see."
+                : answerText
+        } catch {
+            print("⚠️ Higher model hand-off failed: \(error)")
+            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
+            return "the deeper look failed (\(error.localizedDescription)). tell the user in one short line, then answer as best you can from what you see."
         }
     }
 

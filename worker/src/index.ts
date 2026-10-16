@@ -26,6 +26,7 @@ interface Env {
   APP_SHARED_SECRET?: string;
   GEMINI_LIVE_MODEL: string;
   GEMINI_CHAT_MODEL: string;
+  GEMINI_HIGHER_MODEL: string;
   GEMINI_TTS_MODEL: string;
   GEMINI_TTS_VOICE: string;
 }
@@ -45,6 +46,7 @@ export default {
         return jsonResponse({
           liveModel: env.GEMINI_LIVE_MODEL,
           chatModel: env.GEMINI_CHAT_MODEL,
+          higherModel: env.GEMINI_HIGHER_MODEL,
           ttsModel: env.GEMINI_TTS_MODEL,
           ttsVoice: env.GEMINI_TTS_VOICE,
         });
@@ -126,11 +128,15 @@ async function handleLiveToken(env: Env): Promise<Response> {
  * Proxies a Gemini generateContent body to the streaming endpoint. The app
  * sends a standard Gemini request body (contents, systemInstruction,
  * generationConfig). The model comes from the body's optional "model" field,
- * falling back to GEMINI_CHAT_MODEL.
+ * falling back to GEMINI_CHAT_MODEL. The alias "higher" maps to
+ * GEMINI_HIGHER_MODEL, used when the voice model hands off a hard question.
  */
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const requestBody = (await request.json()) as Record<string, unknown>;
-  const requestedModel = typeof requestBody.model === "string" ? requestBody.model : env.GEMINI_CHAT_MODEL;
+  let requestedModel = typeof requestBody.model === "string" ? requestBody.model : env.GEMINI_CHAT_MODEL;
+  if (requestedModel === "higher") {
+    requestedModel = env.GEMINI_HIGHER_MODEL || env.GEMINI_CHAT_MODEL;
+  }
   delete requestBody.model;
 
   const response = await fetch(

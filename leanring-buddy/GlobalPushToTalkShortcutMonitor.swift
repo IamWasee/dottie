@@ -14,6 +14,12 @@ import Foundation
 
 final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     let shortcutTransitionPublisher = PassthroughSubject<BuddyPushToTalkShortcut.ShortcutTransition, Never>()
+    /// Fires on every Escape key-down anywhere in the system. The companion
+    /// uses it to cut off an answer mid-sentence, like shipped Clicky's
+    /// escape-interrupt. The tap is listen-only, so Escape still reaches the
+    /// frontmost app as usual.
+    let escapeKeyPressedPublisher = PassthroughSubject<Void, Never>()
+    private static let escapeKeyCode: UInt16 = 53
 
     private var globalEventTap: CFMachPort?
     private var globalEventTapRunLoopSource: CFRunLoopSource?
@@ -109,6 +115,10 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
 
         let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if eventType == .keyDown && eventKeyCode == Self.escapeKeyCode {
+            escapeKeyPressedPublisher.send(())
+        }
         let shortcutTransition = BuddyPushToTalkShortcut.shortcutTransition(
             for: eventType,
             keyCode: eventKeyCode,
