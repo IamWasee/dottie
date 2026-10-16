@@ -13,9 +13,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Models that mention computer use
-        run: |
-          curl -sS "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=$GEMINI_API_KEY" | jq -r '.models[] | "\(.name) | \(.supportedGenerationMethods|join(","))"' | grep -iE "computer|flash|pro" | head -60
       - name: Draw a fake speed dial
         run: |
           pip install -q pillow
@@ -37,24 +34,38 @@ jobs:
           b=boxes["pinterest.com"]; print("pinterest box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
           b=boxes["facebook.com"]; print("facebook box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
           PY
-      - name: Function calling with a screenshot through /chat
+      - name: Two-step loop with function response plus new screenshot
         run: |
-          cat > fc.mjs <<'JS'
+          cat > loop.mjs <<'JS'
           import fs from "fs";
           const img = fs.readFileSync("dial.jpg").toString("base64");
           const tools = [{ functionDeclarations: [
             { name: "click", description: "Click an element on the screenshot.", parameters: { type: "object", properties: {
               box_2d: { type: "array", items: { type: "integer" }, description: "[ymin, xmin, ymax, xmax] of the element, 0-1000" },
               label: { type: "string" } }, required: ["box_2d", "label"] } },
-            { name: "finish", description: "The task is done.", parameters: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } } ] }];
-          for (const model of process.argv.slice(2)) {
+            { name: "type_text", description: "Type text into the focused field.", parameters: { type: "object", properties: { text: { type: "string" }, press_enter: { type: "boolean" } }, required: ["text"] } },
+            { name: "finish", description: "The task is done; answer is what to tell the user.", parameters: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } } ] }];
+          const [model, level] = process.argv.slice(2);
+          const gen = level ? { thinkingConfig: { thinkingLevel: level } } : {};
+          const contents = [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: img } }, { text: "Task: search the web for kaggle, then tell me which bookmark is right of booking.com. Take the next step." }] }];
+          for (let step = 1; step <= 3; step++) {
             const t0 = Date.now();
-            const body = { model, contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: img } }, { text: "Task: open the facebook bookmark. Take the next step." }] }],
-              tools, toolConfig: { functionCallingConfig: { mode: "ANY" } } };
-            const r = await fetch(process.env.W + "/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+            const r = await fetch(process.env.W + "/chat", { method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ model, contents, tools, toolConfig: { functionCallingConfig: { mode: "ANY" } }, generationConfig: gen }) });
             const txt = await r.text();
-            const calls = [...txt.matchAll(/"functionCall":\s*(\{.*?\})\s*(,\s*"thoughtSignature"|\})/g)].map(m => m[1]);
-            console.log(model, r.status, Date.now() - t0 + "ms", calls.join(" ") || txt.slice(0, 300));
+            if (r.status !== 200) { console.log(model, level, "step", step, r.status, txt.slice(0, 400)); break; }
+            const parts = [];
+            for (const line of txt.split("\n")) if (line.startsWith("data: ")) { const e = JSON.parse(line.slice(6)); for (const p of e.candidates?.[0]?.content?.parts ?? []) parts.push(p); }
+            const calls = parts.filter(p => p.functionCall);
+            console.log(model, level, "step", step, Date.now() - t0 + "ms", JSON.stringify(calls.map(p => p.functionCall)), "sig:", calls.some(p => p.thoughtSignature));
+            if (!calls.length || calls[0].functionCall.name === "finish") break;
+            contents.push({ role: "model", parts });
+            contents.push({ role: "user", parts: [
+              ...calls.map(p => ({ functionResponse: { name: p.functionCall.name, ...(p.functionCall.id ? { id: p.functionCall.id } : {}), response: { result: "done" } } })),
+              { inlineData: { mimeType: "image/jpeg", data: img } },
+              { text: "Here is the screen now. Take the next step." } ] });
           }
           JS
-          node fc.mjs gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite
+          for m in gemini-3.6-flash gemini-3.5-flash; do node loop.mjs $m; done
+          node loop.mjs gemini-3.6-flash low || true
+          node loop.mjs gemini-3.6-flash minimal || true
