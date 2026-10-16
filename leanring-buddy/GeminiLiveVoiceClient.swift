@@ -299,11 +299,13 @@ final class GeminiLiveVoiceClient {
             "systemInstruction": ["parts": [["text": composeSystemInstruction()]]],
             // No googleSearch tool: on a free-tier key, Live closes the
             // session with "You exceeded your current quota" when it's set.
+            // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
                 ["functionDeclarations": [
                     Self.pointAtElementFunctionDeclaration,
                     Self.sendToHigherModelFunctionDeclaration,
-                    Self.startClickyTaskFunctionDeclaration
+                    Self.startClickyTaskFunctionDeclaration,
+                    Self.searchWebFunctionDeclaration
                 ]]
             ],
             // Push-to-talk decides when the user's turn starts and ends, not
@@ -403,6 +405,21 @@ final class GeminiLiveVoiceClient {
                 ]
             ],
             "required": ["task"]
+        ]
+    ]
+
+    private static let searchWebFunctionDeclaration: [String: Any] = [
+        "name": "search_web",
+        "description": "Search the web for fresh or specific facts you don't know for sure: news, prices, scores, weather, opening hours, release dates, recent versions, or anything that may have changed. Say a few words first, like \"let me look that up\". The result has search results and the text of the top page; answer from it in a sentence or two.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "query": [
+                    "type": "STRING",
+                    "description": "What to search for, written like a search engine query."
+                ]
+            ],
+            "required": ["query"]
         ]
     ]
 
@@ -590,6 +607,8 @@ final class GeminiLiveVoiceClient {
                 handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "start_clicky_task":
                 handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "search_web":
+                handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["error": "unknown function"])
@@ -635,6 +654,28 @@ final class GeminiLiveVoiceClient {
                 functionCallID: functionCallID,
                 functionName: "send_to_higher_model",
                 response: ["result": higherModelAnswer]
+            )
+        }
+    }
+
+    /// Live waits for the results, then answers from them.
+    private func handleSearchWebCall(functionCallID: String, functionArguments: [String: Any]) {
+        let query = ((functionArguments["query"] as? String) ?? currentTurnUserTranscript)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "search_web",
+                                 response: ["error": "the query was empty."])
+            return
+        }
+
+        pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
+            let searchResults = await DottieWebSearch.search(query)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
+            self.sendFunctionResponse(
+                functionCallID: functionCallID,
+                functionName: "search_web",
+                response: ["result": searchResults]
             )
         }
     }

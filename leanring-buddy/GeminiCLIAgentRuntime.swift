@@ -184,6 +184,7 @@ final class GeminiCLIAgentRuntime {
         // configured, any placeholder works.
         processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
         processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
+        processEnvironment["DOTTIE_SEARCH_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/search"
         // Picks the cua-driver policy for this turn (see ClickyComputerUse).
         processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved
             ? ClickyComputerUse.actPolicyFileURL(inCLIHome: cliHomeURL)
@@ -254,7 +255,10 @@ final class GeminiCLIAgentRuntime {
         var cliSettings: [String: Any] = [
             "security": ["auth": ["selectedType": "gemini-api-key"]],
             "context": ["fileName": "AGENTS.md"],
-            "skills": ["disabled": ClickySkillLibrary.hiddenBuiltInSkillNames]
+            "skills": ["disabled": ClickySkillLibrary.hiddenBuiltInSkillNames],
+            // Google Search grounding answers "You exceeded your current
+            // quota" on a free-tier key; Dots search through the Worker instead.
+            "tools": ["exclude": ["google_web_search"]]
         ]
         if let cuaDriverURL {
             ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
@@ -267,7 +271,8 @@ final class GeminiCLIAgentRuntime {
         let globalAgentInstructions = [
             ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil),
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
-            ClickyRoutinePrompts.globalAgentInstructions
+            ClickyRoutinePrompts.globalAgentInstructions,
+            webSearchAgentInstructions
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
@@ -276,6 +281,18 @@ final class GeminiCLIAgentRuntime {
             try? settingsData.write(to: settingsFolderURL.appendingPathComponent("settings.json"), options: .atomic)
         }
     }
+
+    /// How Dots search the web without Gemini's Google Search tool.
+    static let webSearchAgentInstructions = """
+    # Searching the web
+
+    To search the web, run:
+
+        curl -s -G -H "x-goog-api-key: $GEMINI_API_KEY" --data-urlencode "q=<your query>" "$DOTTIE_SEARCH_URL"
+
+    It returns JSON: `results` (title, url, snippet) and `topPage` (the text of the first result). To read any other page, use `web_fetch` or `curl` on its URL. Cite the pages you used.
+
+    """
 
     func stopTurn(agentID: UUID) {
         runningProcessesLock.lock()
