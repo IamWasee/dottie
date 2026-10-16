@@ -21,7 +21,10 @@ extension ClickyRoster {
             }
             return summary
         }
-        var lines = agents.map { "- \($0.name): \(statusLine(for: $0))" }
+        var lines = agents.map { agent -> String in
+            let waitingCount = queuedMessages(for: agent).count
+            return "- \(agent.name): \(statusLine(for: agent))\(waitingCount > 0 ? " (+\(waitingCount) tasks waiting)" : "")"
+        }
         if !recentlyDeletedAgentNames.isEmpty {
             lines.append("deleted by the user: \(recentlyDeletedAgentNames.joined(separator: ", ")).")
         }
@@ -37,6 +40,10 @@ extension ClickyRoster {
         }
         if let lastTask = transcript.last(where: { $0.kind == .user }) {
             lines.append("latest task (\(Self.relativeTime(since: lastTask.createdAt))): \(Self.shortened(lastTask.text, to: 300))")
+        }
+        let queuedTasks = queuedMessages(for: agent)
+        if !queuedTasks.isEmpty {
+            lines.append("waiting in line (\(queuedTasks.count)): " + queuedTasks.prefix(5).map { Self.shortened($0, to: 120) }.joined(separator: " | "))
         }
         let recentSteps = transcript.suffix(30).filter { $0.kind == .tool }.suffix(6)
         if !recentSteps.isEmpty {

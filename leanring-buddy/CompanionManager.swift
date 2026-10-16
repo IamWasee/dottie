@@ -920,7 +920,8 @@ final class CompanionManager: ObservableObject {
     clicky was made to help people learn their apps, so this matters most. when the user wants to learn how to do something themselves ("how do i add a sound effect in premiere", "where do i go for effects", "walk me through exporting") call guide_user with mode steps: the app points and draws each step, waits for their click, then shows the next. when they want a rundown or tour of the app or screen ("tell me how to use this app", "give me a complete rundown"), call guide_user with mode tour. for a single "where is x" that's visible right now, just point at it. during a guide, when they say next, done or got it, call guide_next; when they say stop, call stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
 
     multi-step jobs:
-    when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence. if they say stop or never mind while it's running, call stop_screen_task.
+    when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence.
+    jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in order. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting.
 
     second brain:
     you have a second brain that remembers everything you and the helpers have done with the user, and can dig through their files, command-line tools and connected apps.
@@ -982,9 +983,16 @@ final class CompanionManager: ObservableObject {
             return self.startScreenTask(taskText)
         }
 
-        liveVoiceClient.onStopScreenTask = { [weak self] in
+        liveVoiceClient.onStopScreenTask = { [weak self] scope in
             guard let self else { return "nothing is running." }
-            return self.stopScreenTask() ? "stopped it." : "nothing was running."
+            switch scope {
+            case "current":
+                return self.skipCurrentScreenTask()
+            case "list":
+                return self.screenTaskQueueSummary()
+            default:
+                return self.stopScreenTask() ? "stopped everything; the list is clear." : "nothing was running."
+            }
         }
 
         liveVoiceClient.onStartGuide = { [weak self] goal, modeName in
@@ -1166,13 +1174,28 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Multi-step screen tasks
 
-    /// Starts a multi-step job; a running one is replaced. Returns a short
-    /// status for Live to relay.
+    /// Jobs asked for while another was running, oldest first. Each starts
+    /// when the one before it finishes.
+    private var queuedScreenTasks: [String] = []
+
+    /// Starts a multi-step job, or lines it up behind the running one.
+    /// Returns a short status for Live to relay.
     private func startScreenTask(_ taskText: String) -> String {
         guard DottieScreenActionPerformer.canPostEvents else {
             return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
         }
-        let wasAlreadyRunning = screenTaskRunner.isRunning
+        if screenTaskRunner.isRunning {
+            queuedScreenTasks.append(taskText)
+            print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(taskText)")
+            refreshScreenTaskTitle()
+            let position = queuedScreenTasks.count
+            return "added to the list: it starts after the current job\(position > 1 ? " and \(position - 1) more" : ""). say that in a few words; each result comes to you as it finishes."
+        }
+        runScreenTask(taskText)
+        return "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
+    }
+
+    private func runScreenTask(_ taskText: String) {
         stopGuide()
         print("🧭 Screen task: \(taskText)")
         showOverlayTransientlyIfNeeded()
@@ -1189,19 +1212,40 @@ final class CompanionManager: ObservableObject {
             self.detectedElementDisplayFrame = displayFrame
             try? await Task.sleep(nanoseconds: 750_000_000)
         }
-        notchPresenter.showScreenTaskStep("starting")
+        currentScreenTaskText = taskText
+        notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
         screenTaskRunner.start(task: taskText) { [weak self] outcome in
             self?.finishScreenTask(taskText: taskText, outcome: outcome)
         }
-        return wasAlreadyRunning
-            ? "stopped the earlier job and started this one. say you're on it in a few words."
-            : "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
     }
 
-    /// Stops the running job, if any. Returns true if one was running.
+    private var currentScreenTaskText: String?
+
+    /// "on it", plus how many jobs are waiting.
+    private var screenTaskTitle: String {
+        queuedScreenTasks.isEmpty ? "on it" : "on it · \(queuedScreenTasks.count) more next"
+    }
+
+    private func refreshScreenTaskTitle() {
+        guard screenTaskRunner.isRunning else { return }
+        notchPresenter.showScreenTaskStep(notchPresenter.screenTaskStepText, title: screenTaskTitle)
+    }
+
+    /// Starts the next waiting job, if there is one.
+    private func startNextQueuedScreenTask() {
+        guard !screenTaskRunner.isRunning, !queuedScreenTasks.isEmpty else { return }
+        let nextTaskText = queuedScreenTasks.removeFirst()
+        print("🧭 Next queued screen task: \(nextTaskText)")
+        runScreenTask(nextTaskText)
+    }
+
+    /// Stops the running job and drops every waiting one. Returns true if
+    /// anything was running or waiting.
     @discardableResult
     private func stopScreenTask() -> Bool {
-        guard screenTaskRunner.stop() else { return false }
+        let hadQueuedTasks = !queuedScreenTasks.isEmpty
+        queuedScreenTasks.removeAll()
+        guard screenTaskRunner.stop() else { return hadQueuedTasks }
         print("🧭 Screen task stopped")
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1209,7 +1253,36 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
+    /// Stops only the running job; the next waiting one starts.
+    private func skipCurrentScreenTask() -> String {
+        guard screenTaskRunner.isRunning else {
+            return queuedScreenTasks.isEmpty ? "nothing is running." : "nothing is running right now."
+        }
+        screenTaskRunner.stop()
+        notchPresenter.endScreenTask()
+        clearDetectedElementLocation()
+        if queuedScreenTasks.isEmpty {
+            scheduleTransientHideIfNeeded()
+            return "stopped it. nothing else was waiting."
+        }
+        startNextQueuedScreenTask()
+        return "skipped it and started the next job: \(currentScreenTaskText ?? "")."
+    }
+
+    /// What's running and waiting, for list_screen_jobs.
+    private func screenTaskQueueSummary() -> String {
+        var lines: [String] = []
+        if screenTaskRunner.isRunning, let currentScreenTaskText {
+            lines.append("doing now: \(currentScreenTaskText) (\(notchPresenter.screenTaskStepText))")
+        }
+        for (index, queuedTask) in queuedScreenTasks.enumerated() {
+            lines.append("\(index + 1). next: \(queuedTask)")
+        }
+        return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
+    }
+
     private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome) {
+        currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
         let resultText: String
@@ -1225,6 +1298,10 @@ final class CompanionManager: ObservableObject {
             return
         }
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
+        let waitingCount = queuedScreenTasks.count
+        // The next job starts right away; Dottie tells this result while
+        // her cursor gets going on it.
+        startNextQueuedScreenTask()
 
         // Say it as soon as Dottie isn't in the middle of another turn.
         Task { [weak self] in
@@ -1235,15 +1312,16 @@ final class CompanionManager: ObservableObject {
                 if !isBusy { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText)
+            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText, waitingCount: waitingCount)
         }
     }
 
     /// Dottie says how the job went, as a turn of its own, so it reads like
     /// her answer and lands in the conversation history.
-    private func speakScreenTaskResult(taskText: String, resultText: String) {
+    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0) {
+        let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
         let instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
-            + "tell the user the result now in one short, fun sentence. don't start the job again."
+            + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -1495,10 +1573,11 @@ final class CompanionManager: ObservableObject {
             }
         }
 
-        guard !clickyRoster.isRunning(targetAgent) else {
-            return "\(targetAgent.name) is still busy: \(clickyRoster.statusLine(for: targetAgent)). ask the user whether to wait, stop it, or use another helper."
+        // A busy helper the user named takes the task next, in order.
+        let tasksAhead = clickyRoster.sendOrQueueMessage(taskText, to: targetAgent)
+        if tasksAhead > 0 {
+            return "\(targetAgent.name) is busy, so this is lined up: it starts after \(tasksAhead == 1 ? "its current task" : "\(tasksAhead - 1) more tasks after its current one"). say that in a few words."
         }
-        clickyRoster.sendMessage(taskText, to: targetAgent)
         guard clickyRoster.isRunning(targetAgent) else {
             return "couldn't start \(targetAgent.name). tell the user to try again from the Home window."
         }
@@ -1531,9 +1610,15 @@ final class CompanionManager: ObservableObject {
         }
         switch functionName {
         case "stop_helper":
-            guard clickyRoster.isRunning(agent) else { return "\(agent.name) isn't working on anything: \(clickyRoster.statusLine(for: agent))." }
+            let droppedCount = clickyRoster.queuedMessages(for: agent).count
+            clickyRoster.clearQueuedMessages(for: agent)
+            guard clickyRoster.isRunning(agent) else {
+                return droppedCount > 0
+                    ? "cleared \(agent.name)'s \(droppedCount) waiting tasks."
+                    : "\(agent.name) isn't working on anything: \(clickyRoster.statusLine(for: agent))."
+            }
             clickyRoster.stopAgent(agent)
-            return "stopped \(agent.name)."
+            return "stopped \(agent.name)\(droppedCount > 0 ? " and cleared its \(droppedCount) waiting tasks" : "")."
         case "open_helper_result":
             return clickyRoster.openHelperResult(for: agent)
         default:

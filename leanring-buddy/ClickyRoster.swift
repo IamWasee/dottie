@@ -101,6 +101,9 @@ final class ClickyRoster: ObservableObject {
     let routineStore: ClickyRoutineStore
 
     private let runtime = GeminiCLIAgentRuntime()
+    /// Tasks sent to a Dot while it was busy, oldest first. The next one
+    /// starts when its turn ends.
+    @Published private(set) var queuedMessagesByAgentID: [UUID: [String]] = [:]
     private var lastTurnSucceededByAgentID: [UUID: Bool] = [:]
     /// The routine a running turn belongs to, if it's a scheduled run.
     private var routineIDByRunningAgentID: [UUID: UUID] = [:]
@@ -188,6 +191,7 @@ final class ClickyRoster: ObservableObject {
     }
 
     func deleteAgent(_ agent: ClickyAgent) {
+        queuedMessagesByAgentID[agent.id] = nil
         stopAgent(agent)
         agents.removeAll { $0.id == agent.id }
         transcriptsByAgentID[agent.id] = nil
@@ -228,6 +232,26 @@ final class ClickyRoster: ObservableObject {
 
     func isRunning(_ agent: ClickyAgent) -> Bool {
         runningAgentIDs.contains(agent.id)
+    }
+
+    /// Runs the task now, or lines it up if the Dot is busy. Returns how
+    /// many tasks are ahead of it (0 when it started right away).
+    @discardableResult
+    func sendOrQueueMessage(_ messageText: String, to agent: ClickyAgent) -> Int {
+        guard isRunning(agent) else {
+            sendMessage(messageText, to: agent)
+            return 0
+        }
+        queuedMessagesByAgentID[agent.id, default: []].append(messageText)
+        return queuedMessagesByAgentID[agent.id]?.count ?? 1
+    }
+
+    func queuedMessages(for agent: ClickyAgent) -> [String] {
+        queuedMessagesByAgentID[agent.id] ?? []
+    }
+
+    func clearQueuedMessages(for agent: ClickyAgent) {
+        queuedMessagesByAgentID[agent.id] = nil
     }
 
     /// Sends a message to an agent and runs its turn in the background.
@@ -390,6 +414,13 @@ final class ClickyRoster: ObservableObject {
             computerUseRequest: computerUseRequest,
             routineTitle: routineTitle
         ))
+        // Next task in line, unless the Dot is waiting on the user to allow
+        // computer use (the allowed turn runs first, then the line resumes).
+        if computerUseRequest == nil, var queuedMessages = queuedMessagesByAgentID[agentID], !queuedMessages.isEmpty {
+            let nextMessage = queuedMessages.removeFirst()
+            queuedMessagesByAgentID[agentID] = queuedMessages.isEmpty ? nil : queuedMessages
+            sendMessage(nextMessage, to: finishedAgent)
+        }
     }
 
     /// Strips <ROUTINE> blocks from the agent's last reply, applies them and
