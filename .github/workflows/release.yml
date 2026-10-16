@@ -26,6 +26,12 @@ on:
         default: ""
   push:
     tags: ["v*"]
+  # A trial run on pull requests that touch the release: builds the DMG and
+  # keeps it as a build artifact, without deploying or publishing anything.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/**"
 
 permissions:
   contents: write
@@ -51,7 +57,7 @@ jobs:
 
       - name: Deploy the Worker
         id: deploy
-        if: env.HAS_DEPLOY_SECRETS == 'true'
+        if: env.HAS_DEPLOY_SECRETS == 'true' && github.event_name != 'pull_request'
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -84,6 +90,9 @@ jobs:
             # Check the Worker answers before baking its address into the app.
             curl -fsS --max-time 20 "$worker_url/health" || echo "::warning::$worker_url/health didn't answer."
           fi
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            worker_url=""
+          fi
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
 
   build-dmg:
@@ -109,6 +118,8 @@ jobs:
           echo "Version $version"
 
       - name: Put the Worker address in the app
+        # Trial builds are public artifacts, so they never carry the secret.
+        if: github.event_name != 'pull_request'
         env:
           WORKER_URL: ${{ needs.deploy-worker.outputs.worker_url }}
           DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
@@ -163,7 +174,15 @@ jobs:
           hdiutil create -volname Dottie -srcfolder dmg -ov -format UDZO Dottie.dmg
           shasum -a 256 Dottie.dmg | tee Dottie.dmg.sha256
 
+      - name: Keep the trial DMG
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dottie-trial-dmg
+          path: Dottie.dmg
+
       - name: Publish the release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
