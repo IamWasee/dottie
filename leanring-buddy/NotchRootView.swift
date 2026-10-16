@@ -264,6 +264,24 @@ private struct NotchTextResponseSurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let responseTitle = notchPresenter.lastResponseTitle {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.overlayCursorBlue)
+                    Text(responseTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                    Spacer(minLength: 0)
+                    Button(action: { notchPresenter.onOpenHome?() }) {
+                        Text("open")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .pointerCursor()
+                }
+            }
             ScrollView(.vertical, showsIndicators: false) {
                 Text(notchPresenter.lastResponseText)
                     .font(.system(size: 13))

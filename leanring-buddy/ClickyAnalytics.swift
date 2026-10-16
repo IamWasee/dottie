@@ -144,6 +144,10 @@ enum ClickyAnalytics {
     }
 
     /// Gemini Live handed a question to the stronger model.
+    static func trackClickyTaskStarted() {
+        capture("clicky_task_started")
+    }
+
     static func trackHigherModelHandoff() {
         capture("send_to_higher_model")
     }

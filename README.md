@@ -44,6 +44,18 @@ Open `leanring-buddy/Info.plist` and set:
 | `CompanionVoiceMode` | `live` (default) or `classic` |
 | `OnboardingVideoURL` | optional intro video; empty skips it |
 | `PostHogAPIKey` | optional, your own PostHog key; empty disables analytics |
+| `GeminiCLIPath` | optional, where `gemini` is installed if the app can't find it |
+| `GeminiAgentModel` | optional, the model background Clickys use (default `gemini-3.8-flash`) |
+
+### Background Clickys (optional)
+
+Clickys are helpers that work on their own in a folder on your Mac and report back in the notch. They run on Google's open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli), which needs Node.js:
+
+```bash
+npm install -g @google/gemini-cli
+```
+
+Nothing else to set up: the app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Clickys in Home → Clickys, or just ask Clicky out loud to hand a task off.
 
 ### 3. Build and run
 
@@ -62,6 +74,8 @@ Don't build with `xcodebuild` from a terminal; it resets the macOS privacy permi
 ## How it works
 
 Hold the hotkey and the app captures every display into one frame, opens (or reuses) a Gemini Live WebSocket with an ephemeral token from the Worker, and streams your voice. Let go and Gemini answers in audio, which plays as it arrives. If pointing would help, Gemini calls `point_at_element` with coordinates on the frame, and the blue cursor flies there while it talks. Sessions close after 45 idle seconds, and the last ten exchanges are carried into the next session so it remembers the conversation.
+
+Longer jobs go to background Clickys. Each one has its own folder (`~/Library/Application Support/ClickyClone/Clickys/<name>/`) with an `AGENTS.md` it reads and keeps notes in, and an `output/` folder for what it makes. Each turn runs Gemini CLI there with shell, file and web tools, and Home shows what it did.
 
 The full technical breakdown is in [AGENTS.md](AGENTS.md).
 

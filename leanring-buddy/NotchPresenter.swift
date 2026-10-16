@@ -38,6 +38,9 @@ final class NotchPresenter: ObservableObject {
     @Published private(set) var liveCaptionText = ""
     /// The last finished answer, shown on the text response surface.
     @Published private(set) var lastResponseText = ""
+    /// Who the card is from when it isn't Clicky itself (a background
+    /// Clicky reporting back). Nil for normal answers.
+    @Published private(set) var lastResponseTitle: String?
     @Published var draftText = ""
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
@@ -48,6 +51,8 @@ final class NotchPresenter: ObservableObject {
     var onOpenHome: (() -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
+    /// Agent reports that arrived while the notch was busy with a voice turn.
+    private var pendingAgentUpdates: [(title: String, text: String)] = []
 
     // MARK: - Inputs from the companion
 
@@ -81,6 +86,7 @@ final class NotchPresenter: ObservableObject {
             return
         }
         lastResponseText = trimmedResponseText
+        lastResponseTitle = nil
         surface = .textResponse
         startAutoDismiss()
     }
@@ -88,6 +94,25 @@ final class NotchPresenter: ObservableObject {
     func collapse() {
         cancelAutoDismiss()
         surface = .compact
+        showNextPendingAgentUpdateIfIdle()
+    }
+
+    /// A background Clicky finished. Shown as a card right away if the notch
+    /// is free, otherwise after the current voice turn.
+    func showAgentUpdate(title: String, text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        pendingAgentUpdates.append((title: title, text: trimmedText))
+        showNextPendingAgentUpdateIfIdle()
+    }
+
+    private func showNextPendingAgentUpdateIfIdle() {
+        guard surface == .compact, !pendingAgentUpdates.isEmpty else { return }
+        let nextUpdate = pendingAgentUpdates.removeFirst()
+        lastResponseText = nextUpdate.text
+        lastResponseTitle = nextUpdate.title
+        surface = .textResponse
+        startAutoDismiss()
     }
 
     // MARK: - User actions
@@ -135,6 +160,7 @@ final class NotchPresenter: ObservableObject {
             }
             guard !Task.isCancelled, let self, self.surface == .textResponse else { return }
             self.surface = .compact
+            self.showNextPendingAgentUpdateIfIdle()
         }
     }
 

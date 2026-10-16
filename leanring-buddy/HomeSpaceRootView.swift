@@ -2,9 +2,10 @@
 //  HomeSpaceRootView.swift
 //  leanring-buddy
 //
-//  Clicky's Home window: the conversation so far and the settings, in one
-//  place. Shipped Clicky's Home (HomeSpaceRootView) also holds agents,
-//  skills and suggestions; those arrive with later phases (see ROADMAP.md).
+//  Clicky's Home window: the conversation so far, background Clickys and
+//  settings, in one place. Shipped Clicky's Home (HomeSpaceRootView) also
+//  holds skills and suggestions; those arrive with later phases (see
+//  ROADMAP.md).
 //  HomeWindowManager at the bottom owns the NSWindow.
 //
 
@@ -14,6 +15,7 @@ import SwiftUI
 struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
         case conversation = "Conversation"
+        case clickys = "Clickys"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -21,6 +23,7 @@ struct HomeSpaceRootView: View {
         var symbolName: String {
             switch self {
             case .conversation: return "bubble.left.and.bubble.right.fill"
+            case .clickys: return "person.2.fill"
             case .settings: return "gearshape.fill"
             }
         }
@@ -28,6 +31,7 @@ struct HomeSpaceRootView: View {
 
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var conversationStore: ConversationStore
+    @ObservedObject var clickyRoster: ClickyRoster
     @State private var selectedSection: HomeSection = .conversation
 
     var body: some View {
@@ -38,6 +42,8 @@ struct HomeSpaceRootView: View {
                 switch selectedSection {
                 case .conversation:
                     HomeConversationView(companionManager: companionManager, conversationStore: conversationStore)
+                case .clickys:
+                    HomeClickysView(clickyRoster: clickyRoster)
                 case .settings:
                     HomeSettingsView(companionManager: companionManager, conversationStore: conversationStore)
                 }
@@ -328,11 +334,13 @@ private struct HomeSettingsView: View {
 final class HomeWindowManager: NSObject, NSWindowDelegate {
     private let companionManager: CompanionManager
     private let conversationStore: ConversationStore
+    private let clickyRoster: ClickyRoster
     private var homeWindow: NSWindow?
 
-    init(companionManager: CompanionManager, conversationStore: ConversationStore) {
+    init(companionManager: CompanionManager, conversationStore: ConversationStore, clickyRoster: ClickyRoster) {
         self.companionManager = companionManager
         self.conversationStore = conversationStore
+        self.clickyRoster = clickyRoster
     }
 
     func showHomeWindow() {
@@ -349,7 +357,8 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
             window.minSize = NSSize(width: 560, height: 400)
             window.contentView = NSHostingView(rootView: HomeSpaceRootView(
                 companionManager: companionManager,
-                conversationStore: conversationStore
+                conversationStore: conversationStore,
+                clickyRoster: clickyRoster
             ))
             window.center()
             window.delegate = self

@@ -66,6 +66,9 @@ final class GeminiLiveVoiceClient {
     /// The model handed a question to a stronger model (send_to_higher_model).
     /// Returns the text Live should speak. Runs while Live waits.
     var onHigherModelRequest: (@MainActor (_ question: String) async -> String)?
+    /// The model handed a task to a background Clicky (start_clicky_task).
+    /// Returns a short status for Live to relay; the work runs on its own.
+    var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String) -> String)?
 
     // MARK: - Configuration
 
@@ -297,7 +300,8 @@ final class GeminiLiveVoiceClient {
             "tools": [
                 ["functionDeclarations": [
                     Self.pointAtElementFunctionDeclaration,
-                    Self.sendToHigherModelFunctionDeclaration
+                    Self.sendToHigherModelFunctionDeclaration,
+                    Self.startClickyTaskFunctionDeclaration
                 ]],
                 ["googleSearch": [String: Any]()]
             ],
@@ -377,6 +381,27 @@ final class GeminiLiveVoiceClient {
                 ]
             ],
             "required": ["question"]
+        ]
+    ]
+
+    /// Hands longer jobs to a background agent (see ClickyRoster), like
+    /// shipped Clicky's voice delegation to its Clickys.
+    private static let startClickyTaskFunctionDeclaration: [String: Any] = [
+        "name": "start_clicky_task",
+        "description": "Start a background task with one of the user's Clickys: helpers that work on their own on the user's Mac with a shell, files and the web, and report back when done. Use it when the user asks for something that takes real work beyond answering, like researching a topic, writing or editing files, organizing a folder, or building something, or when they name a Clicky. Don't use it for questions you can answer right now. After calling, tell the user briefly that it's started.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "clicky_name": [
+                    "type": "STRING",
+                    "description": "Name of the Clicky the user mentioned, if any. Leave empty to let the app pick or create one."
+                ],
+                "task": [
+                    "type": "STRING",
+                    "description": "The task, written so it stands on its own: what to do, any details from the conversation or screen, and what the finished result should be."
+                ]
+            ],
+            "required": ["task"]
         ]
     ]
 
@@ -562,6 +587,8 @@ final class GeminiLiveVoiceClient {
                 handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "send_to_higher_model":
                 handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "start_clicky_task":
+                handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["error": "unknown function"])
@@ -609,6 +636,19 @@ final class GeminiLiveVoiceClient {
                 response: ["result": higherModelAnswer]
             )
         }
+    }
+
+    private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {
+        let taskText = (functionArguments["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !taskText.isEmpty, let onStartClickyTask, !isDiscardingModelAudioForCurrentTurn else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "start_clicky_task",
+                                 response: ["error": "couldn't start a background task right now."])
+            return
+        }
+        let requestedClickyName = (functionArguments["clicky_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startStatus = onStartClickyTask(requestedClickyName?.isEmpty == true ? nil : requestedClickyName, taskText)
+        sendFunctionResponse(functionCallID: functionCallID, functionName: "start_clicky_task",
+                             response: ["result": startStatus])
     }
 
     private func sendFunctionResponse(functionCallID: String, functionName: String, response: [String: Any]) {

@@ -26,12 +26,15 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Home window: saved conversation transcript (persisted to Application Support) and settings (voice, notch, cursor, worker status, clear history)
 - ⬜ Custom hotkeys (`ClickyHotkeyRecorder`)
 - ⬜ Screen annotation: circle a region and ask about it (`ScreenAnnotationManager`)
-- ⬜ Notch hover peek of agents and files (needs phase 4)
+- ⬜ Notch hover peek of agents and files
 
-## Phase 4: Clicky agents
+## Phase 4: Clicky agents ⏳
 
-- ⬜ Agent runtime. Shipped Clicky bundles OpenAI's Codex CLI; the clone needs an agent loop that runs on Gemini (Codex against an OpenAI-compatible Gemini endpoint, or Gemini CLI)
-- ⬜ Per-agent workspace (`AGENTS.md`, `output/`, `tmp/`), `ClickyModelInstructions.md` as system prompt, skills
+- ✅ Agent runtime on Gemini CLI (`GeminiCLIAgentRuntime`). Shipped Clicky bundles OpenAI's Codex CLI, but Gemini has no Responses API, so the clone drives Google's open-source Gemini CLI in headless stream-json mode. It reaches Gemini through the Worker's `/gemini` passthrough, so the key stays on the Worker. Tested on Linux against a mock Gemini server: tool calls, AGENTS.md as context and resumed sessions all work
+- ✅ Per-agent workspace (`AGENTS.md` with the agent's instructions and notes, `output/`, `tmp/`) and a roster with saved transcripts (`ClickyRoster`)
+- ✅ Home → Clickys: list, new Clicky form, chat with tool activity, stop, reveal output in Finder, delete to Trash
+- ✅ Voice hand-off: Live's `start_clicky_task` tool starts work on a named Clicky (or a general "Helper"); the result comes back as a card in the notch
+- ⬜ Skills (Gemini CLI supports them; needs a skills folder and a Home page)
 - ⬜ Routines (cron), notifications
 
 ## Phase 5: computer use

@@ -16,6 +16,7 @@ The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — 
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
 - **Voice companion (live mode, default)**: Gemini Live (`gemini-3.8-live`) over a WebSocket opened with a single-use ephemeral token from the Worker. Manual activity detection: hotkey press sends `activityStart` + a JPEG frame, release sends `activityEnd`. Output is 24kHz PCM played as it streams. Pointing is the `point_at_element` tool (0–1000 coordinates on the frame).
 - **Classic mode (`CompanionVoiceMode=classic`)**: Apple Speech → Gemini Flash vision (SSE via Worker `/chat`) → Gemini TTS (Worker `/tts`), with v0's `[POINT:]` tags
+- **Background agents ("Clickys")**: each agent turn runs Google's Gemini CLI headless (`gemini -p … -o stream-json --approval-mode yolo`, `--session-id` then `--resume`) in the agent's folder under `~/Library/Application Support/ClickyClone/Clickys/<slug>/`. `GOOGLE_GEMINI_BASE_URL` points it at the Worker's `/gemini` passthrough and `GEMINI_CLI_HOME` at a clone-owned `.cli-home`, so the user's own `~/.gemini` is untouched. Live hands work over with the `start_clicky_task` tool; results show as a notch card.
 - **Model names**: set on the Worker in `wrangler.toml` `[vars]`, not in the app
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
@@ -32,12 +33,13 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 | `POST /live-token` | `generativelanguage.googleapis.com/v1beta/auth_tokens` | Single-use Gemini Live ephemeral token (session must start within 2 min) |
 | `POST /chat` | `…/models/{model}:streamGenerateContent?alt=sse` | Gemini vision + streaming chat (onboarding demo, classic mode) |
 | `POST /tts` | `…/models/{tts model}:generateContent` | Gemini TTS, returned as raw 24kHz PCM (classic mode) |
+| `* /gemini/*` | `generativelanguage.googleapis.com/*` | Passthrough for Gemini CLI (agents). The CLI sends the shared secret as its API key; the Worker swaps in the real one |
 | `GET /config` | none | Echoes the configured model names |
 
 Worker secrets: `GEMINI_API_KEY`, optional `APP_SHARED_SECRET` (checked against the `x-clicky-secret` header)
 Worker vars: `GEMINI_LIVE_MODEL`, `GEMINI_CHAT_MODEL`, `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`
 
-App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionVoiceMode`, `OnboardingVideoURL`, `PostHogAPIKey`
+App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionVoiceMode`, `OnboardingVideoURL`, `PostHogAPIKey`, optional `GeminiCLIPath` and `GeminiAgentModel`
 
 ### Key Architecture Decisions
 
@@ -69,6 +71,9 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `NotchWindowManager.swift` | ~210 | Borderless panel pinned over the notch (or a top-center pill), resized per surface so it never blocks more of the menu bar than needed. |
 | `NotchRootView.swift` | ~390 | SwiftUI for every notch surface, plus `NotchEyeView` (Clicky's eyes). |
 | `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
+| `GeminiCLIAgentRuntime.swift` | ~330 | Finds and runs Gemini CLI for one agent turn, parses its stream-json events, stops turns. |
+| `ClickyRoster.swift` | ~350 | The agents: roster, workspaces (`AGENTS.md`, `output/`, `tmp/`), transcripts, sending messages, finish callbacks. |
+| `HomeClickysView.swift` | ~400 | Home → Clickys: agent list, new Clicky form, chat with tool activity. |
 | `ConversationStore.swift` | ~85 | Persists the conversation shown on Home as JSON in Application Support. |
 | `ClickyWorkerConfiguration.swift` | ~45 | Reads the Worker URL and shared secret from Info.plist; adds the auth header. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
@@ -86,7 +91,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/config`. |
+| `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/gemini/*`, `/config`. |
 
 ## Build & Run
 

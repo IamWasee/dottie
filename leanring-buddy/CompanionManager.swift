@@ -105,12 +105,15 @@ final class CompanionManager: ObservableObject {
 
     /// The conversation shown on Home, persisted across launches.
     let conversationStore = ConversationStore()
+    /// Background agents ("Clickys") that run on Gemini CLI.
+    let clickyRoster = ClickyRoster()
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
     private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
     private lazy var homeWindowManager = HomeWindowManager(
         companionManager: self,
-        conversationStore: conversationStore
+        conversationStore: conversationStore,
+        clickyRoster: clickyRoster
     )
     /// Text the user typed for the current live turn, if it was typed rather
     /// than spoken. Live only transcribes audio, so we remember it ourselves.
@@ -716,6 +719,9 @@ final class CompanionManager: ObservableObject {
 
     going deeper:
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
+
+    clickys:
+    the user can have background helpers called clickys that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something) or mention a clicky by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -743,6 +749,11 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
+        }
+
+        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
+            guard let self else { return "couldn't start it right now." }
+            return self.startClickyTask(clickyName: clickyName, taskText: taskText)
         }
 
         liveVoiceClient.onTurnError = { [weak self] error in
@@ -850,9 +861,53 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Clickys (background agents)
+
+    /// Starts a background task from voice. Uses the named Clicky (creating
+    /// it if it doesn't exist yet), or a general "Helper" Clicky.
+    /// Returns a short status for the voice model to relay.
+    func startClickyTask(clickyName: String?, taskText: String) -> String {
+        guard GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil else {
+            return "background clickys need gemini cli installed on this mac, and it isn't yet. tell the user to install it with npm install -g @google/gemini-cli."
+        }
+
+        let targetAgent: ClickyAgent
+        if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
+            targetAgent = existingAgent
+        } else if let clickyName {
+            targetAgent = clickyRoster.createAgent(name: clickyName, purpose: "")
+        } else if let helperAgent = clickyRoster.agent(matchingName: "Helper"), !clickyRoster.isRunning(helperAgent) {
+            targetAgent = helperAgent
+        } else {
+            let idleAgentCount = clickyRoster.agents.filter { $0.name.hasPrefix("Helper") }.count
+            targetAgent = clickyRoster.createAgent(
+                name: idleAgentCount == 0 ? "Helper" : "Helper \(idleAgentCount + 1)",
+                purpose: "General background tasks the user hands off by voice."
+            )
+        }
+
+        guard !clickyRoster.isRunning(targetAgent) else {
+            return "\(targetAgent.name) is still busy with another task. tell the user it'll need to finish first."
+        }
+        clickyRoster.sendMessage(taskText, to: targetAgent)
+        ClickyAnalytics.trackClickyTaskStarted()
+        return "started. \(targetAgent.name) is working on it and will report back in the notch."
+    }
+
+    private func configureClickyRoster() {
+        clickyRoster.onAgentTurnFinished = { [weak self] finishedAgent, finalReply, succeeded in
+            guard let self else { return }
+            let updateText = finalReply.isEmpty
+                ? (succeeded ? "Finished." : "Stopped without a reply.")
+                : finalReply
+            self.notchPresenter.showAgentUpdate(title: finishedAgent.name, text: updateText)
+        }
+    }
+
     // MARK: - Notch and Typed Messages
 
     private func configureNotch() {
+        configureClickyRoster()
         notchPresenter.onSubmitTypedMessage = { [weak self] messageText in
             self?.sendTypedMessage(messageText)
         }
