@@ -659,12 +659,28 @@ struct CompanionPanelView: View {
                 Spacer()
 
                 Button(action: {
+                    companionManager.openHomeWindow()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "house")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Home")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+
+                Spacer()
+
+                Button(action: {
                     companionManager.replayOnboarding()
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.circle")
                             .font(.system(size: 11, weight: .medium))
-                        Text("Watch Onboarding Again")
+                        Text("Replay Intro")
                             .font(.system(size: 12, weight: .medium))
                     }
                     .foregroundColor(DS.Colors.textTertiary)

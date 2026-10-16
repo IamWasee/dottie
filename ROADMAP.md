@@ -19,11 +19,14 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ `send_to_higher_model` tool: Live hands harder questions to the Worker's `GEMINI_HIGHER_MODEL` with fresh screenshots, can point the cursor, and Live speaks the answer
 - ✅ Escape to interrupt (only while Clicky is busy; the key still reaches the frontmost app)
 
-## Phase 3: notch UI and Home window
+## Phase 3: notch UI and Home window ⏳
 
-- ⬜ Notch surface (`NotchWindowManager`, `NotchRootView`, eye, text input, text response, activity)
-- ⬜ Home window (conversation transcript, skills library, settings, custom hotkeys)
+- ✅ Notch surface: black shape around the notch (a pill on Macs without one) with blinking eyes, listening waveform, thinking, live caption while speaking, typed input, and an auto-dismissing answer card with copy and follow-up
+- ✅ Typed messages from the notch or Home, answered out loud like spoken ones
+- ✅ Home window: saved conversation transcript (persisted to Application Support) and settings (voice, notch, cursor, worker status, clear history)
+- ⬜ Custom hotkeys (`ClickyHotkeyRecorder`)
 - ⬜ Screen annotation: circle a region and ask about it (`ScreenAnnotationManager`)
+- ⬜ Notch hover peek of agents and files (needs phase 4)
 
 ## Phase 4: Clicky agents
 

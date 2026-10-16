@@ -57,6 +57,8 @@ final class GeminiLiveVoiceClient {
     var onModelTurnComplete: (@MainActor (_ userTranscript: String, _ modelTranscript: String) -> Void)?
     /// The model asked to point at something on screen.
     var onPointRequest: (@MainActor (GeminiLivePointRequest) -> Void)?
+    /// Live partial transcript of what the model is saying (for captions).
+    var onModelTranscriptUpdate: (@MainActor (String) -> Void)?
     /// Live partial transcript of what the user is saying.
     var onUserTranscriptUpdate: (@MainActor (String) -> Void)?
     /// Something went wrong mid-turn (network, auth, server closed).
@@ -506,6 +508,9 @@ final class GeminiLiveVoiceClient {
         if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
            let transcriptChunk = outputTranscription["text"] as? String {
             currentTurnModelTranscript += transcriptChunk
+            if !isDiscardingModelAudioForCurrentTurn {
+                onModelTranscriptUpdate?(currentTurnModelTranscript)
+            }
         }
 
         if let modelTurn = serverContent["modelTurn"] as? [String: Any],

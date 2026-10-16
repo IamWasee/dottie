@@ -65,6 +65,11 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `GeminiLiveCompanionTranscriptionProvider.swift` | ~150 | Bridges `BuddyDictationManager`'s mic pipeline into the Live session. |
 | `GeminiAPI.swift` | ~210 | Gemini vision chat with SSE streaming via Worker `/chat`. Same call shape as v0's ClaudeAPI. |
 | `GeminiTTSClient.swift` | ~75 | Gemini TTS via Worker `/tts` (classic mode). |
+| `NotchPresenter.swift` | ~165 | State of the notch surface (compact, listening, thinking, speaking, text input, text response) and the answer card's auto-dismiss. |
+| `NotchWindowManager.swift` | ~210 | Borderless panel pinned over the notch (or a top-center pill), resized per surface so it never blocks more of the menu bar than needed. |
+| `NotchRootView.swift` | ~390 | SwiftUI for every notch surface, plus `NotchEyeView` (Clicky's eyes). |
+| `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
+| `ConversationStore.swift` | ~85 | Persists the conversation shown on Home as JSON in Application Support. |
 | `ClickyWorkerConfiguration.swift` | ~45 | Reads the Worker URL and shared secret from Info.plist; adds the auth header. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
 | `CompanionPanelView.swift` | ~720 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, Gemini voice picker, permissions UI, and quit button. Dark aesthetic using `DS` design system. |

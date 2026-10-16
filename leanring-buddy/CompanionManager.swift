@@ -102,6 +102,20 @@ final class CompanionManager: ObservableObject {
     }()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
+
+    /// The conversation shown on Home, persisted across launches.
+    let conversationStore = ConversationStore()
+    /// State of the notch surface (listening, speaking, typed input, …).
+    let notchPresenter = NotchPresenter()
+    private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
+    private lazy var homeWindowManager = HomeWindowManager(
+        companionManager: self,
+        conversationStore: conversationStore
+    )
+    /// Text the user typed for the current live turn, if it was typed rather
+    /// than spoken. Live only transcribes audio, so we remember it ourselves.
+    private var currentLiveTurnTypedText: String?
+    private var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
@@ -130,6 +144,7 @@ final class CompanionManager: ObservableObject {
     /// started talking".
     private var isLiveTurnInFlight = false
     private var liveTurnPlaybackDrainTask: Task<Void, Never>?
+    private var currentClassicTurnInputKind: ConversationEntry.InputKind = .voice
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -192,6 +207,26 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Whether Clicky's notch surface is shown. Persisted; on by default.
+    @Published private(set) var isNotchEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyNotchEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "isClickyNotchEnabled")
+
+    func setNotchEnabled(_ enabled: Bool) {
+        isNotchEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "isClickyNotchEnabled")
+        if enabled && hasCompletedOnboarding {
+            notchWindowManager.show()
+        } else {
+            notchWindowManager.hide()
+        }
+    }
+
+    func openHomeWindow() {
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        homeWindowManager.showHomeWindow()
+    }
+
     /// Whether the user has completed onboarding at least once. Persisted
     /// to UserDefaults so the Start button only appears on first launch.
     var hasCompletedOnboarding: Bool {
@@ -240,6 +275,8 @@ final class CompanionManager: ObservableObject {
             overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         }
+
+        configureNotch()
     }
 
     /// Called by BlueCursorView after the buddy finishes its pointing
@@ -253,6 +290,9 @@ final class CompanionManager: ObservableObject {
         // Mark onboarding as completed so the Start button won't appear
         // again on future launches — the cursor will auto-show instead
         hasCompletedOnboarding = true
+        if isNotchEnabled {
+            notchWindowManager.show()
+        }
 
         ClickyAnalytics.trackOnboardingStarted()
 
@@ -337,6 +377,8 @@ final class CompanionManager: ObservableObject {
 
     func stop() {
         liveVoiceClient.disconnect()
+        notchWindowManager.hide()
+        notchVoiceStateCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
@@ -474,6 +516,7 @@ final class CompanionManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] powerLevel in
                 self?.currentAudioPowerLevel = powerLevel
+                self?.notchPresenter.audioPowerLevel = powerLevel
             }
     }
 
@@ -546,11 +589,7 @@ final class CompanionManager: ObservableObject {
             transientHideTask = nil
 
             // If the cursor is hidden, bring it back transiently for this interaction
-            if !isClickyCursorEnabled && !isOverlayVisible {
-                overlayWindowManager.hasShownOverlayBefore = true
-                overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                isOverlayVisible = true
-            }
+            showOverlayTransientlyIfNeeded()
 
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -689,6 +728,10 @@ final class CompanionManager: ObservableObject {
             self.voiceState = .responding
         }
 
+        liveVoiceClient.onModelTranscriptUpdate = { [weak self] modelTranscriptSoFar in
+            self?.notchPresenter.updateLiveCaption(modelTranscriptSoFar)
+        }
+
         liveVoiceClient.onPointRequest = { [weak self] pointRequest in
             self?.pointAtLiveElement(pointRequest)
         }
@@ -769,7 +812,17 @@ final class CompanionManager: ObservableObject {
     /// Records the exchange, then waits for the last of the audio to play
     /// before returning the cursor to idle.
     private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
+        let typedTextForThisTurn = currentLiveTurnTypedText
+        currentLiveTurnTypedText = nil
+        // A typed turn has no audio, so Live's input transcript is empty.
+        let userTranscript = typedTextForThisTurn ?? userTranscript
+
         if !userTranscript.isEmpty || !modelTranscript.isEmpty {
+            conversationStore.append(
+                userText: userTranscript,
+                clickyText: modelTranscript,
+                inputKind: typedTextForThisTurn == nil ? .voice : .typed
+            )
             conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
             if conversationHistory.count > 10 {
                 conversationHistory.removeFirst(conversationHistory.count - 10)
@@ -791,9 +844,92 @@ final class CompanionManager: ObservableObject {
             // Only drop to idle if the user hasn't started a new turn.
             if !self.buddyDictationManager.isDictationInProgress {
                 self.voiceState = .idle
+                self.notchPresenter.showFinishedResponse(modelTranscript)
                 self.scheduleTransientHideIfNeeded()
             }
         }
+    }
+
+    // MARK: - Notch and Typed Messages
+
+    private func configureNotch() {
+        notchPresenter.onSubmitTypedMessage = { [weak self] messageText in
+            self?.sendTypedMessage(messageText)
+        }
+        notchPresenter.onOpenHome = { [weak self] in
+            self?.openHomeWindow()
+        }
+
+        // Mirror the voice state onto the notch.
+        notchVoiceStateCancellable = $voiceState
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newVoiceState in
+                guard let self else { return }
+                switch newVoiceState {
+                case .listening:
+                    self.notchPresenter.showListening()
+                case .processing:
+                    self.notchPresenter.showThinking()
+                case .responding:
+                    self.notchPresenter.showSpeaking()
+                case .idle:
+                    // The finished-answer card is shown by the pipelines
+                    // themselves; an idle with no answer (e.g. a tap with
+                    // nothing said) just folds the notch back up.
+                    if self.notchPresenter.surface == .listening || self.notchPresenter.surface == .thinking {
+                        if !self.isLiveTurnInFlight && self.currentResponseTask == nil {
+                            self.notchPresenter.collapse()
+                        }
+                    }
+                }
+            }
+
+        if hasCompletedOnboarding && isNotchEnabled {
+            notchWindowManager.show()
+        }
+    }
+
+    /// Sends a typed message (from the notch or Home) as a turn, with a
+    /// screenshot like a spoken one. Clicky answers out loud as usual.
+    func sendTypedMessage(_ messageText: String) {
+        let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedMessageText.isEmpty else { return }
+        guard !buddyDictationManager.isDictationInProgress else { return }
+
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        showOverlayTransientlyIfNeeded()
+        currentResponseTask?.cancel()
+        stopAllSpeechPlayback()
+        clearDetectedElementLocation()
+        lastTranscript = trimmedMessageText
+        ClickyAnalytics.trackUserMessageSent(transcript: trimmedMessageText)
+
+        switch voiceMode {
+        case .classic:
+            sendTranscriptToGeminiWithScreenshot(transcript: trimmedMessageText, inputKind: .typed)
+        case .live:
+            liveTurnPlaybackDrainTask?.cancel()
+            isLiveTurnInFlight = true
+            currentLiveTurnTypedText = trimmedMessageText
+            voiceState = .processing
+            Task { [weak self] in
+                guard let self else { return }
+                await self.beginLiveTurnWithScreenFrame()
+                self.liveVoiceClient.sendTurnContextText(trimmedMessageText)
+                self.liveVoiceClient.endUserTurn()
+            }
+        }
+    }
+
+    /// With "Show Clicky" off, the cursor overlay appears only for the
+    /// length of an interaction, so pointing is still visible.
+    private func showOverlayTransientlyIfNeeded() {
+        guard !isClickyCursorEnabled && !isOverlayVisible else { return }
+        overlayWindowManager.hasShownOverlayBefore = true
+        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        isOverlayVisible = true
     }
 
     // MARK: - Escape Interrupt
@@ -822,7 +958,9 @@ final class CompanionManager: ObservableObject {
         clearDetectedElementLocation()
 
         isLiveTurnInFlight = false
+        currentLiveTurnTypedText = nil
         voiceState = .idle
+        notchPresenter.collapse()
         scheduleTransientHideIfNeeded()
     }
 
@@ -906,7 +1044,12 @@ final class CompanionManager: ObservableObject {
     /// the spinner/processing state until TTS audio begins playing.
     /// The response may include a [POINT:x,y:label] tag which triggers
     /// the buddy to fly to that element on screen.
-    private func sendTranscriptToGeminiWithScreenshot(transcript: String) {
+    private func sendTranscriptToGeminiWithScreenshot(
+        transcript: String,
+        inputKind: ConversationEntry.InputKind = .voice
+    ) {
+        currentClassicTurnInputKind = inputKind
+        notchPresenter.updateLiveCaption("")
         currentResponseTask?.cancel()
         stopAllSpeechPlayback()
 
@@ -990,6 +1133,12 @@ final class CompanionManager: ObservableObject {
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
+                conversationStore.append(
+                    userText: transcript,
+                    clickyText: spokenText,
+                    inputKind: currentClassicTurnInputKind
+                )
+                notchPresenter.updateLiveCaption(spokenText)
 
                 // Keep the spinner until audio actually starts playing.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1012,6 +1161,7 @@ final class CompanionManager: ObservableObject {
 
             if !Task.isCancelled {
                 voiceState = .idle
+                notchPresenter.showFinishedResponse(notchPresenter.liveCaptionText)
                 scheduleTransientHideIfNeeded()
             }
         }
