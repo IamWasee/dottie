@@ -73,6 +73,9 @@ final class NotchPresenter: ObservableObject {
     /// Set when the card is a background Clicky asking to use the Mac; the
     /// card then shows Allow / Always / Not now.
     @Published private(set) var computerUseRequestAgentID: UUID?
+    /// Set when the card says dictation learned a word; the card then
+    /// offers to remove it again.
+    @Published private(set) var learnedDictionaryWord: String?
     @Published var draftText = ""
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
@@ -114,10 +117,11 @@ final class NotchPresenter: ObservableObject {
     var onOpenPeekFile: ((NotchPeekFile) -> Void)?
     var onRevealPeekFile: ((NotchPeekFile) -> Void)?
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
+    var onRemoveLearnedDictionaryWord: ((String) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
     /// Agent reports that arrived while the notch was busy with a voice turn.
-    private var pendingAgentUpdates: [(title: String, text: String, computerUseRequestAgentID: UUID?)] = []
+    private var pendingAgentUpdates: [(title: String, text: String, computerUseRequestAgentID: UUID?, learnedDictionaryWord: String?)] = []
 
     // MARK: - Inputs from the companion
 
@@ -155,6 +159,7 @@ final class NotchPresenter: ObservableObject {
         lastResponseText = trimmedResponseText
         lastResponseTitle = nil
         computerUseRequestAgentID = nil
+        learnedDictionaryWord = nil
         surface = .textResponse
         startAutoDismiss()
     }
@@ -170,8 +175,29 @@ final class NotchPresenter: ObservableObject {
     func showAgentUpdate(title: String, text: String, computerUseRequestAgentID: UUID? = nil) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
-        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: computerUseRequestAgentID))
+        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: computerUseRequestAgentID, learnedDictionaryWord: nil))
         showNextPendingAgentUpdateIfIdle()
+    }
+
+    /// Dictation learned a word from a fix the user made. Shipped Clicky
+    /// shows the same "Added to your dictionary" card, with a Remove button.
+    func showLearnedDictionaryWord(_ word: String, replacing originalText: String) {
+        // A newer word replaces one that hasn't been shown yet.
+        pendingAgentUpdates.removeAll { $0.learnedDictionaryWord != nil }
+        pendingAgentUpdates.append((
+            title: "Added to your dictionary",
+            text: "\u{201C}\(word)\u{201D}. Dictation will write it this way instead of \u{201C}\(originalText)\u{201D}.",
+            computerUseRequestAgentID: nil,
+            learnedDictionaryWord: word
+        ))
+        showNextPendingAgentUpdateIfIdle()
+    }
+
+    func removeLearnedDictionaryWord() {
+        guard let word = learnedDictionaryWord else { return }
+        learnedDictionaryWord = nil
+        onRemoveLearnedDictionaryWord?(word)
+        collapse()
     }
 
     func answerComputerUseRequest(isAllowed: Bool, alwaysAllow: Bool = false) {
@@ -196,6 +222,7 @@ final class NotchPresenter: ObservableObject {
         lastResponseText = nextUpdate.text
         lastResponseTitle = nextUpdate.title
         computerUseRequestAgentID = nextUpdate.computerUseRequestAgentID
+        learnedDictionaryWord = nextUpdate.learnedDictionaryWord
         surface = .textResponse
         startAutoDismiss()
         // A permission question waits for an answer instead of timing out.

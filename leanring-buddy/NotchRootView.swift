@@ -385,7 +385,7 @@ private struct NotchTextResponseSurface: View {
         VStack(alignment: .leading, spacing: 8) {
             if let responseTitle = notchPresenter.lastResponseTitle {
                 HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: notchPresenter.learnedDictionaryWord != nil ? "text.book.closed.fill" : "checkmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundColor(DS.Colors.overlayCursorBlue)
                     Text(responseTitle)
@@ -411,6 +411,8 @@ private struct NotchTextResponseSurface: View {
 
             if notchPresenter.computerUseRequestAgentID != nil {
                 computerUseRequestButtons
+            } else if notchPresenter.learnedDictionaryWord != nil {
+                learnedWordButtons
             } else {
                 responseButtons
             }
@@ -445,6 +447,30 @@ private struct NotchTextResponseSurface: View {
             }
             .buttonStyle(.plain)
             .pointerCursor()
+        }
+    }
+
+    private var learnedWordButtons: some View {
+        HStack(spacing: 14) {
+            Button(action: { notchPresenter.removeLearnedDictionaryWord() }) {
+                Label("Remove", systemImage: "minus.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Remove this word from your dictionary")
+
+            Spacer(minLength: 0)
+
+            Button(action: { notchPresenter.collapse() }) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Dismiss now")
         }
     }
 

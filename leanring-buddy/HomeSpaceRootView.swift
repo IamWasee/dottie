@@ -248,6 +248,8 @@ private struct HomeSettingsView: View {
     @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true
     @AppStorage(ScreenAnnotationManager.enabledDefaultsKey) private var isScreenAnnotationEnabled = true
     @AppStorage(ClickyDictationController.customWordsDefaultsKey) private var dictationCustomWords = ""
+    @AppStorage(DictationDictionary.learnsCorrectionsDefaultsKey) private var learnsDictationCorrections = true
+    @ObservedObject private var dictationDictionary = DictationDictionary.shared
 
     var body: some View {
         ScrollView {
@@ -346,6 +348,15 @@ private struct HomeSettingsView: View {
                             .font(.system(size: 12))
                     }
                     settingsHint("Hold the shortcut, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
+                    settingsRow(label: "Learn words I correct") {
+                        Toggle("", isOn: $learnsDictationCorrections)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    settingsHint("When you fix a name or word right after dictating, Dottie adds your spelling to your dictionary and uses it next time.")
+                    if !dictationDictionary.learnedCorrections.isEmpty {
+                        learnedWordsList
+                    }
                 }
 
                 settingsGroup(title: "Using your Mac") {
@@ -414,6 +425,55 @@ private struct HomeSettingsView: View {
             accessory()
                 .font(.system(size: 12))
         }
+    }
+
+    private var learnedWordsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(dictationDictionary.learnedCorrections.count == 1
+                     ? "1 learned word"
+                     : "\(dictationDictionary.learnedCorrections.count) learned words")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer(minLength: 0)
+                Button("Clear all") { dictationDictionary.removeAll() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .pointerCursor()
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 6, alignment: .leading)], alignment: .leading, spacing: 6) {
+                ForEach(dictationDictionary.learnedCorrections) { learnedCorrection in
+                    learnedWordChip(learnedCorrection)
+                }
+            }
+        }
+    }
+
+    private func learnedWordChip(_ learnedCorrection: DictationLearnedCorrection) -> some View {
+        HStack(spacing: 4) {
+            Text(learnedCorrection.corrected)
+                .font(.system(size: 12))
+                .foregroundColor(DS.Colors.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button(action: { dictationDictionary.remove(word: learnedCorrection.corrected) }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Remove this word from your dictionary")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(DS.Colors.surface2)
+        )
+        .help("Learned when you changed \u{201C}\(learnedCorrection.original)\u{201D} to \u{201C}\(learnedCorrection.corrected)\u{201D}")
     }
 
     private func settingsHint(_ hintText: String) -> some View {

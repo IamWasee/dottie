@@ -282,6 +282,8 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
     appName?: string;
     textBeforeCursor?: string;
     customWords?: string[];
+    /** Words the user fixed after dictating: what was written, and what they meant. */
+    learnedCorrections?: { heard?: string; meant?: string }[];
   };
   if (!body.audio) {
     return jsonResponse({ error: "missing audio" }, 400);
@@ -297,7 +299,17 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
     );
   }
   if (body.customWords && body.customWords.length > 0) {
-    contextLines.push(`Spell these exactly like this when they come up: ${body.customWords.slice(0, 100).join(", ")}.`);
+    contextLines.push(`Spell these exactly like this when they come up: ${body.customWords.slice(0, 250).join(", ")}.`);
+  }
+  const learnedCorrections = (body.learnedCorrections ?? [])
+    .filter((correction) => correction.heard && correction.meant)
+    .slice(0, 100);
+  if (learnedCorrections.length > 0) {
+    contextLines.push(
+      `Earlier dictation got these wrong and the user fixed them; write the fixed form: ${learnedCorrections
+        .map((correction) => `"${correction.heard}" → "${correction.meant}"`)
+        .join(", ")}.`
+    );
   }
 
   const response = await fetch(
