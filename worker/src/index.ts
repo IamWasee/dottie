@@ -16,6 +16,10 @@
  *   POST /dictate    → hold-to-dictate. Takes a short WAV recording and
  *                      returns the cleaned-up text to type, in one Gemini
  *                      call (transcription and cleanup together).
+ *   GET  /search?q=  → web search without Google Search grounding (free-tier
+ *                      keys can't use it): Bing's results page, then
+ *                      DuckDuckGo, then Wikipedia, plus the top page's text. Used by the voice
+ *                      model's search_web tool and by Dots.
  *   GET  /config     → non-secret model names, for debugging.
  *   ANY  /gemini/*   → transparent Gemini API passthrough for the background
  *                      agents (Gemini CLI). The CLI is pointed here with
@@ -73,11 +77,16 @@ export default {
       });
     }
 
-    if (env.APP_SHARED_SECRET && request.headers.get("x-clicky-secret") !== env.APP_SHARED_SECRET) {
+    const presentedSecret = request.headers.get("x-clicky-secret") ?? request.headers.get("x-goog-api-key");
+    if (env.APP_SHARED_SECRET && presentedSecret !== env.APP_SHARED_SECRET) {
       return new Response("Unauthorized", { status: 401 });
     }
 
     try {
+      if (request.method === "GET" && url.pathname === "/search") {
+        return await handleSearch(url);
+      }
+
       if (request.method === "GET" && url.pathname === "/config") {
         return jsonResponse({
           liveModel: env.GEMINI_LIVE_MODEL,
@@ -392,6 +401,151 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
     status: upstreamResponse.status,
     headers: responseHeaders,
   });
+}
+
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/**
+ * Web search for a free-tier key, which gets "You exceeded your current
+ * quota" for Gemini's Google Search tool. Reads Bing's results page, then
+ * DuckDuckGo's (it often answers servers with a 202 challenge page), then
+ * Wikipedia's search, and adds the readable text of the first result so a
+ * short answer needs no second call.
+ */
+async function handleSearch(url: URL): Promise<Response> {
+  const query = (url.searchParams.get("q") ?? "").trim().slice(0, 300);
+  if (!query) {
+    return jsonResponse({ error: "missing q" }, 400);
+  }
+
+  let results: SearchResult[] = [];
+  let source = "";
+  for (const [engineName, searchEngine] of [
+    ["bing", searchBing],
+    ["duckduckgo", searchDuckDuckGo],
+    ["wikipedia", searchWikipedia],
+  ] as const) {
+    results = await searchEngine(query).catch(() => [] as SearchResult[]);
+    source = engineName;
+    if (results.length > 0) break;
+  }
+
+  let topPage: { url: string; text: string } | undefined;
+  for (const result of results.slice(0, 2)) {
+    const text = await fetchReadableText(result.url).catch(() => "");
+    if (text.length > 200) {
+      topPage = { url: result.url, text };
+      break;
+    }
+  }
+
+  return jsonResponse({ query, source, results, topPage });
+}
+
+const BROWSER_HEADERS = {
+  "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36",
+  "accept-language": "en-US,en;q=0.9",
+};
+
+async function searchBing(query: string): Promise<SearchResult[]> {
+  const response = await fetch(
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&cc=US`,
+    { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) }
+  );
+  if (!response.ok) return [];
+  const html = await response.text();
+
+  const results: SearchResult[] = [];
+  for (const resultBlock of html.split('<li class="b_algo"').slice(1)) {
+    const titleLink = resultBlock.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!titleLink) continue;
+    let resultURL = decodeHTMLEntities(titleLink[1]);
+    // Bing wraps links as /ck/a?...&u=a1<base64url of the real address>.
+    const wrappedTarget = resultURL.match(/[?&]u=a1([^&]+)/);
+    if (wrappedTarget) {
+      const base64 = wrappedTarget[1].replace(/-/g, "+").replace(/_/g, "/");
+      try {
+        resultURL = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+      } catch {
+        continue;
+      }
+    }
+    if (!resultURL.startsWith("http")) continue;
+    const snippet = resultBlock.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    results.push({ title: htmlToText(titleLink[2]), url: resultURL, snippet: snippet ? htmlToText(snippet[1]) : "" });
+    if (results.length === 6) break;
+  }
+  return results;
+}
+
+async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+  const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    headers: BROWSER_HEADERS,
+    signal: AbortSignal.timeout(6000),
+  });
+  if (!response.ok) return [];
+  const html = await response.text();
+
+  const results: SearchResult[] = [];
+  const resultPattern =
+    /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  for (const match of html.matchAll(resultPattern)) {
+    let resultURL = decodeHTMLEntities(match[1]);
+    const redirectTarget = resultURL.match(/[?&]uddg=([^&]+)/);
+    if (redirectTarget) resultURL = decodeURIComponent(redirectTarget[1]);
+    if (resultURL.startsWith("//")) resultURL = "https:" + resultURL;
+    // Skip DuckDuckGo's own ads.
+    if (!resultURL.startsWith("http") || resultURL.includes("duckduckgo.com/y.js")) continue;
+    results.push({ title: htmlToText(match[2]), url: resultURL, snippet: htmlToText(match[3]) });
+    if (results.length === 6) break;
+  }
+  return results;
+}
+
+async function searchWikipedia(query: string): Promise<SearchResult[]> {
+  const response = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=5&srsearch=${encodeURIComponent(query)}`,
+    { headers: { "user-agent": "Dottie/1.0 (https://github.com/IamWasee/dottie)" }, signal: AbortSignal.timeout(6000) }
+  );
+  if (!response.ok) return [];
+  const payload = (await response.json()) as { query?: { search?: { title: string; snippet: string }[] } };
+  return (payload.query?.search ?? []).map((page) => ({
+    title: page.title,
+    url: `https://en.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, "_"))}`,
+    snippet: htmlToText(page.snippet),
+  }));
+}
+
+/** The page's visible text, without scripts, styles and markup, cut to about 4000 characters. */
+async function fetchReadableText(pageURL: string): Promise<string> {
+  const response = await fetch(pageURL, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.includes("html")) return "";
+  const html = (await response.text()).slice(0, 600_000);
+  const body = html
+    .replace(/<(script|style|noscript|svg|nav|footer|header|form)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  return htmlToText(body).slice(0, 4000);
+}
+
+function htmlToText(html: string): string {
+  return decodeHTMLEntities(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function decodeHTMLEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(parseInt(decimal, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
 }
 
 /** The chosen model first, then the fallbacks, without repeats. */
