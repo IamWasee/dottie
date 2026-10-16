@@ -9,14 +9,14 @@
 //  (GeminiCLIAgentRuntime); this file owns the list of agents, their
 //  workspaces on disk and their transcripts.
 //
-//  On disk, under ~/Library/Application Support/ClickyClone/Clickys/:
+//  On disk, under ~/Library/Application Support/Dottie/Dots/:
 //    roster.json                 every agent
 //    <slug>/AGENTS.md            the agent's instructions (Gemini CLI reads it)
 //    <slug>/.gemini/settings.json
 //    <slug>/output/              where finished work goes
 //    <slug>/transcript.json      what the Home window shows
 //    routines.json               scheduled re-runs (ClickyRoutines)
-//  Skills live next door in ClickyClone/Skills (ClickySkillLibrary).
+//  Skills live next door in Dottie/Skills (ClickySkillLibrary).
 //
 
 import AppKit
@@ -102,8 +102,8 @@ final class ClickyRoster: ObservableObject {
     init() {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let cloneDirectoryURL = applicationSupportDirectory.appendingPathComponent("ClickyClone", isDirectory: true)
-        rosterDirectoryURL = cloneDirectoryURL.appendingPathComponent("Clickys", isDirectory: true)
+        let cloneDirectoryURL = applicationSupportDirectory.appendingPathComponent("Dottie", isDirectory: true)
+        rosterDirectoryURL = cloneDirectoryURL.appendingPathComponent("Dots", isDirectory: true)
         try? FileManager.default.createDirectory(at: rosterDirectoryURL, withIntermediateDirectories: true)
         skillLibrary = ClickySkillLibrary(libraryURL: cloneDirectoryURL.appendingPathComponent("Skills", isDirectory: true))
         routineStore = ClickyRoutineStore(routinesFileURL: rosterDirectoryURL.appendingPathComponent("routines.json"))
@@ -122,10 +122,10 @@ final class ClickyRoster: ObservableObject {
         agents.first { $0.id == agentID }
     }
 
-    /// Case-insensitive match on name, for voice ("ask the research clicky…").
+    /// Case-insensitive match on name, for voice ("ask the research dot…").
     func agent(matchingName spokenName: String) -> ClickyAgent? {
         let normalizedSpokenName = spokenName.lowercased()
-            .replacingOccurrences(of: "clicky", with: "")
+            .replacingOccurrences(of: "\\bdots?\\b", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSpokenName.isEmpty else { return nil }
         return agents.first { $0.name.lowercased() == normalizedSpokenName }
@@ -135,7 +135,7 @@ final class ClickyRoster: ObservableObject {
     @discardableResult
     func createAgent(name: String, purpose: String) -> ClickyAgent {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let agentName = trimmedName.isEmpty ? "Clicky \(agents.count + 1)" : trimmedName
+        let agentName = trimmedName.isEmpty ? "Dot \(agents.count + 1)" : trimmedName
         let newAgent = ClickyAgent(
             id: UUID(),
             name: agentName,
@@ -446,7 +446,7 @@ final class ClickyRoster: ObservableObject {
                 }
             }
         }
-        networkPathMonitor.start(queue: DispatchQueue(label: "com.clickyclone.routine-network"))
+        networkPathMonitor.start(queue: DispatchQueue(label: "com.dottie.routine-network"))
 
         routineSchedulerTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
@@ -527,7 +527,7 @@ final class ClickyRoster: ObservableObject {
         let baseSlug = String(slugCharacters)
             .split(separator: "-", omittingEmptySubsequences: true)
             .joined(separator: "-")
-        let safeBaseSlug = baseSlug.isEmpty ? "clicky" : String(baseSlug.prefix(40))
+        let safeBaseSlug = baseSlug.isEmpty ? "dot" : String(baseSlug.prefix(40))
 
         var candidateSlug = safeBaseSlug
         var suffixNumber = 2
@@ -570,7 +570,7 @@ final class ClickyRoster: ObservableObject {
         return """
         # \(agent.name)
 
-        You are \(agent.name), one of the user's Clickys: a background helper that works on its own while the user gets on with their day. The user talks to you from the Clicky app on their Mac. They usually aren't watching while you work, so finish the job before you reply.
+        You are \(agent.name), one of the user's Dots: a background helper that works on its own while the user gets on with their day. The user talks to you from the Dottie app on their Mac. They usually aren't watching while you work, so finish the job before you reply.
 
         Your purpose: \(purposeLine)
 

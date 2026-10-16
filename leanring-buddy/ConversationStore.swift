@@ -35,7 +35,7 @@ final class ConversationStore: ObservableObject {
     init() {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let clickyDirectory = applicationSupportDirectory.appendingPathComponent("ClickyClone", isDirectory: true)
+        let clickyDirectory = applicationSupportDirectory.appendingPathComponent("Dottie", isDirectory: true)
         try? FileManager.default.createDirectory(at: clickyDirectory, withIntermediateDirectories: true)
         self.storageFileURL = clickyDirectory.appendingPathComponent("conversation.json")
         loadEntriesFromDisk()

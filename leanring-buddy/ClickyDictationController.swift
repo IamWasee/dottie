@@ -216,7 +216,7 @@ final class ClickyDictationController: ObservableObject {
             return
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            onError?("Clicky needs microphone access to dictate. Turn it on in System Settings → Privacy & Security → Microphone.")
+            onError?("Dottie needs microphone access to dictate. Turn it on in System Settings → Privacy & Security → Microphone.")
             return
         }
 

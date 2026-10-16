@@ -56,7 +56,7 @@ struct HomeClickysView: View {
     private var agentList: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Clickys")
+                Text("Dots")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
                 Spacer()
@@ -67,7 +67,7 @@ struct HomeClickysView: View {
                 }
                 .buttonStyle(.plain)
                 .pointerCursor()
-                .help("New Clicky")
+                .help("New Dot")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
@@ -136,16 +136,16 @@ private struct NewClickyForm: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("New Clicky")
+                Text("New Dot")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
-                Text("A Clicky works on its own in a folder on your Mac, with a shell, files and the web, and tells you in the notch when it's done. You can also just ask Clicky out loud to hand something off.")
+                Text("A Dot works on its own in a folder on your Mac, with a shell, files and the web, and tells you in the notch when it's done. You can also just ask Dottie out loud to hand something off.")
                     .font(.system(size: 12))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !isGeminiCLIInstalled {
-                    Text("Clickys run on Gemini CLI, which isn't installed yet. In Terminal, run `npm install -g @google/gemini-cli` (needs Node.js), then reopen this window.")
+                    Text("Dots run on Gemini CLI, which isn't installed yet. In Terminal, run `npm install -g @google/gemini-cli` (needs Node.js), then reopen this window.")
                         .font(.system(size: 12))
                         .foregroundColor(DS.Colors.warningText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -300,7 +300,7 @@ private struct ClickyAgentChatView: View {
             .buttonStyle(.plain)
             .foregroundColor(DS.Colors.textSecondary)
             .pointerCursor()
-            .help("Delete this Clicky")
+            .help("Delete this Dot")
             .confirmationDialog("Delete \(agent.name)?", isPresented: $isConfirmingDelete) {
                 Button("Move to Trash", role: .destructive) { clickyRoster.deleteAgent(agent) }
             } message: {
@@ -337,7 +337,7 @@ private struct ClickyAgentChatView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .pointerCursor()
-        .help("Skills this Clicky uses")
+        .help("Skills this Dot uses")
         .onAppear { skillLibrary.reload() }
     }
 
@@ -537,7 +537,7 @@ private struct ClickyTranscriptItemView: View {
                         .pointerCursor()
                     Button("Always allow") { onAnswerComputerUseRequest(true, true) }
                         .pointerCursor()
-                        .help("Let Clickys click and type on your Mac without asking. You can turn this off in Settings.")
+                        .help("Let Dots click and type on your Mac without asking. You can turn this off in Settings.")
                     Button("Not now") { onAnswerComputerUseRequest(false, false) }
                         .pointerCursor()
                 }
