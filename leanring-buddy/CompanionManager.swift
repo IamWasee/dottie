@@ -126,6 +126,8 @@ final class CompanionManager: ObservableObject {
     /// Text the user typed for the current live turn, if it was typed rather
     /// than spoken. Live only transcribes audio, so we remember it ourselves.
     private var currentLiveTurnTypedText: String?
+    /// The second look at where Live pointed; replaced by the next point request.
+    private var livePointingRefinementTask: Task<Void, Never>?
     private var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
@@ -950,13 +952,32 @@ final class CompanionManager: ObservableObject {
             return
         }
 
-        detectedElementScreenLocation = Self.globalScreenLocation(
+        let roughScreenLocation = Self.globalScreenLocation(
             forScreenshotPixel: resolvedPoint.pointInScreenshotPixels,
             in: resolvedPoint.screenCapture
         )
-        detectedElementDisplayFrame = resolvedPoint.screenCapture.displayFrame
+        let displayFrame = resolvedPoint.screenCapture.displayFrame
         ClickyAnalytics.trackElementPointed(elementLabel: pointRequest.elementLabel)
         print("🎯 Live pointing: (\(Int(pointRequest.normalizedX)), \(Int(pointRequest.normalizedY)))/1000 → \"\(pointRequest.elementLabel ?? "element")\"")
+
+        // Live's guess comes from a small frame; take a second, sharper look
+        // before the cursor flies, so it lands on the thing itself.
+        livePointingRefinementTask?.cancel()
+        let userQuestion = currentLiveTurnTypedText ?? ""
+        livePointingRefinementTask = Task { [weak self] in
+            let refinedScreenLocation = await PointingRefiner.refine(
+                elementLabel: pointRequest.elementLabel,
+                userQuestion: userQuestion,
+                roughPoint: roughScreenLocation,
+                displayFrame: displayFrame
+            )
+            guard let self, !Task.isCancelled else { return }
+            // Still on the display the guess was on, or the guess wins.
+            let finalScreenLocation = refinedScreenLocation.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
+                ?? roughScreenLocation
+            self.detectedElementScreenLocation = finalScreenLocation
+            self.detectedElementDisplayFrame = displayFrame
+        }
     }
 
     /// A press released before the mic session opened never reaches Gemini,
