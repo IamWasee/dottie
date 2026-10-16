@@ -121,8 +121,12 @@ final class NotchPresenter: ObservableObject {
     /// The closed notch grows a little on each side to show a working
     /// light and the count of Dots with something new.
     var showsCompactDotIndicators: Bool {
-        unreadDotCount > 0 || isAnyDotWorking
+        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn
     }
+
+    /// The brain's screen journal is on: the closed notch shows a small
+    /// light so the user always knows.
+    @Published var isScreenJournalOn = false
 
     /// Set by CompanionManager.
     var onSubmitTypedMessage: ((String) -> Void)?

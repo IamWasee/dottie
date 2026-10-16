@@ -88,6 +88,11 @@ struct NotchRootView: View {
                 ZStack {
                     if notchPresenter.isAnyDotWorking {
                         NotchWorkingLight()
+                    } else if notchPresenter.isScreenJournalOn {
+                        Circle()
+                            .fill(Color.green.opacity(0.85))
+                            .frame(width: 5, height: 5)
+                            .help("Dottie's brain is keeping a screen journal. Turn it off in Home → Brain.")
                     }
                 }
                 .frame(width: NotchWindowManager.compactIndicatorWidth)

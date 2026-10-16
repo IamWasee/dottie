@@ -262,11 +262,15 @@ final class GeminiCLIAgentRuntime {
             // quota" on a free-tier key; Dots search through the Worker instead.
             "tools": ["exclude": ["google_web_search"]]
         ]
+        // MCP servers the user added in Home → Brain, for the Brain and
+        // every Dot.
+        var mcpServers = DottieBrain.userMCPServers()
         if let cuaDriverURL {
             ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
-            cliSettings["mcpServers"] = [
-                ClickyComputerUse.mcpServerName: ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL)
-            ]
+            mcpServers[ClickyComputerUse.mcpServerName] = ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL)
+        }
+        if !mcpServers.isEmpty {
+            cliSettings["mcpServers"] = mcpServers
         }
 
         // Gemini CLI reads AGENTS.md from its home folder for every agent.
