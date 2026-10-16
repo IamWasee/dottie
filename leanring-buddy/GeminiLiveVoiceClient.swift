@@ -89,6 +89,8 @@ final class GeminiLiveVoiceClient {
     /// list_helpers, check_helper, stop_helper, open_helper_result: the
     /// app answers from the helpers' real state.
     var onHelperTool: (@MainActor (_ functionName: String, _ helperName: String?) -> String)?
+    /// recall_memory, remember and ask_brain (DottieBrain).
+    var onBrainTool: (@MainActor (_ functionName: String, _ text: String) -> String)?
     /// The model asked to click, type, press keys, scroll, open a page or
     /// draw on screen. Returns what happened, for the model to relay.
     var onScreenAction: (@MainActor (DottieScreenAction) async -> String)?
@@ -516,6 +518,40 @@ final class GeminiLiveVoiceClient {
         ]
     }
 
+    private static func brainFunctionDeclaration(name: String, description: String, argumentName: String, argumentDescription: String) -> [String: Any] {
+        [
+            "name": name,
+            "description": description,
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [argumentName: ["type": "STRING", "description": argumentDescription]],
+                "required": [argumentName]
+            ]
+        ]
+    }
+
+    /// The second brain: memory search, saving a memory, and the Brain agent.
+    private static let brainFunctionDeclarations: [[String: Any]] = [
+        brainFunctionDeclaration(
+            name: "recall_memory",
+            description: "Search everything remembered about the user: past conversations, what helpers did, guides, screen jobs, things they asked you to remember, and what they were doing on screen. Use it whenever they ask about the past.",
+            argumentName: "query",
+            argumentDescription: "A few keywords for what to look for."
+        ),
+        brainFunctionDeclaration(
+            name: "remember",
+            description: "Save something the user asked you to remember.",
+            argumentName: "fact",
+            argumentDescription: "The thing to remember, written so it stands on its own."
+        ),
+        brainFunctionDeclaration(
+            name: "ask_brain",
+            description: "Hand a question or job to your second brain, which can search the user's shared folders and memory and use their command-line tools and connected apps. Use it for anything about their files, folders, repos or tools, or that needs real digging. Its answer comes back to you in a later message.",
+            argumentName: "question",
+            argumentDescription: "The question or job, written so it stands on its own."
+        )
+    ]
+
     private static let helperStatusFunctionDeclarations: [[String: Any]] = [
         listHelpersFunctionDeclaration,
         helperFunctionDeclaration(
@@ -543,7 +579,7 @@ final class GeminiLiveVoiceClient {
             guideUserFunctionDeclaration,
             guideNextFunctionDeclaration,
             stopGuideFunctionDeclaration
-        ] + helperStatusFunctionDeclarations
+        ] + helperStatusFunctionDeclarations + brainFunctionDeclarations
     }
 
     /// Teaching the app on screen, step by step or as a tour (DottieGuide).
@@ -813,6 +849,16 @@ final class GeminiLiveVoiceClient {
                 handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "start_helper":
                 handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "recall_memory", "remember", "ask_brain":
+                let argumentName = functionName == "recall_memory" ? "query" : (functionName == "remember" ? "fact" : "question")
+                let argumentText = (functionArguments[argumentName] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let brainResult: String
+                if argumentText.isEmpty && functionName != "recall_memory" {
+                    brainResult = "nothing to \(functionName == "remember" ? "remember" : "ask")."
+                } else {
+                    brainResult = onBrainTool?(functionName, argumentText) ?? "the brain isn't available right now."
+                }
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": brainResult])
             case "list_helpers", "check_helper", "stop_helper", "open_helper_result":
                 let helperName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let helperResult = onHelperTool?(functionName, helperName?.isEmpty == true ? nil : helperName)

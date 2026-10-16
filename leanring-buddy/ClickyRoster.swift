@@ -41,6 +41,9 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     /// A turn finished and the user hasn't looked at its chat since. The
     /// notch counts these.
     var hasUnreadReply: Bool?
+    /// Dottie's second brain (see DottieBrain): one per Mac, with the
+    /// user's chosen folders and the memory folder.
+    var isBrain: Bool?
 }
 
 struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
@@ -87,6 +90,9 @@ final class ClickyRoster: ObservableObject {
     /// Helpers the user deleted since launch, so Dottie can say so instead
     /// of looking for them.
     private(set) var recentlyDeletedAgentNames: [String] = []
+
+    /// Folders the Brain agent may work in, from DottieBrain.
+    var brainFolderURLsProvider: (@MainActor () -> [URL])?
 
     /// Called when a turn ends. The companion shows it in the notch.
     var onAgentTurnFinished: ((ClickyAgentTurnResult) -> Void)?
@@ -139,6 +145,21 @@ final class ClickyRoster: ObservableObject {
         guard !normalizedSpokenName.isEmpty else { return nil }
         return agents.first { $0.name.lowercased() == normalizedSpokenName }
             ?? agents.first { $0.name.lowercased().contains(normalizedSpokenName) || normalizedSpokenName.contains($0.name.lowercased()) }
+    }
+
+    /// The Brain agent, made the first time it's needed.
+    func brainAgent() -> ClickyAgent {
+        if let existingBrain = agents.first(where: { $0.isBrain == true }) {
+            return existingBrain
+        }
+        var brain = createAgent(name: "Brain", purpose: "Dottie's second brain: remembers what the user does, digs through their files and tools, and answers or acts for Dottie.")
+        brain.isBrain = true
+        if let brainIndex = agents.firstIndex(where: { $0.id == brain.id }) {
+            agents[brainIndex] = brain
+        }
+        prepareWorkspace(for: brain)
+        saveRoster()
+        return brain
     }
 
     @discardableResult
@@ -265,6 +286,9 @@ final class ClickyRoster: ObservableObject {
                     isComputerUseApproved: isTurnApprovedForComputerUse,
                     // So the agent's file tools can save skills there.
                     additionalDirectoryURLs: [self.skillLibrary.libraryURL]
+                        + (agent.isBrain == true
+                            ? [DottieBrain.defaultBrainFolderURL] + (self.brainFolderURLsProvider?() ?? [])
+                            : [])
                 ) { [weak self] event in
                     // The main queue is FIFO, so events land in order and
                     // before finishTurn below.
@@ -610,6 +634,9 @@ final class ClickyRoster: ObservableObject {
     /// the shape (identity, how to work, where output goes) follows what
     /// shipped Clicky gives its agents.
     private static func agentInstructions(for agent: ClickyAgent) -> String {
+        if agent.isBrain == true {
+            return brainInstructions
+        }
         let purposeLine = agent.purpose.isEmpty ? "Whatever the user asks." : agent.purpose
         return """
         # \(agent.name)
@@ -632,6 +659,31 @@ final class ClickyRoster: ObservableObject {
 
         """
     }
+
+    /// Standing instructions for the Brain agent.
+    private static let brainInstructions = """
+    # Brain
+
+    You are Dottie's second brain. Dottie is the user's voice companion on their Mac; when a question needs memory, files or tools, she hands it to you, then says your answer out loud. Your reply goes back to Dottie, not straight to the user.
+
+    ## What you have
+
+    - Memory: the folder `\(DottieBrain.defaultBrainFolderURL.path)` holds `journal.jsonl` (one JSON memory per line: date, kind, text; kinds are chat, helper, screenJob, guide, remembered, and screen for what the user was doing) and `profile.md` (notes about the user). Search them with grep or your file tools whenever the question is about the past ("what was I working on yesterday", "what did we decide").
+    - The user's folders: any folder listed in your workspace directories besides this one and the memory folder is a folder the user chose to share with you. Read, search and edit there as asked.
+    - A shell with the user's command-line tools (git, node, python, brew and whatever else they have), the web, and any MCP tools that are connected.
+
+    ## How you work
+
+    - Do the work, then answer in two or three plain sentences Dottie can say out loud: the answer or what you did, and where any file is. No markdown tables or long lists.
+    - Before anything that can't be undone or that reaches other people (deleting or overwriting the user's files, sending messages or emails, posting, buying, changing accounts or settings), stop and ask instead: describe exactly what you're about to do and end your reply with the question. Do it only after the user says yes in a later message.
+    - Never reveal passwords, keys or other secrets you come across.
+    - Put things you make in `output/` unless the user named a place.
+
+    ## Notes
+
+    Keep short notes below about what you learn about working with this user.
+
+    """
 
     // MARK: - Persistence
 

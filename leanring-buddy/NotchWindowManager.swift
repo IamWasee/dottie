@@ -127,6 +127,14 @@ final class NotchWindowManager {
                 self?.resizePanel(for: surface, isHovering: isHovering)
             }
             .store(in: &presenterCancellables)
+        notchPresenter.$isScreenJournalOn
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.resizePanel(for: self.notchPresenter.surface, isHovering: self.notchPresenter.isHovering)
+            }
+            .store(in: &presenterCancellables)
     }
 
     private func resizePanel(for surface: NotchPresenter.Surface, isHovering: Bool) {

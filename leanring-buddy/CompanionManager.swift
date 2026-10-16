@@ -107,6 +107,8 @@ final class CompanionManager: ObservableObject {
     let conversationStore = ConversationStore()
     /// Background agents ("Clickys") that run on Gemini CLI.
     let clickyRoster = ClickyRoster()
+    /// Memory, the Brain agent's settings and the screen journal.
+    let brain = DottieBrain()
     /// Hold right Option to dictate into any app.
     let dictationController = ClickyDictationController()
     private var dictationCancellables: Set<AnyCancellable> = []
@@ -137,6 +139,10 @@ final class CompanionManager: ObservableObject {
     /// While a guide waits for the user to click its target, the cursor
     /// keeps pointing at it instead of flying back after a few seconds.
     private(set) var keepsPointingUntilCleared = false
+    /// The question Dottie handed the Brain, so she says its answer.
+    private var pendingSpokenBrainQuestion: String?
+    private var currentGuideGoal: String?
+    private var brainCancellables = Set<AnyCancellable>()
     /// Counts narrated lines so a stale safety timeout can't end a newer one.
     private var narrationCount = 0
     /// Called once when the current Live turn has finished speaking (or
@@ -219,7 +225,7 @@ final class CompanionManager: ObservableObject {
     func setSelectedPersonality(_ personality: DottiePersonality) {
         selectedPersonality = personality
         UserDefaults.standard.set(personality.rawValue, forKey: DottiePersonality.defaultsKey)
-        liveVoiceClient.baseSystemInstruction = Self.liveVoiceSystemPrompt(personality: personality)
+        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
         if !liveVoiceClient.isModelTurnInProgress {
             liveVoiceClient.disconnect()
         }
@@ -873,6 +879,14 @@ final class CompanionManager: ObservableObject {
         personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
     }
 
+    /// The Live prompt with what the second brain knows about the user.
+    private func currentLiveSystemPrompt() -> String {
+        let basePrompt = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
+        let profile = brain.profileForPrompt
+        guard !profile.isEmpty else { return basePrompt }
+        return basePrompt + "\n\nwhat your second brain knows about the user (use it naturally, don't recite it):\n" + profile
+    }
+
     // MARK: - Live Voice Pipeline (Gemini Live)
 
     /// Live mode's system prompt. Same personality as v0's, but pointing is a
@@ -908,6 +922,12 @@ final class CompanionManager: ObservableObject {
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence. if they say stop or never mind while it's running, call stop_screen_task.
 
+    second brain:
+    you have a second brain that remembers everything you and the helpers have done with the user, and can dig through their files, command-line tools and connected apps.
+    - when the user asks about the past ("what was i working on yesterday", "what did we talk about last week", "what was that site"), call recall_memory with a few keywords, and answer from it.
+    - when they say to remember something, call remember with it, written so it stands on its own.
+    - when a question needs their files, folders, tools or real digging ("find my resume and tighten it", "what's in my downloads", "check my git repos for uncommitted work"), call ask_brain with the question. say a few words, then stop; its answer comes back to you and you say it.
+
     helpers:
     the user can have background helpers (also called dots) that work on their own on the mac with a shell, files, node and the web, and report back in the notch when done. they can do real work: research, write documents, organize files, write code, and build whole websites or small apps, which they save in their own folder.
     - when the user asks for work that takes more than an answer, or says to have a helper or a named helper do something, call start_helper with a task that stands on its own and helper_name if they named one. then say it's started in a few words. don't do the task yourself, and never say you can't start a helper: call start_helper.
@@ -918,7 +938,7 @@ final class CompanionManager: ObservableObject {
 
     /// Hooks the Live client's callbacks into the companion's state.
     private func configureLiveVoiceClient() {
-        liveVoiceClient.baseSystemInstruction = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
+        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
         liveVoiceClient.voiceName = selectedVoiceName
 
         // Pick up where the last run left off: the saved conversation seeds
@@ -985,6 +1005,19 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText)
+        }
+
+        liveVoiceClient.onBrainTool = { [weak self] functionName, text in
+            guard let self else { return "the brain isn't available right now." }
+            switch functionName {
+            case "recall_memory":
+                return self.brain.recall(text)
+            case "remember":
+                self.brain.record(.remembered, text)
+                return "saved to memory."
+            default:
+                return self.askBrain(question: text)
+            }
         }
 
         liveVoiceClient.onHelperTool = { [weak self] functionName, helperName in
@@ -1191,6 +1224,7 @@ final class CompanionManager: ObservableObject {
             scheduleTransientHideIfNeeded()
             return
         }
+        brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
 
         // Say it as soon as Dottie isn't in the middle of another turn.
         Task { [weak self] in
@@ -1226,6 +1260,7 @@ final class CompanionManager: ObservableObject {
     private func startGuide(goal: String, modeName: String) -> String {
         stopScreenTask()
         let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
+        currentGuideGoal = goal
         print("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")
         transientHideTask?.cancel()
         transientHideTask = nil
@@ -1277,6 +1312,10 @@ final class CompanionManager: ObservableObject {
 
     private func guideDidEnd(spokenGoodbye: String?) {
         print("🧑‍🏫 Guide ended")
+        if let guideGoal = currentGuideGoal {
+            brain.record(.guide, "showed the user how to: \(guideGoal)")
+            currentGuideGoal = nil
+        }
         keepsPointingUntilCleared = false
         clearDetectedElementLocation()
         drawingOverlayManager.clear()
@@ -1383,6 +1422,7 @@ final class CompanionManager: ObservableObject {
         let userTranscript = typedTextForThisTurn ?? userTranscript
 
         if !isNarrationTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
+            brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")
             conversationStore.append(
                 userText: userTranscript,
                 clickyText: modelTranscript,
@@ -1440,7 +1480,7 @@ final class CompanionManager: ObservableObject {
             notes.append(wasDeleted
                 ? "the old \(clickyName) was deleted, so this is a new helper with that name."
                 : "there was no helper called \(clickyName), so a new one was made.")
-        } else if let idleHelper = clickyRoster.agents.first(where: { !clickyRoster.isRunning($0) && clickyRoster.pendingComputerUseRequest(for: $0) == nil }) {
+        } else if let idleHelper = clickyRoster.agents.first(where: { $0.isBrain != true && !clickyRoster.isRunning($0) && clickyRoster.pendingComputerUseRequest(for: $0) == nil }) {
             // The most recently made idle helper, usually the one the user
             // just set up in the app.
             targetAgent = idleHelper
@@ -1501,7 +1541,75 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    private func configureBrain() {
+        clickyRoster.brainFolderURLsProvider = { [weak self] in
+            self?.brain.folderURLs ?? []
+        }
+        brain.onProfileChanged = { [weak self] _ in
+            guard let self else { return }
+            // Takes effect on the next Live connection.
+            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
+        }
+        brain.$isScreenJournalEnabled
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isEnabled in
+                self?.notchPresenter.isScreenJournalOn = isEnabled
+            }
+            .store(in: &brainCancellables)
+    }
+
+    /// Hands a question to the Brain agent; Dottie says the answer when it
+    /// comes back.
+    private func askBrain(question: String) -> String {
+        guard ClickyWorkerConfiguration.isWorkerConfigured else {
+            return "the brain can't run yet: Dottie isn't connected to its server."
+        }
+        let brainAgent = clickyRoster.brainAgent()
+        guard !clickyRoster.isRunning(brainAgent) else {
+            return "the brain is still working on the last question: \(clickyRoster.statusLine(for: brainAgent)). tell the user it'll answer that first."
+        }
+        let recentChat = conversationHistory.suffix(4)
+            .map { "user: \($0.userTranscript)\ndottie: \($0.assistantResponse)" }
+            .joined(separator: "\n")
+        let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+        let messageForBrain = """
+        Dottie's question for you: \(question)
+
+        (context: the user is in \(frontmostApp). recent conversation with Dottie:
+        \(recentChat.isEmpty ? "none" : recentChat))
+        """
+        clickyRoster.sendMessage(messageForBrain, to: brainAgent)
+        guard clickyRoster.isRunning(brainAgent) else {
+            return "couldn't reach the brain right now."
+        }
+        pendingSpokenBrainQuestion = question
+        return "the brain is on it. say only a few words like 'let me think on that'; its answer comes to you in a later message."
+    }
+
+    private func speakBrainAnswer(question: String, answer: String) {
+        let instructionText = "your second brain answered the user's question \"\(question)\": \(answer)\n"
+            + "tell the user now, in your own voice, in one to three short sentences. if it asks the user something, ask it."
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        Task { [weak self] in
+            // Wait for any turn in progress to finish first.
+            for _ in 0..<60 {
+                guard let self else { return }
+                if !self.isLiveTurnInFlight && self.voiceState == .idle { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard let self else { return }
+            switch self.voiceMode {
+            case .classic:
+                self.sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
+            case .live:
+                self.startLiveTextTurn(recordedUserText: "(brain: \(question))", turnText: instructionText)
+            }
+        }
+    }
+
     private func configureClickyRoster() {
+        configureBrain()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
             guard let self else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
@@ -1523,6 +1631,14 @@ final class CompanionManager: ObservableObject {
             let updateText = turnResult.finalReply.isEmpty
                 ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
                 : turnResult.finalReply
+            let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
+            self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
+            if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
+                self.pendingSpokenBrainQuestion = nil
+                self.speakBrainAnswer(question: brainQuestion, answer: updateText)
+                self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
+                return
+            }
             self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
             self.refreshNotchPeekFiles()
             self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
@@ -1960,7 +2076,8 @@ final class CompanionManager: ObservableObject {
 
                 let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
                     images: labeledImages,
-                    systemPrompt: Self.classicVoiceSystemPrompt(personality: selectedPersonality),
+                    systemPrompt: Self.classicVoiceSystemPrompt(personality: selectedPersonality)
+                        + (brain.profileForPrompt.isEmpty ? "" : "\n\nwhat your second brain knows about the user:\n" + brain.profileForPrompt),
                     conversationHistory: historyForAPI,
                     userPrompt: promptForModel,
                     onTextChunk: { _ in
@@ -2017,6 +2134,7 @@ final class CompanionManager: ObservableObject {
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
+                brain.record(.chat, "user: \(transcript)\ndottie: \(spokenText)")
                 conversationStore.append(
                     userText: transcript,
                     clickyText: spokenText,

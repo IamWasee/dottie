@@ -17,6 +17,7 @@ struct HomeSpaceRootView: View {
         case conversation = "Conversation"
         case clickys = "Dots"
         case skills = "Skills"
+        case brain = "Brain"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -26,6 +27,7 @@ struct HomeSpaceRootView: View {
             case .conversation: return "bubble.left.and.bubble.right.fill"
             case .clickys: return "person.2.fill"
             case .skills: return "sparkles"
+            case .brain: return "brain.head.profile"
             case .settings: return "gearshape.fill"
             }
         }
@@ -52,6 +54,8 @@ struct HomeSpaceRootView: View {
                     HomeClickysView(clickyRoster: clickyRoster)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
+                case .brain:
+                    HomeBrainView(brain: companionManager.brain)
                 case .settings:
                     HomeSettingsView(
                         companionManager: companionManager,
