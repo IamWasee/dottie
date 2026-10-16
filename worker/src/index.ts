@@ -17,8 +17,8 @@
  *                      returns the cleaned-up text to type, in one Gemini
  *                      call (transcription and cleanup together).
  *   GET  /search?q=  → web search without Google Search grounding (free-tier
- *                      keys can't use it): DuckDuckGo results, Wikipedia as a
- *                      fallback, plus the top page's text. Used by the voice
+ *                      keys can't use it): Bing's results page, then
+ *                      DuckDuckGo, then Wikipedia, plus the top page's text. Used by the voice
  *                      model's search_web tool and by Dots.
  *   GET  /config     → non-secret model names, for debugging.
  *   ANY  /gemini/*   → transparent Gemini API passthrough for the background
@@ -411,10 +411,10 @@ interface SearchResult {
 
 /**
  * Web search for a free-tier key, which gets "You exceeded your current
- * quota" for Gemini's Google Search tool. Asks DuckDuckGo's HTML page,
- * falls back to Wikipedia's search when that gives nothing (DuckDuckGo
- * sometimes answers datacenters with a challenge page), and adds the
- * readable text of the first result so a short answer needs no second call.
+ * quota" for Gemini's Google Search tool. Reads Bing's results page, then
+ * DuckDuckGo's (it often answers servers with a 202 challenge page), then
+ * Wikipedia's search, and adds the readable text of the first result so a
+ * short answer needs no second call.
  */
 async function handleSearch(url: URL): Promise<Response> {
   const query = (url.searchParams.get("q") ?? "").trim().slice(0, 300);
@@ -422,11 +422,16 @@ async function handleSearch(url: URL): Promise<Response> {
     return jsonResponse({ error: "missing q" }, 400);
   }
 
-  let results = await searchDuckDuckGo(query).catch(() => [] as SearchResult[]);
-  let source = "duckduckgo";
-  if (results.length === 0) {
-    results = await searchWikipedia(query).catch(() => [] as SearchResult[]);
-    source = "wikipedia";
+  let results: SearchResult[] = [];
+  let source = "";
+  for (const [engineName, searchEngine] of [
+    ["bing", searchBing],
+    ["duckduckgo", searchDuckDuckGo],
+    ["wikipedia", searchWikipedia],
+  ] as const) {
+    results = await searchEngine(query).catch(() => [] as SearchResult[]);
+    source = engineName;
+    if (results.length > 0) break;
   }
 
   let topPage: { url: string; text: string } | undefined;
@@ -445,6 +450,37 @@ const BROWSER_HEADERS = {
   "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36",
   "accept-language": "en-US,en;q=0.9",
 };
+
+async function searchBing(query: string): Promise<SearchResult[]> {
+  const response = await fetch(
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&cc=US`,
+    { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) }
+  );
+  if (!response.ok) return [];
+  const html = await response.text();
+
+  const results: SearchResult[] = [];
+  for (const resultBlock of html.split('<li class="b_algo"').slice(1)) {
+    const titleLink = resultBlock.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!titleLink) continue;
+    let resultURL = decodeHTMLEntities(titleLink[1]);
+    // Bing wraps links as /ck/a?...&u=a1<base64url of the real address>.
+    const wrappedTarget = resultURL.match(/[?&]u=a1([^&]+)/);
+    if (wrappedTarget) {
+      const base64 = wrappedTarget[1].replace(/-/g, "+").replace(/_/g, "/");
+      try {
+        resultURL = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+      } catch {
+        continue;
+      }
+    }
+    if (!resultURL.startsWith("http")) continue;
+    const snippet = resultBlock.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    results.push({ title: htmlToText(titleLink[2]), url: resultURL, snippet: snippet ? htmlToText(snippet[1]) : "" });
+    if (results.length === 6) break;
+  }
+  return results;
+}
 
 async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
   const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
