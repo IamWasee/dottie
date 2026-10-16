@@ -1,0 +1,568 @@
+//
+//  DottieScreenTaskRunner.swift
+//  leanring-buddy
+//
+//  Multi-step jobs on the screen, done in one go: "open Opera, search
+//  kaggle, go to my competitions, open the RSNA knee one and tell me my
+//  rank". Voice Dottie hands the whole request here (do_task_on_screen) and
+//  this runs the classic look-act loop until it's done:
+//
+//    1. Screenshot the display the user is working on (without Dottie's own
+//       windows) and send it to Gemini Flash with the task, the steps so far
+//       and a small set of actions as function declarations.
+//    2. Gemini answers with the next action: open an app or page, click a
+//       box on the screenshot, type, press keys, scroll, wait, or finish
+//       with what to tell the user.
+//    3. Do it (Dottie's cursor flies to every click first), wait for the
+//       screen to settle, and go again.
+//
+//  Gemini Flash returns exact boxes for what it sees (verified 2026-10-16 on
+//  the free tier: box_2d within a few pixels on a 1440px screenshot), so
+//  clicks land on the thing itself. The loop stops on finish, after
+//  maximumSteps, or when the user stops it (Escape, the notch, or by voice).
+//
+
+import AppKit
+import ApplicationServices
+import Foundation
+import ScreenCaptureKit
+
+@MainActor
+final class DottieScreenTaskRunner {
+    enum Outcome {
+        /// Done; the answer is what to tell the user.
+        case finished(answer: String)
+        /// The user stopped it.
+        case stopped
+        /// Gave up: Gemini unreachable, too many steps, no screen access.
+        case failed(reason: String)
+    }
+
+    static let maximumSteps = 30
+    /// Fast and on the free tier; the Worker falls back to other Flash
+    /// models when it's busy.
+    private static let taskModel = "gemini-3.6-flash"
+    /// Older screenshots are dropped from the conversation to keep requests
+    /// small; the action log still says what happened.
+    private static let keptScreenshotCount = 2
+    private static let maximumScreenshotDimension = 1440
+
+    /// Progress for the notch: step number and what's happening.
+    var onProgress: (@MainActor (_ stepNumber: Int, _ description: String) -> Void)?
+    /// Called before each click with the global point and its display, so
+    /// Dottie's cursor can fly there first.
+    var onWillClick: (@MainActor (_ point: CGPoint, _ displayFrame: CGRect) async -> Void)?
+
+    private(set) var currentTaskText: String?
+    private var runTask: Task<Void, Never>?
+
+    var isRunning: Bool { runTask != nil }
+
+    func start(task taskText: String, completion: @escaping @MainActor (Outcome) -> Void) {
+        stop()
+        currentTaskText = taskText
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            let outcome = await self.run(taskText: taskText)
+            guard !Task.isCancelled else { return }
+            self.runTask = nil
+            self.currentTaskText = nil
+            completion(outcome)
+        }
+    }
+
+    /// Stops after the current action. Returns true if a task was running.
+    @discardableResult
+    func stop() -> Bool {
+        guard let runTask else { return false }
+        runTask.cancel()
+        self.runTask = nil
+        currentTaskText = nil
+        return true
+    }
+
+    // MARK: - The loop
+
+    private func run(taskText: String) async -> Outcome {
+        guard DottieScreenActionPerformer.canPostEvents else {
+            return .failed(reason: "I need Accessibility permission to click and type for you: System Settings → Privacy & Security → Accessibility.")
+        }
+
+        var contents: [[String: Any]] = []
+        var pendingFunctionResponseParts: [[String: Any]] = []
+        var consecutiveRequestFailures = 0
+
+        for stepNumber in 1...Self.maximumSteps {
+            if Task.isCancelled { return .stopped }
+
+            guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension) else {
+                return .failed(reason: "I couldn't see the screen. Dottie needs Screen Recording permission.")
+            }
+            let screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
+            // Every function call needs its response in the next user turn,
+            // so a failed request puts these back for the retry.
+            let functionResponsesForThisTurn = pendingFunctionResponseParts
+            var userParts = functionResponsesForThisTurn
+            userParts.append(["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]])
+            userParts.append(["text": contents.isEmpty
+                ? "Task from the user: \(taskText)\n\n\(screenNote)\nThis is the screen now. Take the first step."
+                : "\(screenNote)\nThis is the screen now. Take the next step."])
+            contents.append(["role": "user", "parts": userParts])
+            pendingFunctionResponseParts = []
+            Self.dropOldScreenshots(from: &contents)
+
+            let modelParts: [[String: Any]]
+            do {
+                modelParts = try await requestNextActions(contents: contents)
+                consecutiveRequestFailures = 0
+            } catch {
+                if Task.isCancelled { return .stopped }
+                consecutiveRequestFailures += 1
+                print("⚠️ Screen task step \(stepNumber) failed: \(error.localizedDescription)")
+                if consecutiveRequestFailures >= 3 {
+                    return .failed(reason: "Gemini's too busy to keep going right now.")
+                }
+                // Try the same step again with the same conversation.
+                contents.removeLast()
+                pendingFunctionResponseParts = functionResponsesForThisTurn
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                continue
+            }
+            if Task.isCancelled { return .stopped }
+
+            contents.append(["role": "model", "parts": modelParts])
+            let functionCalls = modelParts.compactMap { $0["functionCall"] as? [String: Any] }
+
+            guard !functionCalls.isEmpty else {
+                // Plain text instead of an action: treat it as the answer.
+                let answerText = modelParts
+                    .filter { ($0["thought"] as? Bool) != true }
+                    .compactMap { $0["text"] as? String }
+                    .joined()
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return .finished(answer: answerText.isEmpty ? "All done." : answerText)
+            }
+
+            for functionCall in functionCalls {
+                if Task.isCancelled { return .stopped }
+                let functionName = functionCall["name"] as? String ?? ""
+                let arguments = functionCall["args"] as? [String: Any] ?? [:]
+
+                if functionName == "finish" {
+                    let answer = (arguments["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return .finished(answer: answer.isEmpty ? "All done." : answer)
+                }
+
+                let result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
+                var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
+                if let functionCallID = functionCall["id"] as? String {
+                    functionResponse["id"] = functionCallID
+                }
+                pendingFunctionResponseParts.append(["functionResponse": functionResponse])
+            }
+
+            // Let pages load and animations finish before the next look.
+            try? await Task.sleep(nanoseconds: 900_000_000)
+        }
+
+        return .failed(reason: "That took more than \(Self.maximumSteps) steps, so I stopped.")
+    }
+
+    // MARK: - Actions
+
+    private func perform(functionName: String, arguments: [String: Any], screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        func text(_ key: String) -> String? {
+            let value = (arguments[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == false ? value : nil
+        }
+        func flag(_ key: String) -> Bool { (arguments[key] as? Bool) ?? ((arguments[key] as? NSNumber)?.boolValue ?? false) }
+        func boxCenter() -> CGPoint? {
+            guard let box = arguments["box_2d"] as? [Any] else { return nil }
+            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+            guard numbers.count == 4 else { return nil }
+            let (ymin, xmin, ymax, xmax) = (numbers[0], numbers[1], numbers[2], numbers[3])
+            guard ymax >= ymin, xmax >= xmin else { return nil }
+            return screen.globalPoint(normalizedX: (xmin + xmax) / 2, normalizedY: (ymin + ymax) / 2)
+        }
+
+        switch functionName {
+        case "open_app":
+            guard let appName = text("name") else { return "error: no app name" }
+            onProgress?(stepNumber, "opening \(appName)")
+            let didOpen = await Self.openApplication(named: appName)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            return didOpen ? "opened \(appName); it's in front now" : "couldn't find an app called \(appName)"
+
+        case "open_url":
+            guard var address = text("url") else { return "error: no url" }
+            if !address.contains("://") { address = "https://" + address }
+            guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+                return "error: not a web address"
+            }
+            onProgress?(stepNumber, "opening \(url.host ?? address)")
+            let didOpen: Bool
+            if let browserName = text("browser") {
+                didOpen = await Self.open(url, inApplicationNamed: browserName)
+            } else {
+                didOpen = NSWorkspace.shared.open(url)
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return didOpen ? "opened \(address)" : "couldn't open \(address)"
+
+        case "click":
+            guard let point = boxCenter() else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
+            let label = text("label") ?? "it"
+            onProgress?(stepNumber, "clicking \(label)")
+            await onWillClick?(point, screen.displayFrame)
+            if Task.isCancelled { return "stopped" }
+            DottieScreenActionPerformer.click(at: point, clickCount: flag("double_click") ? 2 : 1, isRightClick: flag("right_click"))
+            return "clicked \(label)"
+
+        case "type_text":
+            guard let typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
+            if let point = boxCenter() {
+                await onWillClick?(point, screen.displayFrame)
+                if Task.isCancelled { return "stopped" }
+                DottieScreenActionPerformer.click(at: point, clickCount: 1, isRightClick: false)
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+            if DottieScreenActionPerformer.isFocusedFieldSecure {
+                return "refused: that's a password field. The user has to type passwords themselves; finish and tell them."
+            }
+            onProgress?(stepNumber, "typing \"\(typedText.prefix(40))\"")
+            if flag("select_all_first") {
+                DottieScreenActionPerformer.press(keyCombination: "cmd+a")
+            }
+            await DottieScreenActionPerformer.type(typedText)
+            if flag("press_enter") {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                DottieScreenActionPerformer.press(keyCombination: "enter")
+            }
+            return flag("press_enter") ? "typed it and pressed return" : "typed it"
+
+        case "press_keys":
+            guard let keys = text("keys") else { return "error: no keys" }
+            onProgress?(stepNumber, "pressing \(keys)")
+            return DottieScreenActionPerformer.press(keyCombination: keys)
+                ? "pressed \(keys)"
+                : "unknown key \(keys); use names like cmd+l, enter, escape, tab, up, down"
+
+        case "scroll":
+            guard let direction = text("direction").flatMap({ DottieScreenAction.ScrollDirection(rawValue: $0.lowercased()) }) else {
+                return "error: direction must be up, down, left or right"
+            }
+            onProgress?(stepNumber, "scrolling \(direction.rawValue)")
+            let amount = Int((arguments["amount"] as? NSNumber)?.doubleValue ?? 5)
+            // Scroll where the content is, not wherever the user's pointer is.
+            let scrollPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 550)
+            DottieScreenActionPerformer.scroll(direction: direction, amount: amount, at: scrollPoint)
+            return "scrolled \(direction.rawValue)"
+
+        case "wait":
+            let seconds = min(max((arguments["seconds"] as? NSNumber)?.doubleValue ?? 2, 0.5), 10)
+            onProgress?(stepNumber, "waiting for it to load")
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return "waited \(Int(seconds.rounded())) seconds"
+
+        default:
+            return "error: unknown action \(functionName)"
+        }
+    }
+
+    /// Brings a running app forward, else launches it by name.
+    private static func openApplication(named appName: String) async -> Bool {
+        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "")
+        if let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
+            $0.activationPolicy == .regular && ($0.localizedName?.lowercased() == wantedName)
+        }) {
+            runningApplication.unhide()
+            return runningApplication.activate(options: [.activateAllWindows])
+        }
+        guard let applicationURL = applicationURL(named: appName) else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        return (try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)) != nil
+    }
+
+    private static func open(_ url: URL, inApplicationNamed appName: String) async -> Bool {
+        guard let applicationURL = applicationURL(named: appName) else { return NSWorkspace.shared.open(url) }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        return (try? await NSWorkspace.shared.open([url], withApplicationAt: applicationURL, configuration: configuration)) != nil
+    }
+
+    /// Finds an installed app by name in the usual folders ("opera" finds
+    /// Opera GX.app too).
+    private static func applicationURL(named appName: String) -> URL? {
+        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespaces)
+        let searchFolders = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: "/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
+        ]
+        var prefixMatch: URL?
+        for folder in searchFolders {
+            guard let folderItems = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
+            for itemURL in folderItems where itemURL.pathExtension == "app" {
+                let itemName = itemURL.deletingPathExtension().lastPathComponent.lowercased()
+                if itemName == wantedName { return itemURL }
+                if prefixMatch == nil && itemName.hasPrefix(wantedName) { prefixMatch = itemURL }
+            }
+        }
+        return prefixMatch
+    }
+
+    /// "Frontmost app: Opera GX, window: Kaggle - Competitions."
+    private static func describeFrontmostWindow() -> String {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return "" }
+        var description = "Frontmost app: \(frontmostApplication.localizedName ?? "unknown")"
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        var focusedWindowValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
+           let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() {
+            var titleValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(focusedWindowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+               let title = titleValue as? String, !title.isEmpty {
+                description += ", window: \(title.prefix(120))"
+            }
+        }
+        return description + "."
+    }
+
+    // MARK: - Gemini
+
+    private static let systemInstruction = """
+    You operate the user's Mac to finish a task they asked for, one or a few actions at a time. Each turn you get a fresh screenshot of the screen they're working on; reply only with function calls.
+
+    How to work:
+    - Look at the screenshot carefully before acting. Click things by their box on the screenshot (box_2d: [ymin, xmin, ymax, xmax], 0-1000 across the image).
+    - To use an app, call open_app with its name (it comes to the front). To visit a site in a browser that's already open, click its address bar (or press cmd+l), type the address or search and press return. If the user named a browser, use that browser.
+    - To type into a field, pass the field's box_2d to type_text so it's clicked first; use press_enter to submit.
+    - After an action that loads something, the next screenshot shows the result; use wait if it's still loading.
+    - Scroll to find things that aren't visible. Prefer obvious, direct paths: menus, tabs, search boxes, profile pages.
+    - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you can't go on (it needs a login, a captcha, or something is missing), saying why.
+
+    Safety:
+    - Never type passwords or payment details, and never sign in for the user.
+    - Don't buy anything, send or post messages, delete things, or change account settings unless the task explicitly asks for exactly that.
+    - Stay on the task; don't open unrelated things.
+    """
+
+    private static var functionDeclarations: [[String: Any]] {
+        let boxProperty: [String: Any] = [
+            "type": "array",
+            "items": ["type": "integer"],
+            "description": "[ymin, xmin, ymax, xmax] of the element on the latest screenshot, each 0-1000."
+        ]
+        return [
+            [
+                "name": "open_app",
+                "description": "Open a Mac app by name, or bring it to the front if it's already running.",
+                "parameters": ["type": "object", "properties": ["name": ["type": "string", "description": "The app's name, like 'Opera GX', 'Safari', 'Notes'."]], "required": ["name"]]
+            ],
+            [
+                "name": "open_url",
+                "description": "Open a web address in a new tab.",
+                "parameters": ["type": "object", "properties": [
+                    "url": ["type": "string"],
+                    "browser": ["type": "string", "description": "Browser app to use if the user named one, like 'Opera GX'. Leave out for the default browser."]
+                ], "required": ["url"]]
+            ],
+            [
+                "name": "click",
+                "description": "Click an element on the latest screenshot.",
+                "parameters": ["type": "object", "properties": [
+                    "box_2d": boxProperty,
+                    "label": ["type": "string", "description": "The element's visible text or a short name."],
+                    "double_click": ["type": "boolean"],
+                    "right_click": ["type": "boolean"]
+                ], "required": ["box_2d", "label"]]
+            ],
+            [
+                "name": "type_text",
+                "description": "Type text. With box_2d, clicks that field first; otherwise types into whatever is focused.",
+                "parameters": ["type": "object", "properties": [
+                    "text": ["type": "string"],
+                    "box_2d": boxProperty,
+                    "select_all_first": ["type": "boolean", "description": "Replace what's already in the field."],
+                    "press_enter": ["type": "boolean", "description": "Press return after typing, to submit or search."]
+                ], "required": ["text"]]
+            ],
+            [
+                "name": "press_keys",
+                "description": "Press a key or shortcut, like 'enter', 'escape', 'tab', 'cmd+l', 'cmd+t', 'cmd+[' (back).",
+                "parameters": ["type": "object", "properties": ["keys": ["type": "string"]], "required": ["keys"]]
+            ],
+            [
+                "name": "scroll",
+                "description": "Scroll the content under box_2d (or the middle of the screen).",
+                "parameters": ["type": "object", "properties": [
+                    "direction": ["type": "string", "enum": ["up", "down", "left", "right"]],
+                    "amount": ["type": "integer", "description": "1-10; about 5 is a screenful."],
+                    "box_2d": boxProperty
+                ], "required": ["direction"]]
+            ],
+            [
+                "name": "wait",
+                "description": "Wait for something to load.",
+                "parameters": ["type": "object", "properties": ["seconds": ["type": "number"]], "required": ["seconds"]]
+            ],
+            [
+                "name": "finish",
+                "description": "End the task. answer is what Dottie tells the user: the result they asked for, or why it couldn't be done. One or two short sentences.",
+                "parameters": ["type": "object", "properties": ["answer": ["type": "string"]], "required": ["answer"]]
+            ]
+        ]
+    }
+
+    private func requestNextActions(contents: [[String: Any]]) async throws -> [[String: Any]] {
+        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 75
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        let requestBody: [String: Any] = [
+            "model": Self.taskModel,
+            "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
+            "contents": contents,
+            "tools": [["functionDeclarations": Self.functionDeclarations]],
+            "toolConfig": ["functionCallingConfig": ["mode": "ANY"]]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard statusCode == 200 else {
+            throw NSError(domain: "DottieScreenTaskRunner", code: statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "Gemini returned \(statusCode): \(String(decoding: responseData.prefix(300), as: UTF8.self))"
+            ])
+        }
+
+        // /chat streams server-sent events; gather every part, keeping each
+        // function call whole with its thought signature (Gemini needs it
+        // back on the next turn).
+        var modelParts: [[String: Any]] = []
+        let responseText = String(decoding: responseData, as: UTF8.self)
+        for line in responseText.split(separator: "\n") where line.hasPrefix("data: ") {
+            guard let eventData = line.dropFirst(6).data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
+                  let candidates = event["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else { continue }
+            modelParts.append(contentsOf: parts)
+        }
+        guard !modelParts.isEmpty else {
+            throw NSError(domain: "DottieScreenTaskRunner", code: -2, userInfo: [NSLocalizedDescriptionKey: "empty answer"])
+        }
+        return modelParts
+    }
+
+    /// Keeps only the newest screenshots in the conversation.
+    private static func dropOldScreenshots(from contents: inout [[String: Any]]) {
+        var screenshotsSeen = 0
+        for contentIndex in contents.indices.reversed() {
+            guard var parts = contents[contentIndex]["parts"] as? [[String: Any]] else { continue }
+            var didChange = false
+            for partIndex in parts.indices.reversed() where parts[partIndex]["inlineData"] != nil {
+                screenshotsSeen += 1
+                if screenshotsSeen > keptScreenshotCount {
+                    parts[partIndex] = ["text": "(older screenshot removed)"]
+                    didChange = true
+                }
+            }
+            if didChange {
+                contents[contentIndex]["parts"] = parts
+            }
+        }
+    }
+}
+
+// MARK: - Screen capture
+
+/// One display captured without Dottie's own windows (cursor, notch,
+/// drawings), with what's needed to map 0-1000 positions back to the screen.
+@MainActor
+enum DottieDisplayCapture {
+    struct Screenshot {
+        let image: CGImage
+        let jpegData: Data
+        /// The display's frame in global AppKit coordinates.
+        let displayFrame: CGRect
+
+        /// A 0-1000 position on the screenshot, in global AppKit points.
+        func globalPoint(normalizedX: Double, normalizedY: Double) -> CGPoint {
+            let clampedX = min(max(normalizedX, 0), 1000) / 1000
+            let clampedY = min(max(normalizedY, 0), 1000) / 1000
+            return CGPoint(
+                x: displayFrame.minX + CGFloat(clampedX) * displayFrame.width,
+                y: displayFrame.maxY - CGFloat(clampedY) * displayFrame.height
+            )
+        }
+    }
+
+    /// The display with the frontmost app's window, else the one with the
+    /// pointer.
+    static func captureActiveDisplay(maximumDimension: Int) async -> Screenshot? {
+        let displayFrame = frontmostWindowDisplayFrame()
+            ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.frame
+            ?? NSScreen.main?.frame
+        guard let displayFrame else { return nil }
+        return await capture(displayFrame: displayFrame, maximumDimension: maximumDimension)
+    }
+
+    static func capture(displayFrame: CGRect, maximumDimension: Int) async -> Screenshot? {
+        guard let image = await captureImage(displayFrame: displayFrame, maximumDimension: maximumDimension),
+              let jpegData = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+            return nil
+        }
+        return Screenshot(image: image, jpegData: jpegData, displayFrame: displayFrame)
+    }
+
+    static func captureImage(displayFrame: CGRect, maximumDimension: Int) async -> CGImage? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
+
+        let matchingScreen = NSScreen.screens.first(where: { $0.frame == displayFrame })
+        let displayID = matchingScreen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { return nil }
+
+        let ownBundleIdentifier = Bundle.main.bundleIdentifier
+        let ownAppWindows = content.windows.filter { $0.owningApplication?.bundleIdentifier == ownBundleIdentifier }
+        let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
+
+        let configuration = SCStreamConfiguration()
+        let pointsToPixels = matchingScreen?.backingScaleFactor ?? 2
+        let nativeWidth = CGFloat(display.width) * pointsToPixels
+        let nativeHeight = CGFloat(display.height) * pointsToPixels
+        let downscale = min(1, CGFloat(maximumDimension) / max(nativeWidth, nativeHeight))
+        configuration.width = Int(nativeWidth * downscale)
+        configuration.height = Int(nativeHeight * downscale)
+        configuration.showsCursor = false
+
+        return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+    }
+
+    private static func frontmostWindowDisplayFrame() -> CGRect? {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return nil }
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        var focusedWindowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
+              let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else { return nil }
+        let focusedWindow = focusedWindowValue as! AXUIElement
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        // Accessibility is top-left origin on the primary display.
+        let primaryDisplayHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let windowCenter = CGPoint(x: position.x + size.width / 2, y: primaryDisplayHeight - (position.y + size.height / 2))
+        return NSScreen.screens.first(where: { $0.frame.contains(windowCenter) })?.frame
+    }
+}
