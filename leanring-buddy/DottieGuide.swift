@@ -233,7 +233,7 @@ final class DottieGuide {
             guard !Task.isCancelled else { return }
             self?.resumeStepWait(with: .timedOut)
         }
-        let result = await withCheckedContinuation { continuation in
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<StepWaitResult, Never>) in
             if Task.isCancelled {
                 continuation.resume(returning: .timedOut)
             } else {
