@@ -47,7 +47,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Clickys operate apps through [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver) (MIT), the same open-source driver shipped Clicky bundles. Gemini CLI starts `cua-driver mcp --direct` as an MCP server, so the driver runs under the app's own Accessibility and Screen Recording permissions
 - ✅ Ask-first gate (`ClickyComputerUse`): agents can always look, but cua-driver's policy file only allows clicking and typing in turns the user approved. Agents ask with a `<COMPUTER_USE_REQUEST>` block, shown as Allow / Always / Not now in the notch and in Home. "Always allow" lives in Settings
 - ✅ Shared agent instructions for operating apps (snapshot, act by element, verify), written to Gemini CLI's global `AGENTS.md`. Tested against a fake driver: the per-turn policy reaches the MCP server and a refused click comes back as a tool error
-- ⬜ Bundle cua-driver inside the app (`Contents/Helpers/cua-driver`) instead of asking the user to install it
+- ✅ Bundle cua-driver inside the app (`Contents/Helpers/cua-driver`): an Xcode build phase (`scripts/embed-cua-driver.sh`) downloads a pinned release, verifies it against SHA256SUMS, caches it and signs it with the app's identity; CI checks it landed
 - ⬜ Try it for real on a Mac
 
 ## Phase 6: dictation ⏳

@@ -34,6 +34,15 @@ jobs:
             2>&1 | tee build.log | grep -E "error:|warning: .*(concurrency|Sendable|actor)|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" build.log
 
+      - name: Check the bundled cua-driver
+        run: |
+          grep -E "Bundled cua-driver|cua-driver not bundled" build.log || true
+          app_path="$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 5 -type d -name Dottie.app -path '*/Build/Products/Debug/*' | head -1)"
+          echo "App: $app_path"
+          test -x "$app_path/Contents/Helpers/cua-driver"
+          file "$app_path/Contents/Helpers/cua-driver"
+          "$app_path/Contents/Helpers/cua-driver" --version || true
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
