@@ -15,7 +15,7 @@ import SwiftUI
 struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
         case conversation = "Conversation"
-        case clickys = "Clickys"
+        case clickys = "Dots"
         case skills = "Skills"
         case settings = "Settings"
 
@@ -144,7 +144,7 @@ private struct HomeConversationView: View {
             Text("Nothing here yet")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(DS.Colors.textSecondary)
-            Text("Hold \(BuddyPushToTalkShortcut.pushToTalkDisplayText) and ask Clicky about anything on your screen.")
+            Text("Hold \(BuddyPushToTalkShortcut.pushToTalkDisplayText) and ask Dottie about anything on your screen.")
                 .font(.system(size: 12))
                 .foregroundColor(DS.Colors.textTertiary)
                 .multilineTextAlignment(.center)
@@ -156,7 +156,7 @@ private struct HomeConversationView: View {
 
     private var composer: some View {
         HStack(spacing: 10) {
-            TextField("Type to Clicky", text: $typedMessage)
+            TextField("Type to Dottie", text: $typedMessage)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundColor(DS.Colors.textPrimary)
@@ -238,7 +238,7 @@ private struct HomeSettingsView: View {
                     .foregroundColor(DS.Colors.textPrimary)
 
                 settingsGroup(title: "Voice") {
-                    settingsRow(label: "Clicky's voice") {
+                    settingsRow(label: "Dottie's voice") {
                         Picker("", selection: Binding(
                             get: { companionManager.selectedVoiceName },
                             set: { companionManager.setSelectedVoiceName($0) }
@@ -258,7 +258,7 @@ private struct HomeSettingsView: View {
                 }
 
                 settingsGroup(title: "Appearance") {
-                    settingsRow(label: "Show Clicky in the notch") {
+                    settingsRow(label: "Show Dottie in the notch") {
                         Toggle("", isOn: Binding(
                             get: { companionManager.isNotchEnabled },
                             set: { companionManager.setNotchEnabled($0) }
@@ -274,7 +274,7 @@ private struct HomeSettingsView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                     }
-                    settingsHint("With the cursor off, it only appears while you're talking to Clicky.")
+                    settingsHint("With the cursor off, it only appears while you're talking to Dottie.")
                 }
 
                 settingsGroup(title: "Dictation") {
@@ -291,7 +291,7 @@ private struct HomeSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
                     }
-                    settingsHint("Hold the key, talk, and let go: Clicky types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
+                    settingsHint("Hold the key, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
                 }
 
                 settingsGroup(title: "Using your Mac") {
@@ -299,14 +299,14 @@ private struct HomeSettingsView: View {
                         Text(isCuaDriverInstalled ? "Installed" : "Not installed")
                             .foregroundColor(isCuaDriverInstalled ? DS.Colors.textSecondary : DS.Colors.warningText)
                     }
-                    settingsRow(label: "Let Clickys click and type without asking") {
+                    settingsRow(label: "Let Dots click and type without asking") {
                         Toggle("", isOn: $isComputerUseAlwaysAllowed)
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
                     settingsHint(isCuaDriverInstalled
-                        ? "Clickys can always look at your apps. With this off, they ask in the notch before they click or type."
-                        : "Clickys operate apps through cua-driver. Install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
+                        ? "Dots can always look at your apps. With this off, they ask in the notch before they click or type."
+                        : "Dots operate apps through cua-driver. Install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
                 }
 
                 settingsGroup(title: "Connection") {
@@ -393,7 +393,7 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Clicky"
+            window.title = "Dottie"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 560, height: 400)

@@ -73,7 +73,7 @@ struct NotchRootView: View {
         HStack(spacing: 10) {
             NotchEyeView(mood: .idle)
             Button(action: { notchPresenter.openTextInput() }) {
-                Text("type to clicky")
+                Text("type to dottie")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.75))
             }
@@ -224,7 +224,7 @@ private struct NotchTextInputSurface: View {
     var body: some View {
         HStack(spacing: 10) {
             NotchEyeView(mood: .idle)
-            TextField("ask clicky", text: $notchPresenter.draftText)
+            TextField("ask dottie", text: $notchPresenter.draftText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundColor(.white)
@@ -315,7 +315,7 @@ private struct NotchTextResponseSurface: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.7))
                 .pointerCursor()
-                .help("Let Clickys use your Mac without asking")
+                .help("Let Dots use your Mac without asking")
             Button(action: { notchPresenter.answerComputerUseRequest(isAllowed: true) }) {
                 Text("Allow")
                     .font(.system(size: 11, weight: .semibold))

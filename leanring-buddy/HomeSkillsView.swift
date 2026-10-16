@@ -109,7 +109,7 @@ struct HomeSkillsView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(DS.Colors.textPrimary)
                     .lineLimit(1)
-                Text(usingAgentCount == 0 ? "not in use" : "used by \(usingAgentCount) \(usingAgentCount == 1 ? "Clicky" : "Clickys")")
+                Text(usingAgentCount == 0 ? "not in use" : "used by \(usingAgentCount) \(usingAgentCount == 1 ? "Dot" : "Dots")")
                     .font(.system(size: 10))
                     .foregroundColor(DS.Colors.textTertiary)
                     .lineLimit(1)
@@ -132,7 +132,7 @@ struct HomeSkillsView: View {
             Text("No skills yet")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(DS.Colors.textSecondary)
-            Text("A skill is a set of instructions a Clicky follows when a task calls for it, like your report format or the steps of a weekly chore. Make one here, add a skill folder you downloaded, or tell a Clicky \"remember how to do this\" and it saves one itself.")
+            Text("A skill is a set of instructions a Dot follows when a task calls for it, like your report format or the steps of a weekly chore. Make one here, add a skill folder you downloaded, or tell a Dot \"remember how to do this\" and it saves one itself.")
                 .font(.system(size: 12))
                 .foregroundColor(DS.Colors.textTertiary)
                 .multilineTextAlignment(.center)
@@ -183,7 +183,7 @@ private struct NewSkillForm: View {
                 Text("New skill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
-                Text("Clickys see each skill's name and when to use it, and read the instructions only when a task calls for them.")
+                Text("Dots see each skill's name and when to use it, and read the instructions only when a task calls for them.")
                     .font(.system(size: 12))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -206,7 +206,7 @@ private struct NewSkillForm: View {
                         )
                 }
 
-                Toggle("Turn on for every Clicky", isOn: $isEnabledForAllAgents)
+                Toggle("Turn on for every Dot", isOn: $isEnabledForAllAgents)
                     .font(.system(size: 12))
 
                 if let errorMessage {
@@ -334,7 +334,7 @@ private struct SkillDetailView: View {
             .confirmationDialog("Delete \(skill.name)?", isPresented: $isConfirmingDelete) {
                 Button("Move to Trash", role: .destructive) { clickyRoster.deleteSkill(skill) }
             } message: {
-                Text("Its folder goes to the Trash and no Clicky will use it.")
+                Text("Its folder goes to the Trash and no Dot will use it.")
             }
         }
         .font(.system(size: 13))
@@ -348,7 +348,7 @@ private struct SkillDetailView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(DS.Colors.textSecondary)
             if clickyRoster.agents.isEmpty {
-                Text("No Clickys yet. New Clickys start with every skill turned on.")
+                Text("No Dots yet. New Dots start with every skill turned on.")
                     .font(.system(size: 12))
                     .foregroundColor(DS.Colors.textTertiary)
             } else {

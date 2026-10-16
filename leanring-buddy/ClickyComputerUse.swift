@@ -100,8 +100,8 @@ enum ClickyComputerUse {
 
     /// Writes both policy files. cua-driver denies anything not listed.
     static func writePolicyFiles(inCLIHome cliHomeURL: URL) {
-        let observePolicy = policyYAML(allowedToolNames: observationToolNames, comment: "Look only. Written by Clicky; rewritten at launch.")
-        let actPolicy = policyYAML(allowedToolNames: observationToolNames + inputToolNames, comment: "Look and act, for turns the user allowed. Written by Clicky; rewritten at launch.")
+        let observePolicy = policyYAML(allowedToolNames: observationToolNames, comment: "Look only. Written by Dottie; rewritten at launch.")
+        let actPolicy = policyYAML(allowedToolNames: observationToolNames + inputToolNames, comment: "Look and act, for turns the user allowed. Written by Dottie; rewritten at launch.")
         try? observePolicy.write(to: observePolicyFileURL(inCLIHome: cliHomeURL), atomically: true, encoding: .utf8)
         try? actPolicy.write(to: actPolicyFileURL(inCLIHome: cliHomeURL), atomically: true, encoding: .utf8)
     }
@@ -128,7 +128,7 @@ enum ClickyComputerUse {
             "command": cuaDriverURL.path,
             "args": [
                 "mcp", "--direct", "--embedded",
-                "--host-bundle-id", Bundle.main.bundleIdentifier ?? "com.clickyclone.leanring-buddy"
+                "--host-bundle-id", Bundle.main.bundleIdentifier ?? "com.dottie.Dottie"
             ],
             "env": ["CUA_DRIVER_POLICY_FILE": "${CLICKY_CUA_POLICY_FILE}"],
             "trust": true,
@@ -165,7 +165,7 @@ enum ClickyComputerUse {
             return """
             # Using the Mac
 
-            You can't operate apps on this Mac yet: the computer-use driver isn't installed. If a task needs clicking or typing in an app, do what you can without it and tell the user they can turn it on by installing cua-driver (see the Clickys page in Clicky's Home).
+            You can't operate apps on this Mac yet: the computer-use driver isn't installed. If a task needs clicking or typing in an app, do what you can without it and tell the user they can turn it on by installing cua-driver (see the Dots page in Dottie's Home).
 
             """
         }
@@ -180,7 +180,7 @@ enum ClickyComputerUse {
 
         <COMPUTER_USE_REQUEST>Open Reminders and add "Call the dentist" for Friday at 9am.</COMPUTER_USE_REQUEST>
 
-        Clicky shows the user Allow and Not now buttons. If they allow it, your next turn starts with "\(approvedTurnPrefix)". Never tell the user you can't use their Mac; ask with the block instead.
+        Dottie shows the user Allow and Not now buttons. If they allow it, your next turn starts with "\(approvedTurnPrefix)". Never tell the user you can't use their Mac; ask with the block instead.
 
         ## How to operate an app
 

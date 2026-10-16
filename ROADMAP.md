@@ -1,5 +1,7 @@
 # Roadmap
 
+The app is called Dottie, and its background agents are Dots (shipped Clicky calls them Clickys; the Swift types keep the `Clicky` prefix).
+
 The target is parity with shipped HeyClicky v1.0.53. Its teardown (feature map, prompts, backend routes) lives in the project files at `clicky/FINDINGS.md`. Each phase below maps to a step of that report's clone plan.
 
 Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the code exists. Nothing is marked as tested until it has been built and run on a Mac.

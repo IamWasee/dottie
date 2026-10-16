@@ -11,7 +11,7 @@
 //  The clone uses Gemini CLI's own skills support. A skill is a folder with
 //  a SKILL.md (YAML front matter with `name` and `description`, then the
 //  instructions). The library lives in
-//  ~/Library/Application Support/ClickyClone/Skills/<name>/SKILL.md, and a
+//  ~/Library/Application Support/Dottie/Skills/<name>/SKILL.md, and a
 //  skill reaches an agent as a symlink in its workspace's .gemini/skills/
 //  folder. Gemini CLI lists every linked skill's name and description to the
 //  model and loads the full instructions only when it calls activate_skill.
@@ -240,7 +240,7 @@ final class ClickySkillLibrary: ObservableObject {
 
         Skills are saved instructions for a kind of task. The ones turned on for you are listed to you with a name and a description; when a task matches one, activate it and follow it.
 
-        When the user asks you to remember how to do something so you can do it the same way again (a report format, the steps of a chore, how to use a tool they rely on), save it as a skill in the shared library at `\(libraryURL.path)`: a folder named with lowercase words and hyphens, holding a `SKILL.md` that starts with front matter giving `name` (the folder name) and a one-sentence `description` of when to use it, followed by the instructions. Clicky turns a skill you save on for you, and the user can turn it on for other Clickys. Tell the user in one sentence that you saved it. Don't save skills the user didn't ask for, and don't edit skills in the library unless the user asks you to change one.
+        When the user asks you to remember how to do something so you can do it the same way again (a report format, the steps of a chore, how to use a tool they rely on), save it as a skill in the shared library at `\(libraryURL.path)`: a folder named with lowercase words and hyphens, holding a `SKILL.md` that starts with front matter giving `name` (the folder name) and a one-sentence `description` of when to use it, followed by the instructions. Dottie turns a skill you save on for you, and the user can turn it on for other Dots. Tell the user in one sentence that you saved it. Don't save skills the user didn't ask for, and don't edit skills in the library unless the user asks you to change one.
 
         """
     }

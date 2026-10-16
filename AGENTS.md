@@ -1,11 +1,11 @@
-# Clicky - Agent Instructions
+# Dottie - Agent Instructions
 
 <!-- This is the single source of truth for all AI coding agents. CLAUDE.md is a symlink to this file. -->
 <!-- AGENTS.md spec: https://github.com/agentsmd/agents.md — supported by Claude Code, Cursor, Copilot, Gemini CLI, and others. -->
 
 ## Overview
 
-macOS menu bar companion app, a clone of HeyClicky built on Farza's open-source Clicky v0 (MIT) with every AI call moved to Google Gemini's free tier. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Push-to-talk (ctrl+option) streams the user's voice and one frame of their screen(s) to Gemini Live, which answers in streamed audio. A blue cursor overlay can fly to and point at UI elements Gemini picks via a tool call, on any connected monitor.
+Dottie is a macOS menu bar companion app, a clone of HeyClicky built on Farza's open-source Clicky v0 (MIT) with every AI call moved to Google Gemini's free tier. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Push-to-talk (ctrl+option) streams the user's voice and one frame of their screen(s) to Gemini Live, which answers in streamed audio. A blue cursor overlay can fly to and point at UI elements Gemini picks via a tool call, on any connected monitor.
 
 The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — nothing sensitive ships in the app. See ROADMAP.md for which shipped-Clicky features exist so far.
 
@@ -16,9 +16,9 @@ The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — 
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
 - **Voice companion (live mode, default)**: Gemini Live (`gemini-3.8-live`) over a WebSocket opened with a single-use ephemeral token from the Worker. Manual activity detection: hotkey press sends `activityStart` + a JPEG frame, release sends `activityEnd`. Output is 24kHz PCM played as it streams. Pointing is the `point_at_element` tool (0–1000 coordinates on the frame).
 - **Classic mode (`CompanionVoiceMode=classic`)**: Apple Speech → Gemini Flash vision (SSE via Worker `/chat`) → Gemini TTS (Worker `/tts`), with v0's `[POINT:]` tags
-- **Background agents ("Clickys")**: each agent turn runs Google's Gemini CLI headless (`gemini -p … -o stream-json --approval-mode yolo`, `--session-id` then `--resume`) in the agent's folder under `~/Library/Application Support/ClickyClone/Clickys/<slug>/`. `GOOGLE_GEMINI_BASE_URL` points it at the Worker's `/gemini` passthrough and `GEMINI_CLI_HOME` at a clone-owned `.cli-home`, so the user's own `~/.gemini` is untouched. Live hands work over with the `start_clicky_task` tool; results show as a notch card.
-- **Skills**: a library of Gemini CLI skills (`SKILL.md` folders) in `~/Library/Application Support/ClickyClone/Skills/`. Each agent's enabled skills are symlinked into its workspace's `.gemini/skills/` before each turn, and the library is passed with `--include-directories` so agents can save new skills there (the app turns a skill an agent saved on for that agent).
-- **Routines**: agents set up repeats by ending a reply with `<ROUTINE>{"action":"create","every_minutes":60,"title":…,"task":…}</ROUTINE>` (also update, delete, pause, resume), as shipped Clicky does. `ClickyRoutineStore` keeps them in `Clickys/routines.json`; a 30-second timer in `ClickyRoster` runs due ones while the Mac is awake and online. Every user turn starts with the agent's current routine list; run turns get shipped Clicky's "report what's new" brief. Three failed runs in a row pause a routine.
+- **Background agents ("Dots"; "Clickys" in shipped Clicky and in type names)**: each agent turn runs Google's Gemini CLI headless (`gemini -p … -o stream-json --approval-mode yolo`, `--session-id` then `--resume`) in the agent's folder under `~/Library/Application Support/Dottie/Dots/<slug>/`. `GOOGLE_GEMINI_BASE_URL` points it at the Worker's `/gemini` passthrough and `GEMINI_CLI_HOME` at a clone-owned `.cli-home`, so the user's own `~/.gemini` is untouched. Live hands work over with the `start_clicky_task` tool; results show as a notch card.
+- **Skills**: a library of Gemini CLI skills (`SKILL.md` folders) in `~/Library/Application Support/Dottie/Skills/`. Each agent's enabled skills are symlinked into its workspace's `.gemini/skills/` before each turn, and the library is passed with `--include-directories` so agents can save new skills there (the app turns a skill an agent saved on for that agent).
+- **Routines**: agents set up repeats by ending a reply with `<ROUTINE>{"action":"create","every_minutes":60,"title":…,"task":…}</ROUTINE>` (also update, delete, pause, resume), as shipped Clicky does. `ClickyRoutineStore` keeps them in `Dots/routines.json`; a 30-second timer in `ClickyRoster` runs due ones while the Mac is awake and online. Every user turn starts with the agent's current routine list; run turns get shipped Clicky's "report what's new" brief. Three failed runs in a row pause a routine.
 - **Computer use**: when `cua-driver` is installed, it's registered in Gemini CLI's settings as the `computer-use` MCP server (`cua-driver mcp --direct --embedded`, so it inherits the app's permissions). Each turn sets `CLICKY_CUA_POLICY_FILE` to a look-only or look-and-act policy; act is used only for turns the user allowed or with "Always allow". Agents ask with a `<COMPUTER_USE_REQUEST>` block, which becomes an Allow / Always / Not now card.
 - **Model names**: set on the Worker in `wrangler.toml` `[vars]`, not in the app
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
@@ -59,7 +59,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 
 **Shared URLSession**: Long-lived `URLSession`s are owned by the clients, not per request. Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
-**Transient Cursor Mode**: When "Show Clicky" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
+**Transient Cursor Mode**: When "Show Dottie" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
 
 ## Key Files
 
@@ -73,16 +73,16 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `GeminiTTSClient.swift` | ~75 | Gemini TTS via Worker `/tts` (classic mode). |
 | `NotchPresenter.swift` | ~165 | State of the notch surface (compact, listening, thinking, speaking, text input, text response) and the answer card's auto-dismiss. |
 | `NotchWindowManager.swift` | ~210 | Borderless panel pinned over the notch (or a top-center pill), resized per surface so it never blocks more of the menu bar than needed. |
-| `NotchRootView.swift` | ~390 | SwiftUI for every notch surface, plus `NotchEyeView` (Clicky's eyes). |
+| `NotchRootView.swift` | ~390 | SwiftUI for every notch surface, plus `NotchEyeView` (Dottie's eyes). |
 | `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
 | `GeminiCLIAgentRuntime.swift` | ~330 | Finds and runs Gemini CLI for one agent turn, parses its stream-json events, stops turns. |
 | `ClickyRoster.swift` | ~620 | The agents: roster, workspaces (`AGENTS.md`, `output/`, `tmp/`), transcripts, sending messages, finish callbacks, per-agent skills and the routine scheduler. |
 | `ClickyDictationController.swift` | ~380 | Hold-to-dictate: focus capture through Accessibility, 16kHz recording, Worker `/dictate`, and pasting with a clipboard swap (or clipboard fallback). |
 | `ClickyComputerUse.swift` | ~220 | Computer use: finds cua-driver, writes its look-only and look-and-act policies, the MCP server entry, the shared agent instructions, and parses permission requests. |
-| `HomeClickysView.swift` | ~560 | Home → Clickys: agent list, new Clicky form, chat with tool activity, routines strip and skills menu. |
+| `HomeClickysView.swift` | ~560 | Home → Dots: agent list, new Dot form, chat with tool activity, routines strip and skills menu. |
 | `ClickySkillLibrary.swift` | ~250 | The skills library: reading `SKILL.md` front matter, creating and importing skills, linking enabled skills into agent workspaces. |
 | `ClickyRoutines.swift` | ~330 | Routines: the model, `<ROUTINE>` block parsing, the store (create/update/pause/delete, run bookkeeping) and run prompts. |
-| `HomeSkillsView.swift` | ~370 | Home → Skills: library list, new skill form, skill detail with per-Clicky toggles. |
+| `HomeSkillsView.swift` | ~370 | Home → Skills: library list, new skill form, skill detail with per-Dot toggles. |
 | `ConversationStore.swift` | ~85 | Persists the conversation shown on Home as JSON in Application Support. |
 | `ClickyWorkerConfiguration.swift` | ~45 | Reads the Worker URL and shared secret from Info.plist; adds the auth header. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |

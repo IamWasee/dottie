@@ -15,7 +15,7 @@
 //  (create, update, delete, pause, resume) and run prompts. Routines only
 //  run while the Mac is awake and the app is open.
 //
-//  Saved in ~/Library/Application Support/ClickyClone/Clickys/routines.json.
+//  Saved in ~/Library/Application Support/Dottie/Dots/routines.json.
 //
 
 import Combine
@@ -289,11 +289,11 @@ enum ClickyRoutinePrompts {
     static let globalAgentInstructions = """
     # Routines
 
-    Clicky can re-run a task in your chat on a schedule while the Mac is awake and Clicky is open; each run's answer lands in your chat and the user's notch. You have no scheduling tool: never say it can't be done, look for cron, or write looping scripts. When the user asks for something on a cadence ("every 30 minutes", "every morning", "keep checking"), do the task once now and answer as usual, then end the same reply with one block:
+    Dottie can re-run a task in your chat on a schedule while the Mac is awake and Dottie is open; each run's answer lands in your chat and the user's notch. You have no scheduling tool: never say it can't be done, look for cron, or write looping scripts. When the user asks for something on a cadence ("every 30 minutes", "every morning", "keep checking"), do the task once now and answer as usual, then end the same reply with one block:
 
     <ROUTINE>{"action":"create","every_minutes":60,"title":"Repo Issues","task":"Check the user's GitHub repos for new issues and summarize who opened them and why they matter"}</ROUTINE>
 
-    `every_minutes` is a whole number of at least \(ClickyRoutineStore.minimumEveryMinutes) (hourly = 60, daily = 1440). `title` is two to four words. `task` is the self-contained instruction for every later run and never repeats the cadence, since Clicky shows the schedule beside it. Confirm the cadence in one sentence of your answer ("I'll check this every hour."), never mention the block, and never promise runs while the Mac is asleep or off.
+    `every_minutes` is a whole number of at least \(ClickyRoutineStore.minimumEveryMinutes) (hourly = 60, daily = 1440). `title` is two to four words. `task` is the self-contained instruction for every later run and never repeats the cadence, since Dottie shows the schedule beside it. Confirm the cadence in one sentence of your answer ("I'll check this every hour."), never mention the block, and never promise runs while the Mac is asleep or off.
 
     To change one of your routines, emit `"action":"update"` with its exact `title` and only what changes: `every_minutes`, `new_title`, or the complete replacement `task`. A second `create` for a routine you already have replaces it. To stop, pause or resume one, emit `"action":"delete"`, `"pause"` or `"resume"` with its `title`. Say in your answer what you changed. Each message tells you which routines you have right now; that list is complete, whatever earlier messages say.
 
@@ -316,7 +316,7 @@ enum ClickyRoutinePrompts {
         var briefLines = [
             "[Routine \"\(routine.title)\" · run \(runNumber)]",
             "",
-            "This turn is run #\(runNumber) of the routine \"\(routine.title)\" (\(routine.cadenceDescription)) that the user set up, so Clicky is launching it automatically. The user isn't watching; don't ask them anything unless the routine can't do its job without an answer, and if so say plainly that it's stuck until they reply.",
+            "This turn is run #\(runNumber) of the routine \"\(routine.title)\" (\(routine.cadenceDescription)) that the user set up, so Dottie is launching it automatically. The user isn't watching; don't ask them anything unless the routine can't do its job without an answer, and if so say plainly that it's stuck until they reply.",
             "Earlier runs of this routine are in this conversation above. The previous run started \(previousRunStartedAt.formatted(date: .abbreviated, time: .shortened)). Report what is NEW or changed since then, keep it short, and say so in one line if nothing changed.",
             "Post the answer as your reply. Don't create files unless the task itself asks for one. Don't emit a <ROUTINE> block to set up this repeat; it already exists."
         ]

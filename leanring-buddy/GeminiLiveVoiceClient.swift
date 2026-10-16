@@ -388,13 +388,13 @@ final class GeminiLiveVoiceClient {
     /// shipped Clicky's voice delegation to its Clickys.
     private static let startClickyTaskFunctionDeclaration: [String: Any] = [
         "name": "start_clicky_task",
-        "description": "Start a background task with one of the user's Clickys: helpers that work on their own on the user's Mac with a shell, files and the web, and report back when done. Use it when the user asks for something that takes real work beyond answering, like researching a topic, writing or editing files, organizing a folder, building something, or doing something in an app on their Mac (Clickys can click and type in apps once the user allows it), or when they name a Clicky. Don't use it for questions you can answer right now. After calling, tell the user briefly that it's started.",
+        "description": "Start a background task with one of the user's Dots: helpers that work on their own on the user's Mac with a shell, files and the web, and report back when done. Use it when the user asks for something that takes real work beyond answering, like researching a topic, writing or editing files, organizing a folder, building something, or doing something in an app on their Mac (Dots can click and type in apps once the user allows it), or when they name a Dottie. Don't use it for questions you can answer right now. After calling, tell the user briefly that it's started.",
         "parameters": [
             "type": "OBJECT",
             "properties": [
                 "clicky_name": [
                     "type": "STRING",
-                    "description": "Name of the Clicky the user mentioned, if any. Leave empty to let the app pick or create one."
+                    "description": "Name of the Dot the user mentioned, if any. Leave empty to let the app pick or create one."
                 ],
                 "task": [
                     "type": "STRING",

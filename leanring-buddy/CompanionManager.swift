@@ -258,7 +258,7 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         refreshAllPermissions()
-        print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        print("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
@@ -270,7 +270,7 @@ final class CompanionManager: ObservableObject {
         _ = geminiAPI
 
         if !ClickyWorkerConfiguration.isWorkerConfigured {
-            print("⚠️ Clicky: ClickyWorkerBaseURL is not set in Info.plist — voice won't work until it points at your worker.")
+            print("⚠️ Dottie: ClickyWorkerBaseURL is not set in Info.plist — voice won't work until it points at your worker.")
         }
 
         // If the user already completed onboarding AND all permissions are
@@ -335,7 +335,7 @@ final class CompanionManager: ObservableObject {
     private func startOnboardingMusic() {
         stopOnboardingMusic()
         guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3") else {
-            print("⚠️ Clicky: ff.mp3 not found in bundle")
+            print("⚠️ Dottie: ff.mp3 not found in bundle")
             return
         }
 
@@ -350,7 +350,7 @@ final class CompanionManager: ObservableObject {
                 self?.fadeOutOnboardingMusic()
             }
         } catch {
-            print("⚠️ Clicky: Failed to play onboarding music: \(error)")
+            print("⚠️ Dottie: Failed to play onboarding music: \(error)")
         }
     }
 
@@ -738,7 +738,7 @@ final class CompanionManager: ObservableObject {
     // MARK: - Classic Mode Prompt
 
     private static let companionVoiceResponseSystemPrompt = """
-    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
+    you're dottie, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
     - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
@@ -777,7 +777,7 @@ final class CompanionManager: ObservableObject {
     /// Live mode's system prompt. Same personality as v0's, but pointing is a
     /// tool call instead of a text tag, because the model's output is audio.
     private static let companionLiveVoiceSystemPrompt = """
-    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
+    you're dottie, a friendly always-on companion that lives in the user's menu bar. the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
     - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
@@ -797,8 +797,8 @@ final class CompanionManager: ObservableObject {
     going deeper:
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
-    clickys:
-    the user can have background helpers called clickys that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or do something in an app like adding a reminder or filling in a form) or mention a clicky by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
+    dots:
+    the user can have background helpers called dots that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or do something in an app like adding a reminder or filling in a form) or mention a dot by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -945,7 +945,7 @@ final class CompanionManager: ObservableObject {
     /// Returns a short status for the voice model to relay.
     func startClickyTask(clickyName: String?, taskText: String) -> String {
         guard GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil else {
-            return "background clickys need gemini cli installed on this mac, and it isn't yet. tell the user to install it with npm install -g @google/gemini-cli."
+            return "background dots need gemini cli installed on this mac, and it isn't yet. tell the user to install it with npm install -g @google/gemini-cli."
         }
 
         let targetAgent: ClickyAgent
@@ -1121,7 +1121,7 @@ final class CompanionManager: ObservableObject {
     /// System prompt for the stronger model that answers send_to_higher_model.
     /// Its text goes back to Gemini Live, which says it out loud.
     private static let higherModelSystemPrompt = """
-    you're the careful, thorough brain behind clicky, a voice companion on the user's mac. the fast voice model handed you a question it wanted a closer look at. you get full screenshots of every screen. your answer goes back to the voice model, which will say it out loud to the user.
+    you're the careful, thorough brain behind dottie, a voice companion on the user's mac. the fast voice model handed you a question it wanted a closer look at. you get full screenshots of every screen. your answer goes back to the voice model, which will say it out loud to the user.
 
     rules:
     - answer the question directly and correctly. read small text, code and dense ui carefully.
@@ -1611,7 +1611,7 @@ final class CompanionManager: ObservableObject {
     // MARK: - Onboarding Demo Interaction
 
     private static let onboardingDemoSystemPrompt = """
-    you're clicky, a small blue cursor buddy living on the user's screen. you're showing off during onboarding — look at their screen and find ONE specific, concrete thing to point at. pick something with a clear name or identity: a specific app icon (say its name), a specific word or phrase of text you can read, a specific filename, a specific button label, a specific tab title, a specific image you can describe. do NOT point at vague things like "a window" or "some text" — be specific about exactly what you see.
+    you're dottie, a small blue cursor buddy living on the user's screen. you're showing off during onboarding — look at their screen and find ONE specific, concrete thing to point at. pick something with a clear name or identity: a specific app icon (say its name), a specific word or phrase of text you can read, a specific filename, a specific button label, a specific tab title, a specific image you can describe. do NOT point at vague things like "a window" or "some text" — be specific about exactly what you see.
 
     make a short quirky 3-6 word observation about the specific thing you picked — something fun, playful, or curious that shows you actually read/recognized it. no emojis ever. NEVER quote or repeat text you see on screen — just react to it. keep it to 6 words max, no exceptions.
 
