@@ -43,17 +43,13 @@ jobs:
           const results = await Promise.all(Array.from({ length: count }, (_, i) => one(i)));
           console.log(`== ${label} ${model} x${count}\n` + results.join("\n"));
           JS
-          node live.mjs gemini-3.8-live 1 single
-          node live.mjs gemini-3.8-live 2 concurrent
-          node live.mjs gemini-3.8-live 3 concurrent
-          node live.mjs gemini-3.1-flash-live-preview 3 concurrent
-          for i in 1 2 3 4 5 6; do node live.mjs gemini-3.8-live 1 sequential-$i; done
-      - name: Gemini CLI through the Worker
+          sed -i 's/realtimeInputConfig: { automaticActivityDetection: { disabled: true } }, outputAudioTranscription: {} /outputAudioTranscription: {} /' live.mjs
+          for m in gemini-3.8-live gemini-3.1-flash-live-preview gemini-2.5-flash-native-audio-latest gemini-3.8-live-extended-thinking; do node live.mjs $m 1 minimal; done
+          curl -sS -X POST $W/live-token | sed -E 's/"token":"[^"]+"/"token":"<redacted>"/'
+      - name: Daily quota per model
         run: |
-          mkdir -p home/.gemini && echo '{"security":{"auth":{"selectedType":"gemini-api-key"}}}' > home/.gemini/settings.json
-          mkdir ws && cd ws
-          for m in gemini-3.8-flash gemini-3.6-flash; do
-            echo "== gemini cli $m"
-            GEMINI_CLI_HOME=$PWD/../home GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=x timeout 150 \
-              npx -y @google/gemini-cli@0.64.0 -m $m -p "Reply with the word pong." -o stream-json --approval-mode yolo --skip-trust 2>&1 | tail -6 | cut -c1-400
+          for m in gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite gemini-flash-latest gemini-flash-lite-latest gemini-3.1-flash-lite; do
+            code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
+              "$W/gemini/v1beta/models/$m:generateContent" -d '{"contents":[{"role":"user","parts":[{"text":"Say hi."}]}]}')
+            echo "$m -> $code $(tr -d '\n' < out.txt | grep -oE '"message": *"[^"]{0,140}' | head -1)"
           done
