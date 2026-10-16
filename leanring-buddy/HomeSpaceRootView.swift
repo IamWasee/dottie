@@ -278,6 +278,19 @@ private struct HomeSettingsView: View {
                         .labelsHidden()
                         .frame(width: 140)
                     }
+                    settingsRow(label: "Personality") {
+                        Picker("", selection: Binding(
+                            get: { companionManager.selectedPersonality },
+                            set: { companionManager.setSelectedPersonality($0) }
+                        )) {
+                            ForEach(DottiePersonality.allCases) { personality in
+                                Text(personality.displayName).tag(personality)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
+                    settingsHint(companionManager.selectedPersonality.settingsHint)
                     settingsRow(label: "Voice mode") {
                         Text(companionManager.voiceMode == .live ? "Gemini Live" : "Classic")
                             .foregroundColor(DS.Colors.textSecondary)

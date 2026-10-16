@@ -212,6 +212,19 @@ final class CompanionManager: ObservableObject {
     /// UserDefaults. Takes effect on the next Live connection.
     @Published var selectedVoiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore"
 
+    /// How Dottie talks (Settings → Voice). Takes effect on the next Live
+    /// connection, like the voice.
+    @Published private(set) var selectedPersonality: DottiePersonality = DottiePersonality.saved
+
+    func setSelectedPersonality(_ personality: DottiePersonality) {
+        selectedPersonality = personality
+        UserDefaults.standard.set(personality.rawValue, forKey: DottiePersonality.defaultsKey)
+        liveVoiceClient.baseSystemInstruction = Self.liveVoiceSystemPrompt(personality: personality)
+        if !liveVoiceClient.isModelTurnInProgress {
+            liveVoiceClient.disconnect()
+        }
+    }
+
     func setSelectedVoiceName(_ voiceName: String) {
         selectedVoiceName = voiceName
         UserDefaults.standard.set(voiceName, forKey: "selectedGeminiLiveVoice")
@@ -816,11 +829,11 @@ final class CompanionManager: ObservableObject {
     // MARK: - Classic Mode Prompt
 
     private static let companionVoiceResponseSystemPrompt = """
-    you're dottie, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
+    how this works: you're always on, and the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
     - keep it short, simple and fun: usually one sentence, two at most, in plain everyday words. only go longer when they ask you to explain more or go deeper.
-    - all lowercase, casual, warm. no emojis.
+    - all lowercase, casual, in character (who you are and how you talk, above). no emojis.
     - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
     - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
     - if the user's question relates to what's on their screen, reference specific things you see.
@@ -851,16 +864,25 @@ final class CompanionManager: ObservableObject {
     - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
     """
 
+    /// The personality goes first, so it frames everything after it.
+    private static func classicVoiceSystemPrompt(personality: DottiePersonality) -> String {
+        personality.promptSection + "\n\n" + companionVoiceResponseSystemPrompt
+    }
+
+    private static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
+        personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
+    }
+
     // MARK: - Live Voice Pipeline (Gemini Live)
 
     /// Live mode's system prompt. Same personality as v0's, but pointing is a
     /// tool call instead of a text tag, because the model's output is audio.
     private static let companionLiveVoiceSystemPrompt = """
-    you're dottie, a friendly always-on companion that lives in the user's menu bar. the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
+    how this works: you're always on, and the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
     - keep it short, simple and fun. most answers are one sentence, two at most, in plain everyday words. say the one thing they need and stop: no background, no recap, no "here's how it works". only go longer when they ask you to explain more or go deeper.
-    - playful and warm, like a funny friend sitting next to them. a little personality or a light joke is great when it fits, but never at the cost of the answer. speak naturally, no lists or reading out formatting.
+    - stay in character (who you are and how you talk, above) in every answer, but never at the cost of the answer. speak naturally, no lists or reading out formatting.
     - don't read out code verbatim. describe what the code does or what needs to change conversationally.
     - if the user's question relates to what's on their screen, reference specific things you see.
     - if the screen doesn't seem relevant to their question, just answer the question directly.
@@ -896,7 +918,7 @@ final class CompanionManager: ObservableObject {
 
     /// Hooks the Live client's callbacks into the companion's state.
     private func configureLiveVoiceClient() {
-        liveVoiceClient.baseSystemInstruction = Self.companionLiveVoiceSystemPrompt
+        liveVoiceClient.baseSystemInstruction = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
         liveVoiceClient.voiceName = selectedVoiceName
 
         // Pick up where the last run left off: the saved conversation seeds
@@ -1938,7 +1960,7 @@ final class CompanionManager: ObservableObject {
 
                 let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
                     images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
+                    systemPrompt: Self.classicVoiceSystemPrompt(personality: selectedPersonality),
                     conversationHistory: historyForAPI,
                     userPrompt: promptForModel,
                     onTextChunk: { _ in
