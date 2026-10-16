@@ -471,7 +471,7 @@ private struct HomeSettingsView: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(DS.Colors.surface)
+                .fill(DS.Colors.surface2)
         )
         .help("Learned when you changed \u{201C}\(learnedCorrection.original)\u{201D} to \u{201C}\(learnedCorrection.corrected)\u{201D}")
     }
