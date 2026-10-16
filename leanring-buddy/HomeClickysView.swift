@@ -221,8 +221,13 @@ private struct ClickyAgentChatView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
                             ForEach(transcript) { transcriptItem in
-                                ClickyTranscriptItemView(transcriptItem: transcriptItem)
-                                    .id(transcriptItem.id)
+                                ClickyTranscriptItemView(
+                                    transcriptItem: transcriptItem,
+                                    onAnswerComputerUseRequest: isPendingComputerUseRequest(transcriptItem)
+                                        ? { isAllowed, alwaysAllow in answerComputerUseRequest(isAllowed: isAllowed, alwaysAllow: alwaysAllow) }
+                                        : nil
+                                )
+                                .id(transcriptItem.id)
                             }
                             if clickyRoster.isRunning(agent) {
                                 HStack(spacing: 8) {
@@ -325,6 +330,20 @@ private struct ClickyAgentChatView: View {
         .padding(.vertical, 12)
     }
 
+    private func isPendingComputerUseRequest(_ transcriptItem: ClickyAgentTranscriptItem) -> Bool {
+        transcriptItem.kind == .computerUseRequest
+            && transcriptItem.id == transcript.last?.id
+            && clickyRoster.pendingComputerUseRequest(for: agent) != nil
+    }
+
+    private func answerComputerUseRequest(isAllowed: Bool, alwaysAllow: Bool) {
+        if isAllowed {
+            clickyRoster.approveComputerUse(for: agent, alwaysAllow: alwaysAllow)
+        } else {
+            clickyRoster.declineComputerUse(for: agent)
+        }
+    }
+
     private func sendDraft() {
         let messageText = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !messageText.isEmpty else { return }
@@ -335,6 +354,8 @@ private struct ClickyAgentChatView: View {
 
 private struct ClickyTranscriptItemView: View {
     let transcriptItem: ClickyAgentTranscriptItem
+    /// Set only on an unanswered computer-use request: (isAllowed, alwaysAllow).
+    var onAnswerComputerUseRequest: ((Bool, Bool) -> Void)?
 
     var body: some View {
         switch transcriptItem.kind {
@@ -379,7 +400,45 @@ private struct ClickyTranscriptItemView: View {
                 .foregroundColor(DS.Colors.warningText)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+        case .computerUseRequest:
+            computerUseRequestCard
         }
+    }
+
+    private var computerUseRequestCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Wants to use your Mac", systemImage: "cursorarrow.click.2")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(DS.Colors.textSecondary)
+            Text(transcriptItem.text)
+                .font(.system(size: 13))
+                .foregroundColor(DS.Colors.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if let onAnswerComputerUseRequest {
+                HStack(spacing: 8) {
+                    Button("Allow") { onAnswerComputerUseRequest(true, false) }
+                        .keyboardShortcut(.defaultAction)
+                        .pointerCursor()
+                    Button("Always allow") { onAnswerComputerUseRequest(true, true) }
+                        .pointerCursor()
+                        .help("Let Clickys click and type on your Mac without asking. You can turn this off in Settings.")
+                    Button("Not now") { onAnswerComputerUseRequest(false, false) }
+                        .pointerCursor()
+                }
+                .font(.system(size: 12))
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
     }
 
     private var toolStatusSymbolName: String {

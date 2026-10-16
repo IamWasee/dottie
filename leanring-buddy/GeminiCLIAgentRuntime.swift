@@ -134,6 +134,7 @@ final class GeminiCLIAgentRuntime {
         workspaceURL: URL,
         cliHomeURL: URL,
         model: String,
+        isComputerUseApproved: Bool,
         onEvent: @escaping @Sendable (GeminiCLIAgentEvent) -> Void
     ) async throws {
         guard let geminiExecutableURL = Self.locateGeminiCLIExecutable() else {
@@ -165,6 +166,10 @@ final class GeminiCLIAgentRuntime {
         // configured, any placeholder works.
         processEnvironment["GEMINI_API_KEY"] = AppBundleConfiguration.stringValue(forKey: "ClickyAppSharedSecret") ?? "clicky-worker"
         processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
+        // Picks the cua-driver policy for this turn (see ClickyComputerUse).
+        processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved
+            ? ClickyComputerUse.actPolicyFileURL(inCLIHome: cliHomeURL)
+            : ClickyComputerUse.observePolicyFileURL(inCLIHome: cliHomeURL)).path
         processEnvironment["NO_COLOR"] = "1"
         agentProcess.environment = processEnvironment
 
@@ -218,15 +223,31 @@ final class GeminiCLIAgentRuntime {
     }
 
     /// Writes the CLI's user settings into the clone's own CLI home: API-key
-    /// auth (the worker supplies the real key) and AGENTS.md as the context
-    /// file. Gemini CLI ignores the auth type in workspace settings.
+    /// auth (the worker supplies the real key), AGENTS.md as the context
+    /// file, and cua-driver as the computer-use MCP server when it's
+    /// installed. Gemini CLI ignores the auth type in workspace settings.
+    /// Cheap enough to run before every turn, so installing cua-driver takes
+    /// effect without a relaunch.
     static func prepareCLIHome(at cliHomeURL: URL) {
         let settingsFolderURL = cliHomeURL.appendingPathComponent(".gemini", isDirectory: true)
         try? FileManager.default.createDirectory(at: settingsFolderURL, withIntermediateDirectories: true)
-        let cliSettings: [String: Any] = [
+
+        let cuaDriverURL = ClickyComputerUse.locateCuaDriverExecutable()
+        var cliSettings: [String: Any] = [
             "security": ["auth": ["selectedType": "gemini-api-key"]],
             "context": ["fileName": "AGENTS.md"]
         ]
+        if let cuaDriverURL {
+            ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
+            cliSettings["mcpServers"] = [
+                ClickyComputerUse.mcpServerName: ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL)
+            ]
+        }
+
+        // Gemini CLI reads AGENTS.md from its home folder for every agent.
+        try? ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil)
+            .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+
         if let settingsData = try? JSONSerialization.data(withJSONObject: cliSettings, options: [.prettyPrinted, .sortedKeys]) {
             try? settingsData.write(to: settingsFolderURL.appendingPathComponent("settings.json"), options: .atomic)
         }
@@ -313,7 +334,9 @@ private final class GeminiCLIStreamJSONLineParser: @unchecked Sendable {
             let parameters = eventObject["parameters"] as? [String: Any] ?? [:]
             onEvent(.toolStarted(
                 toolID: eventObject["tool_id"] as? String ?? UUID().uuidString,
-                toolName: eventObject["tool_name"] as? String ?? "tool",
+                // MCP tools arrive as mcp_<server>_<tool>; show just the tool.
+                toolName: (eventObject["tool_name"] as? String ?? "tool")
+                    .replacingOccurrences(of: "mcp_\(ClickyComputerUse.mcpServerName)_", with: ""),
                 parametersSummary: Self.summarizeToolParameters(parameters)
             ))
         case "tool_result":
@@ -341,7 +364,7 @@ private final class GeminiCLIStreamJSONLineParser: @unchecked Sendable {
 
     /// One short line for the transcript, e.g. `file_path: output/report.md`.
     private static func summarizeToolParameters(_ parameters: [String: Any]) -> String {
-        let preferredKeys = ["command", "file_path", "dir_path", "query", "pattern", "prompt", "name"]
+        let preferredKeys = ["command", "file_path", "dir_path", "query", "pattern", "prompt", "name", "text", "value", "bundle_id", "key"]
         for preferredKey in preferredKeys {
             if let value = parameters[preferredKey] as? String, !value.isEmpty {
                 let singleLineValue = value.replacingOccurrences(of: "\n", with: " ")

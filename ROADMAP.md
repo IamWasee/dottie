@@ -37,9 +37,13 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ⬜ Skills (Gemini CLI supports them; needs a skills folder and a Home page)
 - ⬜ Routines (cron), notifications
 
-## Phase 5: computer use
+## Phase 5: computer use ⏳
 
-- ⬜ cua-driver (MIT, trycua/cua) bundled as a helper, with the per-turn consent gate
+- ✅ Clickys operate apps through [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver) (MIT), the same open-source driver shipped Clicky bundles. Gemini CLI starts `cua-driver mcp --direct` as an MCP server, so the driver runs under the app's own Accessibility and Screen Recording permissions
+- ✅ Ask-first gate (`ClickyComputerUse`): agents can always look, but cua-driver's policy file only allows clicking and typing in turns the user approved. Agents ask with a `<COMPUTER_USE_REQUEST>` block, shown as Allow / Always / Not now in the notch and in Home. "Always allow" lives in Settings
+- ✅ Shared agent instructions for operating apps (snapshot, act by element, verify), written to Gemini CLI's global `AGENTS.md`. Tested against a fake driver: the per-turn policy reaches the MCP server and a refused click comes back as a tool error
+- ⬜ Bundle cua-driver inside the app (`Contents/Helpers/cua-driver`) instead of asking the user to install it
+- ⬜ Try it for real on a Mac
 
 ## Phase 6: dictation
 

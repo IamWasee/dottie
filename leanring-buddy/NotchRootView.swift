@@ -290,56 +290,94 @@ private struct NotchTextResponseSurface: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(spacing: 14) {
-                Button(action: copyResponse) {
-                    Label(didJustCopy ? "Copied" : "Copy", systemImage: didJustCopy ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-
-                Button(action: { notchPresenter.openTextInput() }) {
-                    Label("Follow up", systemImage: "arrowshape.turn.up.right.fill")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-
-                Spacer(minLength: 0)
-
-                Button(action: { notchPresenter.toggleAutoDismissPause() }) {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.15), lineWidth: 2)
-                        Circle()
-                            .trim(from: 0, to: notchPresenter.autoDismissProgress)
-                            .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        if notchPresenter.isAutoDismissPaused {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 6))
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                    }
-                    .frame(width: 14, height: 14)
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help(notchPresenter.isAutoDismissPaused ? "Resume auto-dismiss" : "Pause auto-dismiss")
-
-                Button(action: { notchPresenter.collapse() }) {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help("Dismiss now")
+            if notchPresenter.computerUseRequestAgentID != nil {
+                computerUseRequestButtons
+            } else {
+                responseButtons
             }
         }
         .padding(.top, 8)
+    }
+
+    private var computerUseRequestButtons: some View {
+        HStack(spacing: 10) {
+            Text("wants to use your Mac")
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.55))
+            Spacer(minLength: 0)
+            Button("Not now") { notchPresenter.answerComputerUseRequest(isAllowed: false) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .pointerCursor()
+            Button("Always") { notchPresenter.answerComputerUseRequest(isAllowed: true, alwaysAllow: true) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .pointerCursor()
+                .help("Let Clickys use your Mac without asking")
+            Button(action: { notchPresenter.answerComputerUseRequest(isAllowed: true) }) {
+                Text("Allow")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(DS.Colors.overlayCursorBlue))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        }
+    }
+
+    private var responseButtons: some View {
+        HStack(spacing: 14) {
+            Button(action: copyResponse) {
+                Label(didJustCopy ? "Copied" : "Copy", systemImage: didJustCopy ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            Button(action: { notchPresenter.openTextInput() }) {
+                Label("Follow up", systemImage: "arrowshape.turn.up.right.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            Spacer(minLength: 0)
+
+            Button(action: { notchPresenter.toggleAutoDismissPause() }) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.15), lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: notchPresenter.autoDismissProgress)
+                        .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    if notchPresenter.isAutoDismissPaused {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 6))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
+                .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help(notchPresenter.isAutoDismissPaused ? "Resume auto-dismiss" : "Pause auto-dismiss")
+
+            Button(action: { notchPresenter.collapse() }) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Dismiss now")
+        }
     }
 
     private func copyResponse() {

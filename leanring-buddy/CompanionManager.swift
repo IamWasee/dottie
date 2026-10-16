@@ -721,7 +721,7 @@ final class CompanionManager: ObservableObject {
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
     clickys:
-    the user can have background helpers called clickys that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something) or mention a clicky by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
+    the user can have background helpers called clickys that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or do something in an app like adding a reminder or filling in a form) or mention a clicky by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -895,12 +895,31 @@ final class CompanionManager: ObservableObject {
     }
 
     private func configureClickyRoster() {
-        clickyRoster.onAgentTurnFinished = { [weak self] finishedAgent, finalReply, succeeded in
+        clickyRoster.onAgentTurnFinished = { [weak self] finishedAgent, finalReply, succeeded, computerUseRequest in
             guard let self else { return }
+            if let computerUseRequest {
+                // Ask in the notch; the answer comes back through
+                // onAnswerComputerUseRequest below.
+                self.notchPresenter.showAgentUpdate(
+                    title: finishedAgent.name,
+                    text: computerUseRequest,
+                    computerUseRequestAgentID: finishedAgent.id
+                )
+                return
+            }
             let updateText = finalReply.isEmpty
                 ? (succeeded ? "Finished." : "Stopped without a reply.")
                 : finalReply
             self.notchPresenter.showAgentUpdate(title: finishedAgent.name, text: updateText)
+        }
+
+        notchPresenter.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed, alwaysAllow in
+            guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
+            if isAllowed {
+                self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: alwaysAllow)
+            } else {
+                self.clickyRoster.declineComputerUse(for: requestingAgent)
+            }
         }
     }
 

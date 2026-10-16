@@ -41,6 +41,8 @@ struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
         case tool
         case status
         case error
+        /// The agent asked to click and type on the Mac (see ClickyComputerUse).
+        case computerUseRequest
     }
 
     let id: UUID
@@ -58,9 +60,10 @@ final class ClickyRoster: ObservableObject {
     @Published private(set) var transcriptsByAgentID: [UUID: [ClickyAgentTranscriptItem]] = [:]
     @Published private(set) var runningAgentIDs: Set<UUID> = []
 
-    /// Called when a turn ends, with the agent and its final reply. The
-    /// companion shows this in the notch.
-    var onAgentTurnFinished: ((ClickyAgent, String, Bool) -> Void)?
+    /// Called when a turn ends, with the agent, its final reply, whether it
+    /// succeeded, and what it asked to do on screen if it needs permission.
+    /// The companion shows this in the notch.
+    var onAgentTurnFinished: ((_ agent: ClickyAgent, _ finalReply: String, _ succeeded: Bool, _ computerUseRequest: String?) -> Void)?
 
     private let runtime = GeminiCLIAgentRuntime()
     private var lastTurnSucceededByAgentID: [UUID: Bool] = [:]
@@ -142,7 +145,9 @@ final class ClickyRoster: ObservableObject {
     }
 
     /// Sends a message to an agent and runs its turn in the background.
-    func sendMessage(_ messageText: String, to requestedAgent: ClickyAgent) {
+    /// `isComputerUseApproved` lets this turn click and type on the Mac;
+    /// "Always allow" in settings does the same for every turn.
+    func sendMessage(_ messageText: String, to requestedAgent: ClickyAgent, isComputerUseApproved: Bool = false) {
         let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         // Re-read the agent so hasStartedSession is current.
         guard !trimmedMessageText.isEmpty,
@@ -156,6 +161,12 @@ final class ClickyRoster: ObservableObject {
         let isFirstTurn = !agent.hasStartedSession
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
+        let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
+        let messageForAgent = isTurnApprovedForComputerUse
+            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(trimmedMessageText)"
+            : trimmedMessageText
+        // Picks up a cua-driver installed since launch.
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL)
 
         lastTurnSucceededByAgentID[agentID] = false
 
@@ -166,10 +177,11 @@ final class ClickyRoster: ObservableObject {
                     agentID: agentID,
                     sessionID: agent.sessionID,
                     isFirstTurn: isFirstTurn,
-                    message: trimmedMessageText,
+                    message: messageForAgent,
                     workspaceURL: agentWorkspaceURL,
                     cliHomeURL: self.cliHomeURL,
-                    model: agent.model
+                    model: agent.model,
+                    isComputerUseApproved: isTurnApprovedForComputerUse
                 ) { [weak self] event in
                     // The main queue is FIFO, so events land in order and
                     // before finishTurn below.
@@ -234,10 +246,56 @@ final class ClickyRoster: ObservableObject {
         saveTranscript(for: agentID)
 
         guard let finishedAgent = agent(withID: agentID) else { return }
+        let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
         let finalReply = transcriptsByAgentID[agentID]?
             .last { $0.kind == .assistant || $0.kind == .error }?
             .text ?? ""
-        onAgentTurnFinished?(finishedAgent, finalReply, succeeded)
+        onAgentTurnFinished?(finishedAgent, finalReply, succeeded, computerUseRequest)
+    }
+
+    /// If the agent's last reply ends with a <COMPUTER_USE_REQUEST> block,
+    /// strips it from the reply and adds it as its own transcript item.
+    private func moveComputerUseRequestOutOfLastReply(agentID: UUID) -> String? {
+        guard var transcript = transcriptsByAgentID[agentID],
+              let lastReplyIndex = transcript.lastIndex(where: { $0.kind == .assistant }) else { return nil }
+        let (replyWithoutRequest, requestDescription) = ClickyComputerUse.extractComputerUseRequest(from: transcript[lastReplyIndex].text)
+        guard let requestDescription else { return nil }
+
+        if replyWithoutRequest.isEmpty {
+            transcript.remove(at: lastReplyIndex)
+        } else {
+            transcript[lastReplyIndex].text = replyWithoutRequest
+        }
+        transcriptsByAgentID[agentID] = transcript
+        appendTranscriptItem(.computerUseRequest, text: requestDescription, to: agentID)
+        return requestDescription
+    }
+
+    // MARK: - Computer use permission
+
+    /// What the agent is waiting to do on screen, if its last transcript
+    /// item is an unanswered request.
+    func pendingComputerUseRequest(for agent: ClickyAgent) -> String? {
+        guard !isRunning(agent),
+              let lastItem = transcriptsByAgentID[agent.id]?.last,
+              lastItem.kind == .computerUseRequest else { return nil }
+        return lastItem.text
+    }
+
+    /// The user tapped Allow (or Always allow): run a turn that may click
+    /// and type.
+    func approveComputerUse(for agent: ClickyAgent, alwaysAllow: Bool) {
+        guard pendingComputerUseRequest(for: agent) != nil else { return }
+        if alwaysAllow {
+            ClickyComputerUse.isAlwaysAllowed = true
+        }
+        appendTranscriptItem(.status, text: alwaysAllow ? "Always allowed to use your Mac" : "Allowed to use your Mac this time", to: agent.id)
+        sendMessage("Go ahead with what you asked to do on screen.", to: agent, isComputerUseApproved: true)
+    }
+
+    func declineComputerUse(for agent: ClickyAgent) {
+        guard pendingComputerUseRequest(for: agent) != nil else { return }
+        appendTranscriptItem(.status, text: "Not allowed to use your Mac this time", to: agent.id)
     }
 
     // MARK: - Transcript helpers

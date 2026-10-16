@@ -46,6 +46,7 @@ Open `leanring-buddy/Info.plist` and set:
 | `PostHogAPIKey` | optional, your own PostHog key; empty disables analytics |
 | `GeminiCLIPath` | optional, where `gemini` is installed if the app can't find it |
 | `GeminiAgentModel` | optional, the model background Clickys use (default `gemini-3.8-flash`) |
+| `CuaDriverPath` | optional, where `cua-driver` is installed if the app can't find it |
 
 ### Background Clickys (optional)
 
@@ -56,6 +57,14 @@ npm install -g @google/gemini-cli
 ```
 
 Nothing else to set up: the app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Clickys in Home → Clickys, or just ask Clicky out loud to hand a task off.
+
+To let Clickys click and type in your apps, install the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"
+```
+
+Clickys can always look at your apps, but they ask before they click or type: an Allow / Always / Not now card appears in the notch. You can let them act without asking in Home → Settings.
 
 ### 3. Build and run
 
