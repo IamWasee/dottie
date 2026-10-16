@@ -21,14 +21,21 @@ struct NotchRootView: View {
         notchPresenter.surface != .compact || notchPresenter.isHovering
     }
 
+    /// Matches the shape: square at the top so it merges with the notch.
+    private var shapeOutline: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            bottomLeadingRadius: isExpanded ? 22 : 10,
+            bottomTrailingRadius: isExpanded ? 22 : 10,
+            style: .continuous
+        )
+    }
+
     var body: some View {
+        // The panel is a fixed canvas; only the shape inside it changes size,
+        // so the growth animates smoothly on the GPU with its content.
         ZStack(alignment: .top) {
-            UnevenRoundedRectangle(
-                bottomLeadingRadius: isExpanded ? 22 : 10,
-                bottomTrailingRadius: isExpanded ? 22 : 10,
-                style: .continuous
-            )
-            .fill(Color.black)
+            shapeOutline
+                .fill(Color.black)
 
             VStack(spacing: 0) {
                 // The physical notch covers the middle of this strip; the
@@ -41,12 +48,12 @@ struct NotchRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: notchPresenter.shapeSize.width, height: notchPresenter.shapeSize.height, alignment: .top)
+        .clipShape(shapeOutline)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: notchPresenter.shapeSize)
         .animation(.easeOut(duration: 0.22), value: notchPresenter.surface)
         .animation(.easeOut(duration: 0.18), value: notchPresenter.isHovering)
-        .onHover { isHovering in
-            notchPresenter.isHovering = isHovering
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder

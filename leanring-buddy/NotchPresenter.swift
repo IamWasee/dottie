@@ -10,6 +10,7 @@
 //
 
 import Combine
+import CoreGraphics
 import Foundation
 
 /// One Dot as the notch shows it when you hover.
@@ -59,6 +60,9 @@ final class NotchPresenter: ObservableObject {
 
     @Published private(set) var surface: Surface = .compact
     @Published var isHovering = false
+    /// Size of the black shape. NotchWindowManager sets it for each surface;
+    /// NotchRootView animates to it.
+    @Published var shapeSize: CGSize = .zero
     @Published var audioPowerLevel: CGFloat = 0
     /// Word next to the eyes while listening or thinking ("dictating" while
     /// hold-to-dictate is recording).
