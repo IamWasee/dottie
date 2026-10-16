@@ -297,13 +297,14 @@ final class GeminiLiveVoiceClient {
                 ]
             ],
             "systemInstruction": ["parts": [["text": composeSystemInstruction()]]],
+            // No googleSearch tool: on a free-tier key, Live closes the
+            // session with "You exceeded your current quota" when it's set.
             "tools": [
                 ["functionDeclarations": [
                     Self.pointAtElementFunctionDeclaration,
                     Self.sendToHigherModelFunctionDeclaration,
                     Self.startClickyTaskFunctionDeclaration
-                ]],
-                ["googleSearch": [String: Any]()]
+                ]]
             ],
             // Push-to-talk decides when the user's turn starts and ends, not
             // server-side voice detection.
