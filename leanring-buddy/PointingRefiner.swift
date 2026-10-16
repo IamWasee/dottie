@@ -22,12 +22,23 @@
 import AppKit
 import ApplicationServices
 import Foundation
-import ScreenCaptureKit
 
 @MainActor
 enum PointingRefiner {
     /// The whole second look must finish within this, or Live's guess is used.
-    static let refinementTimeoutSeconds: TimeInterval = 3.5
+    static let refinementTimeoutSeconds: TimeInterval = 5
+    /// Fast enough to answer within the timeout (about 2.5s); the default
+    /// chat model often took 8s, so the cursor fell back to Live's guess.
+    static let visionModel = "gemini-3.6-flash"
+
+    /// Chromium and Electron apps only build their web content's
+    /// accessibility tree when asked, and the first ask can take a moment,
+    /// so this is called as soon as a turn starts.
+    static func prepareFrontmostApplicationForSearch() {
+        guard AXIsProcessTrusted(), let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return }
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        AXUIElementSetAttributeValue(applicationElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
 
     /// Returns a better global AppKit point (bottom-left origin) for the
     /// element, or nil to keep the rough one.
@@ -68,7 +79,11 @@ enum PointingRefiner {
         let genericWords: Set<String> = [
             "the", "a", "an", "of", "in", "on", "to", "for", "and", "your", "my", "this", "that",
             "button", "icon", "link", "tab", "menu", "item", "field", "bar", "box", "area", "text",
-            "label", "option", "toggle", "checkbox", "control", "element", "section", "panel"
+            "label", "option", "toggle", "checkbox", "control", "element", "section", "panel",
+            // How people describe browser things that aren't in their names:
+            // "the pinterest bookmark" is a tile named "pinterest.com".
+            "bookmark", "bookmarks", "tile", "shortcut", "thumbnail", "website", "site", "card", "logo",
+            "com", "www", "org", "net", "io", "https", "http"
         ]
         return label.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -258,7 +273,7 @@ private enum VisionElementLocator {
         roughPoint: CGPoint,
         displayFrame: CGRect
     ) async -> CGPoint? {
-        guard let screenshot = await captureDisplay(withFrame: displayFrame),
+        guard let screenshot = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: maximumScreenshotDimension),
               let jpegData = NSBitmapImageRep(cgImage: screenshot)
                 .representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else { return nil }
 
@@ -279,6 +294,7 @@ private enum VisionElementLocator {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestBody: [String: Any] = [
+            "model": PointingRefiner.visionModel,
             "contents": [[
                 "role": "user",
                 "parts": [
@@ -338,35 +354,5 @@ private enum VisionElementLocator {
         guard (0...1000).contains(ymin), (0...1000).contains(xmin), (0...1000).contains(ymax), (0...1000).contains(xmax),
               ymax > ymin, xmax > xmin else { return nil }
         return (ymin, xmin, ymax, xmax)
-    }
-
-    /// A sharper capture of one display than the frame Live saw, without
-    /// this app's own windows.
-    private static func captureDisplay(withFrame displayFrame: CGRect) async -> CGImage? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
-
-        var displayIDByScreenFrame: [CGDirectDisplayID] = []
-        for screen in NSScreen.screens where screen.frame == displayFrame {
-            if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
-                displayIDByScreenFrame.append(screenNumber)
-            }
-        }
-        guard let display = content.displays.first(where: { displayIDByScreenFrame.contains($0.displayID) })
-                ?? content.displays.first else { return nil }
-
-        let ownBundleIdentifier = Bundle.main.bundleIdentifier
-        let ownAppWindows = content.windows.filter { $0.owningApplication?.bundleIdentifier == ownBundleIdentifier }
-        let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
-
-        let configuration = SCStreamConfiguration()
-        let pointsToPixels = NSScreen.screens.first(where: { $0.frame == displayFrame })?.backingScaleFactor ?? 2
-        let nativeWidth = CGFloat(display.width) * pointsToPixels
-        let nativeHeight = CGFloat(display.height) * pointsToPixels
-        let downscale = min(1, CGFloat(maximumScreenshotDimension) / max(nativeWidth, nativeHeight))
-        configuration.width = Int(nativeWidth * downscale)
-        configuration.height = Int(nativeHeight * downscale)
-        configuration.showsCursor = false
-
-        return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
     }
 }

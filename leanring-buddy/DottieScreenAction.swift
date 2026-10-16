@@ -6,8 +6,8 @@
 //  click, type, press keys, scroll, open a page, and draw on the screen.
 //  Shipped Clicky leaves acting to its background agents; here the voice
 //  companion can also do quick, single steps directly, so "click sign in",
-//  "go back" or "circle the error" happen right away. Longer jobs still go
-//  to a Dot.
+//  "go back" or "circle the error" happen right away. Jobs with several
+//  steps go to DottieScreenTaskRunner (do_task_on_screen).
 //
 //  The tools are declared for Gemini Live here, and DottieScreenActionPerformer
 //  carries them out with synthetic events (which need the Accessibility
@@ -301,10 +301,25 @@ enum DottieScreenActionPerformer {
         return true
     }
 
-    static func scroll(direction: DottieScreenAction.ScrollDirection, amount: Int) {
+    /// Scrolls whatever is under the pointer, or under `appKitPoint` when
+    /// given (the pointer goes back where it was afterwards).
+    static func scroll(direction: DottieScreenAction.ScrollDirection, amount: Int, at appKitPoint: CGPoint? = nil) {
         let clampedAmount = max(1, min(amount, 10))
         let linesPerStep: Int32 = 4
         let eventSource = CGEventSource(stateID: .hidSystemState)
+        let originalMouseLocation = quartzPoint(fromAppKit: NSEvent.mouseLocation)
+        if let appKitPoint {
+            CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: quartzPoint(fromAppKit: appKitPoint), mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+        }
+        defer {
+            if appKitPoint != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    CGWarpMouseCursorPosition(originalMouseLocation)
+                    CGAssociateMouseAndMouseCursorPosition(1)
+                }
+            }
+        }
         for _ in 0..<clampedAmount {
             let verticalLines: Int32
             let horizontalLines: Int32
@@ -314,9 +329,12 @@ enum DottieScreenActionPerformer {
             case .right: (verticalLines, horizontalLines) = (0, -linesPerStep)
             case .left: (verticalLines, horizontalLines) = (0, linesPerStep)
             }
-            CGEvent(scrollWheelEvent2Source: eventSource, units: .line, wheelCount: 2,
-                    wheel1: verticalLines, wheel2: horizontalLines, wheel3: 0)?
-                .post(tap: .cghidEventTap)
+            let scrollEvent = CGEvent(scrollWheelEvent2Source: eventSource, units: .line, wheelCount: 2,
+                                      wheel1: verticalLines, wheel2: horizontalLines, wheel3: 0)
+            if let appKitPoint {
+                scrollEvent?.location = quartzPoint(fromAppKit: appKitPoint)
+            }
+            scrollEvent?.post(tap: .cghidEventTap)
         }
     }
 

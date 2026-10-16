@@ -130,6 +130,8 @@ final class CompanionManager: ObservableObject {
     private var livePointingRefinementTask: Task<Void, Never>?
     /// What voice Dottie draws on screen when asked.
     private let drawingOverlayManager = DottieDrawingOverlayManager()
+    /// Multi-step jobs on the screen ("open opera, find my kaggle rank").
+    private let screenTaskRunner = DottieScreenTaskRunner()
     private var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
@@ -863,10 +865,13 @@ final class CompanionManager: ObservableObject {
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
     doing things on screen:
-    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. to go back a page press cmd+[, forward cmd+], new tab cmd+t. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords. bigger multi-step jobs go to a dot instead.
+    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. to go back a page press cmd+[, forward cmd+], new tab cmd+t. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+
+    multi-step jobs:
+    when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence. if they say stop or never mind while it's running, call stop_screen_task.
 
     dots:
-    the user can have background helpers called dots that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or do something in an app like adding a reminder or filling in a form) or mention a dot by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
+    the user can have background helpers called dots that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or something that should happen in the background while they keep using their mac) or mention a dot by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -910,6 +915,16 @@ final class CompanionManager: ObservableObject {
             return await self.performScreenAction(screenAction)
         }
 
+        liveVoiceClient.onStartScreenTask = { [weak self] taskText in
+            guard let self else { return "couldn't start it right now." }
+            return self.startScreenTask(taskText)
+        }
+
+        liveVoiceClient.onStopScreenTask = { [weak self] in
+            guard let self else { return "nothing is running." }
+            return self.stopScreenTask() ? "stopped it." : "nothing was running."
+        }
+
         liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText)
@@ -929,6 +944,8 @@ final class CompanionManager: ObservableObject {
     /// Called by the live transcription provider when push-to-talk opens.
     /// Grabs the screen frame and opens the user's turn on the Live session.
     private func beginLiveTurnWithScreenFrame() async {
+        // So a web page's elements can be found by name if Dottie points.
+        PointingRefiner.prepareFrontmostApplicationForSearch()
         let compositeScreenFrame: CompanionCompositeScreenFrame?
         do {
             compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
@@ -1042,6 +1059,95 @@ final class CompanionManager: ObservableObject {
         case .clearDrawings:
             drawingOverlayManager.clear()
             return "cleared the drawings."
+        }
+    }
+
+    // MARK: - Multi-step screen tasks
+
+    /// Starts a multi-step job; a running one is replaced. Returns a short
+    /// status for Live to relay.
+    private func startScreenTask(_ taskText: String) -> String {
+        guard DottieScreenActionPerformer.canPostEvents else {
+            return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
+        }
+        let wasAlreadyRunning = screenTaskRunner.isRunning
+        print("🧭 Screen task: \(taskText)")
+        showOverlayTransientlyIfNeeded()
+
+        screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
+            print("🧭 Step \(stepNumber): \(stepDescription)")
+            self?.notchPresenter.showScreenTaskStep(stepDescription)
+        }
+        screenTaskRunner.onWillClick = { [weak self] point, displayFrame in
+            guard let self else { return }
+            // Fly there first so the user sees what's about to be clicked.
+            self.livePointingRefinementTask?.cancel()
+            self.detectedElementScreenLocation = point
+            self.detectedElementDisplayFrame = displayFrame
+            try? await Task.sleep(nanoseconds: 750_000_000)
+        }
+        notchPresenter.showScreenTaskStep("starting")
+        screenTaskRunner.start(task: taskText) { [weak self] outcome in
+            self?.finishScreenTask(taskText: taskText, outcome: outcome)
+        }
+        return wasAlreadyRunning
+            ? "stopped the earlier job and started this one. say you're on it in a few words."
+            : "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
+    }
+
+    /// Stops the running job, if any. Returns true if one was running.
+    @discardableResult
+    private func stopScreenTask() -> Bool {
+        guard screenTaskRunner.stop() else { return false }
+        print("🧭 Screen task stopped")
+        notchPresenter.endScreenTask()
+        clearDetectedElementLocation()
+        scheduleTransientHideIfNeeded()
+        return true
+    }
+
+    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome) {
+        notchPresenter.endScreenTask()
+        clearDetectedElementLocation()
+        let resultText: String
+        switch outcome {
+        case .finished(let answer):
+            print("🧭 Screen task finished: \(answer)")
+            resultText = answer
+        case .failed(let reason):
+            print("🧭 Screen task failed: \(reason)")
+            resultText = "it couldn't be finished: \(reason)"
+        case .stopped:
+            scheduleTransientHideIfNeeded()
+            return
+        }
+
+        // Say it as soon as Dottie isn't in the middle of another turn.
+        Task { [weak self] in
+            for _ in 0..<60 {
+                guard let self else { return }
+                let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle
+                    || self.buddyDictationManager.isDictationInProgress || self.notchPresenter.surface == .textInput
+                if !isBusy { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText)
+        }
+    }
+
+    /// Dottie says how the job went, as a turn of its own, so it reads like
+    /// her answer and lands in the conversation history.
+    private func speakScreenTaskResult(taskText: String, resultText: String) {
+        let instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
+            + "tell the user the result now in one short, fun sentence. don't start the job again."
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        showOverlayTransientlyIfNeeded()
+        switch voiceMode {
+        case .classic:
+            sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
+        case .live:
+            startLiveTextTurn(recordedUserText: "(done: \(taskText))", turnText: instructionText)
         }
     }
 
@@ -1354,6 +1460,9 @@ final class CompanionManager: ObservableObject {
         notchPresenter.onOpenHome = { [weak self] in
             self?.openHomeWindow()
         }
+        notchPresenter.onStopScreenTask = { [weak self] in
+            self?.stopScreenTask()
+        }
         notchPresenter.onOpenPeekFile = { [weak self] peekFile in
             self?.notchPresenter.isHovering = false
             NSWorkspace.shared.open(peekFile.url)
@@ -1423,16 +1532,22 @@ final class CompanionManager: ObservableObject {
         case .classic:
             sendTranscriptToGeminiWithScreenshot(transcript: trimmedMessageText, inputKind: .typed)
         case .live:
-            liveTurnPlaybackDrainTask?.cancel()
-            isLiveTurnInFlight = true
-            currentLiveTurnTypedText = trimmedMessageText
-            voiceState = .processing
-            Task { [weak self] in
-                guard let self else { return }
-                await self.beginLiveTurnWithScreenFrame()
-                self.liveVoiceClient.sendTurnContextText(trimmedMessageText)
-                self.liveVoiceClient.endUserTurn()
-            }
+            startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: trimmedMessageText)
+        }
+    }
+
+    /// A Live turn from text instead of the mic, with a fresh screen frame.
+    /// `recordedUserText` is what the conversation history keeps.
+    private func startLiveTextTurn(recordedUserText: String, turnText: String) {
+        liveTurnPlaybackDrainTask?.cancel()
+        isLiveTurnInFlight = true
+        currentLiveTurnTypedText = recordedUserText
+        voiceState = .processing
+        Task { [weak self] in
+            guard let self else { return }
+            await self.beginLiveTurnWithScreenFrame()
+            self.liveVoiceClient.sendTurnContextText(turnText)
+            self.liveVoiceClient.endUserTurn()
         }
     }
 
@@ -1451,7 +1566,7 @@ final class CompanionManager: ObservableObject {
     /// flight, and drops a recording without sending it. Does nothing while
     /// the companion is idle, so Escape keeps working normally elsewhere.
     private func handleEscapeInterrupt() {
-        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying
+        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying || screenTaskRunner.isRunning
         guard isCompanionBusy else { return }
 
         print("⎋ Escape interrupt")
@@ -1470,6 +1585,7 @@ final class CompanionManager: ObservableObject {
         stopAllSpeechPlayback()
         clearDetectedElementLocation()
         screenAnnotationManager.clear()
+        stopScreenTask()
 
         isLiveTurnInFlight = false
         currentLiveTurnTypedText = nil
@@ -1742,8 +1858,9 @@ final class CompanionManager: ObservableObject {
             }
 
             // Wait for pointing animation to finish (location is cleared
-            // when the buddy flies back to the cursor)
-            while detectedElementScreenLocation != nil {
+            // when the buddy flies back to the cursor), and for a screen
+            // task, whose clicks the cursor shows.
+            while detectedElementScreenLocation != nil || screenTaskRunner.isRunning {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }

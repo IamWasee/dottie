@@ -73,6 +73,8 @@ struct NotchRootView: View {
             NotchTextInputSurface(notchPresenter: notchPresenter)
         case .textResponse:
             NotchTextResponseSurface(notchPresenter: notchPresenter)
+        case .screenTask:
+            screenTaskContent
         }
     }
 
@@ -186,6 +188,34 @@ struct NotchRootView: View {
             ProgressView()
                 .controlSize(.small)
                 .tint(.white)
+        }
+        .padding(.top, 8)
+    }
+
+    private var screenTaskContent: some View {
+        HStack(spacing: 12) {
+            NotchEyeView(mood: .thinking)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("on it")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                Text(notchPresenter.screenTaskStepText.isEmpty ? "starting" : notchPresenter.screenTaskStepText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+            Button(action: { notchPresenter.stopScreenTask() }) {
+                Text("stop")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.16)))
+            }
+            .buttonStyle(.plain)
+            .help("Stop (or press Escape)")
         }
         .padding(.top, 8)
     }

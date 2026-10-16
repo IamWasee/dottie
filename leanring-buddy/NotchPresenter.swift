@@ -54,6 +54,9 @@ final class NotchPresenter: ObservableObject {
         case textInput
         /// The last answer as text, auto-dismissing.
         case textResponse
+        /// Dottie is doing a multi-step job on the screen; shows the
+        /// current step and a stop button.
+        case screenTask
     }
 
     private static let textResponseAutoDismissSeconds: TimeInterval = 8
@@ -81,6 +84,11 @@ final class NotchPresenter: ObservableObject {
     /// offers to remove it again.
     @Published private(set) var learnedDictionaryWord: String?
     @Published var draftText = ""
+    /// What the running screen task is doing right now ("clicking Sign in").
+    @Published private(set) var screenTaskStepText = ""
+    /// True while a screen task runs; the notch comes back to it after a
+    /// voice turn or a card.
+    private(set) var isScreenTaskRunning = false
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
     @Published private(set) var isAutoDismissPaused = false
@@ -122,6 +130,7 @@ final class NotchPresenter: ObservableObject {
     var onRevealPeekFile: ((NotchPeekFile) -> Void)?
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
     var onRemoveLearnedDictionaryWord: ((String) -> Void)?
+    var onStopScreenTask: (() -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
     /// Agent reports that arrived while the notch was busy with a voice turn.
@@ -172,6 +181,31 @@ final class NotchPresenter: ObservableObject {
         cancelAutoDismiss()
         surface = .compact
         showNextPendingAgentUpdateIfIdle()
+        if surface == .compact && isScreenTaskRunning {
+            surface = .screenTask
+        }
+    }
+
+    /// A screen task started or moved on to its next step. Doesn't cover a
+    /// voice turn or a card that's showing; the step shows once they close.
+    func showScreenTaskStep(_ stepText: String) {
+        isScreenTaskRunning = true
+        screenTaskStepText = stepText
+        if surface == .compact {
+            surface = .screenTask
+        }
+    }
+
+    func endScreenTask() {
+        isScreenTaskRunning = false
+        screenTaskStepText = ""
+        if surface == .screenTask {
+            collapse()
+        }
+    }
+
+    func stopScreenTask() {
+        onStopScreenTask?()
     }
 
     /// A background Clicky finished. Shown as a card right away if the notch

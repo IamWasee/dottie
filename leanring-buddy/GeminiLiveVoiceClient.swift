@@ -89,6 +89,12 @@ final class GeminiLiveVoiceClient {
     /// The model asked to click, type, press keys, scroll, open a page or
     /// draw on screen. Returns what happened, for the model to relay.
     var onScreenAction: (@MainActor (DottieScreenAction) async -> String)?
+    /// The model handed a multi-step job on the screen to the task runner
+    /// (do_task_on_screen). Returns a short status; the result is spoken
+    /// in a later turn when the job finishes.
+    var onStartScreenTask: (@MainActor (_ task: String) -> String)?
+    /// The user asked to stop the running screen task (stop_screen_task).
+    var onStopScreenTask: (@MainActor () -> String)?
 
     // MARK: - Configuration
 
@@ -483,9 +489,33 @@ final class GeminiLiveVoiceClient {
             pointAtElementFunctionDeclaration,
             sendToHigherModelFunctionDeclaration,
             startClickyTaskFunctionDeclaration,
-            searchWebFunctionDeclaration
+            searchWebFunctionDeclaration,
+            doTaskOnScreenFunctionDeclaration,
+            stopScreenTaskFunctionDeclaration
         ]
     }
+
+    /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
+    private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
+        "name": "do_task_on_screen",
+        "description": "Do a job on the user's screen that takes several steps, all in one go: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there. Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "task": [
+                    "type": "STRING",
+                    "description": "The whole job in the user's words, every step in order, plus details from the conversation (names, apps, what to report back)."
+                ]
+            ],
+            "required": ["task"]
+        ]
+    ]
+
+    private static let stopScreenTaskFunctionDeclaration: [String: Any] = [
+        "name": "stop_screen_task",
+        "description": "Stop the on-screen job that's running, when the user says stop, cancel or never mind.",
+        "parameters": ["type": "OBJECT", "properties": [String: Any]()]
+    ]
 
     private static let searchWebFunctionDeclaration: [String: Any] = [
         "name": "search_web",
@@ -701,6 +731,11 @@ final class GeminiLiveVoiceClient {
                 handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "search_web":
                 handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "do_task_on_screen":
+                handleDoTaskOnScreenCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "stop_screen_task":
+                let stopStatus = onStopScreenTask?() ?? "nothing is running."
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
@@ -792,6 +827,17 @@ final class GeminiLiveVoiceClient {
             self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                       response: ["result": actionResult])
         }
+    }
+
+    private func handleDoTaskOnScreenCall(functionCallID: String, functionArguments: [String: Any]) {
+        let taskText = (functionArguments["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !taskText.isEmpty, let onStartScreenTask, !isDiscardingModelAudioForCurrentTurn else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "do_task_on_screen",
+                                 response: ["error": "couldn't start that right now."])
+            return
+        }
+        sendFunctionResponse(functionCallID: functionCallID, functionName: "do_task_on_screen",
+                             response: ["result": onStartScreenTask(taskText)])
     }
 
     private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {
