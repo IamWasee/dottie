@@ -1016,8 +1016,11 @@ final class CompanionManager: ObservableObject {
             guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
                 return "couldn't tell where that is on screen."
             }
-            let width = normalizedSize.map { max(24, min(1000, $0)) / 1000 * target.frameWidthInPoints } ?? 110
-            let height = max(28, min(width * 0.45, 140))
+            var width: CGFloat = 110
+            if let normalizedSize {
+                width = CGFloat(max(24, min(1000, normalizedSize)) / 1000) * target.frameWidthInPoints
+            }
+            let height: CGFloat = max(28, min(width * 0.45, 140))
             drawingOverlayManager.add(DottieDrawing(
                 shape: shape,
                 targetRect: CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height),
