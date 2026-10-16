@@ -45,7 +45,7 @@ jobs:
                 ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
               }
               const sc = m.serverContent || {};
-              if (sc.inputTranscription?.text) heard += sc.inputTranscription.text;
+              if (sc.inputTranscription?.text) { if (!heard) stamp("first heard"); heard += sc.inputTranscription.text; }
               if (sc.outputTranscription?.text) { if (!firstOut) { firstOut = Date.now(); stamp(`first output (${tEnd ? (firstOut - tEnd) + "ms after release" : "BEFORE release"})`); } said += sc.outputTranscription.text; }
               if (sc.interrupted) stamp("interrupted");
               if (sc.turnComplete) { turns++; stamp("turnComplete"); }
@@ -59,9 +59,9 @@ jobs:
           JS
           T='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1200,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
           L='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":60000,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
-          node ptt.mjs gemini-3.8-live ptt-quick-release "$T" 200 ""
-          node ptt.mjs gemini-3.8-live ptt-held-3s "$T" 3000 ""
-          node ptt.mjs gemini-3.8-live ptt-long-silence-config "$L" 200 ""
-          node ptt.mjs gemini-3.8-live ptt-with-context-text "$L" 200 "(The screenshot shows one screen.)"
-          SYS="Only listen. Never reply." node ptt.mjs gemini-3.8-live dictation-long-silence "$L" 4000 ""
-          node ptt.mjs gemini-3.1-flash-live-preview ptt-quick-release "$T" 200 ""
+          M='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":2500,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
+          for i in 1 2 3; do node ptt.mjs gemini-3.8-live ptt-quick-release "$T" 200 ""; done
+          for i in 1 2; do node ptt.mjs gemini-3.8-live ptt-2500-quick "$M" 200 ""; done
+          node ptt.mjs gemini-3.1-flash-live-preview ptt-2500-quick "$M" 200 ""
+          node ptt.mjs gemini-3.8-live ptt-context-text "$T" 200 "(The screenshot shows one screen.)"
+          SYS="Only listen. Never reply." node ptt.mjs gemini-3.8-live dictation-1200 "$T" 4000 ""
