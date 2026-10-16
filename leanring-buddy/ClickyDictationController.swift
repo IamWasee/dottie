@@ -311,6 +311,9 @@ final class ClickyDictationController: ObservableObject {
                 ["heard": $0.original, "meant": $0.corrected]
             }
         ]
+        if let pinnedLanguage = DictationLanguageCatalog.pinnedLanguage {
+            requestBody["language"] = pinnedLanguage.englishName
+        }
         if let focusContext {
             requestBody["appName"] = focusContext.appName
             if !focusContext.textBeforeCursor.isEmpty {

@@ -293,6 +293,8 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
     appName?: string;
     textBeforeCursor?: string;
     customWords?: string[];
+    /** The language the user picked in Settings (an English name); absent means auto-detect. */
+    language?: string;
     /** Words the user fixed after dictating: what was written, and what they meant. */
     learnedCorrections?: { heard?: string; meant?: string }[];
   };
@@ -301,6 +303,12 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
   }
 
   const contextLines: string[] = [];
+  if (body.language) {
+    const language = body.language.slice(0, 40);
+    contextLines.push(
+      `They're speaking ${language}. Write the text in ${language}, even where a word sounds like another language; never translate.`
+    );
+  }
   if (body.appName) {
     contextLines.push(`They're typing into ${body.appName}.`);
   }

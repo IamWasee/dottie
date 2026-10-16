@@ -253,6 +253,8 @@ private struct HomeSettingsView: View {
     @State private var serverCheckMessage: String?
     @State private var isCheckingServer = false
     @AppStorage(DictationDictionary.learnsCorrectionsDefaultsKey) private var learnsDictationCorrections = true
+    @AppStorage(DictationLanguageCatalog.autoDetectDefaultsKey) private var isDictationLanguageAutoDetected = true
+    @AppStorage(DictationLanguageCatalog.languageCodeDefaultsKey) private var dictationLanguageCode = DictationLanguageCatalog.defaultLanguageCode
     @ObservedObject private var dictationDictionary = DictationDictionary.shared
 
     var body: some View {
@@ -352,6 +354,24 @@ private struct HomeSettingsView: View {
                             .font(.system(size: 12))
                     }
                     settingsHint("Hold the shortcut, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
+                    settingsRow(label: "Detect the language automatically") {
+                        Toggle("", isOn: $isDictationLanguageAutoDetected)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    if !isDictationLanguageAutoDetected {
+                        settingsRow(label: "Language") {
+                            Picker("", selection: $dictationLanguageCode) {
+                                ForEach(DictationLanguageCatalog.languages) { language in
+                                    Text(language.displayName).tag(language.code)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: 180)
+                        }
+                    }
+                    settingsHint("Auto-detect follows you across languages, even mid-sentence. Pin one language for the most accurate results.")
                     settingsRow(label: "Learn words I correct") {
                         Toggle("", isOn: $learnsDictationCorrections)
                             .labelsHidden()
