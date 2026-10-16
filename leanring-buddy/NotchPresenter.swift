@@ -27,6 +27,17 @@ struct NotchDotSummary: Identifiable, Equatable {
     let lastLine: String
 }
 
+/// A file a Dot made, shown in the hover peek so it can be opened or
+/// dragged straight into another app.
+struct NotchPeekFile: Identifiable, Equatable {
+    let url: URL
+    let agentID: UUID
+    let agentName: String
+    let modifiedAt: Date
+
+    var id: String { url.path }
+}
+
 @MainActor
 final class NotchPresenter: ObservableObject {
     enum Surface: Equatable {
@@ -77,6 +88,11 @@ final class NotchPresenter: ObservableObject {
         Array(dotSummaries.prefix(Self.maximumPeekDotCount))
     }
 
+    /// The newest files the Dots made, newest first. CompanionManager
+    /// refreshes this when the hover peek opens.
+    @Published var peekFiles: [NotchPeekFile] = []
+    nonisolated static let maximumPeekFileCount = 5
+
     var unreadDotCount: Int {
         dotSummaries.filter { $0.status == .hasNew }.count
     }
@@ -95,6 +111,8 @@ final class NotchPresenter: ObservableObject {
     var onSubmitTypedMessage: ((String) -> Void)?
     var onOpenHome: (() -> Void)?
     var onOpenDot: ((UUID) -> Void)?
+    var onOpenPeekFile: ((NotchPeekFile) -> Void)?
+    var onRevealPeekFile: ((NotchPeekFile) -> Void)?
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?

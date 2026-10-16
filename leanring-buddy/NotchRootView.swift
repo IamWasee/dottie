@@ -115,6 +115,10 @@ struct NotchRootView: View {
                     }
                 }
             }
+            if !notchPresenter.peekFiles.isEmpty {
+                NotchPeekFilePile(notchPresenter: notchPresenter)
+                    .frame(height: NotchWindowManager.peekFilePileHeight)
+            }
         }
     }
 

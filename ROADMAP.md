@@ -29,7 +29,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Custom hotkeys (`ClickyHotkeyRecorder`): record your own talk and dictation shortcuts in Settings, modifiers alone or with a key
 - ✅ Screen annotation: circle a region with the cursor while holding the talk shortcut and ask about it (`ScreenAnnotationManager`); the ring is drawn onto the screenshot the model sees
 - ✅ Notch hover peek of Dots: each Dot's status light (working, something new, idle) and last line; click one to open its chat in Home
-- ⬜ Notch hover peek of files
+- ✅ Notch hover peek of files: the newest files in the Dots' output folders as thumbnails; click to open, drag into any app, or right-click to show in Finder (`NotchPeekFiles`)
 
 ## Phase 4: Clicky agents ⏳
 
