@@ -661,6 +661,15 @@ final class CompanionManager: ObservableObject {
             }
             .store(in: &dictationCancellables)
 
+        dictationController.$liveText
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] liveText in
+                guard let self, self.dictationController.state == .recording else { return }
+                self.notchPresenter.updateLiveCaption(liveText)
+            }
+            .store(in: &dictationCancellables)
+
         dictationController.$audioPowerLevel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] powerLevel in

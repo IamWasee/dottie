@@ -112,6 +112,8 @@ private final class DictationAudioRecorder: @unchecked Sendable {
     private let bufferLock = NSLock()
     private var recordedPCMData = Data()
     var onAudioPowerLevel: (@Sendable (CGFloat) -> Void)?
+    /// Each converted chunk, for the live preview.
+    var onPCM16Chunk: (@Sendable (Data) -> Void)?
 
     func start() throws {
         bufferLock.lock()
@@ -148,6 +150,7 @@ private final class DictationAudioRecorder: @unchecked Sendable {
         }
 
         guard let pcmData = pcmConverter.convertToPCM16Data(from: audioBuffer) else { return }
+        onPCM16Chunk?(pcmData)
         bufferLock.lock()
         if recordedPCMData.count + pcmData.count <= Self.maximumRecordingBytes {
             recordedPCMData.append(pcmData)
@@ -179,6 +182,9 @@ final class ClickyDictationController: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var audioPowerLevel: CGFloat = 0
+    /// What Gemini Live has heard so far while recording (a preview; the
+    /// typed text comes from /dictate).
+    @Published private(set) var liveText = ""
 
     /// Called with what happened and the text, once dictation finishes.
     var onFinished: ((Outcome, String) -> Void)?
@@ -212,12 +218,20 @@ final class ClickyDictationController: ObservableObject {
 
     /// Watches the field after a paste and learns the words the user fixes.
     let correctionLearner = DictationCorrectionLearner()
+    private let liveTranscriber = DictationLiveTranscriber()
 
     init() {
         audioRecorder.onAudioPowerLevel = { [weak self] powerLevel in
             DispatchQueue.main.async {
                 self?.audioPowerLevel = powerLevel
             }
+        }
+        audioRecorder.onPCM16Chunk = { [liveTranscriber] pcm16Chunk in
+            liveTranscriber.sendAudio(pcm16Chunk)
+        }
+        liveTranscriber.onPartialText = { [weak self] partialText in
+            guard let self, self.state == .recording else { return }
+            self.liveText = partialText
         }
     }
 
@@ -244,12 +258,17 @@ final class ClickyDictationController: ObservableObject {
             return
         }
         recordingStartedAt = Date()
+        liveText = ""
+        if DictationLiveTranscriber.isEnabled {
+            liveTranscriber.start()
+        }
         state = .recording
     }
 
     func finishDictation() {
         guard state == .recording else { return }
         let recordedPCMData = audioRecorder.stop()
+        liveTranscriber.stop()
         audioPowerLevel = 0
 
         let recordingSeconds = Date().timeIntervalSince(recordingStartedAt ?? Date())
@@ -289,6 +308,8 @@ final class ClickyDictationController: ObservableObject {
         if state == .recording {
             _ = audioRecorder.stop()
         }
+        liveTranscriber.stop()
+        liveText = ""
         audioPowerLevel = 0
         state = .idle
     }
