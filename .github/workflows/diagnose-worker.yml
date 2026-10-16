@@ -24,17 +24,64 @@ jobs:
             | grep -oE '"name": *"models/[^"]+"' | sed -E 's/.*models\///; s/"//' | sort | tr '\n' ' '; echo
           echo "== models (bidi)"; curl -sS -H 'x-goog-api-key: x' "$W/gemini/v1beta/models?pageSize=1000" \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);for(const m of j.models||[])if((m.supportedGenerationMethods||[]).includes("bidiGenerateContent"))console.log(m.name)}catch(e){console.log(s.slice(0,800))}})'
-      - name: Live session
+      - name: Chat models
         run: |
+          for m in gemini-3.8-flash gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-flash-latest gemini-3.5-flash-lite gemini-3.8-flash-lite-tts; do
+            code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
+              "$W/gemini/v1beta/models/$m:generateContent" -d '{"contents":[{"role":"user","parts":[{"text":"Say hi in two words."}]}]}')
+            echo "$m -> $code $(tr -d '\n' < out.txt | head -c 200)"
+          done
+      - name: Live session like the app
+        run: |
+          convert -size 320x200 xc:white -pointsize 24 -annotate +20+100 'Hello Dottie' frame.jpg
           cat > live.mjs <<'JS'
+          import fs from "node:fs";
           const W = process.env.W;
           const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
-          if (!t.token) { console.log("no token", JSON.stringify(t).slice(0, 500)); process.exit(0); }
           const url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token);
+          const obj = { type: "OBJECT" };
+          const setup = { setup: {
+            model: "models/" + t.model,
+            generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } },
+            systemInstruction: { parts: [{ text: "You are Dottie, a friendly screen companion. Keep answers short." }] },
+            tools: [
+              { functionDeclarations: [
+                { name: "point_at_element", description: "Point", parameters: { type: "OBJECT", properties: { x: { type: "INTEGER", description: "x" }, y: { type: "INTEGER", description: "y" }, label: { type: "STRING", description: "l" } }, required: ["x","y","label"] } },
+                { name: "send_to_higher_model", description: "Hand off", parameters: { type: "OBJECT", properties: { question: { type: "STRING", description: "q" } }, required: ["question"] } },
+                { name: "start_clicky_task", description: "Task", parameters: { type: "OBJECT", properties: { clicky_name: { type: "STRING", description: "n" }, task: { type: "STRING", description: "t" } }, required: ["task"] } }
+              ] },
+              { googleSearch: {} }
+            ],
+            realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            contextWindowCompression: { slidingWindow: {} },
+            sessionResumption: {}
+          } };
           const ws = new WebSocket(url);
-          const done = setTimeout(() => { console.log("timeout"); process.exit(0); }, 20000);
-          ws.onopen = () => { console.log("open, model", t.model); ws.send(JSON.stringify({ setup: { model: "models/" + t.model, generationConfig: { responseModalities: ["AUDIO"] } } })); };
-          ws.onmessage = async (e) => { const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString(); console.log("msg", s.slice(0, 300)); if (s.includes("setupComplete")) { clearTimeout(done); ws.close(); } };
+          const send = (m) => ws.send(JSON.stringify(m));
+          const done = setTimeout(() => { console.log("timeout after 30s"); process.exit(0); }, 30000);
+          let audioBytes = 0, out = "";
+          ws.onopen = () => { console.log("open, model", t.model); send(setup); };
+          ws.onmessage = async (e) => {
+            const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
+            const m = JSON.parse(s);
+            if (m.setupComplete) {
+              console.log("setupComplete");
+              send({ realtimeInput: { activityStart: {} } });
+              send({ realtimeInput: { video: { mimeType: "image/jpeg", data: fs.readFileSync("frame.jpg").toString("base64") } } });
+              send({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: Buffer.alloc(32000).toString("base64") } } });
+              send({ realtimeInput: { text: "What does my screen say?" } });
+              send({ realtimeInput: { activityEnd: {} } });
+              return;
+            }
+            const sc = m.serverContent;
+            if (sc?.modelTurn?.parts) for (const p of sc.modelTurn.parts) if (p.inlineData) audioBytes += p.inlineData.data.length;
+            if (sc?.outputTranscription?.text) out += sc.outputTranscription.text;
+            if (m.toolCall) console.log("toolCall", JSON.stringify(m.toolCall).slice(0, 300));
+            if (sc?.turnComplete) { console.log("turnComplete; audio b64 chars", audioBytes, "; said:", out); clearTimeout(done); ws.close(); return; }
+            if (!sc?.modelTurn && !sc?.outputTranscription) console.log("msg", s.slice(0, 300));
+          };
           ws.onclose = (e) => { console.log("close", e.code, e.reason); process.exit(0); };
           ws.onerror = (e) => console.log("error", e.message || e);
           JS
