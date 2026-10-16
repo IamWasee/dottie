@@ -274,7 +274,8 @@ final class GeminiCLIAgentRuntime {
             ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil),
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
-            webSearchAgentInstructions
+            webSearchAgentInstructions,
+            buildingAgentInstructions
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
@@ -293,6 +294,22 @@ final class GeminiCLIAgentRuntime {
         curl -s -G -H "x-goog-api-key: $GEMINI_API_KEY" --data-urlencode "q=<your query>" "$DOTTIE_SEARCH_URL"
 
     It returns JSON: `results` (title, url, snippet) and `topPage` (the text of the first result). To read any other page, use `web_fetch` or `curl` on its URL. Cite the pages you used.
+
+    """
+
+    /// So Dots take on real builds (a website, an app, a script) instead of
+    /// describing them, without hanging the turn on a server that never exits.
+    static let buildingAgentInstructions = """
+    # Building things
+
+    You can build real, working things: websites, web apps, small tools, scripts, documents and data files. When asked to build something, build the whole thing, not a plan or a sketch.
+
+    - Make each project its own folder in `output/` (for example `output/coffee-site/`).
+    - For a website, plain `index.html` with CSS and JavaScript files is the default: it opens straight from disk in any browser. Make it look finished: real copy (no lorem ipsum), a clear layout, responsive on phones, and images as inline SVG or CSS rather than files you don't have.
+    - Node.js, npm and npx are on your PATH. Use a framework (for example `npm create vite@latest`) only when the user asks for one or the job needs it, and then build it (`npm run build`) so there's a `dist/index.html` that opens from disk.
+    - Never start a command that keeps running (a dev server, `npm run dev`, a watcher): your turn would never end. To check a page, read it back or run a quick script, then move on.
+    - Before you reply, check your work: open the files you wrote, fix broken links and errors, and make sure everything the user asked for is there.
+    - In your reply, say what you built and the path to open (for example `output/coffee-site/index.html`). Dottie can open it for the user.
 
     """
 

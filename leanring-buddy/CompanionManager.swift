@@ -886,8 +886,12 @@ final class CompanionManager: ObservableObject {
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence. if they say stop or never mind while it's running, call stop_screen_task.
 
-    dots:
-    the user can have background helpers called dots that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or something that should happen in the background while they keep using their mac) or mention a dot by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
+    helpers:
+    the user can have background helpers (also called dots) that work on their own on the mac with a shell, files, node and the web, and report back in the notch when done. they can do real work: research, write documents, organize files, write code, and build whole websites or small apps, which they save in their own folder.
+    - when the user asks for work that takes more than an answer, or says to have a helper or a named helper do something, call start_helper with a task that stands on its own and helper_name if they named one. then say it's started in a few words. don't do the task yourself, and never say you can't start a helper: call start_helper.
+    - helpers change all the time and the user can create, use or delete them in the app without you. never answer about helpers from memory or from earlier in the conversation. whenever the user asks about helpers (what are they doing, is it done, what did it say, did it work, which ones exist), call list_helpers or check_helper first and answer from what it returns. if a helper isn't there anymore, say it was deleted.
+    - check_helper gives a helper's latest task, steps, reply and files; tell the user the gist in a sentence or two, not the whole reply.
+    - stop_helper stops one that's working. open_helper_result opens what it made (a website in the browser, a file, or its folder).
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -959,6 +963,11 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText)
+        }
+
+        liveVoiceClient.onHelperTool = { [weak self] functionName, helperName in
+            guard let self else { return "helpers aren't available right now." }
+            return self.answerHelperTool(functionName: functionName, helperName: helperName)
         }
 
         liveVoiceClient.onTurnError = { [weak self] error in
@@ -1396,27 +1405,78 @@ final class CompanionManager: ObservableObject {
     /// it if it doesn't exist yet), or a general "Helper" Clicky.
     /// Returns a short status for the voice model to relay.
     func startClickyTask(clickyName: String?, taskText: String) -> String {
+        guard ClickyWorkerConfiguration.isWorkerConfigured else {
+            return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
+        }
+        var notes: [String] = []
         let targetAgent: ClickyAgent
         if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
             targetAgent = existingAgent
         } else if let clickyName {
+            let wasDeleted = clickyRoster.recentlyDeletedAgentNames.contains { $0.caseInsensitiveCompare(clickyName) == .orderedSame }
             targetAgent = clickyRoster.createAgent(name: clickyName, purpose: "")
-        } else if let helperAgent = clickyRoster.agent(matchingName: "Helper"), !clickyRoster.isRunning(helperAgent) {
-            targetAgent = helperAgent
+            notes.append(wasDeleted
+                ? "the old \(clickyName) was deleted, so this is a new helper with that name."
+                : "there was no helper called \(clickyName), so a new one was made.")
+        } else if let idleHelper = clickyRoster.agents.first(where: { !clickyRoster.isRunning($0) && clickyRoster.pendingComputerUseRequest(for: $0) == nil }) {
+            // The most recently made idle helper, usually the one the user
+            // just set up in the app.
+            targetAgent = idleHelper
         } else {
-            let idleAgentCount = clickyRoster.agents.filter { $0.name.hasPrefix("Helper") }.count
+            let helperCount = clickyRoster.agents.filter { $0.name.hasPrefix("Helper") }.count
             targetAgent = clickyRoster.createAgent(
-                name: idleAgentCount == 0 ? "Helper" : "Helper \(idleAgentCount + 1)",
+                name: helperCount == 0 ? "Helper" : "Helper \(helperCount + 1)",
                 purpose: "General background tasks the user hands off by voice."
             )
+            if !clickyRoster.agents.dropFirst().isEmpty {
+                notes.append("the other helpers were busy, so a new one was made.")
+            }
         }
 
         guard !clickyRoster.isRunning(targetAgent) else {
-            return "\(targetAgent.name) is still busy with another task. tell the user it'll need to finish first."
+            return "\(targetAgent.name) is still busy: \(clickyRoster.statusLine(for: targetAgent)). ask the user whether to wait, stop it, or use another helper."
         }
         clickyRoster.sendMessage(taskText, to: targetAgent)
+        guard clickyRoster.isRunning(targetAgent) else {
+            return "couldn't start \(targetAgent.name). tell the user to try again from the Home window."
+        }
         ClickyAnalytics.trackClickyTaskStarted()
-        return "started. \(targetAgent.name) is working on it and will report back in the notch."
+        if !DotsRuntimeInstaller.isInstalled {
+            notes.append("this is the first helper task on this mac, so it's setting up first (a one-time download), which takes a minute.")
+        }
+        notes.append("check_helper shows how it's going.")
+        return "started. \(targetAgent.name) is working on it and will report back in the notch. " + notes.joined(separator: " ")
+    }
+
+    /// list_helpers, check_helper, stop_helper and open_helper_result.
+    private func answerHelperTool(functionName: String, helperName: String?) -> String {
+        if functionName == "list_helpers" {
+            return clickyRoster.helperListSummary()
+        }
+        let requestedAgent: ClickyAgent?
+        if let helperName, !helperName.isEmpty {
+            requestedAgent = clickyRoster.agent(matchingName: helperName)
+        } else {
+            // No name: the helper the user most likely means is the one
+            // that did something most recently.
+            requestedAgent = clickyRoster.agents.max { $0.lastActivityAt < $1.lastActivityAt }
+        }
+        guard let agent = requestedAgent else {
+            if let helperName, clickyRoster.recentlyDeletedAgentNames.contains(where: { $0.caseInsensitiveCompare(helperName) == .orderedSame }) {
+                return "\(helperName) was deleted by the user. helpers now:\n\(clickyRoster.helperListSummary())"
+            }
+            return "no helper by that name. helpers now:\n\(clickyRoster.helperListSummary())"
+        }
+        switch functionName {
+        case "stop_helper":
+            guard clickyRoster.isRunning(agent) else { return "\(agent.name) isn't working on anything: \(clickyRoster.statusLine(for: agent))." }
+            clickyRoster.stopAgent(agent)
+            return "stopped \(agent.name)."
+        case "open_helper_result":
+            return clickyRoster.openHelperResult(for: agent)
+        default:
+            return clickyRoster.helperDetail(for: agent)
+        }
     }
 
     private func configureClickyRoster() {

@@ -83,9 +83,12 @@ final class GeminiLiveVoiceClient {
     /// The model handed a question to a stronger model (send_to_higher_model).
     /// Returns the text Live should speak. Runs while Live waits.
     var onHigherModelRequest: (@MainActor (_ question: String) async -> String)?
-    /// The model handed a task to a background Clicky (start_clicky_task).
+    /// The model handed a task to a background Clicky (start_helper).
     /// Returns a short status for Live to relay; the work runs on its own.
     var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String) -> String)?
+    /// list_helpers, check_helper, stop_helper, open_helper_result: the
+    /// app answers from the helpers' real state.
+    var onHelperTool: (@MainActor (_ functionName: String, _ helperName: String?) -> String)?
     /// The model asked to click, type, press keys, scroll, open a page or
     /// draw on screen. Returns what happened, for the model to relay.
     var onScreenAction: (@MainActor (DottieScreenAction) async -> String)?
@@ -473,14 +476,14 @@ final class GeminiLiveVoiceClient {
     /// Hands longer jobs to a background agent (see ClickyRoster), like
     /// shipped Clicky's voice delegation to its Clickys.
     private static let startClickyTaskFunctionDeclaration: [String: Any] = [
-        "name": "start_clicky_task",
-        "description": "Start a background task with one of the user's Dots: helpers that work on their own on the user's Mac with a shell, files and the web, and report back when done. Use it when the user asks for something that takes real work beyond answering, like researching a topic, writing or editing files, organizing a folder, building something, or doing something in an app on their Mac (Dots can click and type in apps once the user allows it), or when they name a Dottie. Don't use it for questions you can answer right now. After calling, tell the user briefly that it's started.",
+        "name": "start_helper",
+        "description": "Start a task with one of the user's background helpers (also called Dots). Helpers work on their own on the user's Mac with a shell, files, Node.js and the web, and report back when done. They can research, write documents, organize files, write code, and build complete websites or small apps. Use it whenever the user asks for real work beyond answering, or asks a helper to do something. After calling, say briefly that it's started.",
         "parameters": [
             "type": "OBJECT",
             "properties": [
-                "clicky_name": [
+                "helper_name": [
                     "type": "STRING",
-                    "description": "Name of the Dot the user mentioned, if any. Leave empty to let the app pick or create one."
+                    "description": "Name of the helper the user mentioned, if any. Leave empty to use an idle helper or make one."
                 ],
                 "task": [
                     "type": "STRING",
@@ -489,6 +492,44 @@ final class GeminiLiveVoiceClient {
             ],
             "required": ["task"]
         ]
+    ]
+
+    private static let listHelpersFunctionDeclaration: [String: Any] = [
+        "name": "list_helpers",
+        "description": "List the user's helpers as they are right now: which exist, which were deleted, and what each is doing (working, finished, stuck, waiting for permission). Always call this before talking about helpers; never rely on memory.",
+        "parameters": ["type": "OBJECT", "properties": [String: Any]()]
+    ]
+
+    private static func helperFunctionDeclaration(name: String, description: String) -> [String: Any] {
+        [
+            "name": name,
+            "description": description,
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "helper_name": [
+                        "type": "STRING",
+                        "description": "The helper's name. Leave empty for the most recently active one."
+                    ]
+                ]
+            ]
+        ]
+    }
+
+    private static let helperStatusFunctionDeclarations: [[String: Any]] = [
+        listHelpersFunctionDeclaration,
+        helperFunctionDeclaration(
+            name: "check_helper",
+            description: "Get one helper's current status, latest task, recent steps, latest reply and the files it made. Use it when the user asks how a helper is doing or what it said."
+        ),
+        helperFunctionDeclaration(
+            name: "stop_helper",
+            description: "Stop a helper that is working on something."
+        ),
+        helperFunctionDeclaration(
+            name: "open_helper_result",
+            description: "Open what a helper made for the user to see: a website in the browser, a single file in its app, or the helper's output folder."
+        )
     ]
 
     private static var coreFunctionDeclarations: [[String: Any]] {
@@ -502,7 +543,7 @@ final class GeminiLiveVoiceClient {
             guideUserFunctionDeclaration,
             guideNextFunctionDeclaration,
             stopGuideFunctionDeclaration
-        ]
+        ] + helperStatusFunctionDeclarations
     }
 
     /// Teaching the app on screen, step by step or as a tour (DottieGuide).
@@ -770,8 +811,13 @@ final class GeminiLiveVoiceClient {
                 handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "send_to_higher_model":
                 handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "start_clicky_task":
+            case "start_helper":
                 handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "list_helpers", "check_helper", "stop_helper", "open_helper_result":
+                let helperName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let helperResult = onHelperTool?(functionName, helperName?.isEmpty == true ? nil : helperName)
+                    ?? "helpers aren't available right now."
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": helperResult])
             case "search_web":
                 handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "do_task_on_screen":
@@ -901,13 +947,13 @@ final class GeminiLiveVoiceClient {
     private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {
         let taskText = (functionArguments["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !taskText.isEmpty, let onStartClickyTask, !isDiscardingModelAudioForCurrentTurn else {
-            sendFunctionResponse(functionCallID: functionCallID, functionName: "start_clicky_task",
+            sendFunctionResponse(functionCallID: functionCallID, functionName: "start_helper",
                                  response: ["error": "couldn't start a background task right now."])
             return
         }
-        let requestedClickyName = (functionArguments["clicky_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedClickyName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startStatus = onStartClickyTask(requestedClickyName?.isEmpty == true ? nil : requestedClickyName, taskText)
-        sendFunctionResponse(functionCallID: functionCallID, functionName: "start_clicky_task",
+        sendFunctionResponse(functionCallID: functionCallID, functionName: "start_helper",
                              response: ["result": startStatus])
     }
 
