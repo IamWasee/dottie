@@ -113,6 +113,8 @@ final class CompanionManager: ObservableObject {
     private var clickyRosterCancellable: AnyCancellable?
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
+    /// macOS notifications when a Dot finishes or needs an answer.
+    let dotNotifications = ClickyNotifications()
     private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
     private lazy var homeWindowManager = HomeWindowManager(
         companionManager: self,
@@ -977,12 +979,17 @@ final class CompanionManager: ObservableObject {
             guard let self else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
             if let computerUseRequest = turnResult.computerUseRequest {
-                // Ask in the notch; the answer comes back through
-                // onAnswerComputerUseRequest below.
+                // Ask in the notch and in a notification; the answer comes
+                // back through onAnswerComputerUseRequest below.
                 self.notchPresenter.showAgentUpdate(
                     title: updateTitle,
                     text: computerUseRequest,
                     computerUseRequestAgentID: turnResult.agent.id
+                )
+                self.dotNotifications.notifyComputerUseRequest(
+                    agentID: turnResult.agent.id,
+                    title: "\(updateTitle) wants to use your Mac",
+                    text: computerUseRequest
                 )
                 return
             }
@@ -990,6 +997,23 @@ final class CompanionManager: ObservableObject {
                 ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
                 : turnResult.finalReply
             self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
+            self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
+        }
+
+        dotNotifications.configure()
+        dotNotifications.onOpenDot = { [weak self] agentID in
+            guard let self else { return }
+            self.clickyRoster.requestShowInHome(agentID: agentID)
+            self.openHomeWindow()
+        }
+        dotNotifications.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed in
+            guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
+            self.notchPresenter.dropComputerUseRequest(forAgentID: agentID)
+            if isAllowed {
+                self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
+            } else {
+                self.clickyRoster.declineComputerUse(for: requestingAgent)
+            }
         }
 
         // objectWillChange fires before the change lands; hopping to the
@@ -1010,6 +1034,7 @@ final class CompanionManager: ObservableObject {
 
         notchPresenter.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed, alwaysAllow in
             guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
+            self.dotNotifications.removeNotification(forAgentID: agentID)
             if isAllowed {
                 self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: alwaysAllow)
             } else {
@@ -1047,6 +1072,15 @@ final class CompanionManager: ObservableObject {
         }
         if sortedDotSummaries != notchPresenter.dotSummaries {
             notchPresenter.dotSummaries = sortedDotSummaries
+        }
+
+        // A Dot's notification goes once its reply is read or it's deleted.
+        // Waiting computer-use questions count as unread until answered.
+        if dotNotifications.hasNotificationsShowing {
+            let agentIDsStillOwed = Set(clickyRoster.agents.filter { agent in
+                agent.hasUnreadReply == true || clickyRoster.pendingComputerUseRequest(for: agent) != nil
+            }.map(\.id))
+            dotNotifications.removeNotifications(keepingAgentIDs: agentIDsStillOwed)
         }
     }
 
