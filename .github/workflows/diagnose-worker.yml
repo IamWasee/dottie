@@ -13,47 +13,55 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Concurrent Live sessions
+      - name: Push-to-talk with automatic detection
         run: |
-          cat > live.mjs <<'JS'
+          curl -sS -X POST -H 'content-type: application/json' $W/tts -d '{"text":"What is the capital of France? Answer briefly."}' -o speech24.pcm
+          ls -la speech24.pcm
+          cat > ptt.mjs <<'JS'
+          import fs from "fs";
           const W = process.env.W;
-          const [model, count, label] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
-          async function one(i) {
-            let ws;
-            if (process.env.DIRECT) {
-              ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" + process.env.GEMINI_API_KEY);
-            } else {
-              const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
-              if (!t.token) return `#${i} no token ${JSON.stringify(t).slice(0,200)}`;
-              ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
-            }
-            return await new Promise((resolve) => {
-              const timer = setTimeout(() => { resolve(`#${i} timeout`); try { ws.close(); } catch {} }, 25000);
-              let said = "";
-              ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, ...JSON.parse(process.env.EXTRA || "{}") } }));
-              ws.onmessage = async (e) => {
-                const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
-                const m = JSON.parse(s);
-                if (m.setupComplete) { said = "[setup ok] ";
-                  if (!process.env.NOMARK) ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
-                  ws.send(JSON.stringify({ realtimeInput: { text: "Say hi in three words." } }));
-                  if (!process.env.NOMARK) ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
-                  else ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
-                }
-                if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text;
-                // Hold the session open a few seconds so they overlap.
-                if (m.serverContent?.turnComplete) setTimeout(() => { clearTimeout(timer); resolve(`#${i} ok: ${said.trim()}`); ws.close(); }, 4000);
-              };
-              ws.onclose = (e) => { clearTimeout(timer); resolve(`#${i} close ${e.code} ${e.reason.slice(0,90)}`); };
-            });
-          }
-          const results = await Promise.all(Array.from({ length: count }, (_, i) => one(i)));
-          console.log(`== ${label} ${model} x${count}\n` + results.join("\n"));
+          const [model, label, cfgJSON, trailingSilenceMs, extraText] = process.argv.slice(2);
+          const pcm24 = fs.readFileSync("speech24.pcm");
+          const in24 = new Int16Array(pcm24.buffer, pcm24.byteOffset, pcm24.length >> 1);
+          const n16 = Math.floor(in24.length * 2 / 3); const s16 = new Int16Array(n16);
+          for (let i = 0; i < n16; i++) { const x = i * 1.5, a = Math.floor(x), f = x - a; s16[i] = in24[a] * (1 - f) + (in24[a + 1] ?? 0) * f; }
+          const speech = Buffer.from(s16.buffer);
+          const silence = Buffer.alloc(Number(trailingSilenceMs) * 32);
+          const audio = Buffer.concat([speech, silence]);
+          const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
+          const ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
+          const t0 = Date.now(); let tEnd = 0; const log = []; let heard = "", said = ""; let firstOut = 0, turns = 0;
+          const stamp = (m) => log.push(`${Date.now() - t0}ms ${m}`);
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          const done = new Promise((resolve) => {
+            ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, systemInstruction: { parts: [{ text: process.env.SYS || "You are a helpful voice assistant." }] }, inputAudioTranscription: {}, outputAudioTranscription: {}, ...JSON.parse(cfgJSON) } }));
+            ws.onmessage = async (e) => {
+              const m = JSON.parse(typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString());
+              if (m.setupComplete) {
+                stamp("setup ok");
+                for (let i = 0; i < audio.length; i += 3200) { ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: audio.subarray(i, i + 3200).toString("base64") } } })); await sleep(100); }
+                tEnd = Date.now(); stamp("released");
+                if (extraText) ws.send(JSON.stringify({ realtimeInput: { text: extraText } }));
+                ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+              }
+              const sc = m.serverContent || {};
+              if (sc.inputTranscription?.text) heard += sc.inputTranscription.text;
+              if (sc.outputTranscription?.text) { if (!firstOut) { firstOut = Date.now(); stamp(`first output (${tEnd ? (firstOut - tEnd) + "ms after release" : "BEFORE release"})`); } said += sc.outputTranscription.text; }
+              if (sc.interrupted) stamp("interrupted");
+              if (sc.turnComplete) { turns++; stamp("turnComplete"); }
+            };
+            ws.onclose = (e) => { stamp(`close ${e.code} ${e.reason.slice(0, 80)}`); resolve(); };
+            setTimeout(() => { ws.close(); resolve(); }, 30000);
+          });
+          await done;
+          console.log(`== ${label} ${model}\nheard: ${heard.trim()}\nsaid: ${said.trim().slice(0, 160)}\nturns: ${turns}\n` + log.join("\n"));
+          process.exit(0);
           JS
-          for i in 1 2; do DIRECT=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 direct-aad; done
-          for i in 1 2; do DIRECT=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.1-flash-live-preview 1 direct-aad; done
-          for i in 1 2; do NOMARK=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1500,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}' node live.mjs gemini-3.8-live 1 token-tuned-nomark; done
-          for i in 1 2; do NOMARK=1 node live.mjs gemini-3.8-live 1 token-minimal-nomark; done
-          for i in 1 2; do NOMARK=1 EXTRA='{"realtimeInputConfig":{"activityHandling":"NO_INTERRUPTION"}}' node live.mjs gemini-3.8-live 1 token-noint; done
-          for i in 1 2; do NOMARK=1 node live.mjs gemini-3.1-flash-live-preview 1 token-minimal-nomark; done
-          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 token-aad-again; done
+          T='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1200,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
+          L='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":60000,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
+          node ptt.mjs gemini-3.8-live ptt-quick-release "$T" 200 ""
+          node ptt.mjs gemini-3.8-live ptt-held-3s "$T" 3000 ""
+          node ptt.mjs gemini-3.8-live ptt-long-silence-config "$L" 200 ""
+          node ptt.mjs gemini-3.8-live ptt-with-context-text "$L" 200 "(The screenshot shows one screen.)"
+          SYS="Only listen. Never reply." node ptt.mjs gemini-3.8-live dictation-long-silence "$L" 4000 ""
+          node ptt.mjs gemini-3.1-flash-live-preview ptt-quick-release "$T" 200 ""
