@@ -99,7 +99,9 @@ final class GeminiLiveVoiceClient {
     /// in a later turn when the job finishes.
     var onStartScreenTask: (@MainActor (_ task: String) -> String)?
     /// The user asked to stop the running screen task (stop_screen_task).
-    var onStopScreenTask: (@MainActor () -> String)?
+    /// scope: "all" (stop and clear the list), "current" (skip to the next
+    /// job) or "list" (what's running and waiting).
+    var onStopScreenTask: (@MainActor (_ scope: String) -> String)?
     /// The model started teaching the app on screen (guide_user). Returns a
     /// short status; the steps are shown and spoken as they come.
     var onStartGuide: (@MainActor (_ goal: String, _ mode: String) -> String)?
@@ -618,7 +620,7 @@ final class GeminiLiveVoiceClient {
     /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
     private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
         "name": "do_task_on_screen",
-        "description": "Do a job on the user's screen that takes several steps, all in one go: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there. Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
+        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there. Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
         "parameters": [
             "type": "OBJECT",
             "properties": [
@@ -633,8 +635,17 @@ final class GeminiLiveVoiceClient {
 
     private static let stopScreenTaskFunctionDeclaration: [String: Any] = [
         "name": "stop_screen_task",
-        "description": "Stop the on-screen job that's running, when the user says stop, cancel or never mind.",
-        "parameters": ["type": "OBJECT", "properties": [String: Any]()]
+        "description": "Manage on-screen jobs: stop everything and clear the waiting list (scope all: stop, cancel, never mind), skip only the running job so the next one starts (scope current: skip this one, next), or hear what's running and waiting (scope list).",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "scope": [
+                    "type": "STRING",
+                    "enum": ["all", "current", "list"],
+                    "description": "all, current or list. Defaults to all."
+                ]
+            ]
+        ]
     ]
 
     private static let searchWebFunctionDeclaration: [String: Any] = [
@@ -884,7 +895,8 @@ final class GeminiLiveVoiceClient {
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["result": onStopGuide?() ?? "no guide is running."])
             case "stop_screen_task":
-                let stopStatus = onStopScreenTask?() ?? "nothing is running."
+                let scope = (functionArguments["scope"] as? String)?.lowercased() ?? "all"
+                let stopStatus = onStopScreenTask?(scope) ?? "nothing is running."
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
