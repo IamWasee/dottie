@@ -8,6 +8,7 @@ jobs:
     timeout-minutes: 10
     env:
       W: https://dottie.vidershub.workers.dev
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -18,9 +19,14 @@ jobs:
           const W = process.env.W;
           const [model, count, label] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
           async function one(i) {
-            const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
-            if (!t.token) return `#${i} no token ${JSON.stringify(t).slice(0,200)}`;
-            const ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
+            let ws;
+            if (process.env.DIRECT) {
+              ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" + process.env.GEMINI_API_KEY);
+            } else {
+              const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
+              if (!t.token) return `#${i} no token ${JSON.stringify(t).slice(0,200)}`;
+              ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
+            }
             return await new Promise((resolve) => {
               const timer = setTimeout(() => { resolve(`#${i} timeout`); try { ws.close(); } catch {} }, 25000);
               let said = "";
@@ -29,9 +35,10 @@ jobs:
                 const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
                 const m = JSON.parse(s);
                 if (m.setupComplete) { said = "[setup ok] ";
-                  ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+                  if (!process.env.NOMARK) ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
                   ws.send(JSON.stringify({ realtimeInput: { text: "Say hi in three words." } }));
-                  ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+                  if (!process.env.NOMARK) ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+                  else ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
                 }
                 if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text;
                 // Hold the session open a few seconds so they overlap.
@@ -43,8 +50,10 @@ jobs:
           const results = await Promise.all(Array.from({ length: count }, (_, i) => one(i)));
           console.log(`== ${label} ${model} x${count}\n` + results.join("\n"));
           JS
-          for i in 1 2 3; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 aad; done
-          for i in 1 2 3; do node live.mjs gemini-3.8-live 1 minimal; done
-          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.1-flash-live-preview 1 aad; done
-          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}},"inputAudioTranscription":{},"outputAudioTranscription":{},"contextWindowCompression":{"slidingWindow":{}},"sessionResumption":{},"systemInstruction":{"parts":[{"text":"You are Dottie."}]},"tools":[{"functionDeclarations":[{"name":"search_web","description":"Search","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}}]}]}' node live.mjs gemini-3.1-flash-live-preview 1 full; done
-          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}},"inputAudioTranscription":{},"outputAudioTranscription":{},"contextWindowCompression":{"slidingWindow":{}},"sessionResumption":{},"systemInstruction":{"parts":[{"text":"You are Dottie."}]},"tools":[{"functionDeclarations":[{"name":"search_web","description":"Search","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}}]}]}' node live.mjs gemini-3.8-live 1 full; done
+          for i in 1 2; do DIRECT=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 direct-aad; done
+          for i in 1 2; do DIRECT=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.1-flash-live-preview 1 direct-aad; done
+          for i in 1 2; do NOMARK=1 EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1500,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}' node live.mjs gemini-3.8-live 1 token-tuned-nomark; done
+          for i in 1 2; do NOMARK=1 node live.mjs gemini-3.8-live 1 token-minimal-nomark; done
+          for i in 1 2; do NOMARK=1 EXTRA='{"realtimeInputConfig":{"activityHandling":"NO_INTERRUPTION"}}' node live.mjs gemini-3.8-live 1 token-noint; done
+          for i in 1 2; do NOMARK=1 node live.mjs gemini-3.1-flash-live-preview 1 token-minimal-nomark; done
+          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 token-aad-again; done
