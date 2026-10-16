@@ -37,6 +37,9 @@ interface Env {
   GEMINI_TTS_MODEL: string;
   GEMINI_TTS_VOICE: string;
   GEMINI_DICTATION_MODEL: string;
+  /** Comma-separated models to try, in order, when the chosen one is busy. */
+  GEMINI_FALLBACK_MODELS?: string;
+  GEMINI_TTS_FALLBACK_MODELS?: string;
 }
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -177,16 +180,11 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   }
   delete requestBody.model;
 
-  const response = await fetch(
-    `${GEMINI_API_BASE}/models/${encodeURIComponent(requestedModel)}:streamGenerateContent?alt=sse`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": env.GEMINI_API_KEY,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    }
+  const response = await fetchGeminiWithFallback(
+    env,
+    modelsToTry(requestedModel, env.GEMINI_FALLBACK_MODELS),
+    "streamGenerateContent?alt=sse",
+    JSON.stringify(requestBody)
   );
 
   if (!response.ok) {
@@ -218,24 +216,19 @@ async function handleTTS(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: "missing text" }, 400);
   }
 
-  const response = await fetch(
-    `${GEMINI_API_BASE}/models/${encodeURIComponent(env.GEMINI_TTS_MODEL)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": env.GEMINI_API_KEY,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text }] }],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } },
-          },
+  const response = await fetchGeminiWithFallback(
+    env,
+    modelsToTry(env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODELS),
+    "generateContent",
+    JSON.stringify({
+      contents: [{ parts: [{ text }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } },
         },
-      }),
-    }
+      },
+    })
   );
 
   if (!response.ok) {
@@ -331,28 +324,23 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  const response = await fetch(
-    `${GEMINI_API_BASE}/models/${encodeURIComponent(env.GEMINI_DICTATION_MODEL)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": env.GEMINI_API_KEY,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: DICTATION_SYSTEM_PROMPT }] },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              ...(contextLines.length > 0 ? [{ text: contextLines.join("\n") }] : []),
-              { inlineData: { mimeType: body.mimeType ?? "audio/wav", data: body.audio } },
-            ],
-          },
-        ],
-        generationConfig: { temperature: 0 },
-      }),
-    }
+  const response = await fetchGeminiWithFallback(
+    env,
+    modelsToTry(env.GEMINI_DICTATION_MODEL, env.GEMINI_FALLBACK_MODELS),
+    "generateContent",
+    JSON.stringify({
+      systemInstruction: { parts: [{ text: DICTATION_SYSTEM_PROMPT }] },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            ...(contextLines.length > 0 ? [{ text: contextLines.join("\n") }] : []),
+            { inlineData: { mimeType: body.mimeType ?? "audio/wav", data: body.audio } },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0 },
+    })
   );
 
   if (!response.ok) {
@@ -404,6 +392,37 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
     status: upstreamResponse.status,
     headers: responseHeaders,
   });
+}
+
+/** The chosen model first, then the fallbacks, without repeats. */
+function modelsToTry(model: string, fallbackModels?: string): string[] {
+  const fallbacks = (fallbackModels ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  return [...new Set([model, ...fallbacks])];
+}
+
+/**
+ * Calls `models/<model>:<method>` on each model in turn until one answers.
+ * Free-tier models often say "high demand" (503) or hit their per-model
+ * limit (429) while others are fine, so a busy model moves on to the next.
+ * Any other error is returned as is.
+ */
+async function fetchGeminiWithFallback(env: Env, models: string[], method: string, body: string): Promise<Response> {
+  let response: Response | undefined;
+  for (const [index, model] of models.entries()) {
+    response = await fetch(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${method}`, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": env.GEMINI_API_KEY,
+        "content-type": "application/json",
+      },
+      body,
+    });
+    const isBusy = [429, 500, 503, 504].includes(response.status);
+    if (!isBusy || index === models.length - 1) break;
+    console.warn(`${model} answered ${response.status}; trying ${models[index + 1]}`);
+    await response.body?.cancel();
+  }
+  return response!;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
