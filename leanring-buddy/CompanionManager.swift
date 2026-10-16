@@ -677,6 +677,13 @@ final class CompanionManager: ObservableObject {
         dictationController.onError = { [weak self] errorMessage in
             self?.notchPresenter.showAgentUpdate(title: "Dictation", text: errorMessage)
         }
+
+        dictationController.correctionLearner.onLearnedCorrection = { [weak self] learnedCorrection in
+            self?.notchPresenter.showLearnedDictionaryWord(learnedCorrection.corrected, replacing: learnedCorrection.original)
+        }
+        notchPresenter.onRemoveLearnedDictionaryWord = { learnedWord in
+            DictationDictionary.shared.remove(word: learnedWord)
+        }
     }
 
     private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {

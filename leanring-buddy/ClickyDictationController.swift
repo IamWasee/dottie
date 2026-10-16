@@ -22,6 +22,8 @@ import Foundation
 
 /// The field the user was in when they started dictating.
 struct DictationFocusContext {
+    /// The focused field itself, so the correction learner can watch it.
+    let element: AXUIElement?
     let processIdentifier: pid_t
     let appName: String
     let role: String?
@@ -42,6 +44,7 @@ struct DictationFocusContext {
               let focusedElementValue,
               CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() else {
             return DictationFocusContext(
+                element: nil,
                 processIdentifier: frontmostApplication.processIdentifier,
                 appName: appName,
                 role: nil,
@@ -61,6 +64,7 @@ struct DictationFocusContext {
         let isEditable = editableRoles.contains(role ?? "") || isValueSettable.boolValue
 
         return DictationFocusContext(
+            element: focusedElement,
             processIdentifier: elementProcessIdentifier,
             appName: NSRunningApplication(processIdentifier: elementProcessIdentifier)?.localizedName ?? appName,
             role: role,
@@ -190,14 +194,24 @@ final class ClickyDictationController: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: isEnabledDefaultsKey) }
     }
 
-    /// The user's own spellings (names, jargon), from Settings. One per
-    /// line or comma-separated.
-    static var customWords: [String] {
+    /// The user's own spellings (names, jargon), typed into Settings. One
+    /// per line or comma-separated.
+    static var manualCustomWords: [String] {
         (UserDefaults.standard.string(forKey: customWordsDefaultsKey) ?? "")
             .components(separatedBy: CharacterSet(charactersIn: ",\n"))
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
+
+    /// Words from Settings plus the ones learned from fixes.
+    static var customWords: [String] {
+        var seenWords: Set<String> = []
+        let learnedWords = DictationDictionary.shared.learnedCorrections.map(\.corrected)
+        return (manualCustomWords + learnedWords).filter { seenWords.insert($0.lowercased()).inserted }
+    }
+
+    /// Watches the field after a paste and learns the words the user fixes.
+    let correctionLearner = DictationCorrectionLearner()
 
     init() {
         audioRecorder.onAudioPowerLevel = { [weak self] powerLevel in
@@ -220,6 +234,8 @@ final class ClickyDictationController: ObservableObject {
             return
         }
 
+        // The previous paste's field is done being watched.
+        correctionLearner.stopWatching()
         focusContext = DictationFocusContext.captureCurrent()
         do {
             try audioRecorder.start()
@@ -253,6 +269,9 @@ final class ClickyDictationController: ObservableObject {
                 self.state = .idle
                 guard !dictatedText.isEmpty else { return }
                 let outcome = DictationInsertion.deliver(dictatedText, into: capturedFocusContext)
+                if outcome == .inserted, let capturedFocusContext {
+                    self.correctionLearner.watch(insertedText: dictatedText, in: capturedFocusContext)
+                }
                 ClickyAnalytics.trackDictation(outcome: outcome == .inserted ? "inserted" : "clipboard", recordingSeconds: recordingSeconds)
                 self.onFinished?(outcome, dictatedText)
             } catch {
@@ -286,7 +305,11 @@ final class ClickyDictationController: ObservableObject {
         var requestBody: [String: Any] = [
             "audio": wavData.base64EncodedString(),
             "mimeType": "audio/wav",
-            "customWords": customWords
+            "customWords": customWords,
+            // Older Workers ignore this; the corrected words are in customWords too.
+            "learnedCorrections": DictationDictionary.shared.learnedCorrections.prefix(100).map {
+                ["heard": $0.original, "meant": $0.corrected]
+            }
         ]
         if let focusContext {
             requestBody["appName"] = focusContext.appName

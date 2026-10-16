@@ -57,7 +57,8 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ One Gemini call on the Worker (`/dictate`, `GEMINI_DICTATION_MODEL`) hears the recording and tidies it: fillers and false starts out, punctuation in, self-corrections applied, spoken formatting followed. It gets the app name, the text before the cursor and the user's own spellings as context. Shipped Clicky uses Deepgram plus a separate cleanup call; the clone stays on the one free Gemini key
 - ✅ Paste with a temporary clipboard swap that puts the user's clipboard back; clipboard fallback (with a notch card) when the field can't take it, the user switched apps, or a password field is focused
 - ✅ Settings: on/off and a custom words list
-- ⬜ Learn corrections automatically (`DictationCorrectionLearner`), streaming partial text, language picker
+- ✅ Learn corrections automatically (`DictationCorrectionLearner`): after a paste, Dottie reads the field through Accessibility for 45 seconds. When you replace a dictated word with a similar one that isn't an everyday word (a name, a brand, jargon), it goes into a learned dictionary, the notch says "Added to your dictionary" with a Remove button, and later dictation is told the spelling. Settings lists the learned words
+- ⬜ Streaming partial text, language picker
 - ⬜ Try it for real on a Mac
 
 ## Phase 7: accounts and integrations (optional for a personal clone)
