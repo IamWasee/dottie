@@ -1,27 +1,22 @@
 name: Diagnose Worker
-# Temporary: runs the voice-web-search Worker locally and tries /search.
 on:
   push:
     branches: [diagnose-worker]
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: voice-web-search
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Search through a local Worker
-        working-directory: worker
+      - name: Engines
         run: |
-          npm ci --silent
-          (npx wrangler dev --port 8787 > dev.log 2>&1 &)
-          for i in $(seq 1 60); do curl -s localhost:8787/health >/dev/null && break; sleep 1; done
-          for q in "bbc news today" "weather in London" "latest swift version" "xqzv nonsense qqq"; do
+          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
+          for q in "weather+in+London" "latest+swift+version" "price+of+bitcoin" "who+won+the+world+series"; do
             echo "== $q"
-            curl -sS -G --data-urlencode "q=$q" localhost:8787/search | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("source",j.source,"results",(j.results||[]).length);for(const r of (j.results||[]).slice(0,3))console.log(" -",r.title,"|",r.url,"|",r.snippet.slice(0,90));console.log(" top:",j.topPage?j.topPage.url+" "+j.topPage.text.length+" chars: "+j.topPage.text.slice(0,200):"none")})'
+            c=$(curl -s -A "$UA" -o a.html -w '%{http_code}' "https://html.duckduckgo.com/html/?q=$q"); echo "ddg-html $c $(grep -c result__a a.html)"
+            c=$(curl -s -A "$UA" -o b.html -w '%{http_code}' "https://lite.duckduckgo.com/lite/?q=$q"); echo "ddg-lite $c $(grep -c "result-link" b.html)"
+            c=$(curl -s -A "$UA" -H 'accept-language: en-US' -o c.html -w '%{http_code}' "https://www.bing.com/search?q=$q&setlang=en"); echo "bing $c $(grep -o 'class="b_algo"' c.html | wc -l)"
+            c=$(curl -s -A "$UA" -o d.html -w '%{http_code}' "https://www.mojeek.com/search?q=$q"); echo "mojeek $c $(grep -o 'class="title"' d.html | wc -l)"
           done
-          tail -5 dev.log
+          grep -o '<li class="b_algo".\{0,600\}' c.html | head -1
+          echo; grep -o '<a class="title".\{0,300\}' d.html | head -1; echo; grep -o 'class="s".\{0,200\}' d.html | head -1
+          echo; grep -o "result-link.\{0,300\}" b.html | head -1; grep -o "result-snippet.\{0,200\}" b.html | head -1
