@@ -111,6 +111,8 @@ final class CompanionManager: ObservableObject {
     let dictationController = ClickyDictationController()
     private var dictationCancellables: Set<AnyCancellable> = []
     private var clickyRosterCancellable: AnyCancellable?
+    private var notchHoverCancellable: AnyCancellable?
+    private var peekFilesRefreshTask: Task<Void, Never>?
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
     /// macOS notifications when a Dot finishes or needs an answer.
@@ -1041,6 +1043,7 @@ final class CompanionManager: ObservableObject {
                 ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
                 : turnResult.finalReply
             self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
+            self.refreshNotchPeekFiles()
             self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
         }
 
@@ -1128,6 +1131,24 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Reads the newest files in the Dots' output folders off the main
+    /// thread and hands them to the notch.
+    private func refreshNotchPeekFiles() {
+        let workspaces = clickyRoster.agents.map { agent in
+            (agentID: agent.id, agentName: agent.name, workspaceURL: clickyRoster.workspaceURL(for: agent))
+        }
+        peekFilesRefreshTask?.cancel()
+        peekFilesRefreshTask = Task { [weak self] in
+            let newestFiles = await Task.detached(priority: .utility) {
+                NotchPeekFileIndex.newestFiles(inWorkspaces: workspaces, limit: NotchPresenter.maximumPeekFileCount)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            if newestFiles != self.notchPresenter.peekFiles {
+                self.notchPresenter.peekFiles = newestFiles
+            }
+        }
+    }
+
     private func notchLastLine(for agent: ClickyAgent, status: NotchDotSummary.Status) -> String {
         let transcript = clickyRoster.transcriptsByAgentID[agent.id] ?? []
         if status == .working {
@@ -1155,6 +1176,24 @@ final class CompanionManager: ObservableObject {
         notchPresenter.onOpenHome = { [weak self] in
             self?.openHomeWindow()
         }
+        notchPresenter.onOpenPeekFile = { [weak self] peekFile in
+            self?.notchPresenter.isHovering = false
+            NSWorkspace.shared.open(peekFile.url)
+        }
+        notchPresenter.onRevealPeekFile = { [weak self] peekFile in
+            self?.notchPresenter.isHovering = false
+            NSWorkspace.shared.activateFileViewerSelecting([peekFile.url])
+        }
+
+        // The files row is ready before the first hover, and checked again
+        // each time the peek opens in case a Dot wrote something since.
+        refreshNotchPeekFiles()
+        notchHoverCancellable = notchPresenter.$isHovering
+            .removeDuplicates()
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.refreshNotchPeekFiles()
+            }
 
         // Mirror the voice state onto the notch.
         notchVoiceStateCancellable = $voiceState

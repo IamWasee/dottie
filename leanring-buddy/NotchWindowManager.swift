@@ -33,6 +33,8 @@ final class NotchWindowManager {
 
     /// Room on each side of the closed notch for the Dot indicators.
     static let compactIndicatorWidth: CGFloat = 30
+    /// Height of the row of file tiles in the hover peek.
+    static let peekFilePileHeight: CGFloat = 74
 
     private let notchPresenter: NotchPresenter
     private var panel: NotchPanel?
@@ -97,10 +99,10 @@ final class NotchWindowManager {
 
     private func bindPresenter() {
         notchPresenter.$surface
-            .combineLatest(notchPresenter.$isHovering, notchPresenter.$dotSummaries)
+            .combineLatest(notchPresenter.$isHovering, notchPresenter.$dotSummaries, notchPresenter.$peekFiles)
             .removeDuplicates { previous, current in previous == current }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] surface, isHovering, _ in
+            .sink { [weak self] surface, isHovering, _, _ in
                 self?.resizePanel(for: surface, isHovering: isHovering)
             }
             .store(in: &presenterCancellables)
@@ -133,12 +135,15 @@ final class NotchWindowManager {
         switch surface {
         case .compact:
             if isHovering {
-                // One row for the eyes and buttons, then a row per Dot.
+                // One row for the eyes and buttons, a row per Dot, then the
+                // newest files the Dots made.
                 let peekRowCount = notchPresenter.peekDotSummaries.count
                 let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10
+                let peekFilesHeight: CGFloat = notchPresenter.peekFiles.isEmpty ? 0 : Self.peekFilePileHeight + 8
+                let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty
                 contentSize = CGSize(
-                    width: peekRowCount == 0 ? geometry.notchWidth + 80 : max(geometry.notchWidth + 160, 360),
-                    height: geometry.notchHeight + 28 + peekListHeight
+                    width: isPeekEmpty ? geometry.notchWidth + 80 : max(geometry.notchWidth + 160, notchPresenter.peekFiles.isEmpty ? 360 : 390),
+                    height: geometry.notchHeight + 28 + peekListHeight + peekFilesHeight
                 )
             } else if notchPresenter.showsCompactDotIndicators {
                 contentSize = CGSize(width: geometry.notchWidth + 2 * Self.compactIndicatorWidth, height: geometry.notchHeight)
