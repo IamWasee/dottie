@@ -240,6 +240,7 @@ private struct HomeSettingsView: View {
 
     private let availableVoiceNames = ["Kore", "Puck", "Aoede", "Charon", "Fenrir", "Leda", "Orus", "Zephyr"]
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
+    private let isCuaDriverBundled = ClickyComputerUse.isCuaDriverBundled
     // Same key ClickyComputerUse.isAlwaysAllowed reads.
     @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
     // Same keys ClickyDictationController reads.
@@ -349,7 +350,7 @@ private struct HomeSettingsView: View {
 
                 settingsGroup(title: "Using your Mac") {
                     settingsRow(label: "Computer-use driver") {
-                        Text(isCuaDriverInstalled ? "Installed" : "Not installed")
+                        Text(isCuaDriverBundled ? "Built in" : (isCuaDriverInstalled ? "Installed" : "Missing"))
                             .foregroundColor(isCuaDriverInstalled ? DS.Colors.textSecondary : DS.Colors.warningText)
                     }
                     settingsRow(label: "Let Dots click and type without asking") {
@@ -359,7 +360,7 @@ private struct HomeSettingsView: View {
                     }
                     settingsHint(isCuaDriverInstalled
                         ? "Dots can always look at your apps. With this off, they ask in the notch before they click or type."
-                        : "Dots operate apps through cua-driver. Install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
+                        : "Dots operate apps through cua-driver, which the build normally puts inside Dottie. This build doesn't have it (it couldn't be downloaded while building). Rebuild with a network connection, or install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
                 }
 
                 settingsGroup(title: "Connection") {

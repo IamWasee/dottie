@@ -58,11 +58,7 @@ npm install -g @google/gemini-cli
 
 Nothing else to set up: the app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Dots in Home → Dots, or just ask Dottie out loud to hand a task off.
 
-To let Dots click and type in your apps, install the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver):
-
-```bash
-/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"
-```
+Dots click and type in your apps through the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver), which the build puts inside Dottie.app for you (a build phase downloads a pinned release once, checks its checksum and caches it). It runs under Dottie's own Accessibility and Screen Recording permissions, so there's nothing extra to install or allow. If the build was offline, Settings says the driver is missing; rebuild online, or install it yourself with `/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"`.
 
 Dots can always look at your apps, but they ask before they click or type: an Allow / Always / Not now card appears in the notch. You can let them act without asking in Home → Settings.
 
@@ -102,4 +98,4 @@ The full technical breakdown is in [AGENTS.md](AGENTS.md).
 
 ## Credits
 
-Built on [farzaa/clicky](https://github.com/farzaa/clicky) by Farza, MIT licensed; see [LICENSE](LICENSE). Not affiliated with Farza, Human Songs, or HeyClicky.
+Built on [farzaa/clicky](https://github.com/farzaa/clicky) by Farza, MIT licensed; see [LICENSE](LICENSE). Bundles [cua-driver](https://github.com/trycua/cua) by Cua, MIT licensed; its license and third-party notices are copied into the app's Resources. Not affiliated with Farza, Human Songs, or HeyClicky.

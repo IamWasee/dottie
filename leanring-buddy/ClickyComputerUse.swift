@@ -8,7 +8,9 @@
 //  (ClickyComputerUseGate): agents can always look, but they may only click
 //  or type in a turn the user allowed, or after "Always allow".
 //
-//  The clone does the same with an installed cua-driver:
+//  The clone does the same. The build bundles cua-driver into
+//  Contents/Helpers (scripts/embed-cua-driver.sh); an installed copy is the
+//  fallback:
 //  - Gemini CLI starts `cua-driver mcp --direct` as an MCP server, so the
 //    driver runs as a child of this app and uses its Accessibility and
 //    Screen Recording permissions.
@@ -41,18 +43,27 @@ enum ClickyComputerUse {
 
     // MARK: - Locating cua-driver
 
-    /// Finds the `cua-driver` executable. The official installer puts it in
-    /// ~/.local/bin; a copy in the app bundle's Helpers folder wins if
-    /// someone bundles it the way shipped Clicky does.
+    /// Finds the `cua-driver` executable: the copy the build puts in the
+    /// app's Helpers folder, else one from the official installer in
+    /// ~/.local/bin. CuaDriverPath in Info.plist overrides both.
     static func locateCuaDriverExecutable() -> URL? {
+        locateCuaDriver()?.executableURL
+    }
+
+    /// Where the driver in use came from, for Settings.
+    static var isCuaDriverBundled: Bool {
+        locateCuaDriver()?.isBundled == true
+    }
+
+    private static func locateCuaDriver() -> (executableURL: URL, isBundled: Bool)? {
         if let configuredPath = AppBundleConfiguration.stringValue(forKey: "CuaDriverPath"),
            FileManager.default.isExecutableFile(atPath: configuredPath) {
-            return URL(fileURLWithPath: configuredPath)
+            return (URL(fileURLWithPath: configuredPath), false)
         }
 
         let bundledDriverURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/cua-driver")
         if FileManager.default.isExecutableFile(atPath: bundledDriverURL.path) {
-            return bundledDriverURL
+            return (bundledDriverURL, true)
         }
 
         let homeDirectoryPath = FileManager.default.homeDirectoryForCurrentUser.path
@@ -62,7 +73,7 @@ enum ClickyComputerUse {
             "/usr/local/bin/cua-driver"
         ]
         if let foundPath = commonInstallPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return URL(fileURLWithPath: foundPath)
+            return (URL(fileURLWithPath: foundPath), false)
         }
         return nil
     }
@@ -165,7 +176,7 @@ enum ClickyComputerUse {
             return """
             # Using the Mac
 
-            You can't operate apps on this Mac yet: the computer-use driver isn't installed. If a task needs clicking or typing in an app, do what you can without it and tell the user they can turn it on by installing cua-driver (see the Dots page in Dottie's Home).
+            You can't operate apps on this Mac right now: the computer-use driver is missing from this build of Dottie. If a task needs clicking or typing in an app, do what you can without it and tell the user that Settings in Dottie's Home explains how to add the driver.
 
             """
         }
