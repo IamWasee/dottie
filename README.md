@@ -66,6 +66,10 @@ To let Clickys click and type in your apps, install the open-source [cua-driver]
 
 Clickys can always look at your apps, but they ask before they click or type: an Allow / Always / Not now card appears in the notch. You can let them act without asking in Home → Settings.
 
+To have a Clicky repeat a task, just say how often ("check my repos for new issues every morning"). It does the task once and sets up a routine; each later run's answer lands in its chat and the notch. Routines run while your Mac is awake and Clicky is open, and you can run, pause or delete them from the Clicky's chat.
+
+Skills are saved instructions a Clicky follows when a task calls for them, like your report format or the steps of a chore. Make them in Home → Skills, add a skill folder you downloaded, or tell a Clicky "remember how to do this" and it saves one itself. Turn skills on per Clicky from the ✨ menu in its chat.
+
 ### 3. Build and run
 
 ```bash

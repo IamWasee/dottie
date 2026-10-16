@@ -158,4 +158,16 @@ enum ClickyAnalytics {
     static func trackHigherModelHandoff() {
         capture("send_to_higher_model")
     }
+
+    static func trackRoutineChanged(action: String) {
+        capture("clicky_routine_changed", properties: ["action": action])
+    }
+
+    static func trackRoutineRun(succeeded: Bool) {
+        capture("clicky_routine_run_ended", properties: ["succeeded": succeeded])
+    }
+
+    static func trackSkillChanged(action: String) {
+        capture("clicky_skill_changed", properties: ["action": action])
+    }
 }

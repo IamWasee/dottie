@@ -2,10 +2,10 @@
 //  HomeSpaceRootView.swift
 //  leanring-buddy
 //
-//  Clicky's Home window: the conversation so far, background Clickys and
-//  settings, in one place. Shipped Clicky's Home (HomeSpaceRootView) also
-//  holds skills and suggestions; those arrive with later phases (see
-//  ROADMAP.md).
+//  Clicky's Home window: the conversation so far, background Clickys, their
+//  skills and settings, in one place. Shipped Clicky's Home
+//  (HomeSpaceRootView) also holds suggestions; those arrive with a later
+//  phase (see ROADMAP.md).
 //  HomeWindowManager at the bottom owns the NSWindow.
 //
 
@@ -16,6 +16,7 @@ struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
         case conversation = "Conversation"
         case clickys = "Clickys"
+        case skills = "Skills"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -24,6 +25,7 @@ struct HomeSpaceRootView: View {
             switch self {
             case .conversation: return "bubble.left.and.bubble.right.fill"
             case .clickys: return "person.2.fill"
+            case .skills: return "sparkles"
             case .settings: return "gearshape.fill"
             }
         }
@@ -44,6 +46,8 @@ struct HomeSpaceRootView: View {
                     HomeConversationView(companionManager: companionManager, conversationStore: conversationStore)
                 case .clickys:
                     HomeClickysView(clickyRoster: clickyRoster)
+                case .skills:
+                    HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .settings:
                     HomeSettingsView(companionManager: companionManager, conversationStore: conversationStore)
                 }

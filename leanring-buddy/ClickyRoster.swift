@@ -15,11 +15,14 @@
 //    <slug>/.gemini/settings.json
 //    <slug>/output/              where finished work goes
 //    <slug>/transcript.json      what the Home window shows
+//    routines.json               scheduled re-runs (ClickyRoutines)
+//  Skills live next door in ClickyClone/Skills (ClickySkillLibrary).
 //
 
 import AppKit
 import Combine
 import Foundation
+import Network
 
 struct ClickyAgent: Codable, Identifiable, Equatable {
     let id: UUID
@@ -32,6 +35,9 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     var model: String
     var hasStartedSession: Bool
     var lastActivityAt: Date
+    /// Library skills linked into this agent's workspace. Optional so
+    /// rosters saved before skills existed still load.
+    var enabledSkillNames: [String]?
 }
 
 struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
@@ -43,6 +49,8 @@ struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
         case error
         /// The agent asked to click and type on the Mac (see ClickyComputerUse).
         case computerUseRequest
+        /// Marks the start of a scheduled routine run (see ClickyRoutines).
+        case routineRun
     }
 
     let id: UUID
@@ -54,19 +62,38 @@ struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
     var toolSucceeded: Bool?
 }
 
+/// How a turn ended, for the notch.
+struct ClickyAgentTurnResult {
+    let agent: ClickyAgent
+    let finalReply: String
+    let succeeded: Bool
+    /// What the agent asked to do on screen, if it needs permission.
+    let computerUseRequest: String?
+    /// Set when the turn was a scheduled routine run.
+    let routineTitle: String?
+}
+
 @MainActor
 final class ClickyRoster: ObservableObject {
     @Published private(set) var agents: [ClickyAgent] = []
     @Published private(set) var transcriptsByAgentID: [UUID: [ClickyAgentTranscriptItem]] = [:]
     @Published private(set) var runningAgentIDs: Set<UUID> = []
 
-    /// Called when a turn ends, with the agent, its final reply, whether it
-    /// succeeded, and what it asked to do on screen if it needs permission.
-    /// The companion shows this in the notch.
-    var onAgentTurnFinished: ((_ agent: ClickyAgent, _ finalReply: String, _ succeeded: Bool, _ computerUseRequest: String?) -> Void)?
+    /// Called when a turn ends. The companion shows it in the notch.
+    var onAgentTurnFinished: ((ClickyAgentTurnResult) -> Void)?
+
+    let skillLibrary: ClickySkillLibrary
+    let routineStore: ClickyRoutineStore
 
     private let runtime = GeminiCLIAgentRuntime()
     private var lastTurnSucceededByAgentID: [UUID: Bool] = [:]
+    /// The routine a running turn belongs to, if it's a scheduled run.
+    private var routineIDByRunningAgentID: [UUID: UUID] = [:]
+    /// Library folders before each running turn, to spot skills it saved.
+    private var skillFolderNamesBeforeTurnByAgentID: [UUID: Set<String>] = [:]
+    private var routineSchedulerTimer: Timer?
+    private let networkPathMonitor = NWPathMonitor()
+    private var isNetworkAvailable = true
     private let rosterDirectoryURL: URL
     private var rosterFileURL: URL { rosterDirectoryURL.appendingPathComponent("roster.json") }
     /// Gemini CLI's home for all agents (settings and saved sessions).
@@ -75,12 +102,14 @@ final class ClickyRoster: ObservableObject {
     init() {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        rosterDirectoryURL = applicationSupportDirectory
-            .appendingPathComponent("ClickyClone", isDirectory: true)
-            .appendingPathComponent("Clickys", isDirectory: true)
+        let cloneDirectoryURL = applicationSupportDirectory.appendingPathComponent("ClickyClone", isDirectory: true)
+        rosterDirectoryURL = cloneDirectoryURL.appendingPathComponent("Clickys", isDirectory: true)
         try? FileManager.default.createDirectory(at: rosterDirectoryURL, withIntermediateDirectories: true)
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL)
+        skillLibrary = ClickySkillLibrary(libraryURL: cloneDirectoryURL.appendingPathComponent("Skills", isDirectory: true))
+        routineStore = ClickyRoutineStore(routinesFileURL: rosterDirectoryURL.appendingPathComponent("routines.json"))
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
         loadRoster()
+        startRoutineScheduler()
     }
 
     // MARK: - Agents
@@ -116,7 +145,9 @@ final class ClickyRoster: ObservableObject {
             workspaceFolderName: uniqueWorkspaceFolderName(for: agentName),
             model: AppBundleConfiguration.stringValue(forKey: "GeminiAgentModel") ?? GeminiCLIAgentRuntime.defaultAgentModel,
             hasStartedSession: false,
-            lastActivityAt: Date()
+            lastActivityAt: Date(),
+            // A new Clicky starts with every skill in the library.
+            enabledSkillNames: skillLibrary.skills.map(\.name)
         )
         prepareWorkspace(for: newAgent)
         agents.insert(newAgent, at: 0)
@@ -129,6 +160,7 @@ final class ClickyRoster: ObservableObject {
         stopAgent(agent)
         agents.removeAll { $0.id == agent.id }
         transcriptsByAgentID[agent.id] = nil
+        routineStore.deleteRoutines(forAgentID: agent.id)
         saveRoster()
         // Move the folder to the Trash rather than deleting the agent's work.
         try? FileManager.default.trashItem(at: workspaceURL(for: agent), resultingItemURL: nil)
@@ -155,6 +187,18 @@ final class ClickyRoster: ObservableObject {
               !isRunning(agent) else { return }
 
         appendTranscriptItem(.user, text: trimmedMessageText, to: agent.id)
+        // The agent only learns which routines it has from this list.
+        let routinesContext = ClickyRoutinePrompts.currentRoutinesContext(for: routineStore.routines(for: agent.id))
+        startTurn(
+            for: agent,
+            messageForAgent: "\(routinesContext)\n\n\(trimmedMessageText)",
+            isComputerUseApproved: isComputerUseApproved,
+            routineID: nil
+        )
+    }
+
+    /// Runs one turn. The transcript item for it is already added.
+    private func startTurn(for agent: ClickyAgent, messageForAgent: String, isComputerUseApproved: Bool, routineID: UUID?) {
         runningAgentIDs.insert(agent.id)
         touchAgent(agent.id)
 
@@ -162,11 +206,15 @@ final class ClickyRoster: ObservableObject {
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
         let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
-        let messageForAgent = isTurnApprovedForComputerUse
-            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(trimmedMessageText)"
-            : trimmedMessageText
+        let fullMessageForAgent = isTurnApprovedForComputerUse
+            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
+            : messageForAgent
         // Picks up a cua-driver installed since launch.
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL)
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
+        skillLibrary.reload()
+        skillLibrary.linkSkills(named: Set(agent.enabledSkillNames ?? []), intoWorkspace: agentWorkspaceURL)
+        skillFolderNamesBeforeTurnByAgentID[agentID] = skillLibrary.skillFolderNamesOnDisk()
+        routineIDByRunningAgentID[agentID] = routineID
 
         lastTurnSucceededByAgentID[agentID] = false
 
@@ -177,11 +225,13 @@ final class ClickyRoster: ObservableObject {
                     agentID: agentID,
                     sessionID: agent.sessionID,
                     isFirstTurn: isFirstTurn,
-                    message: messageForAgent,
+                    message: fullMessageForAgent,
                     workspaceURL: agentWorkspaceURL,
                     cliHomeURL: self.cliHomeURL,
                     model: agent.model,
-                    isComputerUseApproved: isTurnApprovedForComputerUse
+                    isComputerUseApproved: isTurnApprovedForComputerUse,
+                    // So the agent's file tools can save skills there.
+                    additionalDirectoryURLs: [self.skillLibrary.libraryURL]
                 ) { [weak self] event in
                     // The main queue is FIFO, so events land in order and
                     // before finishTurn below.
@@ -241,16 +291,69 @@ final class ClickyRoster: ObservableObject {
 
     private func finishTurn(agentID: UUID) {
         let succeeded = lastTurnSucceededByAgentID[agentID] ?? false
+        let routineID = routineIDByRunningAgentID.removeValue(forKey: agentID)
+        let skillFolderNamesBeforeTurn = skillFolderNamesBeforeTurnByAgentID.removeValue(forKey: agentID) ?? []
         runningAgentIDs.remove(agentID)
         touchAgent(agentID)
         saveTranscript(for: agentID)
 
-        guard let finishedAgent = agent(withID: agentID) else { return }
+        guard agent(withID: agentID) != nil else { return }
+        applyRoutineBlocksInLastReply(agentID: agentID)
+        enableSkillsSavedDuringTurn(agentID: agentID, skillFolderNamesBeforeTurn: skillFolderNamesBeforeTurn)
+
+        var routineTitle: String?
+        if let routineID, let routine = routineStore.routine(withID: routineID) {
+            routineTitle = routine.title
+            ClickyAnalytics.trackRoutineRun(succeeded: succeeded)
+            if routineStore.markRunFinished(routineID: routineID, succeeded: succeeded) {
+                appendTranscriptItem(.status, text: "Paused routine “\(routine.title)” after \(ClickyRoutineStore.maximumFailedRunsInARow) failed runs in a row", to: agentID)
+            }
+        }
+
         let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
+        guard let finishedAgent = agent(withID: agentID) else { return }
         let finalReply = transcriptsByAgentID[agentID]?
             .last { $0.kind == .assistant || $0.kind == .error }?
             .text ?? ""
-        onAgentTurnFinished?(finishedAgent, finalReply, succeeded, computerUseRequest)
+        onAgentTurnFinished?(ClickyAgentTurnResult(
+            agent: finishedAgent,
+            finalReply: finalReply,
+            succeeded: succeeded,
+            computerUseRequest: computerUseRequest,
+            routineTitle: routineTitle
+        ))
+    }
+
+    /// Strips <ROUTINE> blocks from the agent's last reply, applies them and
+    /// notes each change in the transcript.
+    private func applyRoutineBlocksInLastReply(agentID: UUID) {
+        guard var transcript = transcriptsByAgentID[agentID],
+              let lastReplyIndex = transcript.lastIndex(where: { $0.kind == .assistant }),
+              transcript[lastReplyIndex].text.contains(ClickyRoutinePrompts.openingTag) else { return }
+        let (replyWithoutBlocks, routineActions) = ClickyRoutinePrompts.extractRoutineActions(from: transcript[lastReplyIndex].text)
+        if replyWithoutBlocks.isEmpty {
+            transcript.remove(at: lastReplyIndex)
+        } else {
+            transcript[lastReplyIndex].text = replyWithoutBlocks
+        }
+        transcriptsByAgentID[agentID] = transcript
+        for statusLine in routineStore.apply(routineActions, forAgentID: agentID) {
+            appendTranscriptItem(.status, text: statusLine, to: agentID, persist: false)
+        }
+        saveTranscript(for: agentID)
+    }
+
+    /// Turns on, for this agent, any skill it saved to the library during
+    /// the turn.
+    private func enableSkillsSavedDuringTurn(agentID: UUID, skillFolderNamesBeforeTurn: Set<String>) {
+        let newSkillFolderNames = skillLibrary.skillFolderNamesOnDisk().subtracting(skillFolderNamesBeforeTurn)
+        guard !newSkillFolderNames.isEmpty else { return }
+        skillLibrary.reload()
+        for newSkillName in newSkillFolderNames.sorted() where skillLibrary.skill(named: newSkillName) != nil {
+            setSkill(newSkillName, enabled: true, forAgentID: agentID)
+            appendTranscriptItem(.status, text: "Saved a new skill: \(newSkillName)", to: agentID)
+            ClickyAnalytics.trackSkillChanged(action: "saved_by_agent")
+        }
     }
 
     /// If the agent's last reply ends with a <COMPUTER_USE_REQUEST> block,
@@ -296,6 +399,93 @@ final class ClickyRoster: ObservableObject {
     func declineComputerUse(for agent: ClickyAgent) {
         guard pendingComputerUseRequest(for: agent) != nil else { return }
         appendTranscriptItem(.status, text: "Not allowed to use your Mac this time", to: agent.id)
+    }
+
+    // MARK: - Skills
+
+    func isSkill(_ skillName: String, enabledFor agent: ClickyAgent) -> Bool {
+        (self.agent(withID: agent.id)?.enabledSkillNames ?? []).contains(skillName)
+    }
+
+    func setSkill(_ skillName: String, enabled: Bool, forAgentID agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }) else { return }
+        var enabledSkillNames = agents[agentIndex].enabledSkillNames ?? []
+        enabledSkillNames.removeAll { $0 == skillName }
+        if enabled {
+            enabledSkillNames.append(skillName)
+        }
+        agents[agentIndex].enabledSkillNames = enabledSkillNames
+        saveRoster()
+    }
+
+    /// Turns a skill on for every Clicky, e.g. right after creating it.
+    func enableSkillForAllAgents(_ skillName: String) {
+        for agent in agents {
+            setSkill(skillName, enabled: true, forAgentID: agent.id)
+        }
+    }
+
+    func deleteSkill(_ skill: ClickySkill) {
+        skillLibrary.deleteSkill(skill)
+        for agent in agents {
+            setSkill(skill.name, enabled: false, forAgentID: agent.id)
+        }
+        ClickyAnalytics.trackSkillChanged(action: "deleted")
+    }
+
+    // MARK: - Routines
+
+    /// Checks for due routines every 30 seconds. Timers don't fire while the
+    /// Mac sleeps, so a routine that came due during sleep runs once on wake.
+    private func startRoutineScheduler() {
+        networkPathMonitor.pathUpdateHandler = { [weak self] networkPath in
+            let isSatisfied = networkPath.status == .satisfied
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.isNetworkAvailable = isSatisfied
+                }
+            }
+        }
+        networkPathMonitor.start(queue: DispatchQueue(label: "com.clickyclone.routine-network"))
+
+        routineSchedulerTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.runDueRoutines()
+                }
+            }
+        }
+    }
+
+    private func runDueRoutines() {
+        guard isNetworkAvailable, GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil else { return }
+        for dueRoutine in routineStore.dueRoutines(at: Date()) {
+            runRoutine(dueRoutine)
+        }
+    }
+
+    /// Runs a routine now, unless its Clicky is busy (the scheduler tries
+    /// again on its next check).
+    func runRoutine(_ requestedRoutine: ClickyRoutine) {
+        guard let routine = routineStore.routine(withID: requestedRoutine.id),
+              let agent = agent(withID: routine.agentID),
+              !isRunning(agent) else { return }
+        let previousRunStartedAt = routine.lastRunStartedAt
+        let previousRunFailed = routine.failedRunsInARow > 0
+        guard let runNumber = routineStore.markRunStarted(routineID: routine.id) else { return }
+
+        appendTranscriptItem(.routineRun, text: "Routine “\(routine.title)” · run \(runNumber)", to: agent.id)
+        startTurn(
+            for: agent,
+            messageForAgent: ClickyRoutinePrompts.runMessage(
+                for: routine,
+                runNumber: runNumber,
+                previousRunStartedAt: previousRunStartedAt,
+                previousRunFailed: previousRunFailed
+            ),
+            isComputerUseApproved: false,
+            routineID: routine.id
+        )
     }
 
     // MARK: - Transcript helpers

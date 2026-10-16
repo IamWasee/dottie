@@ -34,8 +34,9 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Per-agent workspace (`AGENTS.md` with the agent's instructions and notes, `output/`, `tmp/`) and a roster with saved transcripts (`ClickyRoster`)
 - ✅ Home → Clickys: list, new Clicky form, chat with tool activity, stop, reveal output in Finder, delete to Trash
 - ✅ Voice hand-off: Live's `start_clicky_task` tool starts work on a named Clicky (or a general "Helper"); the result comes back as a card in the notch
-- ⬜ Skills (Gemini CLI supports them; needs a skills folder and a Home page)
-- ⬜ Routines (cron), notifications
+- ✅ Skills on Gemini CLI's own skills support: a library in Application Support, Home → Skills (new skill, add a skill folder, per-Clicky toggles), a ✨ menu in each chat, and agents can save a skill when asked to remember how to do something. Tested against a mock Gemini server: linked skills are listed to the model and an agent can write a new skill into the library
+- ✅ Routines the way shipped Clicky does them: an agent asked for something on a cadence ends its reply with a `<ROUTINE>` block (create, update, delete, pause, resume), the app keeps the schedule, and each run's answer lands in the chat and the notch. Run now / pause / delete in the chat. Runs only while the Mac is awake, online and the app is open; three failed runs in a row pause the routine
+- ⬜ macOS notifications and a "has something new" badge in the notch
 
 ## Phase 5: computer use ⏳
 

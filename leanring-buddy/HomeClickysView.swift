@@ -28,8 +28,13 @@ struct HomeClickysView: View {
                         selectedAgentID = createdAgent?.id ?? selectedAgentID
                     }
                 } else if let selectedAgent = selectedAgent {
-                    ClickyAgentChatView(clickyRoster: clickyRoster, agent: selectedAgent)
-                        .id(selectedAgent.id)
+                    ClickyAgentChatView(
+                        clickyRoster: clickyRoster,
+                        routineStore: clickyRoster.routineStore,
+                        skillLibrary: clickyRoster.skillLibrary,
+                        agent: selectedAgent
+                    )
+                    .id(selectedAgent.id)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -191,6 +196,8 @@ private struct NewClickyForm: View {
 
 private struct ClickyAgentChatView: View {
     @ObservedObject var clickyRoster: ClickyRoster
+    @ObservedObject var routineStore: ClickyRoutineStore
+    @ObservedObject var skillLibrary: ClickySkillLibrary
     let agent: ClickyAgent
     @State private var draftMessage = ""
     @State private var isConfirmingDelete = false
@@ -203,6 +210,10 @@ private struct ClickyAgentChatView: View {
         VStack(spacing: 0) {
             header
             Divider().background(DS.Colors.borderSubtle)
+            if !agentRoutines.isEmpty {
+                routinesStrip
+                Divider().background(DS.Colors.borderSubtle)
+            }
 
             if transcript.isEmpty {
                 VStack(spacing: 6) {
@@ -210,9 +221,11 @@ private struct ClickyAgentChatView: View {
                     Text("No work yet")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(DS.Colors.textSecondary)
-                    Text("Give \(agent.name) a task below.")
+                    Text("Give \(agent.name) a task below. To repeat one on a schedule, just say how often, like \"every morning\".")
                         .font(.system(size: 12))
                         .foregroundColor(DS.Colors.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 360)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -271,6 +284,8 @@ private struct ClickyAgentChatView: View {
                 }
             }
             Spacer()
+            skillsMenu
+
             Button(action: { clickyRoster.revealWorkspaceInFinder(for: agent) }) {
                 Image(systemName: "folder")
             }
@@ -295,6 +310,92 @@ private struct ClickyAgentChatView: View {
         .font(.system(size: 13))
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+    }
+
+    private var agentRoutines: [ClickyRoutine] {
+        routineStore.routines(for: agent.id)
+    }
+
+    /// Turns library skills on and off for this Clicky.
+    private var skillsMenu: some View {
+        Menu {
+            if skillLibrary.skills.isEmpty {
+                Text("No skills yet. Add some on the Skills page.")
+            } else {
+                ForEach(skillLibrary.skills) { skill in
+                    Toggle(skill.name, isOn: Binding(
+                        get: { clickyRoster.isSkill(skill.name, enabledFor: agent) },
+                        set: { clickyRoster.setSkill(skill.name, enabled: $0, forAgentID: agent.id) }
+                    ))
+                }
+            }
+        } label: {
+            Image(systemName: "sparkles")
+                .foregroundColor(DS.Colors.textSecondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .pointerCursor()
+        .help("Skills this Clicky uses")
+        .onAppear { skillLibrary.reload() }
+    }
+
+    /// This Clicky's routines, with run now, pause and delete.
+    private var routinesStrip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("ROUTINES")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(DS.Colors.textTertiary)
+            ForEach(agentRoutines) { routine in
+                HStack(spacing: 8) {
+                    Image(systemName: routine.isPaused ? "pause.circle" : "clock")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textTertiary)
+                    Text(routine.title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(DS.Colors.textPrimary)
+                        .lineLimit(1)
+                    Text(routineScheduleText(routine))
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("Run now") { clickyRoster.runRoutine(routine) }
+                            .disabled(clickyRoster.isRunning(agent))
+                        Button(routine.isPaused ? "Resume routine" : "Pause routine") {
+                            routineStore.setPaused(!routine.isPaused, routineID: routine.id)
+                        }
+                        Divider()
+                        Button("Delete routine", role: .destructive) {
+                            routineStore.deleteRoutine(routineID: routine.id)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11))
+                            .foregroundColor(DS.Colors.textSecondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .pointerCursor()
+                }
+                .help(routine.task)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+    }
+
+    private func routineScheduleText(_ routine: ClickyRoutine) -> String {
+        if routine.isPaused {
+            return "\(routine.cadenceDescription) · paused"
+        }
+        if routine.nextRunAt <= Date() {
+            return "\(routine.cadenceDescription) · next run soon"
+        }
+        return "\(routine.cadenceDescription) · next \(routine.nextRunAt.formatted(.relative(presentation: .named)))"
     }
 
     private var composer: some View {
@@ -394,6 +495,20 @@ private struct ClickyTranscriptItemView: View {
             Text(transcriptItem.text)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(DS.Colors.textTertiary)
+        case .routineRun:
+            HStack(spacing: 8) {
+                Rectangle()
+                    .fill(DS.Colors.borderSubtle)
+                    .frame(height: 0.5)
+                Label(transcriptItem.text, systemImage: "clock")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize()
+                Rectangle()
+                    .fill(DS.Colors.borderSubtle)
+                    .frame(height: 0.5)
+            }
+            .padding(.vertical, 4)
         case .error:
             Text(transcriptItem.text)
                 .font(.system(size: 12))
