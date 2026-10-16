@@ -20,5 +20,17 @@
 	<string>Dottie needs screen recording access to see your screen and help you.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Dottie uses speech recognition to transcribe your voice when you talk to it</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Dottie controls apps like Music, Finder, Notes, Mail and your browser when you ask her to.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dottie reads and adds calendar events when you ask, like "what's my day look like?"</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Dottie reads and adds calendar events when you ask, like "what's my day look like?"</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Dottie reads, adds and ticks off reminders when you ask.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Dottie reads, adds and ticks off reminders when you ask.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Dottie looks up a contact's number, email or birthday when you ask.</string>
 </dict>
 </plist>

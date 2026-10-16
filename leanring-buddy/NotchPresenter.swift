@@ -121,8 +121,11 @@ final class NotchPresenter: ObservableObject {
     /// The closed notch grows a little on each side to show a working
     /// light and the count of Dots with something new.
     var showsCompactDotIndicators: Bool {
-        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn
+        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn || isMeetingRecording
     }
+
+    /// Meeting mode is listening: the closed notch shows a red light.
+    @Published var isMeetingRecording = false
 
     /// The brain's screen journal is on: the closed notch shows a small
     /// light so the user always knows.

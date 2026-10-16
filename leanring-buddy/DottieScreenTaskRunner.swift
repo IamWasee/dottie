@@ -421,7 +421,9 @@ final class DottieScreenTaskRunner {
     private func requestNextActions(contents: [[String: Any]]) async throws -> [[String: Any]] {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = 75
+        // A step normally takes 2-8s. One stuck in Google's queue (seen at
+        // 90s+) is dropped and asked again, which is usually much quicker.
+        request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestBody: [String: Any] = [
