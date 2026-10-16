@@ -24,11 +24,11 @@ jobs:
             return await new Promise((resolve) => {
               const timer = setTimeout(() => { resolve(`#${i} timeout`); try { ws.close(); } catch {} }, 25000);
               let said = "";
-              ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, realtimeInputConfig: { automaticActivityDetection: { disabled: true } }, outputAudioTranscription: {} } }));
+              ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, ...JSON.parse(process.env.EXTRA || "{}") } }));
               ws.onmessage = async (e) => {
                 const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
                 const m = JSON.parse(s);
-                if (m.setupComplete) {
+                if (m.setupComplete) { said = "[setup ok] ";
                   ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
                   ws.send(JSON.stringify({ realtimeInput: { text: "Say hi in three words." } }));
                   ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
@@ -43,13 +43,8 @@ jobs:
           const results = await Promise.all(Array.from({ length: count }, (_, i) => one(i)));
           console.log(`== ${label} ${model} x${count}\n` + results.join("\n"));
           JS
-          sed -i 's/realtimeInputConfig: { automaticActivityDetection: { disabled: true } }, outputAudioTranscription: {} /outputAudioTranscription: {} /' live.mjs
-          for m in gemini-3.8-live gemini-3.1-flash-live-preview gemini-2.5-flash-native-audio-latest gemini-3.8-live-extended-thinking; do node live.mjs $m 1 minimal; done
-          curl -sS -X POST $W/live-token | sed -E 's/"token":"[^"]+"/"token":"<redacted>"/'
-      - name: Daily quota per model
-        run: |
-          for m in gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite gemini-flash-latest gemini-flash-lite-latest gemini-3.1-flash-lite; do
-            code=$(curl -sS -o out.txt -w '%{http_code}' -X POST -H 'x-goog-api-key: x' -H 'content-type: application/json' \
-              "$W/gemini/v1beta/models/$m:generateContent" -d '{"contents":[{"role":"user","parts":[{"text":"Say hi."}]}]}')
-            echo "$m -> $code $(tr -d '\n' < out.txt | grep -oE '"message": *"[^"]{0,140}' | head -1)"
-          done
+          for i in 1 2 3; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.8-live 1 aad; done
+          for i in 1 2 3; do node live.mjs gemini-3.8-live 1 minimal; done
+          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}}}' node live.mjs gemini-3.1-flash-live-preview 1 aad; done
+          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}},"inputAudioTranscription":{},"outputAudioTranscription":{},"contextWindowCompression":{"slidingWindow":{}},"sessionResumption":{},"systemInstruction":{"parts":[{"text":"You are Dottie."}]},"tools":[{"functionDeclarations":[{"name":"search_web","description":"Search","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}}]}]}' node live.mjs gemini-3.1-flash-live-preview 1 full; done
+          for i in 1 2; do EXTRA='{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true}},"inputAudioTranscription":{},"outputAudioTranscription":{},"contextWindowCompression":{"slidingWindow":{}},"sessionResumption":{},"systemInstruction":{"parts":[{"text":"You are Dottie."}]},"tools":[{"functionDeclarations":[{"name":"search_web","description":"Search","parameters":{"type":"OBJECT","properties":{"query":{"type":"STRING"}},"required":["query"]}}]}]}' node live.mjs gemini-3.8-live 1 full; done
