@@ -43,13 +43,21 @@ struct HomeSpaceRootView: View {
             Group {
                 switch selectedSection {
                 case .conversation:
-                    HomeConversationView(companionManager: companionManager, conversationStore: conversationStore)
+                    HomeConversationView(
+                        companionManager: companionManager,
+                        conversationStore: conversationStore,
+                        shortcutMonitor: companionManager.globalPushToTalkShortcutMonitor
+                    )
                 case .clickys:
                     HomeClickysView(clickyRoster: clickyRoster)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .settings:
-                    HomeSettingsView(companionManager: companionManager, conversationStore: conversationStore)
+                    HomeSettingsView(
+                        companionManager: companionManager,
+                        conversationStore: conversationStore,
+                        shortcutMonitor: companionManager.globalPushToTalkShortcutMonitor
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -94,6 +102,7 @@ struct HomeSpaceRootView: View {
 private struct HomeConversationView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var conversationStore: ConversationStore
+    @ObservedObject var shortcutMonitor: GlobalPushToTalkShortcutMonitor
     @State private var typedMessage = ""
 
     var body: some View {
@@ -103,7 +112,7 @@ private struct HomeConversationView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
                 Spacer()
-                Text("hold \(BuddyPushToTalkShortcut.pushToTalkDisplayText) to talk")
+                Text("hold \(shortcutMonitor.talkHotkey.displayText) to talk")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
             }
@@ -150,7 +159,7 @@ private struct HomeConversationView: View {
             Text("Nothing here yet")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(DS.Colors.textSecondary)
-            Text("Hold \(BuddyPushToTalkShortcut.pushToTalkDisplayText) and ask Dottie about anything on your screen.")
+            Text("Hold \(shortcutMonitor.talkHotkey.displayText) and ask Dottie about anything on your screen.")
                 .font(.system(size: 12))
                 .foregroundColor(DS.Colors.textTertiary)
                 .multilineTextAlignment(.center)
@@ -227,6 +236,7 @@ private struct HomeConversationEntryView: View {
 private struct HomeSettingsView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var conversationStore: ConversationStore
+    @ObservedObject var shortcutMonitor: GlobalPushToTalkShortcutMonitor
 
     private let availableVoiceNames = ["Kore", "Puck", "Aoede", "Charon", "Fenrir", "Leda", "Orus", "Zephyr"]
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
@@ -263,6 +273,29 @@ private struct HomeSettingsView: View {
                     settingsHint("Change CompanionVoiceMode in Info.plist to switch between live and classic.")
                 }
 
+                settingsGroup(title: "Shortcuts") {
+                    settingsRow(label: "Talk to Dottie") {
+                        ClickyHotkeyRecorderField(
+                            hotkey: shortcutMonitor.talkHotkey,
+                            onRecord: { shortcutMonitor.setTalkHotkey($0) },
+                            onRecordingChanged: { shortcutMonitor.isSuspendedForRecording = $0 }
+                        )
+                    }
+                    settingsRow(label: "Dictate") {
+                        ClickyHotkeyRecorderField(
+                            hotkey: shortcutMonitor.dictationHotkey,
+                            onRecord: { shortcutMonitor.setDictationHotkey($0) },
+                            onRecordingChanged: { shortcutMonitor.isSuspendedForRecording = $0 }
+                        )
+                    }
+                    if shortcutMonitor.talkHotkey != .defaultTalk || shortcutMonitor.dictationHotkey != .defaultDictation {
+                        settingsRow(label: "Back to ctrl + option and right option") {
+                            Button("Reset") { shortcutMonitor.resetHotkeysToDefaults() }
+                        }
+                    }
+                    settingsHint("Click a shortcut, then press the new one: modifier keys on their own (like right option or fn), or modifiers with a key (like cmd + shift + space). You hold it the same way to talk or dictate.")
+                }
+
                 settingsGroup(title: "Appearance") {
                     settingsRow(label: "Show Dottie in the notch") {
                         Toggle("", isOn: Binding(
@@ -284,7 +317,7 @@ private struct HomeSettingsView: View {
                 }
 
                 settingsGroup(title: "Dictation") {
-                    settingsRow(label: "Hold \(GlobalPushToTalkShortcutMonitor.dictationShortcutDisplayText) to dictate") {
+                    settingsRow(label: "Hold \(shortcutMonitor.dictationHotkey.displayText) to dictate") {
                         Toggle("", isOn: $isDictationEnabled)
                             .labelsHidden()
                             .toggleStyle(.switch)
@@ -297,7 +330,7 @@ private struct HomeSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
                     }
-                    settingsHint("Hold the key, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
+                    settingsHint("Hold the shortcut, talk, and let go: Dottie types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
                 }
 
                 settingsGroup(title: "Using your Mac") {

@@ -1,6 +1,6 @@
 # Dottie
 
-An AI buddy that lives next to your cursor on macOS. Hold **ctrl + option**, talk, and it sees your screen, answers out loud, and can fly a little blue cursor to the thing you're asking about.
+An AI buddy that lives next to your cursor on macOS. Hold **ctrl + option** (or a shortcut you pick in Settings), talk, and it sees your screen, answers out loud, and can fly a little blue cursor to the thing you're asking about.
 
 Dottie is a clone of [HeyClicky](https://www.heyclicky.com/), built on top of Farza's open-source [Clicky v0](https://github.com/farzaa/clicky) (MIT). v0 is the April 2026 version he open-sourced; the app he ships today is closed. This repo starts from v0 and rebuilds the newer features, with every AI call moved to **Google Gemini's free tier**, so the only key you need is one from [Google AI Studio](https://aistudio.google.com/apikey).
 
@@ -89,6 +89,8 @@ Don't build with `xcodebuild` from a terminal; it resets the macOS privacy permi
 ## Dictation
 
 Hold **right Option**, talk, and let go: Dottie types the cleaned-up text wherever your cursor is, in any app. Fillers and false starts are dropped and punctuation is added. If there's nowhere to type, the text goes to your clipboard. Add names and jargon you want spelled your way in Home → Settings.
+
+Both shortcuts can be changed in Home → Settings → Shortcuts: click one and press the new keys. A shortcut is either modifier keys held on their own (right option, fn, ctrl + option) or modifiers with a key (cmd + shift + space). With Accessibility granted, a key shortcut's key is kept from typing into the app in front.
 
 ## How it works
 

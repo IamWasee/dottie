@@ -26,7 +26,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Notch surface: black shape around the notch (a pill on Macs without one) with blinking eyes, listening waveform, thinking, live caption while speaking, typed input, and an auto-dismissing answer card with copy and follow-up
 - ✅ Typed messages from the notch or Home, answered out loud like spoken ones
 - ✅ Home window: saved conversation transcript (persisted to Application Support) and settings (voice, notch, cursor, worker status, clear history)
-- ⬜ Custom hotkeys (`ClickyHotkeyRecorder`)
+- ✅ Custom hotkeys (`ClickyHotkeyRecorder`): record your own talk and dictation shortcuts in Settings, modifiers alone or with a key
 - ⬜ Screen annotation: circle a region and ask about it (`ScreenAnnotationManager`)
 - ✅ Notch hover peek of Dots: each Dot's status light (working, something new, idle) and last line; click one to open its chat in Home
 - ⬜ Notch hover peek of files
@@ -52,7 +52,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 
 ## Phase 6: dictation ⏳
 
-- ✅ Hold right Option, talk, let go: the text is typed wherever the cursor is (`ClickyDictationController`). A key pressed during the hold (an Option special character) or Escape throws the recording away
+- ✅ Hold right Option (or your own shortcut), talk, let go: the text is typed wherever the cursor is (`ClickyDictationController`). A key pressed during the hold (an Option special character) or Escape throws the recording away
 - ✅ One Gemini call on the Worker (`/dictate`, `GEMINI_DICTATION_MODEL`) hears the recording and tidies it: fillers and false starts out, punctuation in, self-corrections applied, spoken formatting followed. It gets the app name, the text before the cursor and the user's own spellings as context. Shipped Clicky uses Deepgram plus a separate cleanup call; the clone stays on the one free Gemini key
 - ✅ Paste with a temporary clipboard swap that puts the user's clipboard back; clipboard fallback (with a notch card) when the field can't take it, the user switched apps, or a password field is focused
 - ✅ Settings: on/off and a custom words list
