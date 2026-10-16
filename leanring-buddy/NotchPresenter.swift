@@ -10,6 +10,7 @@
 //
 
 import Combine
+import CoreGraphics
 import Foundation
 
 /// One Dot as the notch shows it when you hover.
