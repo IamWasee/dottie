@@ -1,27 +1,59 @@
 name: Diagnose Worker
-# Temporary: runs the voice-web-search Worker locally and tries /search.
 on:
   push:
     branches: [diagnose-worker]
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
+    env:
+      W: https://dottie.vidershub.workers.dev
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: voice-web-search
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Search through a local Worker
-        working-directory: worker
+      - name: Concurrent Live sessions
         run: |
-          npm ci --silent
-          (npx wrangler dev --port 8787 > dev.log 2>&1 &)
-          for i in $(seq 1 60); do curl -s localhost:8787/health >/dev/null && break; sleep 1; done
-          for q in "bbc news today" "weather in London" "latest swift version" "price of bitcoin" "who won the world series"; do
-            echo "== $q"
-            curl -sS -G --data-urlencode "q=$q" localhost:8787/search | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("source",j.source,"results",(j.results||[]).length);for(const r of (j.results||[]).slice(0,3))console.log(" -",r.title,"|",r.url,"|",r.snippet.slice(0,90));console.log(" top:",j.topPage?j.topPage.url+" "+j.topPage.text.length+" chars: "+j.topPage.text.slice(0,200):"none")})'
+          cat > live.mjs <<'JS'
+          const W = process.env.W;
+          const [model, count, label] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
+          async function one(i) {
+            const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
+            if (!t.token) return `#${i} no token ${JSON.stringify(t).slice(0,200)}`;
+            const ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
+            return await new Promise((resolve) => {
+              const timer = setTimeout(() => { resolve(`#${i} timeout`); try { ws.close(); } catch {} }, 25000);
+              let said = "";
+              ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, realtimeInputConfig: { automaticActivityDetection: { disabled: true } }, outputAudioTranscription: {} } }));
+              ws.onmessage = async (e) => {
+                const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString();
+                const m = JSON.parse(s);
+                if (m.setupComplete) {
+                  ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+                  ws.send(JSON.stringify({ realtimeInput: { text: "Say hi in three words." } }));
+                  ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+                }
+                if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text;
+                // Hold the session open a few seconds so they overlap.
+                if (m.serverContent?.turnComplete) setTimeout(() => { clearTimeout(timer); resolve(`#${i} ok: ${said.trim()}`); ws.close(); }, 4000);
+              };
+              ws.onclose = (e) => { clearTimeout(timer); resolve(`#${i} close ${e.code} ${e.reason.slice(0,90)}`); };
+            });
+          }
+          const results = await Promise.all(Array.from({ length: count }, (_, i) => one(i)));
+          console.log(`== ${label} ${model} x${count}\n` + results.join("\n"));
+          JS
+          node live.mjs gemini-3.8-live 1 single
+          node live.mjs gemini-3.8-live 2 concurrent
+          node live.mjs gemini-3.8-live 3 concurrent
+          node live.mjs gemini-3.1-flash-live-preview 3 concurrent
+          for i in 1 2 3 4 5 6; do node live.mjs gemini-3.8-live 1 sequential-$i; done
+      - name: Gemini CLI through the Worker
+        run: |
+          mkdir -p home/.gemini && echo '{"security":{"auth":{"selectedType":"gemini-api-key"}}}' > home/.gemini/settings.json
+          mkdir ws && cd ws
+          for m in gemini-3.8-flash gemini-3.6-flash; do
+            echo "== gemini cli $m"
+            GEMINI_CLI_HOME=$PWD/../home GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=x timeout 150 \
+              npx -y @google/gemini-cli@0.64.0 -m $m -p "Reply with the word pong." -o stream-json --approval-mode yolo --skip-trust 2>&1 | tail -6 | cut -c1-400
           done
-          tail -5 dev.log
