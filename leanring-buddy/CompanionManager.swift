@@ -681,8 +681,19 @@ final class CompanionManager: ObservableObject {
             .store(in: &dictationCancellables)
 
         dictationController.onFinished = { [weak self] outcome, dictatedText in
-            guard let self, outcome == .copiedToClipboard else { return }
-            self.notchPresenter.showAgentUpdate(title: "Copied to your clipboard", text: dictatedText)
+            guard let self else { return }
+            switch outcome {
+            case .inserted:
+                break
+            case .copiedToClipboard:
+                self.notchPresenter.showAgentUpdate(title: "Copied to your clipboard", text: dictatedText)
+            case .copiedInsteadOfTypingPassword:
+                // Don't show what was said; it may be the password itself.
+                self.notchPresenter.showAgentUpdate(
+                    title: "Password field",
+                    text: "I don't type into password boxes, so it's on your clipboard. Paste it yourself if it's right."
+                )
+            }
         }
 
         dictationController.onError = { [weak self] errorMessage in
