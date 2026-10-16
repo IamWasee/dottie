@@ -107,6 +107,9 @@ final class CompanionManager: ObservableObject {
     let conversationStore = ConversationStore()
     /// Background agents ("Clickys") that run on Gemini CLI.
     let clickyRoster = ClickyRoster()
+    /// Hold right Option to dictate into any app.
+    let dictationController = ClickyDictationController()
+    private var dictationCancellables: Set<AnyCancellable> = []
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
     private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
@@ -260,6 +263,7 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        bindDictation()
         configureLiveVoiceClient()
         // Eagerly touch the Gemini API so its TLS warmup handshake completes
         // well before the onboarding demo fires.
@@ -580,10 +584,83 @@ final class CompanionManager: ObservableObject {
             }
     }
 
+    // MARK: - Dictation
+
+    private func bindDictation() {
+        let shortcutMonitor = globalPushToTalkShortcutMonitor
+
+        shortcutMonitor.dictationShortcutTransitionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] transition in
+                guard let self else { return }
+                switch transition {
+                case .pressed:
+                    // The companion and dictation share the microphone.
+                    guard self.hasCompletedOnboarding,
+                          !self.showOnboardingVideo,
+                          !self.buddyDictationManager.isDictationInProgress,
+                          !self.isLiveTurnInFlight else { return }
+                    self.dictationController.beginDictation()
+                case .released:
+                    self.dictationController.finishDictation()
+                case .none:
+                    break
+                }
+            }
+            .store(in: &dictationCancellables)
+
+        // Right Option plus a key is a special character, not dictation.
+        shortcutMonitor.keyPressedDuringDictationPublisher
+            .merge(with: shortcutMonitor.escapeKeyPressedPublisher)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                guard let self, self.dictationController.state != .idle else { return }
+                self.dictationController.cancelDictation()
+            }
+            .store(in: &dictationCancellables)
+
+        dictationController.$state
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] dictationState in
+                guard let self, self.isNotchEnabled else { return }
+                switch dictationState {
+                case .recording:
+                    self.notchPresenter.showListening(label: "dictating")
+                case .transcribing:
+                    self.notchPresenter.showThinking(label: "writing")
+                case .idle:
+                    let isNotchShowingDictation = self.notchPresenter.surface == .listening || self.notchPresenter.surface == .thinking
+                    if isNotchShowingDictation && self.voiceState == .idle && !self.isLiveTurnInFlight {
+                        self.notchPresenter.collapse()
+                    }
+                }
+            }
+            .store(in: &dictationCancellables)
+
+        dictationController.$audioPowerLevel
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] powerLevel in
+                guard let self, self.dictationController.state == .recording else { return }
+                self.notchPresenter.audioPowerLevel = powerLevel
+            }
+            .store(in: &dictationCancellables)
+
+        dictationController.onFinished = { [weak self] outcome, dictatedText in
+            guard let self, outcome == .copiedToClipboard else { return }
+            self.notchPresenter.showAgentUpdate(title: "Copied to your clipboard", text: dictatedText)
+        }
+
+        dictationController.onError = { [weak self] errorMessage in
+            self?.notchPresenter.showAgentUpdate(title: "Dictation", text: errorMessage)
+        }
+    }
+
     private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
         switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
+            guard dictationController.state == .idle else { return }
             // Don't register push-to-talk while the onboarding video is playing
             guard !showOnboardingVideo else { return }
 

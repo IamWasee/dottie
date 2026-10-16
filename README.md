@@ -80,6 +80,10 @@ The app appears in the menu bar, not the Dock. Open the panel and grant the perm
 
 Don't build with `xcodebuild` from a terminal; it resets the macOS privacy permissions every time.
 
+## Dictation
+
+Hold **right Option**, talk, and let go: Clicky types the cleaned-up text wherever your cursor is, in any app. Fillers and false starts are dropped and punctuation is added. If there's nowhere to type, the text goes to your clipboard. Add names and jargon you want spelled your way in Home → Settings.
+
 ## How it works
 
 Hold the hotkey and the app captures every display into one frame, opens (or reuses) a Gemini Live WebSocket with an ephemeral token from the Worker, and streams your voice. Let go and Gemini answers in audio, which plays as it arrives. If pointing would help, Gemini calls `point_at_element` with coordinates on the frame, and the blue cursor flies there while it talks. Sessions close after 45 idle seconds, and the last ten exchanges are carried into the next session so it remembers the conversation.

@@ -33,12 +33,13 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 |-------|----------|---------|
 | `POST /live-token` | `generativelanguage.googleapis.com/v1beta/auth_tokens` | Single-use Gemini Live ephemeral token (session must start within 2 min) |
 | `POST /chat` | `…/models/{model}:streamGenerateContent?alt=sse` | Gemini vision + streaming chat (onboarding demo, classic mode) |
+| `POST /dictate` | `…/models/{dictation model}:generateContent` | Hold-to-dictate: a WAV recording in, cleaned-up text out, in one call |
 | `POST /tts` | `…/models/{tts model}:generateContent` | Gemini TTS, returned as raw 24kHz PCM (classic mode) |
 | `* /gemini/*` | `generativelanguage.googleapis.com/*` | Passthrough for Gemini CLI (agents). The CLI sends the shared secret as its API key; the Worker swaps in the real one |
 | `GET /config` | none | Echoes the configured model names |
 
 Worker secrets: `GEMINI_API_KEY`, optional `APP_SHARED_SECRET` (checked against the `x-clicky-secret` header)
-Worker vars: `GEMINI_LIVE_MODEL`, `GEMINI_CHAT_MODEL`, `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`
+Worker vars: `GEMINI_LIVE_MODEL`, `GEMINI_CHAT_MODEL`, `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`, `GEMINI_DICTATION_MODEL`
 
 App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionVoiceMode`, `OnboardingVideoURL`, `PostHogAPIKey`, optional `GeminiCLIPath`, `GeminiAgentModel` and `CuaDriverPath`
 
@@ -74,6 +75,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
 | `GeminiCLIAgentRuntime.swift` | ~330 | Finds and runs Gemini CLI for one agent turn, parses its stream-json events, stops turns. |
 | `ClickyRoster.swift` | ~350 | The agents: roster, workspaces (`AGENTS.md`, `output/`, `tmp/`), transcripts, sending messages, finish callbacks. |
+| `ClickyDictationController.swift` | ~380 | Hold-to-dictate: focus capture through Accessibility, 16kHz recording, Worker `/dictate`, and pasting with a clipboard swap (or clipboard fallback). |
 | `ClickyComputerUse.swift` | ~220 | Computer use: finds cua-driver, writes its look-only and look-and-act policies, the MCP server entry, the shared agent instructions, and parses permission requests. |
 | `HomeClickysView.swift` | ~400 | Home → Clickys: agent list, new Clicky form, chat with tool activity. |
 | `ConversationStore.swift` | ~85 | Persists the conversation shown on Home as JSON in Application Support. |
@@ -93,7 +95,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/gemini/*`, `/config`. |
+| `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/dictate`, `/gemini/*`, `/config`. |
 
 ## Build & Run
 

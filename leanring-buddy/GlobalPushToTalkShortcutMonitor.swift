@@ -21,6 +21,19 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     let escapeKeyPressedPublisher = PassthroughSubject<Void, Never>()
     private static let escapeKeyCode: UInt16 = 53
 
+    /// Hold-to-dictate: right Option held on its own. Kept apart from the
+    /// talk-to-Clicky shortcut (ctrl + option) so the two never overlap.
+    let dictationShortcutTransitionPublisher = PassthroughSubject<BuddyPushToTalkShortcut.ShortcutTransition, Never>()
+    /// Any key pressed while the dictation key is held. Right Option also
+    /// types special characters (option-e, option-2…), so a key press means
+    /// the user wasn't dictating and the recording should be thrown away.
+    let keyPressedDuringDictationPublisher = PassthroughSubject<Void, Never>()
+    static let dictationShortcutDisplayText = "right option"
+    /// Device-dependent bits CGEvent sets for each Option key.
+    private static let rightOptionDeviceFlag: UInt64 = 0x40
+    private static let leftOptionDeviceFlag: UInt64 = 0x20
+    private var isDictationShortcutCurrentlyPressed = false
+
     private var globalEventTap: CFMachPort?
     private var globalEventTapRunLoopSource: CFRunLoopSource?
     /// Mutated exclusively from the CGEvent tap callback, which runs on
@@ -119,6 +132,8 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         if eventType == .keyDown && eventKeyCode == Self.escapeKeyCode {
             escapeKeyPressedPublisher.send(())
         }
+
+        handleDictationShortcut(eventType: eventType, modifierFlagsRawValue: event.flags.rawValue)
         let shortcutTransition = BuddyPushToTalkShortcut.shortcutTransition(
             for: eventType,
             keyCode: eventKeyCode,
@@ -138,5 +153,27 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    private func handleDictationShortcut(eventType: CGEventType, modifierFlagsRawValue: UInt64) {
+        if eventType == .keyDown && isDictationShortcutCurrentlyPressed {
+            keyPressedDuringDictationPublisher.send(())
+            return
+        }
+        guard eventType == .flagsChanged else { return }
+
+        let deviceIndependentModifiers = NSEvent.ModifierFlags(rawValue: UInt(modifierFlagsRawValue))
+            .intersection([.shift, .control, .option, .command])
+        let isOnlyRightOptionHeld = deviceIndependentModifiers == [.option]
+            && modifierFlagsRawValue & Self.rightOptionDeviceFlag != 0
+            && modifierFlagsRawValue & Self.leftOptionDeviceFlag == 0
+
+        if isOnlyRightOptionHeld && !isDictationShortcutCurrentlyPressed {
+            isDictationShortcutCurrentlyPressed = true
+            dictationShortcutTransitionPublisher.send(.pressed)
+        } else if !isOnlyRightOptionHeld && isDictationShortcutCurrentlyPressed {
+            isDictationShortcutCurrentlyPressed = false
+            dictationShortcutTransitionPublisher.send(.released)
+        }
     }
 }
