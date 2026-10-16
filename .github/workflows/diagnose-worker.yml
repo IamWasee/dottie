@@ -1,0 +1,41 @@
+name: Diagnose Worker
+# Temporary: checks the deployed Worker and Gemini from a GitHub runner.
+on:
+  push:
+    branches: [diagnose-worker]
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      W: https://dottie.vidershub.workers.dev
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe
+        run: |
+          echo "== /health"; curl -sS -w '\nHTTP %{http_code}\n' "$W/health"
+          echo "== /config"; curl -sS -w '\nHTTP %{http_code}\n' "$W/config"
+          echo "== /live-token"; curl -sS -X POST -w '\nHTTP %{http_code}\n' "$W/live-token" | sed -E 's/"token":"[^"]+"/"token":"<redacted>"/'
+          echo "== /chat"; curl -sS -X POST -H 'content-type: application/json' -w '\nHTTP %{http_code}\n' "$W/chat" \
+            -d '{"contents":[{"role":"user","parts":[{"text":"Say hi in two words."}]}]}' | head -c 1500; echo
+          echo "== models"; curl -sS -H 'x-goog-api-key: x' "$W/gemini/v1beta/models?pageSize=1000" \
+            | grep -oE '"name": *"models/[^"]+"' | sed -E 's/.*models\///; s/"//' | sort | tr '\n' ' '; echo
+          echo "== models (bidi)"; curl -sS -H 'x-goog-api-key: x' "$W/gemini/v1beta/models?pageSize=1000" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);for(const m of j.models||[])if((m.supportedGenerationMethods||[]).includes("bidiGenerateContent"))console.log(m.name)}catch(e){console.log(s.slice(0,800))}})'
+      - name: Live session
+        run: |
+          cat > live.mjs <<'JS'
+          const W = process.env.W;
+          const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
+          if (!t.token) { console.log("no token", JSON.stringify(t).slice(0, 500)); process.exit(0); }
+          const url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token);
+          const ws = new WebSocket(url);
+          const done = setTimeout(() => { console.log("timeout"); process.exit(0); }, 20000);
+          ws.onopen = () => { console.log("open, model", t.model); ws.send(JSON.stringify({ setup: { model: "models/" + t.model, generationConfig: { responseModalities: ["AUDIO"] } } })); };
+          ws.onmessage = async (e) => { const s = typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString(); console.log("msg", s.slice(0, 300)); if (s.includes("setupComplete")) { clearTimeout(done); ws.close(); } };
+          ws.onclose = (e) => { console.log("close", e.code, e.reason); process.exit(0); };
+          ws.onerror = (e) => console.log("error", e.message || e);
+          JS
+          node live.mjs
