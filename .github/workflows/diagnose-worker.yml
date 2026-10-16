@@ -1,22 +1,27 @@
 name: Diagnose Worker
+# Temporary: runs the voice-web-search Worker locally and tries /search.
 on:
   push:
     branches: [diagnose-worker]
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Bing sample
+      - uses: actions/checkout@v4
+        with:
+          ref: voice-web-search
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Search through a local Worker
+        working-directory: worker
         run: |
-          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
-          for q in "latest+swift+version" "price+of+bitcoin" "who+won+the+world+series" "weather+in+London"; do
-            c=$(curl -s --max-time 10 -A "$UA" -H 'accept-language: en-US' -o c.html -w '%{http_code}' "https://www.bing.com/search?q=$q&setlang=en&cc=US"); echo "bing $q $c $(grep -o 'class="b_algo"' c.html | wc -l)"
+          npm ci --silent
+          (npx wrangler dev --port 8787 > dev.log 2>&1 &)
+          for i in $(seq 1 60); do curl -s localhost:8787/health >/dev/null && break; sleep 1; done
+          for q in "bbc news today" "weather in London" "latest swift version" "price of bitcoin" "who won the world series"; do
+            echo "== $q"
+            curl -sS -G --data-urlencode "q=$q" localhost:8787/search | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("source",j.source,"results",(j.results||[]).length);for(const r of (j.results||[]).slice(0,3))console.log(" -",r.title,"|",r.url,"|",r.snippet.slice(0,90));console.log(" top:",j.topPage?j.topPage.url+" "+j.topPage.text.length+" chars: "+j.topPage.text.slice(0,200):"none")})'
           done
-          python3 - <<'PY'
-          import re
-          h=open('c.html',encoding='utf-8',errors='replace').read()
-          blocks=re.findall(r'<li class="b_algo".*?</li>',h,re.S)
-          for b in blocks[:3]:
-              print(re.sub(r'<(svg|style|script).*?</\1>','',b,flags=re.S)[:1500]); print('-----')
-          PY
+          tail -5 dev.log
