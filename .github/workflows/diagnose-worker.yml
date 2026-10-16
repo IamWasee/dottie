@@ -42,6 +42,7 @@ jobs:
                 for (let i = 0; i < audio.length; i += 3200) { ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: audio.subarray(i, i + 3200).toString("base64") } } })); await sleep(100); }
                 tEnd = Date.now(); stamp("released");
                 if (extraText) ws.send(JSON.stringify({ realtimeInput: { text: extraText } }));
+                if (process.env.BURST) { const z = Buffer.alloc(Number(process.env.BURST) * 32); for (let i = 0; i < z.length; i += 3200) ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: z.subarray(i, i + 3200).toString("base64") } } })); }
                 ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
               }
               const sc = m.serverContent || {};
@@ -59,9 +60,7 @@ jobs:
           JS
           T='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1200,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
           L='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":60000,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
-          M='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":2500,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
-          for i in 1 2 3; do node ptt.mjs gemini-3.8-live ptt-quick-release "$T" 200 ""; done
-          for i in 1 2; do node ptt.mjs gemini-3.8-live ptt-2500-quick "$M" 200 ""; done
-          node ptt.mjs gemini-3.1-flash-live-preview ptt-2500-quick "$M" 200 ""
-          node ptt.mjs gemini-3.8-live ptt-context-text "$T" 200 "(The screenshot shows one screen.)"
-          SYS="Only listen. Never reply." node ptt.mjs gemini-3.8-live dictation-1200 "$T" 4000 ""
+          for i in 1 2 3; do BURST=1500 node ptt.mjs gemini-3.8-live burst1500 "$T" 200 ""; done
+          for i in 1 2 3; do BURST=1500 node ptt.mjs gemini-3.1-flash-live-preview burst1500 "$T" 200 ""; done
+          for i in 1 2; do node ptt.mjs gemini-3.1-flash-live-preview plain "$T" 200 ""; done
+          BURST=1500 node ptt.mjs gemini-3.1-flash-live-preview burst-context "$T" 200 "(The screenshot shows one screen.)"
