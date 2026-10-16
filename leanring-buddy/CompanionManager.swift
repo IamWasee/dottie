@@ -281,7 +281,19 @@ final class CompanionManager: ObservableObject {
         _ = geminiAPI
 
         if !ClickyWorkerConfiguration.isWorkerConfigured {
-            print("⚠️ Dottie: ClickyWorkerBaseURL is not set in Info.plist — voice won't work until it points at your worker.")
+            print("⚠️ Dottie: no server address (Info.plist ClickyWorkerBaseURL or Settings → Connection) — voice won't work until one is set.")
+        }
+
+        // Get Dots ready in the background (a one-time download), so the
+        // first Dot doesn't wait for it. Skipped when Gemini CLI is already
+        // on this Mac.
+        Task.detached(priority: .background) {
+            guard GeminiCLIAgentRuntime.locateGeminiCLIExecutable() == nil else { return }
+            do {
+                try await DotsRuntimeInstaller.shared.installIfNeeded()
+            } catch {
+                print("⚠️ Dottie: couldn't set up the Dots runtime yet: \(error.localizedDescription)")
+            }
         }
 
         // If the user already completed onboarding AND all permissions are
@@ -1000,10 +1012,6 @@ final class CompanionManager: ObservableObject {
     /// it if it doesn't exist yet), or a general "Helper" Clicky.
     /// Returns a short status for the voice model to relay.
     func startClickyTask(clickyName: String?, taskText: String) -> String {
-        guard GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil else {
-            return "background dots need gemini cli installed on this mac, and it isn't yet. tell the user to install it with npm install -g @google/gemini-cli."
-        }
-
         let targetAgent: ClickyAgent
         if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
             targetAgent = existingAgent
@@ -1596,7 +1604,7 @@ final class CompanionManager: ObservableObject {
     private func speakConnectionErrorFallback() {
         let utterance = ClickyWorkerConfiguration.isWorkerConfigured
             ? "I couldn't reach Gemini. Check that your worker is deployed and your API key is set, then try again."
-            : "I'm not set up yet. Put your worker's address in the app's Info.plist and try again."
+            : "I'm not connected yet. Open Settings, add the server address under Connection, and try again."
         speakWithSystemVoice(utterance)
     }
 

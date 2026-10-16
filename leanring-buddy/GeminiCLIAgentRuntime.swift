@@ -46,9 +46,9 @@ enum GeminiCLIAgentRuntimeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .geminiCLINotFound:
-            return "Gemini CLI isn't installed. Install it with `npm install -g @google/gemini-cli` (needs Node.js), then try again."
+            return "Dottie couldn't set up Gemini CLI, which Dots run on. Check your internet connection and try again."
         case .workerNotConfigured:
-            return "Set ClickyWorkerBaseURL in Info.plist so agents can reach Gemini through your worker."
+            return "Dottie isn't connected to its server yet. Add the server address in Settings → Connection."
         case .processFailed(let exitCode, let standardErrorTail):
             return "The agent stopped with exit code \(exitCode). \(standardErrorTail)"
         }
@@ -66,13 +66,17 @@ final class GeminiCLIAgentRuntime {
 
     // MARK: - Locating the CLI
 
-    /// Finds the `gemini` executable. GUI apps don't inherit the shell's
-    /// PATH, so common install locations are checked first, then the user's
-    /// login shell is asked.
+    /// Finds the `gemini` executable: the copy Dottie set up itself (see
+    /// DotsRuntimeInstaller), else one the user installed. GUI apps don't
+    /// inherit the shell's PATH, so common install locations are checked
+    /// first, then the user's login shell is asked.
     static func locateGeminiCLIExecutable() -> URL? {
         if let configuredPath = AppBundleConfiguration.stringValue(forKey: "GeminiCLIPath"),
            FileManager.default.isExecutableFile(atPath: configuredPath) {
             return URL(fileURLWithPath: configuredPath)
+        }
+        if DotsRuntimeInstaller.isInstalled {
+            return DotsRuntimeInstaller.geminiLauncherURL
         }
 
         let homeDirectoryPath = FileManager.default.homeDirectoryForCurrentUser.path
@@ -139,6 +143,11 @@ final class GeminiCLIAgentRuntime {
         additionalDirectoryURLs: [URL],
         onEvent: @escaping @Sendable (GeminiCLIAgentEvent) -> Void
     ) async throws {
+        // The first Dot on a new Mac waits while Dottie downloads Gemini
+        // CLI and Node.js (usually already done at launch).
+        if Self.locateGeminiCLIExecutable() == nil {
+            try? await DotsRuntimeInstaller.shared.installIfNeeded()
+        }
         guard let geminiExecutableURL = Self.locateGeminiCLIExecutable() else {
             throw GeminiCLIAgentRuntimeError.geminiCLINotFound
         }
@@ -164,10 +173,16 @@ final class GeminiCLIAgentRuntime {
         if let loginShellPATH = Self.loginShellPATH {
             processEnvironment["PATH"] = loginShellPATH
         }
+        // Dottie's own Node.js, so node and npx work in the Dot's shell even
+        // on a Mac without them.
+        if DotsRuntimeInstaller.isInstalled {
+            let existingPATH = processEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+            processEnvironment["PATH"] = existingPATH + ":" + DotsRuntimeInstaller.nodeBinFolderURL.path
+        }
         processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/gemini"
         // The Worker swaps this for the real key. Without a shared secret
         // configured, any placeholder works.
-        processEnvironment["GEMINI_API_KEY"] = AppBundleConfiguration.stringValue(forKey: "ClickyAppSharedSecret") ?? "clicky-worker"
+        processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
         processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
         // Picks the cua-driver policy for this turn (see ClickyComputerUse).
         processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved

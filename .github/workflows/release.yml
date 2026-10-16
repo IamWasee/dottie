@@ -1,0 +1,209 @@
+name: Release
+
+# Builds Dottie.dmg and publishes it as a GitHub Release, so people can
+# download Dottie like any other Mac app:
+#   https://github.com/<owner>/<repo>/releases/latest/download/Dottie.dmg
+#
+# Run it from the Actions tab ("Release" → "Run workflow"), or push a tag
+# like v1.0.1. See INSTALL.md for the one-time setup.
+#
+# Repository secrets it uses:
+#   GEMINI_API_KEY         your key from https://aistudio.google.com/apikey
+#   CLOUDFLARE_API_TOKEN   lets this workflow deploy the Worker (the small
+#                          server that keeps the Gemini key out of the app)
+#   CLOUDFLARE_ACCOUNT_ID  optional; only if the token reaches several accounts
+#   DOTTIE_APP_SECRET      optional; any long random string. The Worker then
+#                          only answers copies of Dottie built with it.
+# Repository variable it uses when the Worker isn't deployed here:
+#   DOTTIE_WORKER_URL      the Worker's address, e.g. https://dottie.you.workers.dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number (leave empty for 1.0.<run number>)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+  # A trial run on pull requests that touch the release: builds the DMG and
+  # keeps it as a build artifact, without deploying or publishing anything.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HAS_DEPLOY_SECRETS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.GEMINI_API_KEY != '' }}
+    outputs:
+      worker_url: ${{ steps.address.outputs.worker_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy the Worker
+        id: deploy
+        if: env.HAS_DEPLOY_SECRETS == 'true' && github.event_name != 'pull_request'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Only needed when the token can reach more than one account.
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+        run: |
+          npm ci
+          npx wrangler deploy 2>&1 | tee deploy.log
+          printf '%s' "$GEMINI_API_KEY" | npx wrangler secret put GEMINI_API_KEY
+          if [ -n "$DOTTIE_APP_SECRET" ]; then
+            printf '%s' "$DOTTIE_APP_SECRET" | npx wrangler secret put APP_SHARED_SECRET
+          fi
+          worker_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
+          echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
+
+      - name: Pick the Worker address
+        id: address
+        env:
+          DEPLOYED_URL: ${{ steps.deploy.outputs.worker_url }}
+          CONFIGURED_URL: ${{ vars.DOTTIE_WORKER_URL }}
+        run: |
+          worker_url="${CONFIGURED_URL:-$DEPLOYED_URL}"
+          worker_url="${worker_url%/}"
+          if [ -z "$worker_url" ]; then
+            echo "::warning::No Worker address. Add the GEMINI_API_KEY and CLOUDFLARE_API_TOKEN secrets (see INSTALL.md), or set the DOTTIE_WORKER_URL variable. Dottie will ask for the address in Settings."
+          else
+            echo "Worker: $worker_url"
+            # Check the Worker answers before baking its address into the app.
+            curl -fsS --max-time 20 "$worker_url/health" || echo "::warning::$worker_url/health didn't answer."
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            worker_url=""
+          fi
+          echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
+
+  build-dmg:
+    needs: deploy-worker
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="1.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version"
+
+      - name: Put the Worker address in the app
+        # Trial builds are public artifacts, so they never carry the secret.
+        if: github.event_name != 'pull_request'
+        env:
+          WORKER_URL: ${{ needs.deploy-worker.outputs.worker_url }}
+          DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+        run: |
+          plist=leanring-buddy/Info.plist
+          if [ -n "$WORKER_URL" ]; then
+            /usr/libexec/PlistBuddy -c "Set :ClickyWorkerBaseURL $WORKER_URL" "$plist"
+          fi
+          if [ -n "$DOTTIE_APP_SECRET" ]; then
+            /usr/libexec/PlistBuddy -c "Set :ClickyAppSharedSecret $DOTTIE_APP_SECRET" "$plist"
+          fi
+
+      - name: Build Dottie.app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -o pipefail
+          # "Sign to Run Locally" (ad-hoc): no Apple Developer account
+          # needed. macOS asks people to allow it once (see INSTALL.md).
+          xcodebuild build \
+            -project leanring-buddy.xcodeproj \
+            -scheme leanring-buddy \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ENABLE_HARDENED_RUNTIME=NO \
+            2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)|cua-driver|Permission denied|Command .* failed" || true
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Check the app
+        run: |
+          app=build/Build/Products/Release/Dottie.app
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :ClickyWorkerBaseURL" "$app/Contents/Info.plist"
+          lipo -archs "$app/Contents/MacOS/Dottie"
+          test -x "$app/Contents/Helpers/cua-driver"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Make Dottie.dmg
+        run: |
+          mkdir -p dmg
+          ditto build/Build/Products/Release/Dottie.app dmg/Dottie.app
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Dottie -srcfolder dmg -ov -format UDZO Dottie.dmg
+          shasum -a 256 Dottie.dmg | tee Dottie.dmg.sha256
+
+      - name: Keep the trial DMG
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dottie-trial-dmg
+          path: Dottie.dmg
+
+      - name: Publish the release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          **Download [Dottie.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/Dottie.dmg)**, open it and drag Dottie into Applications.
+
+          The first time you open it, macOS says it can't check the app for malware. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Full steps: [INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/INSTALL.md).
+          EOF
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" Dottie.dmg Dottie.dmg.sha256 --clobber
+          else
+            gh release create "v$VERSION" Dottie.dmg Dottie.dmg.sha256 \
+              --title "Dottie $VERSION" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA"
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-log
+          path: build.log

@@ -226,7 +226,7 @@ final class ClickyDictationController: ObservableObject {
     func beginDictation() {
         guard Self.isEnabled, state == .idle else { return }
         guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            onError?("Set ClickyWorkerBaseURL in Info.plist to use dictation.")
+            onError?("Dottie isn't connected to its server yet. Add the server address in Settings → Connection.")
             return
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
