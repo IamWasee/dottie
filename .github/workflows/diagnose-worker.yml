@@ -7,16 +7,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Engines
+      - name: Bing sample
         run: |
           UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
-          for q in "weather+in+London" "latest+swift+version" "price+of+bitcoin" "who+won+the+world+series"; do
-            echo "== $q"
-            c=$(curl -s -A "$UA" -o a.html -w '%{http_code}' "https://html.duckduckgo.com/html/?q=$q"); echo "ddg-html $c $(grep -c result__a a.html)"
-            c=$(curl -s -A "$UA" -o b.html -w '%{http_code}' "https://lite.duckduckgo.com/lite/?q=$q"); echo "ddg-lite $c $(grep -c "result-link" b.html)"
-            c=$(curl -s -A "$UA" -H 'accept-language: en-US' -o c.html -w '%{http_code}' "https://www.bing.com/search?q=$q&setlang=en"); echo "bing $c $(grep -o 'class="b_algo"' c.html | wc -l)"
-            c=$(curl -s -A "$UA" -o d.html -w '%{http_code}' "https://www.mojeek.com/search?q=$q"); echo "mojeek $c $(grep -o 'class="title"' d.html | wc -l)"
+          for q in "latest+swift+version" "price+of+bitcoin" "who+won+the+world+series" "weather+in+London"; do
+            c=$(curl -s --max-time 10 -A "$UA" -H 'accept-language: en-US' -o c.html -w '%{http_code}' "https://www.bing.com/search?q=$q&setlang=en&cc=US"); echo "bing $q $c $(grep -o 'class="b_algo"' c.html | wc -l)"
           done
-          grep -o '<li class="b_algo".\{0,600\}' c.html | head -1
-          echo; grep -o '<a class="title".\{0,300\}' d.html | head -1; echo; grep -o 'class="s".\{0,200\}' d.html | head -1
-          echo; grep -o "result-link.\{0,300\}" b.html | head -1; grep -o "result-snippet.\{0,200\}" b.html | head -1
+          python3 - <<'PY'
+          import re
+          h=open('c.html',encoding='utf-8',errors='replace').read()
+          blocks=re.findall(r'<li class="b_algo".*?</li>',h,re.S)
+          for b in blocks[:3]:
+              print(re.sub(r'<(svg|style|script).*?</\1>','',b,flags=re.S)[:1500]); print('-----')
+          PY
