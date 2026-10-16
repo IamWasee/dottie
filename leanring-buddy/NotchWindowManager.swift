@@ -192,7 +192,7 @@ final class NotchWindowManager {
         case .textResponse:
             contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 150)
         case .screenTask:
-            contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 56)
+            contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 70)
         }
 
         return contentSize

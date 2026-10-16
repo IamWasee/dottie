@@ -132,6 +132,19 @@ final class CompanionManager: ObservableObject {
     private let drawingOverlayManager = DottieDrawingOverlayManager()
     /// Multi-step jobs on the screen ("open opera, find my kaggle rank").
     private let screenTaskRunner = DottieScreenTaskRunner()
+    /// Teaching the app on screen, step by step or as a tour.
+    private let guide = DottieGuide()
+    /// While a guide waits for the user to click its target, the cursor
+    /// keeps pointing at it instead of flying back after a few seconds.
+    private(set) var keepsPointingUntilCleared = false
+    /// Counts narrated lines so a stale safety timeout can't end a newer one.
+    private var narrationCount = 0
+    /// Called once when the current Live turn has finished speaking (or
+    /// failed), for narration that waits on it.
+    private var liveTurnFinishedHandler: (() -> Void)?
+    /// The current Live turn only speaks a guide line; it isn't saved to the
+    /// conversation and doesn't leave an answer card.
+    private var currentLiveTurnIsNarration = false
     private var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
@@ -865,7 +878,10 @@ final class CompanionManager: ObservableObject {
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
     doing things on screen:
-    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. to go back a page press cmd+[, forward cmd+], new tab cmd+t. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. prefer keyboard shortcuts over clicking whenever one exists, they never miss: close a tab cmd+w, new tab cmd+t, reopen a closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close a window cmd+shift+w, switch apps by opening them, zoom cmd+= and cmd+-. when you do click, pass the label exactly as it appears on screen, so the click lands on the right thing. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+
+    teaching:
+    clicky was made to help people learn their apps, so this matters most. when the user wants to learn how to do something themselves ("how do i add a sound effect in premiere", "where do i go for effects", "walk me through exporting") call guide_user with mode steps: the app points and draws each step, waits for their click, then shows the next. when they want a rundown or tour of the app or screen ("tell me how to use this app", "give me a complete rundown"), call guide_user with mode tour. for a single "where is x" that's visible right now, just point at it. during a guide, when they say next, done or got it, call guide_next; when they say stop, call stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
 
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence. if they say stop or never mind while it's running, call stop_screen_task.
@@ -925,6 +941,21 @@ final class CompanionManager: ObservableObject {
             return self.stopScreenTask() ? "stopped it." : "nothing was running."
         }
 
+        liveVoiceClient.onStartGuide = { [weak self] goal, modeName in
+            guard let self else { return "couldn't start it right now." }
+            return self.startGuide(goal: goal, modeName: modeName)
+        }
+
+        liveVoiceClient.onGuideNext = { [weak self] in
+            guard let self, self.guide.userSaidNext() else { return "no guide is running." }
+            return "okay, moving on. say nothing more; the next step is coming."
+        }
+
+        liveVoiceClient.onStopGuide = { [weak self] in
+            guard let self else { return "no guide is running." }
+            return self.stopGuide() ? "stopped the guide." : "no guide was running."
+        }
+
         liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText)
@@ -935,6 +966,8 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackResponseError(error: error.localizedDescription)
             print("⚠️ Gemini Live turn error: \(error)")
             self.isLiveTurnInFlight = false
+            self.currentLiveTurnIsNarration = false
+            self.fireLiveTurnFinishedHandler()
             self.speakConnectionErrorFallback()
             self.voiceState = .idle
             self.scheduleTransientHideIfNeeded()
@@ -943,15 +976,16 @@ final class CompanionManager: ObservableObject {
 
     /// Called by the live transcription provider when push-to-talk opens.
     /// Grabs the screen frame and opens the user's turn on the Live session.
-    private func beginLiveTurnWithScreenFrame() async {
+    private func beginLiveTurnWithScreenFrame(includesScreenFrame: Bool = true) async {
         // So a web page's elements can be found by name if Dottie points.
         PointingRefiner.prepareFrontmostApplicationForSearch()
-        let compositeScreenFrame: CompanionCompositeScreenFrame?
-        do {
-            compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
-        } catch {
-            print("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
-            compositeScreenFrame = nil
+        var compositeScreenFrame: CompanionCompositeScreenFrame?
+        if includesScreenFrame {
+            do {
+                compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
+            } catch {
+                print("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
+            }
         }
 
         currentLiveTurnScreenFrame = compositeScreenFrame
@@ -1044,16 +1078,20 @@ final class CompanionManager: ObservableObject {
             guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
                 return "couldn't tell where that is on screen."
             }
-            var width: CGFloat = 110
-            if let normalizedSize {
-                width = CGFloat(max(24, min(1000, normalizedSize)) / 1000) * target.frameWidthInPoints
+            // Hug the element's real frame when it was found; otherwise a
+            // guess from Live's rough size, kept modest.
+            let markedRect: CGRect
+            if let elementFrame = target.elementFrame {
+                markedRect = elementFrame
+            } else {
+                var width: CGFloat = 70
+                if let normalizedSize {
+                    width = CGFloat(max(16, min(1000, normalizedSize)) / 1000) * target.frameWidthInPoints
+                }
+                let height: CGFloat = max(22, min(width * 0.4, 120))
+                markedRect = CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height)
             }
-            let height: CGFloat = max(28, min(width * 0.45, 140))
-            drawingOverlayManager.add(DottieDrawing(
-                shape: shape,
-                targetRect: CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height),
-                note: note
-            ))
+            drawingOverlayManager.add(DottieDrawing(shape: shape, targetRect: markedRect, note: note))
             return "drew a \(shape.rawValue) on screen."
 
         case .clearDrawings:
@@ -1071,6 +1109,7 @@ final class CompanionManager: ObservableObject {
             return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
         }
         let wasAlreadyRunning = screenTaskRunner.isRunning
+        stopGuide()
         print("🧭 Screen task: \(taskText)")
         showOverlayTransientlyIfNeeded()
 
@@ -1151,13 +1190,81 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Guides (teaching the app on screen)
+
+    private func startGuide(goal: String, modeName: String) -> String {
+        stopScreenTask()
+        let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
+        print("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        showOverlayTransientlyIfNeeded()
+
+        guide.onProgress = { [weak self] progressText in
+            self?.notchPresenter.showScreenTaskStep(progressText, title: "showing you")
+        }
+        guide.presentStep = { [weak self] step in
+            await self?.presentGuideStep(step)
+        }
+        guide.onEnd = { [weak self] spokenGoodbye in
+            self?.guideDidEnd(spokenGoodbye: spokenGoodbye)
+        }
+        notchPresenter.showScreenTaskStep("looking at your screen", title: "showing you")
+        guide.start(goal: goal, mode: mode)
+        return mode == .tour
+            ? "started the tour. say only a few words like 'okay, let me show you around'; each part's line comes to you next."
+            : "started. say only a few words like 'let me show you'; each step's line comes to you next."
+    }
+
+    @discardableResult
+    private func stopGuide() -> Bool {
+        guide.stop()
+    }
+
+    /// Draws the step's marks, points at its target, and says it.
+    private func presentGuideStep(_ step: DottieGuide.Step) async {
+        drawingOverlayManager.clear()
+        for mark in step.marks {
+            drawingOverlayManager.add(DottieDrawing(shape: mark.shape, targetRect: mark.rect, note: mark.note), fadesOut: false)
+        }
+        if let targetRect = step.targetRect {
+            // Circle the thing to click unless a mark already covers it.
+            if !step.marks.contains(where: { $0.rect.intersects(targetRect) }) {
+                drawingOverlayManager.add(DottieDrawing(shape: .circle, targetRect: targetRect, note: nil), fadesOut: false)
+            }
+            keepsPointingUntilCleared = step.kind == .click
+            livePointingRefinementTask?.cancel()
+            detectedElementBubbleText = step.kind == .click ? "click here" : nil
+            detectedElementDisplayFrame = step.displayFrame
+            detectedElementScreenLocation = CGPoint(x: targetRect.midX, y: targetRect.midY)
+        } else {
+            keepsPointingUntilCleared = false
+        }
+        notchPresenter.showScreenTaskStep(step.say, title: "showing you")
+        await narrate(step.say)
+    }
+
+    private func guideDidEnd(spokenGoodbye: String?) {
+        print("🧑‍🏫 Guide ended")
+        keepsPointingUntilCleared = false
+        clearDetectedElementLocation()
+        drawingOverlayManager.clear()
+        notchPresenter.endScreenTask()
+        if let spokenGoodbye {
+            Task { [weak self] in
+                await self?.narrate(spokenGoodbye)
+            }
+        }
+        scheduleTransientHideIfNeeded()
+    }
+
     /// Where a 0-1000 point in this turn's frame is on screen, after the
     /// same second look pointing gets.
     private func refinedScreenLocation(
         normalizedX: Double,
         normalizedY: Double,
         label: String?
-    ) async -> (point: CGPoint, displayFrame: CGRect, frameWidthInPoints: CGFloat)? {
+    ) async -> (point: CGPoint, elementFrame: CGRect?, displayFrame: CGRect, frameWidthInPoints: CGFloat)? {
         guard let currentLiveTurnScreenFrame,
               let resolvedPoint = currentLiveTurnScreenFrame.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
             return nil
@@ -1167,18 +1274,18 @@ final class CompanionManager: ObservableObject {
             in: resolvedPoint.screenCapture
         )
         let displayFrame = resolvedPoint.screenCapture.displayFrame
-        let refinedPoint = await PointingRefiner.refine(
+        let refinedFrame = await PointingRefiner.refineFrame(
             elementLabel: label,
             userQuestion: currentLiveTurnTypedText ?? "",
             roughPoint: roughScreenLocation,
             displayFrame: displayFrame
-        )
-        let finalPoint = refinedPoint.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil } ?? roughScreenLocation
+        ).flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: $0.midX, y: $0.midY)) ? $0 : nil }
+        let finalPoint = refinedFrame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? roughScreenLocation
         // The frame spans every display side by side, so "size" is relative
         // to the whole frame's width.
         let frameWidthInPoints = displayFrame.width * CGFloat(currentLiveTurnScreenFrame.compositeWidthInPixels)
             / CGFloat(max(1, resolvedPoint.screenCapture.screenshotWidthInPixels))
-        return (finalPoint, displayFrame, frameWidthInPoints)
+        return (finalPoint, refinedFrame, displayFrame, frameWidthInPoints)
     }
 
     private func pointAtLiveElement(_ pointRequest: GeminiLivePointRequest) {
@@ -1239,10 +1346,12 @@ final class CompanionManager: ObservableObject {
     private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
         let typedTextForThisTurn = currentLiveTurnTypedText
         currentLiveTurnTypedText = nil
+        let isNarrationTurn = currentLiveTurnIsNarration
+        currentLiveTurnIsNarration = false
         // A typed turn has no audio, so Live's input transcript is empty.
         let userTranscript = typedTextForThisTurn ?? userTranscript
 
-        if !userTranscript.isEmpty || !modelTranscript.isEmpty {
+        if !isNarrationTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
             conversationStore.append(
                 userText: userTranscript,
                 clickyText: modelTranscript,
@@ -1269,9 +1378,15 @@ final class CompanionManager: ObservableObject {
             // Only drop to idle if the user hasn't started a new turn.
             if !self.buddyDictationManager.isDictationInProgress {
                 self.voiceState = .idle
-                self.notchPresenter.showFinishedResponse(modelTranscript)
+                if isNarrationTurn {
+                    // The guide's step stays in the notch instead.
+                    self.notchPresenter.collapse()
+                } else {
+                    self.notchPresenter.showFinishedResponse(modelTranscript)
+                }
                 self.scheduleTransientHideIfNeeded()
             }
+            self.fireLiveTurnFinishedHandler()
         }
     }
 
@@ -1461,7 +1576,9 @@ final class CompanionManager: ObservableObject {
             self?.openHomeWindow()
         }
         notchPresenter.onStopScreenTask = { [weak self] in
+            // The same stop button serves jobs and guides.
             self?.stopScreenTask()
+            self?.stopGuide()
         }
         notchPresenter.onOpenPeekFile = { [weak self] peekFile in
             self?.notchPresenter.isHovering = false
@@ -1538,16 +1655,70 @@ final class CompanionManager: ObservableObject {
 
     /// A Live turn from text instead of the mic, with a fresh screen frame.
     /// `recordedUserText` is what the conversation history keeps.
-    private func startLiveTextTurn(recordedUserText: String, turnText: String) {
+    private func startLiveTextTurn(recordedUserText: String, turnText: String, isNarration: Bool = false) {
         liveTurnPlaybackDrainTask?.cancel()
         isLiveTurnInFlight = true
         currentLiveTurnTypedText = recordedUserText
+        currentLiveTurnIsNarration = isNarration
         voiceState = .processing
         Task { [weak self] in
             guard let self else { return }
-            await self.beginLiveTurnWithScreenFrame()
+            // A guide line needs no new look at the screen.
+            await self.beginLiveTurnWithScreenFrame(includesScreenFrame: !isNarration)
             self.liveVoiceClient.sendTurnContextText(turnText)
             self.liveVoiceClient.endUserTurn()
+        }
+    }
+
+    private func fireLiveTurnFinishedHandler() {
+        let handler = liveTurnFinishedHandler
+        liveTurnFinishedHandler = nil
+        handler?()
+    }
+
+    /// Says one line in Dottie's voice and returns once it has been said.
+    /// Waits for any turn in progress to finish first.
+    private func narrate(_ line: String) async {
+        for _ in 0..<80 {
+            let isBusy = isLiveTurnInFlight || voiceState != .idle || buddyDictationManager.isDictationInProgress
+            if !isBusy { break }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        if Task.isCancelled { return }
+
+        switch voiceMode {
+        case .classic:
+            notchPresenter.updateLiveCaption(line)
+            speakWithSystemVoice(line)
+            let wordCount = line.split(separator: " ").count
+            try? await Task.sleep(nanoseconds: UInt64(max(1.5, Double(wordCount) * 0.38) * 1_000_000_000))
+            voiceState = .idle
+        case .live:
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                var hasResumed = false
+                let resumeOnce = {
+                    guard !hasResumed else { return }
+                    hasResumed = true
+                    continuation.resume()
+                }
+                fireLiveTurnFinishedHandler()
+                liveTurnFinishedHandler = resumeOnce
+                narrationCount += 1
+                let thisNarration = narrationCount
+                // Never hang the guide on a turn that goes quiet.
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 25_000_000_000)
+                    guard let self, self.narrationCount == thisNarration else { return }
+                    if self.liveTurnFinishedHandler != nil {
+                        self.fireLiveTurnFinishedHandler()
+                    }
+                }
+                startLiveTextTurn(
+                    recordedUserText: "",
+                    turnText: "[dottie guide] this step is already drawn on the screen. say exactly this line out loud, in your own warm voice, and nothing else. no tools.\n\"\(line)\"",
+                    isNarration: true
+                )
+            }
         }
     }
 
@@ -1566,7 +1737,7 @@ final class CompanionManager: ObservableObject {
     /// flight, and drops a recording without sending it. Does nothing while
     /// the companion is idle, so Escape keeps working normally elsewhere.
     private func handleEscapeInterrupt() {
-        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying || screenTaskRunner.isRunning
+        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying || screenTaskRunner.isRunning || guide.isActive
         guard isCompanionBusy else { return }
 
         print("⎋ Escape interrupt")
@@ -1586,6 +1757,8 @@ final class CompanionManager: ObservableObject {
         clearDetectedElementLocation()
         screenAnnotationManager.clear()
         stopScreenTask()
+        stopGuide()
+        fireLiveTurnFinishedHandler()
 
         isLiveTurnInFlight = false
         currentLiveTurnTypedText = nil
@@ -1860,7 +2033,7 @@ final class CompanionManager: ObservableObject {
             // Wait for pointing animation to finish (location is cleared
             // when the buddy flies back to the cursor), and for a screen
             // task, whose clicks the cursor shows.
-            while detectedElementScreenLocation != nil || screenTaskRunner.isRunning {
+            while detectedElementScreenLocation != nil || screenTaskRunner.isRunning || guide.isActive {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }

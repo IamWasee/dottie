@@ -95,6 +95,13 @@ final class GeminiLiveVoiceClient {
     var onStartScreenTask: (@MainActor (_ task: String) -> String)?
     /// The user asked to stop the running screen task (stop_screen_task).
     var onStopScreenTask: (@MainActor () -> String)?
+    /// The model started teaching the app on screen (guide_user). Returns a
+    /// short status; the steps are shown and spoken as they come.
+    var onStartGuide: (@MainActor (_ goal: String, _ mode: String) -> String)?
+    /// The user said they did the current guide step (guide_next).
+    var onGuideNext: (@MainActor () -> String)?
+    /// The user asked to stop the guide (stop_guide).
+    var onStopGuide: (@MainActor () -> String)?
 
     // MARK: - Configuration
 
@@ -491,9 +498,45 @@ final class GeminiLiveVoiceClient {
             startClickyTaskFunctionDeclaration,
             searchWebFunctionDeclaration,
             doTaskOnScreenFunctionDeclaration,
-            stopScreenTaskFunctionDeclaration
+            stopScreenTaskFunctionDeclaration,
+            guideUserFunctionDeclaration,
+            guideNextFunctionDeclaration,
+            stopGuideFunctionDeclaration
         ]
     }
+
+    /// Teaching the app on screen, step by step or as a tour (DottieGuide).
+    private static let guideUserFunctionDeclaration: [String: Any] = [
+        "name": "guide_user",
+        "description": "Teach the user the app on their screen. Use when they want to learn how to do something themselves ('how do I add a sound effect in premiere', 'where do I go to export', 'walk me through making a pivot table') or want a tour or rundown of the app ('show me around', 'give me a rundown of everything here'). steps mode walks them through it one click at a time: the app points and draws on screen, they click, and the next step appears. tour mode marks the main parts of the window one by one and explains each. The app shows every step on screen and you'll get each line to say. After calling, say only a few words like 'let me show you'.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "goal": [
+                    "type": "STRING",
+                    "description": "What the user wants to learn or do, in their words, with the app's name and any details they gave."
+                ],
+                "mode": [
+                    "type": "STRING",
+                    "enum": ["steps", "tour"],
+                    "description": "steps to walk them through doing something; tour for a rundown of the app or screen."
+                ]
+            ],
+            "required": ["goal", "mode"]
+        ]
+    ]
+
+    private static let guideNextFunctionDeclaration: [String: Any] = [
+        "name": "guide_next",
+        "description": "During a guide, when the user says next, continue, done, got it, or that they did the step, so the guide moves on.",
+        "parameters": ["type": "OBJECT", "properties": [String: Any]()]
+    ]
+
+    private static let stopGuideFunctionDeclaration: [String: Any] = [
+        "name": "stop_guide",
+        "description": "Stop the guide that's running, when the user says stop, that's enough, or never mind.",
+        "parameters": ["type": "OBJECT", "properties": [String: Any]()]
+    ]
 
     /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
     private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
@@ -733,6 +776,21 @@ final class GeminiLiveVoiceClient {
                 handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "do_task_on_screen":
                 handleDoTaskOnScreenCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case "guide_user":
+                let goal = (functionArguments["goal"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let mode = (functionArguments["mode"] as? String) ?? "steps"
+                if !goal.isEmpty, !isDiscardingModelAudioForCurrentTurn, let guideStatus = onStartGuide?(goal, mode) {
+                    sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": guideStatus])
+                } else {
+                    sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                         response: ["error": "couldn't start a guide right now."])
+                }
+            case "guide_next":
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                     response: ["result": onGuideNext?() ?? "no guide is running."])
+            case "stop_guide":
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                     response: ["result": onStopGuide?() ?? "no guide is running."])
             case "stop_screen_task":
                 let stopStatus = onStopScreenTask?() ?? "nothing is running."
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])

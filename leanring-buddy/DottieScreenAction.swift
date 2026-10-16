@@ -27,7 +27,7 @@ enum DottieScreenAction {
     }
 
     enum DrawingShape: String, CaseIterable {
-        case circle, box, underline, arrow
+        case circle, box, underline, arrow, highlight
     }
 
     /// x and y are 0-1000 across the turn's screen frame, like point_at_element.
@@ -130,7 +130,7 @@ enum DottieScreenAction {
     private static var drawOnScreenDeclaration: [String: Any] {
         [
             "name": "draw_on_screen",
-            "description": "Draw on top of the user's screen to show them something: a circle or box around it, an arrow pointing at it, or an underline below it, with an optional short note. It fades away after a few seconds." + onlyWhenAskedNote,
+            "description": "Draw on top of the user's screen to show them something: a circle or box around it, an arrow pointing at it, an underline below it, or a soft highlight over a whole area (a panel or section), with an optional short note. It fades away after a few seconds." + onlyWhenAskedNote,
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
