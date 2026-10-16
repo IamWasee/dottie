@@ -28,6 +28,9 @@ struct DictationFocusContext {
     let appName: String
     let role: String?
     let isEditable: Bool
+    /// A password box (or any field that turned on secure input). Dictated
+    /// text never gets typed into one.
+    let isSecureField: Bool
     /// Up to 300 characters before the cursor, so the cleanup can continue
     /// the sentence with the right casing and spacing.
     let textBeforeCursor: String
@@ -49,6 +52,7 @@ struct DictationFocusContext {
                 appName: appName,
                 role: nil,
                 isEditable: false,
+                isSecureField: IsSecureEventInputEnabled(),
                 textBeforeCursor: ""
             )
         }
@@ -62,6 +66,10 @@ struct DictationFocusContext {
         var isValueSettable: DarwinBoolean = false
         AXUIElementIsAttributeSettable(focusedElement, kAXValueAttribute as CFString, &isValueSettable)
         let isEditable = editableRoles.contains(role ?? "") || isValueSettable.boolValue
+        // Native and web password inputs report AXSecureTextField; secure
+        // input catches the rest (Terminal's password prompts, some apps).
+        let subrole = stringAttribute(kAXSubroleAttribute, of: focusedElement)
+        let isSecureField = role == "AXSecureTextField" || subrole == "AXSecureTextField" || IsSecureEventInputEnabled()
 
         return DictationFocusContext(
             element: focusedElement,
@@ -69,7 +77,9 @@ struct DictationFocusContext {
             appName: NSRunningApplication(processIdentifier: elementProcessIdentifier)?.localizedName ?? appName,
             role: role,
             isEditable: isEditable,
-            textBeforeCursor: isEditable ? textBeforeCursor(in: focusedElement) : ""
+            isSecureField: isSecureField,
+            // Never read what's in a password box.
+            textBeforeCursor: isEditable && !isSecureField ? textBeforeCursor(in: focusedElement) : ""
         )
     }
 
@@ -170,6 +180,8 @@ final class ClickyDictationController: ObservableObject {
     enum Outcome {
         /// Pasted into the field the user started in.
         case inserted
+        /// It was a password field, so it's on the clipboard instead.
+        case copiedInsteadOfTypingPassword
         /// The field couldn't take it (or the user moved on), so it's on
         /// the clipboard instead.
         case copiedToClipboard
@@ -361,6 +373,10 @@ final class ClickyDictationController: ObservableObject {
 enum DictationInsertion {
     @MainActor
     static func deliver(_ dictatedText: String, into focusContext: DictationFocusContext?) -> ClickyDictationController.Outcome {
+        if focusContext?.isSecureField == true || IsSecureEventInputEnabled() {
+            copyToClipboard(dictatedText)
+            return .copiedInsteadOfTypingPassword
+        }
         guard let focusContext, focusContext.isEditable,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == focusContext.processIdentifier,
               // Password fields turn on secure input; never paste into those.
