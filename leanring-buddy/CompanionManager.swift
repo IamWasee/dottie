@@ -128,6 +128,8 @@ final class CompanionManager: ObservableObject {
     private var currentLiveTurnTypedText: String?
     /// The second look at where Live pointed; replaced by the next point request.
     private var livePointingRefinementTask: Task<Void, Never>?
+    /// What voice Dottie draws on screen when asked.
+    private let drawingOverlayManager = DottieDrawingOverlayManager()
     private var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
@@ -849,6 +851,9 @@ final class CompanionManager: ObservableObject {
     going deeper:
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
+    doing things on screen:
+    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. to go back a page press cmd+[, forward cmd+], new tab cmd+t. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords. bigger multi-step jobs go to a dot instead.
+
     dots:
     the user can have background helpers called dots that work on their own, with a shell, files and the web, and report back in the notch when done. when they ask for real work that takes more than an answer (research something, write or edit files, organize a folder, build something, or do something in an app like adding a reminder or filling in a form) or mention a dot by name, call start_clicky_task with a task that stands on its own. then just say it's started, in a few words. don't do the task yourself.
     """
@@ -887,6 +892,11 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
+        }
+
+        liveVoiceClient.onScreenAction = { [weak self] screenAction in
+            guard let self else { return "couldn't do that right now." }
+            return await self.performScreenAction(screenAction)
         }
 
         liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
@@ -951,6 +961,104 @@ final class CompanionManager: ObservableObject {
             }
             return (data: capture.imageData, label: capture.label + dimensionInfo)
         }
+    }
+
+    // MARK: - Doing things on screen
+
+    /// Carries out a click, typing, keys, scroll, page or drawing the user
+    /// asked voice Dottie for, and says what happened for Live to relay.
+    private func performScreenAction(_ screenAction: DottieScreenAction) async -> String {
+        let needsEventPermission: Bool
+        switch screenAction {
+        case .click, .typeText, .pressKeys, .scroll: needsEventPermission = true
+        case .openURL, .draw, .clearDrawings: needsEventPermission = false
+        }
+        if needsEventPermission && !DottieScreenActionPerformer.canPostEvents {
+            return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
+        }
+
+        switch screenAction {
+        case .click(let normalizedX, let normalizedY, let label, let clickCount, let isRightClick):
+            guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
+                return "couldn't tell where that is on screen."
+            }
+            // Fly there first so the user sees what's about to be clicked.
+            livePointingRefinementTask?.cancel()
+            detectedElementScreenLocation = target.point
+            detectedElementDisplayFrame = target.displayFrame
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+            DottieScreenActionPerformer.click(at: target.point, clickCount: clickCount, isRightClick: isRightClick)
+            return "clicked \(label ?? "it"). keep it short: just say it's done."
+
+        case .typeText(let text, let pressEnterAfter):
+            if DottieScreenActionPerformer.isFocusedFieldSecure {
+                return "that's a password box, so I didn't type anything. tell the user to type passwords themselves."
+            }
+            await DottieScreenActionPerformer.type(text)
+            if pressEnterAfter {
+                DottieScreenActionPerformer.press(keyCombination: "enter")
+            }
+            return pressEnterAfter ? "typed it and pressed return." : "typed it."
+
+        case .pressKeys(let keyCombination):
+            return DottieScreenActionPerformer.press(keyCombination: keyCombination)
+                ? "pressed \(keyCombination)."
+                : "don't know the key \(keyCombination). use names like cmd+t, enter, escape, tab, up, down."
+
+        case .scroll(let direction, let amount):
+            DottieScreenActionPerformer.scroll(direction: direction, amount: amount)
+            return "scrolled \(direction.rawValue)."
+
+        case .openURL(let url):
+            return NSWorkspace.shared.open(url) ? "opened \(url.host ?? url.absoluteString)." : "couldn't open that page."
+
+        case .draw(let shape, let normalizedX, let normalizedY, let normalizedSize, let label, let note):
+            guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
+                return "couldn't tell where that is on screen."
+            }
+            let width = normalizedSize.map { max(24, min(1000, $0)) / 1000 * target.frameWidthInPoints } ?? 110
+            let height = max(28, min(width * 0.45, 140))
+            drawingOverlayManager.add(DottieDrawing(
+                shape: shape,
+                targetRect: CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height),
+                note: note
+            ))
+            return "drew a \(shape.rawValue) on screen."
+
+        case .clearDrawings:
+            drawingOverlayManager.clear()
+            return "cleared the drawings."
+        }
+    }
+
+    /// Where a 0-1000 point in this turn's frame is on screen, after the
+    /// same second look pointing gets.
+    private func refinedScreenLocation(
+        normalizedX: Double,
+        normalizedY: Double,
+        label: String?
+    ) async -> (point: CGPoint, displayFrame: CGRect, frameWidthInPoints: CGFloat)? {
+        guard let currentLiveTurnScreenFrame,
+              let resolvedPoint = currentLiveTurnScreenFrame.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
+            return nil
+        }
+        let roughScreenLocation = Self.globalScreenLocation(
+            forScreenshotPixel: resolvedPoint.pointInScreenshotPixels,
+            in: resolvedPoint.screenCapture
+        )
+        let displayFrame = resolvedPoint.screenCapture.displayFrame
+        let refinedPoint = await PointingRefiner.refine(
+            elementLabel: label,
+            userQuestion: currentLiveTurnTypedText ?? "",
+            roughPoint: roughScreenLocation,
+            displayFrame: displayFrame
+        )
+        let finalPoint = refinedPoint.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil } ?? roughScreenLocation
+        // The frame spans every display side by side, so "size" is relative
+        // to the whole frame's width.
+        let frameWidthInPoints = displayFrame.width * CGFloat(currentLiveTurnScreenFrame.compositeWidthInPixels)
+            / CGFloat(max(1, resolvedPoint.screenCapture.screenshotWidthInPixels))
+        return (finalPoint, displayFrame, frameWidthInPoints)
     }
 
     private func pointAtLiveElement(_ pointRequest: GeminiLivePointRequest) {
