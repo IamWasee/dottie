@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import Combine
 import QuickLookThumbnailing
 import SwiftUI
 
