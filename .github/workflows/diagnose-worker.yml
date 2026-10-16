@@ -3,45 +3,70 @@ on:
   push:
     branches: [diagnose-worker]
 jobs:
-  dots:
+  probe:
     runs-on: macos-15
     timeout-minutes: 20
     env:
       W: https://dottie.vidershub.workers.dev
     steps:
-      - name: Install the Dots runtime like Dottie does
+      - name: Make test inputs
         run: |
-          set -e
-          R=$HOME/rt; mkdir -p $R; cd $R
-          curl -sSLO https://nodejs.org/dist/v24.22.0/node-v24.22.0-darwin-arm64.tar.gz
-          shasum -a 256 node-v24.22.0-darwin-arm64.tar.gz
-          tar -xzf node-v24.22.0-darwin-arm64.tar.gz
-          curl -sSLO https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.64.0.tgz
-          mkdir g && tar -xzf gemini-cli-0.64.0.tgz -C g
-          printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$R/node-v24.22.0-darwin-arm64/bin/node" "$R/g/package/bundle/gemini.js" > gemini; chmod +x gemini
-          ./gemini --version
-      - name: CLI home like prepareCLIHome
+          screencapture -x shot.png || true
+          ls -la shot.png || true
+          sips -Z 1280 -s format jpeg shot.png --out shot.jpg >/dev/null 2>&1 || true
+          ls -la shot.jpg || true
+          say -o speech.aiff "Okay team, quick update. Sam will send the budget by Friday. Priya is fixing the login bug today. Let's meet again on Tuesday at ten."
+          afconvert -f WAVE -d LEI16@16000 -c 1 speech.aiff speech.wav
+          ls -la speech.wav
+      - name: Probe speed and audio
         run: |
-          H=$HOME/clihome/.gemini; mkdir -p $H
-          cat > $H/settings.json <<'J'
-          {"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]}}
-          J
-          mkdir -p $HOME/ws/output $HOME/ws/tmp $HOME/ws/.gemini
-          printf '{"context":{"fileName":"AGENTS.md"},"model":{"name":"gemini-3.6-flash"}}' > $HOME/ws/.gemini/settings.json
-          printf '# Helper\nYou are Helper, a background helper. Put anything you make in output/. Finish the job before you reply.\n' > $HOME/ws/AGENTS.md
-      - name: Brain - memory, shared folder and an MCP server
+          cat > probe.py <<'PY'
+          import json, time, base64, os, urllib.request
+          W = os.environ["W"]
+          def chat(body):
+              t = time.time()
+              req = urllib.request.Request(W + "/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+              try:
+                  raw = urllib.request.urlopen(req, timeout=120).read().decode()
+              except Exception as e:
+                  return time.time() - t, "ERROR " + str(getattr(e, "code", "")) + " " + (e.read().decode()[:200] if hasattr(e, "read") else str(e))
+              text = ""
+              for line in raw.splitlines():
+                  if line.startswith("data:"):
+                      try:
+                          d = json.loads(line[5:])
+                          for p in d["candidates"][0]["content"]["parts"]:
+                              if not p.get("thought") and "text" in p:
+                                  text += p["text"]
+                      except Exception:
+                          pass
+              return time.time() - t, text.strip()
+          img = base64.b64encode(open("shot.jpg", "rb").read()).decode() if os.path.exists("shot.jpg") else None
+          def box_body(model, level):
+              parts = []
+              if img: parts.append({"inlineData": {"mimeType": "image/jpeg", "data": img}})
+              parts.append({"text": "Return JSON {\"box_2d\":[ymin,xmin,ymax,xmax]} (0-1000) for the Apple menu icon at the top left."})
+              gc = {"responseMimeType": "application/json"}
+              if level: gc["thinkingConfig"] = {"thinkingLevel": level}
+              return {"model": model, "contents": [{"role": "user", "parts": parts}], "generationConfig": gc}
+          for model, level in [("gemini-3.6-flash", None), ("gemini-3.6-flash", "low"), ("gemini-3.8-flash", None), ("gemini-3.8-flash", "low"), ("gemini-3.5-flash-lite", None), ("gemini-3.5-flash", "low")]:
+              for i in range(3):
+                  dt, out = chat(box_body(model, level))
+                  print(f"BOX {model} thinking={level} run{i}: {dt:.1f}s -> {out[:120]}")
+          q = "In two short sentences, why is the sky blue?"
+          for model, level in [("gemini-3.8-flash", None), ("gemini-3.8-flash", "low"), ("gemini-3.6-flash", "low"), ("gemini-3.5-flash-lite", None)]:
+              for i in range(2):
+                  gc = {"thinkingConfig": {"thinkingLevel": level}} if level else {}
+                  dt, out = chat({"model": model, "contents": [{"role": "user", "parts": [{"text": q}]}], "generationConfig": gc})
+                  print(f"TEXT {model} thinking={level} run{i}: {dt:.1f}s -> {out[:100]}")
+          wav = base64.b64encode(open("speech.wav", "rb").read()).decode()
+          for model in ["gemini-3.5-flash-lite", "gemini-3.6-flash"]:
+              dt, out = chat({"model": model, "contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav}}, {"text": "Transcribe this meeting audio word for word. Plain text only."}]}]})
+              print(f"AUDIO {model}: {dt:.1f}s -> {out[:300]}")
+          PY
+          python3 probe.py
+      - name: Mac tools present
         run: |
-          B="$HOME/Library/Application Support/Dottie/Brain"; mkdir -p "$B" $HOME/Projects/site $HOME/brainws/output
-          printf '%s\n' '{"id":"1","date":"2026-10-15T14:00:00Z","kind":"chat","text":"user: im redesigning my portfolio site in figma, its called NovaFolio\ndottie: nice"}' '{"id":"2","date":"2026-10-15T16:00:00Z","kind":"screen","text":"Editing hero section of NovaFolio in Figma"}' > "$B/journal.jsonl"
-          printf -- '- Name: Sam\n- Working on: NovaFolio portfolio\n' > "$B/profile.md"
-          echo "TODO: fix the contact form" > $HOME/Projects/site/notes.txt
-          N=$HOME/rt/node-v24.22.0-darwin-arm64/bin
-          printf '{"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]},"mcpServers":{"everything":{"command":"%s/npx","args":["-y","@modelcontextprotocol/server-everything"],"env":{"PATH":"%s:/usr/bin:/bin"}}}}' "$N" "$N" > $HOME/clihome/.gemini/settings.json
-          python3 -m json.tool $HOME/clihome/.gemini/settings.json > /dev/null && echo settings-ok
-          printf '# Brain\nYou are Dottie'"'"'s second brain. Memory folder: %s (journal.jsonl, profile.md). Answer in two sentences.\n' "$B" > $HOME/brainws/AGENTS.md
-          cd $HOME/brainws
-          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1 PATH=$HOME/rt/node-v24.22.0-darwin-arm64/bin:$PATH
-          $HOME/rt/gemini -m gemini-3.6-flash -p "Dottie's question for you: what was I working on yesterday, and what's left to do in my site project folder? Also use the everything MCP server's echo tool to echo the word hello." -o stream-json --approval-mode yolo --skip-trust --include-directories "$B" --include-directories $HOME/Projects/site --session-id 31111111-2222-4333-8444-555555555555 < /dev/null > b.jsonl 2> b.err || echo "exit $?"; tail -c 1500 b.err
-          grep -o '"tool_name":"[^"]*"' b.jsonl | sort | uniq -c
-          grep '"role":"assistant"' b.jsonl | sed 's/.*"content":"\([^"]*\)".*/\1/' | tr -d '\n'; echo
-          grep '"type":"result"' b.jsonl | cut -c1-200; grep -i "mcp\|everything" b.err | head -5
+          which shortcuts osascript || true
+          shortcuts list 2>&1 | head -5 || true
+          osascript -e 'return (current date) as string' || true
