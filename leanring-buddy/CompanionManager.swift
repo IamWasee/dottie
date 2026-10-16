@@ -144,6 +144,8 @@ final class CompanionManager: ObservableObject {
     /// Conversation history so the companion remembers prior exchanges within
     /// a session. Each entry is the user's transcript and the spoken reply.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+    /// Exchanges carried into each new conversation, including across relaunches.
+    private static let rememberedExchangeCount = 20
 
     /// The screenshot frame sent with the current live turn. Pointing tool
     /// calls are in this frame's coordinate space.
@@ -787,7 +789,7 @@ final class CompanionManager: ObservableObject {
     you're dottie, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
-    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
+    - keep it short, simple and fun: usually one sentence, two at most, in plain everyday words. only go longer when they ask you to explain more or go deeper.
     - all lowercase, casual, warm. no emojis.
     - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
     - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
@@ -802,7 +804,7 @@ final class CompanionManager: ObservableObject {
     - if a screen image has a bright blue hand-drawn ring on it, the user circled that with their cursor while talking. it's what they're asking about.
 
     element pointing:
-    you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
+    you have your own little cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
 
     don't point at things when it would be pointless — like if the user asks a general knowledge question, or the conversation has nothing to do with what's on screen, or you'd just be pointing at something obvious they're already looking at. but if there's a specific UI element, menu, button, or area on screen that's relevant to what you're helping with, point at it.
 
@@ -827,19 +829,19 @@ final class CompanionManager: ObservableObject {
     you're dottie, a friendly always-on companion that lives in the user's menu bar. the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
 
     rules:
-    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
-    - casual and warm, like a smart friend sitting next to them. speak naturally, no lists or reading out formatting.
+    - keep it short, simple and fun. most answers are one sentence, two at most, in plain everyday words. say the one thing they need and stop: no background, no recap, no "here's how it works". only go longer when they ask you to explain more or go deeper.
+    - playful and warm, like a funny friend sitting next to them. a little personality or a light joke is great when it fits, but never at the cost of the answer. speak naturally, no lists or reading out formatting.
     - don't read out code verbatim. describe what the code does or what needs to change conversationally.
     - if the user's question relates to what's on their screen, reference specific things you see.
     - if the screen doesn't seem relevant to their question, just answer the question directly.
     - you can help with anything — coding, writing, general knowledge, brainstorming. when you need fresh or specific facts (news, prices, scores, weather, dates, recent versions), call search_web instead of guessing.
     - never say "simply" or "just".
-    - don't end with dead-end yes/no questions like "want me to explain more?". instead, when it fits naturally, plant a seed — mention something bigger they could try, or a next-level technique that builds on what you explained. it's okay to end without anything extra.
+    - don't end with questions like "want me to explain more?" and don't tack on extra tips. ending right after the answer is perfect.
     - if the frame shows several screens side by side, the one marked as the cursor screen is the primary focus.
     - the user can circle things with their cursor while talking. if a frame shows a bright blue hand-drawn ring, that's what they marked and are asking about.
 
     pointing:
-    you have a small blue triangle cursor that can fly to and point at things on screen, using the point_at_element tool. use it whenever pointing would genuinely help — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app. err on the side of pointing, because it makes your help way more concrete. don't point for general knowledge questions or at something obvious they're already looking at.
+    you have your own little cursor that can fly to and point at things on screen, using the point_at_element tool. use it whenever pointing would genuinely help — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app. err on the side of pointing, because it makes your help way more concrete. don't point for general knowledge questions or at something obvious they're already looking at.
     the tool takes x and y from 0 to 1000 across the whole frame (0,0 is the top-left corner, 1000,1000 the bottom-right) and a short label. call it once, then keep talking as if you're gesturing at it, e.g. "see that button up here? click it."
 
     going deeper:
@@ -853,6 +855,15 @@ final class CompanionManager: ObservableObject {
     private func configureLiveVoiceClient() {
         liveVoiceClient.baseSystemInstruction = Self.companionLiveVoiceSystemPrompt
         liveVoiceClient.voiceName = selectedVoiceName
+
+        // Pick up where the last run left off: the saved conversation seeds
+        // memory, so Dottie still knows the user's name after a relaunch.
+        conversationHistory = conversationStore.entries
+            .suffix(Self.rememberedExchangeCount)
+            .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
+        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
+            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
+        }
 
         liveVoiceClient.onModelSpeechStarted = { [weak self] in
             guard let self, self.isLiveTurnInFlight else { return }
@@ -989,8 +1000,8 @@ final class CompanionManager: ObservableObject {
                 inputKind: typedTextForThisTurn == nil ? .voice : .typed
             )
             conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
-            if conversationHistory.count > 10 {
-                conversationHistory.removeFirst(conversationHistory.count - 10)
+            if conversationHistory.count > Self.rememberedExchangeCount {
+                conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
             }
             liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
                 (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
@@ -1334,7 +1345,7 @@ final class CompanionManager: ObservableObject {
     rules:
     - answer the question directly and correctly. read small text, code and dense ui carefully.
     - write for the ear: plain sentences, no markdown, no lists, no code blocks. describe code changes in words.
-    - be as short as the question allows: usually two to five sentences. give precise steps when steps are needed.
+    - be as short as the question allows: usually one to three sentences in plain, friendly words. give precise steps only when steps are needed.
     - if the screenshots don't contain what's needed, say what you'd need instead of guessing.
 
     pointing: if pointing at one ui element would help, append a tag at the very end: [POINT:x,y:label] with integer pixel coordinates in that screenshot's coordinate space (top-left is 0,0; images are labeled with their dimensions), and :screenN if it isn't on the cursor screen. otherwise append [POINT:none].
@@ -1485,8 +1496,8 @@ final class CompanionManager: ObservableObject {
                     userTranscript: transcript,
                     assistantResponse: spokenText
                 ))
-                if conversationHistory.count > 10 {
-                    conversationHistory.removeFirst(conversationHistory.count - 10)
+                if conversationHistory.count > Self.rememberedExchangeCount {
+                    conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
                 }
 
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
@@ -1612,7 +1623,7 @@ final class CompanionManager: ObservableObject {
 
     private func speakConnectionErrorFallback() {
         let utterance = ClickyWorkerConfiguration.isWorkerConfigured
-            ? "I couldn't reach Gemini. Check that your worker is deployed and your API key is set, then try again."
+            ? "Gemini's swamped right now. Give it a second and try me again."
             : "I'm not connected yet. Open Settings, add the server address under Connection, and try again."
         speakWithSystemVoice(utterance)
     }

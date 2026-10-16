@@ -322,6 +322,12 @@ final class ClickyRoster: ObservableObject {
         let skillFolderNamesBeforeTurn = skillFolderNamesBeforeTurnByAgentID.removeValue(forKey: agentID) ?? []
         runningAgentIDs.remove(agentID)
         touchAgent(agentID)
+        // A turn that ended with no answer and no error used to look like the
+        // Dot just stopped. Say so instead.
+        if !succeeded, let lastItem = transcriptsByAgentID[agentID]?.last,
+           lastItem.kind != .assistant, lastItem.kind != .error, lastItem.text != "Stopped" {
+            appendTranscriptItem(.error, text: "Couldn't finish this one: Gemini was too busy to answer. Try sending it again.", to: agentID)
+        }
         saveTranscript(for: agentID)
 
         guard agent(withID: agentID) != nil else { return }

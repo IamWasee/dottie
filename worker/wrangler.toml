@@ -18,5 +18,5 @@ GEMINI_TTS_VOICE = "Kore"
 GEMINI_DICTATION_MODEL = "gemini-3.5-flash-lite"
 # Tried in order when a model is busy ("high demand") or over its limit.
 # Each model has its own free-tier limit, so this also stretches the quota.
-GEMINI_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.7-flash"
+GEMINI_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.7-flash,gemini-3.5-flash-lite"
 GEMINI_TTS_FALLBACK_MODELS = "gemini-3.8-flash-tts"
