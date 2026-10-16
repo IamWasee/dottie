@@ -22,7 +22,7 @@ The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — 
 - **Computer use**: when `cua-driver` is installed, it's registered in Gemini CLI's settings as the `computer-use` MCP server (`cua-driver mcp --direct --embedded`, so it inherits the app's permissions). Each turn sets `CLICKY_CUA_POLICY_FILE` to a look-only or look-and-act policy; act is used only for turns the user allowed or with "Always allow". Agents ask with a `<COMPUTER_USE_REQUEST>` block, which becomes an Allow / Always / Not now card.
 - **Model names**: set on the Worker in `wrangler.toml` `[vars]`, not in the app
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
-- **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
+- **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcuts (talk and dictation, both recordable in Settings) via a CGEvent tap.
 - **Element Pointing**: In live mode, all displays are drawn side by side into one frame (`captureCompositeFrameForLive`); Gemini's `point_at_element(x, y, label)` is resolved back to a display and converted to AppKit coordinates. In classic mode the model embeds `[POINT:x,y:label:screenN]` tags. Either way the blue cursor animates along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
 - **Analytics**: PostHog via `ClickyAnalytics.swift`, off unless `PostHogAPIKey` is set in Info.plist
@@ -51,7 +51,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
-**Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
+**Global Push-To-Talk Shortcut**: Background push-to-talk uses a `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background. The talk and dictation shortcuts are `ClickyHotkey` values (modifiers only, optionally one side's key, or modifiers + a key) saved in UserDefaults and recorded in Settings by `ClickyHotkeyRecorder`. With Accessibility the tap is active so it can swallow a key shortcut's key; without it the tap only listens.
 
 **Live audio through the dictation pipeline**: `BuddyDictationManager` already owns the mic, permissions, waveform and press/release lifecycle. In live mode it is constructed with `GeminiLiveCompanionTranscriptionProvider`, which forwards mic buffers (batched to ~100ms of 16kHz PCM16) to the Live session instead of a speech-to-text service. The spoken answer comes back through `GeminiLiveVoiceClient`'s callbacks, not the dictation callbacks.
 
@@ -94,7 +94,8 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `BuddyTranscriptionProvider.swift` | ~45 | Protocol surface for voice transcription backends. The factory returns Apple Speech (classic mode); live mode injects the Gemini Live bridge instead. |
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | On-device transcription backed by Apple's Speech framework (classic mode). |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
-| `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
+| `GlobalPushToTalkShortcutMonitor.swift` | ~300 | System-wide shortcut monitor. Owns the `CGEvent` tap, holds the current talk and dictation shortcuts, and publishes press/release transitions. |
+| `ClickyHotkeys.swift` | ~400 | `ClickyHotkey` (a shortcut, its matching and display), `ClickyHotkeyRecorder`, and the Settings recorder field. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
