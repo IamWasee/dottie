@@ -31,6 +31,9 @@ final class NotchWindowManager {
         }
     }
 
+    /// Room on each side of the closed notch for the Dot indicators.
+    static let compactIndicatorWidth: CGFloat = 30
+
     private let notchPresenter: NotchPresenter
     private var panel: NotchPanel?
     private var presenterCancellables: Set<AnyCancellable> = []
@@ -94,10 +97,10 @@ final class NotchWindowManager {
 
     private func bindPresenter() {
         notchPresenter.$surface
-            .combineLatest(notchPresenter.$isHovering)
+            .combineLatest(notchPresenter.$isHovering, notchPresenter.$dotSummaries)
             .removeDuplicates { previous, current in previous == current }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] surface, isHovering in
+            .sink { [weak self] surface, isHovering, _ in
                 self?.resizePanel(for: surface, isHovering: isHovering)
             }
             .store(in: &presenterCancellables)
@@ -106,6 +109,7 @@ final class NotchWindowManager {
     private func resizePanel(for surface: NotchPresenter.Surface, isHovering: Bool) {
         guard let panel, let notchGeometry else { return }
         let targetFrame = frame(for: surface, isHovering: isHovering, geometry: notchGeometry)
+        guard targetFrame != panel.frame else { return }
 
         NSAnimationContext.runAnimationGroup { animationContext in
             animationContext.duration = 0.22
@@ -128,9 +132,19 @@ final class NotchWindowManager {
         let contentSize: CGSize
         switch surface {
         case .compact:
-            contentSize = isHovering
-                ? CGSize(width: geometry.notchWidth + 80, height: geometry.notchHeight + 28)
-                : CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
+            if isHovering {
+                // One row for the eyes and buttons, then a row per Dot.
+                let peekRowCount = notchPresenter.peekDotSummaries.count
+                let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10
+                contentSize = CGSize(
+                    width: peekRowCount == 0 ? geometry.notchWidth + 80 : max(geometry.notchWidth + 160, 360),
+                    height: geometry.notchHeight + 28 + peekListHeight
+                )
+            } else if notchPresenter.showsCompactDotIndicators {
+                contentSize = CGSize(width: geometry.notchWidth + 2 * Self.compactIndicatorWidth, height: geometry.notchHeight)
+            } else {
+                contentSize = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
+            }
         case .listening, .thinking:
             contentSize = CGSize(width: max(geometry.notchWidth + 160, 360), height: geometry.notchHeight + 48)
         case .speaking:

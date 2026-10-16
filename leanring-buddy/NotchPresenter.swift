@@ -12,6 +12,21 @@
 import Combine
 import Foundation
 
+/// One Dot as the notch shows it when you hover.
+struct NotchDotSummary: Identifiable, Equatable {
+    enum Status: Equatable {
+        case working
+        case hasNew
+        case idle
+    }
+
+    let id: UUID
+    let name: String
+    let status: Status
+    /// The last thing it said or did, on one line.
+    let lastLine: String
+}
+
 @MainActor
 final class NotchPresenter: ObservableObject {
     enum Surface: Equatable {
@@ -51,10 +66,35 @@ final class NotchPresenter: ObservableObject {
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
     @Published private(set) var isAutoDismissPaused = false
+    /// The Dots, most relevant first (working, then something new, then
+    /// most recent). CompanionManager keeps this current.
+    @Published var dotSummaries: [NotchDotSummary] = []
+
+    /// How many Dots the hover peek lists.
+    static let maximumPeekDotCount = 4
+
+    var peekDotSummaries: [NotchDotSummary] {
+        Array(dotSummaries.prefix(Self.maximumPeekDotCount))
+    }
+
+    var unreadDotCount: Int {
+        dotSummaries.filter { $0.status == .hasNew }.count
+    }
+
+    var isAnyDotWorking: Bool {
+        dotSummaries.contains { $0.status == .working }
+    }
+
+    /// The closed notch grows a little on each side to show a working
+    /// light and the count of Dots with something new.
+    var showsCompactDotIndicators: Bool {
+        unreadDotCount > 0 || isAnyDotWorking
+    }
 
     /// Set by CompanionManager.
     var onSubmitTypedMessage: ((String) -> Void)?
     var onOpenHome: (() -> Void)?
+    var onOpenDot: ((UUID) -> Void)?
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?

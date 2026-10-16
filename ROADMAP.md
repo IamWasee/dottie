@@ -28,7 +28,8 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Home window: saved conversation transcript (persisted to Application Support) and settings (voice, notch, cursor, worker status, clear history)
 - ⬜ Custom hotkeys (`ClickyHotkeyRecorder`)
 - ⬜ Screen annotation: circle a region and ask about it (`ScreenAnnotationManager`)
-- ⬜ Notch hover peek of agents and files
+- ✅ Notch hover peek of Dots: each Dot's status light (working, something new, idle) and last line; click one to open its chat in Home
+- ⬜ Notch hover peek of files
 
 ## Phase 4: Clicky agents ⏳
 
@@ -38,7 +39,8 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Voice hand-off: Live's `start_clicky_task` tool starts work on a named Clicky (or a general "Helper"); the result comes back as a card in the notch
 - ✅ Skills on Gemini CLI's own skills support: a library in Application Support, Home → Skills (new skill, add a skill folder, per-Clicky toggles), a ✨ menu in each chat, and agents can save a skill when asked to remember how to do something. Tested against a mock Gemini server: linked skills are listed to the model and an agent can write a new skill into the library
 - ✅ Routines the way shipped Clicky does them: an agent asked for something on a cadence ends its reply with a `<ROUTINE>` block (create, update, delete, pause, resume), the app keeps the schedule, and each run's answer lands in the chat and the notch. Run now / pause / delete in the chat. Runs only while the Mac is awake, online and the app is open; three failed runs in a row pause the routine
-- ⬜ macOS notifications and a "has something new" badge in the notch
+- ✅ "Something new" tracking: a finished turn marks a Dot unread until you look at its chat. The closed notch grows a pulsing light while any Dot works and a count of Dots with something new, and Home marks them in the list
+- ⬜ macOS notifications
 
 ## Phase 5: computer use ⏳
 

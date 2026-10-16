@@ -38,6 +38,9 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     /// Library skills linked into this agent's workspace. Optional so
     /// rosters saved before skills existed still load.
     var enabledSkillNames: [String]?
+    /// A turn finished and the user hasn't looked at its chat since. The
+    /// notch counts these.
+    var hasUnreadReply: Bool?
 }
 
 struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
@@ -78,6 +81,9 @@ final class ClickyRoster: ObservableObject {
     @Published private(set) var agents: [ClickyAgent] = []
     @Published private(set) var transcriptsByAgentID: [UUID: [ClickyAgentTranscriptItem]] = [:]
     @Published private(set) var runningAgentIDs: Set<UUID> = []
+    /// Set when something (the notch) asks Home to show a Dot's chat; Home
+    /// clears it once it has.
+    @Published private(set) var agentIDRequestedInHome: UUID?
 
     /// Called when a turn ends. The companion shows it in the notch.
     var onAgentTurnFinished: ((ClickyAgentTurnResult) -> Void)?
@@ -164,6 +170,27 @@ final class ClickyRoster: ObservableObject {
         saveRoster()
         // Move the folder to the Trash rather than deleting the agent's work.
         try? FileManager.default.trashItem(at: workspaceURL(for: agent), resultingItemURL: nil)
+    }
+
+    var unreadAgentCount: Int {
+        agents.filter { $0.hasUnreadReply == true }.count
+    }
+
+    func markRead(agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
+              agents[agentIndex].hasUnreadReply == true else { return }
+        agents[agentIndex].hasUnreadReply = false
+        saveRoster()
+    }
+
+    /// Asks Home to open this Dot's chat (Home shows it when it next
+    /// appears, or right away if it's open).
+    func requestShowInHome(agentID: UUID) {
+        agentIDRequestedInHome = agentID
+    }
+
+    func clearHomeRequest() {
+        agentIDRequestedInHome = nil
     }
 
     func revealWorkspaceInFinder(for agent: ClickyAgent) {
@@ -311,6 +338,11 @@ final class ClickyRoster: ObservableObject {
         }
 
         let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
+        // Home clears this right away if the chat is on screen.
+        if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
+            agents[agentIndex].hasUnreadReply = true
+            saveRoster()
+        }
         guard let finishedAgent = agent(withID: agentID) else { return }
         let finalReply = transcriptsByAgentID[agentID]?
             .last { $0.kind == .assistant || $0.kind == .error }?

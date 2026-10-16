@@ -31,8 +31,10 @@ struct NotchRootView: View {
             .fill(Color.black)
 
             VStack(spacing: 0) {
-                // The physical notch covers this strip; keep it empty.
-                Color.clear.frame(height: notchHeight)
+                // The physical notch covers the middle of this strip; the
+                // Dot indicators sit on either side of it.
+                notchStrip
+                    .frame(height: notchHeight)
                 surfaceContent
                     .padding(.horizontal, 18)
                     .padding(.bottom, 10)
@@ -67,9 +69,56 @@ struct NotchRootView: View {
         }
     }
 
+    // MARK: - Notch strip
+
+    @ViewBuilder
+    private var notchStrip: some View {
+        if notchPresenter.surface == .compact && notchPresenter.showsCompactDotIndicators {
+            HStack(spacing: 0) {
+                // Left: a pulsing light while any Dot is working.
+                ZStack {
+                    if notchPresenter.isAnyDotWorking {
+                        NotchWorkingLight()
+                    }
+                }
+                .frame(width: NotchWindowManager.compactIndicatorWidth)
+                Spacer(minLength: notchWidth)
+                // Right: how many Dots have something new.
+                ZStack {
+                    if notchPresenter.unreadDotCount > 0 {
+                        Text("\(notchPresenter.unreadDotCount)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(Circle().fill(DS.Colors.overlayCursorBlue))
+                            .help("\(notchPresenter.unreadDotCount) \(notchPresenter.unreadDotCount == 1 ? "Dot has" : "Dots have") something new")
+                    }
+                }
+                .frame(width: NotchWindowManager.compactIndicatorWidth)
+            }
+        } else {
+            Color.clear
+        }
+    }
+
     // MARK: - Compact (hovered)
 
     private var compactHoverContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            compactHoverButtons
+            if !notchPresenter.peekDotSummaries.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(notchPresenter.peekDotSummaries) { dotSummary in
+                        NotchDotRow(dotSummary: dotSummary) {
+                            notchPresenter.onOpenDot?(dotSummary.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var compactHoverButtons: some View {
         HStack(spacing: 10) {
             NotchEyeView(mood: .idle)
             Button(action: { notchPresenter.openTextInput() }) {
@@ -133,6 +182,72 @@ struct NotchRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.top, 8)
+    }
+}
+
+// MARK: - Dots
+
+/// One Dot in the hover peek: its status light, name and last line.
+private struct NotchDotRow: View {
+    let dotSummary: NotchDotSummary
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 8) {
+                statusLight
+                    .frame(width: 8)
+                Text(dotSummary.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(dotSummary.lastLine)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help("Open \(dotSummary.name) in Home")
+    }
+
+    @ViewBuilder
+    private var statusLight: some View {
+        switch dotSummary.status {
+        case .working:
+            NotchWorkingLight()
+        case .hasNew:
+            Circle()
+                .fill(DS.Colors.overlayCursorBlue)
+                .frame(width: 6, height: 6)
+        case .idle:
+            Circle()
+                .fill(Color.white.opacity(0.25))
+                .frame(width: 6, height: 6)
+        }
+    }
+}
+
+/// A small blue light that pulses while a Dot works.
+private struct NotchWorkingLight: View {
+    @State private var isDimmed = false
+
+    var body: some View {
+        Circle()
+            .fill(DS.Colors.overlayCursorBlue)
+            .frame(width: 6, height: 6)
+            .opacity(isDimmed ? 0.3 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                    isDimmed = true
+                }
+            }
     }
 }
 

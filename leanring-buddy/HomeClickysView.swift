@@ -44,6 +44,12 @@ struct HomeClickysView: View {
                 selectedAgentID = clickyRoster.agents.first?.id
             }
         }
+        .onReceive(clickyRoster.$agentIDRequestedInHome) { requestedAgentID in
+            guard let requestedAgentID else { return }
+            isCreatingAgent = false
+            selectedAgentID = requestedAgentID
+            clickyRoster.clearHomeRequest()
+        }
     }
 
     private var selectedAgent: ClickyAgent? {
@@ -106,6 +112,12 @@ struct HomeClickysView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                if agent.hasUnreadReply == true && !isSelected {
+                    Circle()
+                        .fill(DS.Colors.overlayCursorBlue)
+                        .frame(width: 6, height: 6)
+                        .help("Something new")
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -201,6 +213,8 @@ private struct ClickyAgentChatView: View {
     let agent: ClickyAgent
     @State private var draftMessage = ""
     @State private var isConfirmingDelete = false
+    /// .key while the Home window is the one the user is looking at.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     private var transcript: [ClickyAgentTranscriptItem] {
         clickyRoster.transcriptsByAgentID[agent.id] ?? []
@@ -268,6 +282,16 @@ private struct ClickyAgentChatView: View {
             Divider().background(DS.Colors.borderSubtle)
             composer
         }
+        // Seeing the chat clears its "something new" mark, including a reply
+        // that lands while the chat is on screen.
+        .onAppear(perform: markReadIfVisible)
+        .onChange(of: controlActiveState) { _, _ in markReadIfVisible() }
+        .onChange(of: clickyRoster.agent(withID: agent.id)?.hasUnreadReply) { _, _ in markReadIfVisible() }
+    }
+
+    private func markReadIfVisible() {
+        guard controlActiveState == .key else { return }
+        clickyRoster.markRead(agentID: agent.id)
     }
 
     private var header: some View {
