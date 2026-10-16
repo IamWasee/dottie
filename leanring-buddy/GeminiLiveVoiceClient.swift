@@ -9,10 +9,18 @@
 //  AssemblyAI speech-to-text → Claude → ElevenLabs text-to-speech.
 //
 //  How a push-to-talk turn flows:
-//    1. Hotkey pressed → beginUserTurn(): connect if needed, send activityStart,
-//       then one screenshot frame as realtimeInput.video.
+//    1. Hotkey pressed → beginUserTurn(): connect if needed, then send one
+//       screenshot frame as realtimeInput.video.
 //    2. While held → sendMicrophoneAudio(): 16kHz PCM16 chunks.
-//    3. Released → endUserTurn(): send activityEnd. Gemini starts answering.
+//    3. Released → endUserTurn(): send any turn text, then a burst of
+//       silence and audioStreamEnd. Gemini's voice detection hears the
+//       silence as the end of speech and starts answering right away.
+//
+//  Gemini now rejects sessions that turn voice detection off ("Precondition
+//  check failed"), so the turn can't be opened and closed with
+//  activityStart/activityEnd any more; the silence burst stands in for it.
+//  If a session drops before Gemini has answered anything, the turn is
+//  replayed on a fresh session (on a backup Live model) instead of failing.
 //    4. Server streams 24kHz PCM16 audio (played by GeminiLivePCMPlayer),
 //       transcripts of both sides, and optional point_at_element tool calls
 //       that make the blue cursor fly to something on screen.
@@ -47,6 +55,15 @@ final class GeminiLiveVoiceClient {
     private static let liveWebSocketBaseURL =
         "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained"
     private static let fallbackLiveModel = "gemini-3.8-live"
+    /// Used to replay a turn when a session on the main model drops before
+    /// answering (gemini-3.8-live sometimes closes with "Internal error").
+    private static let backupLiveModel = "gemini-3.1-flash-live-preview"
+    /// Silence sent at the end of a turn so voice detection ends it now.
+    /// Longer than silenceDurationMs below.
+    private static let endOfTurnSilenceMilliseconds = 2500
+    /// A pause this long while the key is still held also ends the turn.
+    private static let voiceDetectionSilenceMilliseconds = 2000
+    private static let maximumTurnReplays = 2
     private static let idleDisconnectDelaySeconds: TimeInterval = 45
 
     // MARK: - Callbacks (all delivered on the main actor)
@@ -75,7 +92,7 @@ final class GeminiLiveVoiceClient {
     /// System prompt for every session. CompanionManager sets this once.
     var baseSystemInstruction: String = ""
     /// Recent (user, model) exchanges, appended to the system instruction of
-    /// each new session so memory survives reconnects.
+    /// each new session so memory survives reconnects and relaunches.
     var recentConversationHistory: [(userTranscript: String, modelTranscript: String)] = []
     /// Prebuilt Gemini voice name (e.g. "Kore", "Puck"). Persisted by the panel.
     var voiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore"
@@ -102,10 +119,25 @@ final class GeminiLiveVoiceClient {
     private nonisolated(unsafe) var pendingOutgoingMessages: [String] = []
     private nonisolated(unsafe) var isSocketReadyForSending = false
     private nonisolated(unsafe) var activeWebSocketTaskForSending: URLSessionWebSocketTask?
+    /// Everything sent during the current turn, kept so the turn can be
+    /// replayed on a new session if this one drops before answering.
+    /// Guarded by outgoingMessageLock.
+    private nonisolated(unsafe) var currentTurnSentMessages: [String] = []
+    private nonisolated(unsafe) var isRecordingCurrentTurnMessages = false
+    private nonisolated static let maximumReplayableTurnMessages = 1500
 
     private var currentTurnUserTranscript = ""
     private var currentTurnModelTranscript = ""
     private var hasModelStartedSpeakingThisTurn = false
+    /// Any audio, transcript or tool call from the model this turn. Until
+    /// then a dropped session can be retried without the user noticing.
+    private var hasReceivedModelContentThisTurn = false
+    private var turnReplayCount = 0
+    /// Set for a replay so the next session uses the backup model.
+    private var shouldUseBackupLiveModel = false
+    /// Text for the current turn, sent when the turn ends. Sent earlier,
+    /// voice detection would answer the text before the user has spoken.
+    private var pendingTurnContextTexts: [String] = []
     private var isUserTurnOpen = false
     private(set) var isModelTurnInProgress = false
     /// Set when the server sends goAway mid-turn: close as soon as the turn ends.
@@ -130,19 +162,31 @@ final class GeminiLiveVoiceClient {
         cancelIdleDisconnect()
         audioPlayer.stopImmediately()
 
+        // An answer still streaming would keep arriving until voice detection
+        // notices the user talking. Starting a fresh session drops it at
+        // once; the resumption handle carries the conversation over.
+        if isModelTurnInProgress && connectionState != .disconnected {
+            disconnect()
+        }
+
         currentTurnUserTranscript = ""
         currentTurnModelTranscript = ""
         hasModelStartedSpeakingThisTurn = false
+        hasReceivedModelContentThisTurn = false
+        turnReplayCount = 0
+        shouldUseBackupLiveModel = false
+        pendingTurnContextTexts = []
         isDiscardingModelAudioForCurrentTurn = false
         cancelPendingFunctionCalls()
         isUserTurnOpen = true
         isModelTurnInProgress = true
 
-        connectIfNeeded()
+        outgoingMessageLock.lock()
+        currentTurnSentMessages = []
+        isRecordingCurrentTurnMessages = true
+        outgoingMessageLock.unlock()
 
-        // With automatic voice detection disabled, activityStart both opens the
-        // user's turn and cancels whatever the model was still generating.
-        enqueueOrSend(message: ["realtimeInput": ["activityStart": [String: Any]()]])
+        connectIfNeeded()
 
         if let screenFrameJPEGData {
             sendScreenFrame(jpegData: screenFrameJPEGData)
@@ -162,10 +206,15 @@ final class GeminiLiveVoiceClient {
         ])
     }
 
-    /// Extra text context for the current turn, e.g. how a multi-screen frame
-    /// is laid out. Sent inside the open user turn so it isn't answered alone.
+    /// Extra text for the current turn, e.g. how a multi-screen frame is
+    /// laid out, or a typed question. Held until the turn ends so it isn't
+    /// answered on its own.
     func sendTurnContextText(_ contextText: String) {
-        enqueueOrSend(message: ["realtimeInput": ["text": contextText]])
+        if isUserTurnOpen {
+            pendingTurnContextTexts.append(contextText)
+        } else {
+            enqueueOrSend(message: ["realtimeInput": ["text": contextText]])
+        }
     }
 
     /// Streams a chunk of 16kHz mono PCM16 mic audio. Safe to call from the
@@ -186,13 +235,29 @@ final class GeminiLiveVoiceClient {
     func endUserTurn() {
         guard isUserTurnOpen else { return }
         isUserTurnOpen = false
-        enqueueOrSend(message: ["realtimeInput": ["activityEnd": [String: Any]()]])
+        if !pendingTurnContextTexts.isEmpty {
+            enqueueOrSend(message: ["realtimeInput": ["text": pendingTurnContextTexts.joined(separator: "\n\n")]])
+            pendingTurnContextTexts = []
+        }
+        sendEndOfTurnSilence()
+        enqueueOrSend(message: ["realtimeInput": ["audioStreamEnd": true]])
         startResponseWatchdog()
     }
 
+    /// Voice detection ends a turn after a stretch of silence. Sending that
+    /// silence all at once on release makes Gemini answer immediately
+    /// instead of waiting for more audio that never comes.
+    private func sendEndOfTurnSilence() {
+        let chunkMilliseconds = 100
+        let silentChunk = Data(count: 16 * 2 * chunkMilliseconds) // 16kHz mono PCM16
+        for _ in 0..<(Self.endOfTurnSilenceMilliseconds / chunkMilliseconds) {
+            sendMicrophoneAudio(pcm16AudioData: silentChunk)
+        }
+    }
+
     /// Stops the answer currently playing (e.g. user pressed the hotkey again
-    /// or hit escape). The server-side generation is cancelled by the next
-    /// activityStart.
+    /// or hit escape). beginUserTurn drops the session if it's still
+    /// generating.
     func interruptModelSpeech() {
         audioPlayer.stopImmediately()
     }
@@ -225,6 +290,7 @@ final class GeminiLiveVoiceClient {
         isSocketReadyForSending = false
         activeWebSocketTaskForSending = nil
         pendingOutgoingMessages.removeAll()
+        isRecordingCurrentTurnMessages = false
         outgoingMessageLock.unlock()
     }
 
@@ -246,8 +312,9 @@ final class GeminiLiveVoiceClient {
     }
 
     private func openSession() async throws {
-        let (ephemeralToken, liveModel) = try await fetchEphemeralToken()
+        let (ephemeralToken, tokenLiveModel) = try await fetchEphemeralToken()
         try Task.checkCancellation()
+        let liveModel = shouldUseBackupLiveModel ? Self.backupLiveModel : tokenLiveModel
 
         var urlComponents = URLComponents(string: Self.liveWebSocketBaseURL)!
         urlComponents.queryItems = [URLQueryItem(name: "access_token", value: ephemeralToken)]
@@ -308,10 +375,15 @@ final class GeminiLiveVoiceClient {
                     Self.searchWebFunctionDeclaration
                 ]]
             ],
-            // Push-to-talk decides when the user's turn starts and ends, not
-            // server-side voice detection.
+            // Voice detection stays on (Gemini rejects turning it off). A
+            // low end sensitivity and a long silence window keep it from
+            // cutting the user off mid-thought; endUserTurn's silence burst
+            // ends the turn on release.
             "realtimeInputConfig": [
-                "automaticActivityDetection": ["disabled": true]
+                "automaticActivityDetection": [
+                    "endOfSpeechSensitivity": "END_SENSITIVITY_LOW",
+                    "silenceDurationMs": Self.voiceDetectionSilenceMilliseconds
+                ]
             ],
             "inputAudioTranscription": [String: Any](),
             "outputAudioTranscription": [String: Any](),
@@ -339,7 +411,7 @@ final class GeminiLiveVoiceClient {
         return baseSystemInstruction + """
 
 
-        recent conversation (from earlier in this session, for context):
+        recent conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
         \(historyLines)
         """
     }
@@ -434,6 +506,15 @@ final class GeminiLiveVoiceClient {
         let socketTask = activeWebSocketTaskForSending
         if !isReady {
             pendingOutgoingMessages.append(messageText)
+        }
+        if isRecordingCurrentTurnMessages && message["toolResponse"] == nil {
+            if currentTurnSentMessages.count < Self.maximumReplayableTurnMessages {
+                currentTurnSentMessages.append(messageText)
+            } else {
+                // Too long to replay; a drop now is reported as an error.
+                isRecordingCurrentTurnMessages = false
+                currentTurnSentMessages = []
+            }
         }
         outgoingMessageLock.unlock()
 
@@ -550,6 +631,7 @@ final class GeminiLiveVoiceClient {
 
         if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
            let transcriptChunk = outputTranscription["text"] as? String {
+            markModelContentReceived()
             currentTurnModelTranscript += transcriptChunk
             if !isDiscardingModelAudioForCurrentTurn {
                 onModelTranscriptUpdate?(currentTurnModelTranscript)
@@ -564,6 +646,7 @@ final class GeminiLiveVoiceClient {
                       let pcmAudioData = Data(base64Encoded: base64AudioData) else {
                     continue
                 }
+                markModelContentReceived()
                 guard !isDiscardingModelAudioForCurrentTurn else { continue }
                 if !hasModelStartedSpeakingThisTurn {
                     hasModelStartedSpeakingThisTurn = true
@@ -579,6 +662,7 @@ final class GeminiLiveVoiceClient {
 
         if (serverContent["turnComplete"] as? Bool) == true {
             isModelTurnInProgress = false
+            stopRecordingCurrentTurnMessages()
             // An answer cut off with Escape isn't remembered as said.
             let wasCancelledByUser = isDiscardingModelAudioForCurrentTurn
             let finishedUserTranscript = wasCancelledByUser ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -594,6 +678,7 @@ final class GeminiLiveVoiceClient {
 
     private func handleToolCall(_ toolCall: [String: Any]) {
         guard let functionCalls = toolCall["functionCalls"] as? [[String: Any]] else { return }
+        markModelContentReceived()
 
         for functionCall in functionCalls {
             let functionName = functionCall["name"] as? String ?? ""
@@ -715,7 +800,59 @@ final class GeminiLiveVoiceClient {
         pendingFunctionCallTasks.removeAll()
     }
 
+    /// The model has started answering, so this turn can't be replayed any more.
+    private func markModelContentReceived() {
+        guard !hasReceivedModelContentThisTurn else { return }
+        hasReceivedModelContentThisTurn = true
+        stopRecordingCurrentTurnMessages()
+    }
+
+    private func stopRecordingCurrentTurnMessages() {
+        outgoingMessageLock.lock()
+        isRecordingCurrentTurnMessages = false
+        currentTurnSentMessages = []
+        outgoingMessageLock.unlock()
+    }
+
+    /// The session dropped before the model said anything this turn: open a
+    /// new session on the backup model and send the turn again. Returns
+    /// false when the turn can't be replayed.
+    private func replayCurrentTurnOnNewSession() -> Bool {
+        guard isModelTurnInProgress, !hasReceivedModelContentThisTurn,
+              turnReplayCount < Self.maximumTurnReplays else { return false }
+
+        outgoingMessageLock.lock()
+        let messagesToReplay = isRecordingCurrentTurnMessages ? currentTurnSentMessages : nil
+        outgoingMessageLock.unlock()
+        guard let messagesToReplay else { return false }
+
+        turnReplayCount += 1
+        shouldUseBackupLiveModel = true
+        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays)) on \(Self.backupLiveModel)")
+
+        let wasUserTurnOpen = isUserTurnOpen
+        disconnect()
+        // A session that errored out can't be resumed; its context comes
+        // back through recentConversationHistory instead.
+        sessionResumptionHandle = nil
+
+        outgoingMessageLock.lock()
+        pendingOutgoingMessages = messagesToReplay
+        currentTurnSentMessages = messagesToReplay
+        isRecordingCurrentTurnMessages = true
+        outgoingMessageLock.unlock()
+
+        isModelTurnInProgress = true
+        isUserTurnOpen = wasUserTurnOpen
+        connectIfNeeded()
+        if !wasUserTurnOpen {
+            startResponseWatchdog()
+        }
+        return true
+    }
+
     private func handleConnectionLost(error: Error) {
+        if replayCurrentTurnOnNewSession() { return }
         let wasTurnInProgress = isModelTurnInProgress
         disconnect()
         isModelTurnInProgress = false

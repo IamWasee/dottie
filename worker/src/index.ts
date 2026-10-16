@@ -378,9 +378,9 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
  */
 async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Promise<Response> {
   const upstreamPath = url.pathname.slice("/gemini".length);
-  const upstreamURL = new URL(`https://generativelanguage.googleapis.com${upstreamPath}`);
+  const upstreamQuery = new URLSearchParams();
   url.searchParams.forEach((value, key) => {
-    if (key !== "key") upstreamURL.searchParams.set(key, value);
+    if (key !== "key") upstreamQuery.set(key, value);
   });
 
   const upstreamHeaders = new Headers();
@@ -388,17 +388,38 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
   if (contentType) upstreamHeaders.set("content-type", contentType);
   upstreamHeaders.set("x-goog-api-key", env.GEMINI_API_KEY);
 
-  const upstreamResponse = await fetch(upstreamURL.toString(), {
-    method: request.method,
-    headers: upstreamHeaders,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-  });
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  // Buffered so the same request can go to a backup model.
+  const requestBody = hasBody ? await request.arrayBuffer() : undefined;
+
+  // Dots (Gemini CLI) call models/<model>:<method>. A busy or out-of-quota
+  // model moves on to the backups, like /chat does; the CLI never knows.
+  const modelCall = upstreamPath.match(/^(.*\/models\/)([^/:]+)(:.+)$/);
+  const upstreamPaths = modelCall && request.method === "POST"
+    ? modelsToTry(decodeURIComponent(modelCall[2]), env.GEMINI_FALLBACK_MODELS)
+        .map((model) => `${modelCall[1]}${encodeURIComponent(model)}${modelCall[3]}`)
+    : [upstreamPath];
+
+  let upstreamResponse: Response | undefined;
+  for (const [index, path] of upstreamPaths.entries()) {
+    const upstreamURL = new URL(`https://generativelanguage.googleapis.com${path}`);
+    upstreamURL.search = upstreamQuery.toString();
+    upstreamResponse = await fetch(upstreamURL.toString(), {
+      method: request.method,
+      headers: upstreamHeaders,
+      body: requestBody,
+    });
+    const isBusy = [429, 500, 503, 504].includes(upstreamResponse.status);
+    if (!isBusy || index === upstreamPaths.length - 1) break;
+    console.warn(`[/gemini] ${path} answered ${upstreamResponse.status}; trying ${upstreamPaths[index + 1]}`);
+    await upstreamResponse.body?.cancel();
+  }
 
   const responseHeaders = new Headers();
-  const upstreamContentType = upstreamResponse.headers.get("content-type");
+  const upstreamContentType = upstreamResponse!.headers.get("content-type");
   if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType);
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
+  return new Response(upstreamResponse!.body, {
+    status: upstreamResponse!.status,
     headers: responseHeaders,
   });
 }

@@ -56,9 +56,11 @@ enum GeminiCLIAgentRuntimeError: LocalizedError {
 }
 
 final class GeminiCLIAgentRuntime {
-    /// Model used for agents unless the agent overrides it. Agents do long,
-    /// tool-heavy work, so this defaults to the strongest Flash model.
-    static let defaultAgentModel = "gemini-3.8-flash"
+    /// Model used for agents unless the agent overrides it. Agents make many
+    /// calls per task, and gemini-3.8-flash's free daily limit runs out after
+    /// a few tasks, so this is the next Flash model, which has more room.
+    /// The Worker also moves to backup models when this one is busy.
+    static let defaultAgentModel = "gemini-3.6-flash"
 
     /// Running processes by agent ID, so a turn can be stopped.
     private var runningProcessesByAgentID: [UUID: Process] = [:]
