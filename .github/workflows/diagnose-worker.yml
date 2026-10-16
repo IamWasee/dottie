@@ -29,23 +29,20 @@ jobs:
           mkdir -p $HOME/ws/output $HOME/ws/tmp $HOME/ws/.gemini
           printf '{"context":{"fileName":"AGENTS.md"},"model":{"name":"gemini-3.6-flash"}}' > $HOME/ws/.gemini/settings.json
           printf '# Helper\nYou are Helper, a background helper. Put anything you make in output/. Finish the job before you reply.\n' > $HOME/ws/AGENTS.md
-      - name: Turn 1 - build a website
+      - name: Brain - memory, shared folder and an MCP server
         run: |
-          cd $HOME/ws
-          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
-          start=$(date +%s)
-          $HOME/rt/gemini -m gemini-3.6-flash -p "Build me a simple one-page website for a coffee shop called Bean There, with a menu and opening hours. Put it in output/site." -o stream-json --approval-mode yolo --skip-trust --session-id 11111111-2222-4333-8444-555555555555 < /dev/null > t1.jsonl 2> t1.err; echo "exit $? after $(( $(date +%s)-start ))s"
-          cut -c1-300 t1.jsonl | head -60; echo ---stderr; tail -c 1500 t1.err
-          find output -type f | head; wc -c output/site/* 2>/dev/null || true
-      - name: Turn 2 - resume
-        run: |
-          cd $HOME/ws
-          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
-          $HOME/rt/gemini -m gemini-3.6-flash -p "What did you just build? One sentence." -o stream-json --approval-mode yolo --skip-trust --resume 11111111-2222-4333-8444-555555555555 < /dev/null > t2.jsonl 2> t2.err; echo "exit $?"
-          cut -c1-300 t2.jsonl | tail -8; echo ---stderr; tail -c 800 t2.err
-      - name: Include directories outside the workspace
-        run: |
-          cd $HOME/ws; mkdir -p $HOME/Desktop $HOME/Documents; echo "hello from desktop" > $HOME/Desktop/note.txt
-          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
-          $HOME/rt/gemini -m gemini-3.6-flash -p "Read ~/Desktop/note.txt with your file tool and tell me what it says." -o stream-json --approval-mode yolo --skip-trust --include-directories $HOME/Desktop --include-directories $HOME/Documents --session-id 21111111-2222-4333-8444-555555555555 < /dev/null > t3.jsonl 2> t3.err; echo "exit $?"
-          cut -c1-300 t3.jsonl | tail -8; tail -c 600 t3.err
+          B="$HOME/Library/Application Support/Dottie/Brain"; mkdir -p "$B" $HOME/Projects/site $HOME/brainws/output
+          printf '%s\n' '{"id":"1","date":"2026-10-15T14:00:00Z","kind":"chat","text":"user: im redesigning my portfolio site in figma, its called NovaFolio\ndottie: nice"}' '{"id":"2","date":"2026-10-15T16:00:00Z","kind":"screen","text":"Editing hero section of NovaFolio in Figma"}' > "$B/journal.jsonl"
+          printf -- '- Name: Sam\n- Working on: NovaFolio portfolio\n' > "$B/profile.md"
+          echo "TODO: fix the contact form" > $HOME/Projects/site/notes.txt
+          cat > $HOME/clihome/.gemini/settings.json <<'J'
+          {"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]},
+           "mcpServers":{"everything":{"command":"'"$HOME"'/rt/node-v24.22.0-darwin-arm64/bin/npx","args":["-y","@modelcontextprotocol/server-everything"],"env":{"PATH":"'"$HOME"'/rt/node-v24.22.0-darwin-arm64/bin:/usr/bin:/bin"}}}}
+          J
+          printf '# Brain\nYou are Dottie'"'"'s second brain. Memory folder: %s (journal.jsonl, profile.md). Answer in two sentences.\n' "$B" > $HOME/brainws/AGENTS.md
+          cd $HOME/brainws
+          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1 PATH=$HOME/rt/node-v24.22.0-darwin-arm64/bin:$PATH
+          $HOME/rt/gemini -m gemini-3.6-flash -p "Dottie's question for you: what was I working on yesterday, and what's left to do in my site project folder? Also use the everything MCP server's echo tool to echo the word hello." -o stream-json --approval-mode yolo --skip-trust --include-directories "$B" --include-directories $HOME/Projects/site --session-id 31111111-2222-4333-8444-555555555555 < /dev/null > b.jsonl 2> b.err; echo "exit $?"
+          grep -o '"tool_name":"[^"]*"' b.jsonl | sort | uniq -c
+          grep '"role":"assistant"' b.jsonl | sed 's/.*"content":"\([^"]*\)".*/\1/' | tr -d '\n'; echo
+          grep '"type":"result"' b.jsonl | cut -c1-200; grep -i "mcp\|everything" b.err | head -5
