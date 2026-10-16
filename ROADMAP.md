@@ -14,10 +14,10 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Removed v0's hard-coded third-party values: Farza's PostHog key, FormSpark form, Mux video, Sparkle feed, Apple team IDs
 - ⬜ First build and run on a Mac
 
-## Phase 2: hand-off to a stronger model
+## Phase 2: hand-off to a stronger model ✅
 
-- ⬜ `send_to_higher_model` tool: Live hands harder questions to Gemini Flash/Pro with the screenshot and speaks the result
-- ⬜ Escape to interrupt
+- ✅ `send_to_higher_model` tool: Live hands harder questions to the Worker's `GEMINI_HIGHER_MODEL` with fresh screenshots, can point the cursor, and Live speaks the answer
+- ✅ Escape to interrupt (only while Clicky is busy; the key still reaches the frontmost app)
 
 ## Phase 3: notch UI and Home window
 
