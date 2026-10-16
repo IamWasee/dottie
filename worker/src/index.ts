@@ -14,6 +14,10 @@
  *   POST /tts        → Gemini TTS. Returns raw 24kHz 16-bit mono PCM bytes.
  *                      Used only by the classic voice mode.
  *   GET  /config     → non-secret model names, for debugging.
+ *   ANY  /gemini/*   → transparent Gemini API passthrough for the background
+ *                      agents (Gemini CLI). The CLI is pointed here with
+ *                      GOOGLE_GEMINI_BASE_URL and sends the shared secret as
+ *                      its "API key"; the real key is swapped in here.
  *
  * Optional: set the APP_SHARED_SECRET secret and the same value as
  * ClickyAppSharedSecret in the app's Info.plist. Requests without the
@@ -36,6 +40,20 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Gemini CLI can only send an "API key", so the agents' passthrough
+    // authenticates with x-goog-api-key instead of x-clicky-secret.
+    if (url.pathname.startsWith("/gemini/")) {
+      if (env.APP_SHARED_SECRET && request.headers.get("x-goog-api-key") !== env.APP_SHARED_SECRET) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      try {
+        return await handleGeminiPassthrough(request, url, env);
+      } catch (error) {
+        console.error(`[/gemini] Unhandled error:`, error);
+        return jsonResponse({ error: String(error) }, 500);
+      }
+    }
 
     if (env.APP_SHARED_SECRET && request.headers.get("x-clicky-secret") !== env.APP_SHARED_SECRET) {
       return new Response("Unauthorized", { status: 401 });
@@ -227,6 +245,37 @@ async function handleTTS(request: Request, env: Env): Promise<Response> {
   return new Response(pcmBytes, {
     status: 200,
     headers: { "content-type": "audio/L16; rate=24000; channels=1" },
+  });
+}
+
+/**
+ * Forwards /gemini/<path> to generativelanguage.googleapis.com/<path> with the
+ * real key. Bodies and streamed responses pass through untouched.
+ */
+async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Promise<Response> {
+  const upstreamPath = url.pathname.slice("/gemini".length);
+  const upstreamURL = new URL(`https://generativelanguage.googleapis.com${upstreamPath}`);
+  url.searchParams.forEach((value, key) => {
+    if (key !== "key") upstreamURL.searchParams.set(key, value);
+  });
+
+  const upstreamHeaders = new Headers();
+  const contentType = request.headers.get("content-type");
+  if (contentType) upstreamHeaders.set("content-type", contentType);
+  upstreamHeaders.set("x-goog-api-key", env.GEMINI_API_KEY);
+
+  const upstreamResponse = await fetch(upstreamURL.toString(), {
+    method: request.method,
+    headers: upstreamHeaders,
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  });
+
+  const responseHeaders = new Headers();
+  const upstreamContentType = upstreamResponse.headers.get("content-type");
+  if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType);
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status,
+    headers: responseHeaders,
   });
 }
 
