@@ -6,11 +6,16 @@
 //  pipeline (dictation manager + global shortcut monitor + overlay) and
 //  exposes observable voice state for the panel UI.
 //
+//  Two voice modes (Info.plist key CompanionVoiceMode):
+//    live    (default) Gemini Live: mic audio + one screenshot frame stream in,
+//            spoken audio streams back, pointing arrives as a tool call.
+//    classic v0's original chain with Gemini swapped in: Apple Speech →
+//            Gemini Flash vision → Gemini TTS, pointing via [POINT:] tags.
+//
 
 import AVFoundation
 import Combine
 import Foundation
-import PostHog
 import ScreenCaptureKit
 import SwiftUI
 
@@ -19,6 +24,16 @@ enum CompanionVoiceState {
     case listening
     case processing
     case responding
+}
+
+enum CompanionVoiceMode: String {
+    case live
+    case classic
+
+    static var configuredMode: CompanionVoiceMode {
+        AppBundleConfiguration.stringValue(forKey: "CompanionVoiceMode")
+            .flatMap { CompanionVoiceMode(rawValue: $0.lowercased()) } ?? .live
+    }
 }
 
 @MainActor
@@ -32,7 +47,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasScreenContentPermission = false
 
     /// Screen location (global AppKit coords) of a detected UI element the
-    /// buddy should fly to and point at. Parsed from Claude's response;
+    /// buddy should fly to and point at. Parsed from the model's response;
     /// observed by BlueCursorView to trigger the flight animation.
     @Published var detectedElementScreenLocation: CGPoint?
     /// The display frame (global AppKit coords) of the screen the detected
@@ -62,27 +77,59 @@ final class CompanionManager: ObservableObject {
     private var onboardingMusicPlayer: AVAudioPlayer?
     private var onboardingMusicFadeTimer: Timer?
 
-    let buddyDictationManager = BuddyDictationManager()
+    let voiceMode = CompanionVoiceMode.configuredMode
+
+    /// The Gemini Live session used in live mode. Idle (no socket) until the
+    /// first push-to-talk.
+    let liveVoiceClient = GeminiLiveVoiceClient()
+
+    /// In live mode the mic audio goes to Gemini Live through a bridge
+    /// provider; in classic mode it goes to Apple Speech. Lazy because the
+    /// live provider's turn-start closure needs `self`.
+    private(set) lazy var buddyDictationManager: BuddyDictationManager = {
+        switch voiceMode {
+        case .live:
+            let liveProvider = GeminiLiveCompanionTranscriptionProvider(
+                liveVoiceClient: liveVoiceClient,
+                beginLiveTurn: { [weak self] in
+                    await self?.beginLiveTurnWithScreenFrame()
+                }
+            )
+            return BuddyDictationManager(transcriptionProvider: liveProvider)
+        case .classic:
+            return BuddyDictationManager()
+        }
+    }()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
-
-    private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+    /// Gemini Flash vision chat via the Worker. Used by the onboarding demo
+    /// and by classic mode.
+    private lazy var geminiAPI: GeminiAPI = {
+        return GeminiAPI(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/chat"))
     }()
 
-    private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
+    /// Classic mode only. Live mode speaks through the Live session itself.
+    private lazy var geminiTTSClient: GeminiTTSClient = {
+        return GeminiTTSClient(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/tts"))
     }()
 
-    /// Conversation history so Claude remembers prior exchanges within a session.
-    /// Each entry is the user's transcript and Claude's response.
+    /// Conversation history so the companion remembers prior exchanges within
+    /// a session. Each entry is the user's transcript and the spoken reply.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+
+    /// The screenshot frame sent with the current live turn. Pointing tool
+    /// calls are in this frame's coordinate space.
+    private var currentLiveTurnScreenFrame: CompanionCompositeScreenFrame?
+
+    /// True from push-to-talk press until the live answer has finished
+    /// playing. Keeps the dictation state observer from flipping the cursor
+    /// back to idle in the gap between "user stopped talking" and "Gemini
+    /// started talking".
+    private var isLiveTurnInFlight = false
+    private var liveTurnPlaybackDrainTask: Task<Void, Never>?
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -107,13 +154,18 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    /// The Gemini Live voice the companion speaks with. Persisted to
+    /// UserDefaults. Takes effect on the next Live connection.
+    @Published var selectedVoiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore"
 
-    func setSelectedModel(_ model: String) {
-        selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-        claudeAPI.model = model
+    func setSelectedVoiceName(_ voiceName: String) {
+        selectedVoiceName = voiceName
+        UserDefaults.standard.set(voiceName, forKey: "selectedGeminiLiveVoice")
+        liveVoiceClient.voiceName = voiceName
+        // Reconnect with the new voice on the next press, unless mid-answer.
+        if !liveVoiceClient.isModelTurnInProgress {
+            liveVoiceClient.disconnect()
+        }
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -149,27 +201,17 @@ final class CompanionManager: ObservableObject {
     /// Whether the user has submitted their email during onboarding.
     @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
 
-    /// Submits the user's email to FormSpark and identifies them in PostHog.
+    /// Records the user's email locally (and in analytics, if configured).
+    /// v0 also posted it to Farza's FormSpark form; the clone doesn't.
     func submitEmail(_ email: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { return }
 
         hasSubmittedEmail = true
         UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
+        UserDefaults.standard.set(trimmedEmail, forKey: "submittedEmail")
 
-        // Identify user in PostHog
-        PostHogSDK.shared.identify(trimmedEmail, userProperties: [
-            "email": trimmedEmail
-        ])
-
-        // Submit to FormSpark
-        Task {
-            var request = URLRequest(url: URL(string: "https://submit-form.com/RWbGJxmIs")!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmedEmail])
-            _ = try? await URLSession.shared.data(for: request)
-        }
+        ClickyAnalytics.identifyUser(email: trimmedEmail)
     }
 
     func start() {
@@ -179,9 +221,14 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        // Eagerly touch the Claude API so its TLS warmup handshake completes
-        // well before the onboarding demo fires at ~40s into the video.
-        _ = claudeAPI
+        configureLiveVoiceClient()
+        // Eagerly touch the Gemini API so its TLS warmup handshake completes
+        // well before the onboarding demo fires.
+        _ = geminiAPI
+
+        if !ClickyWorkerConfiguration.isWorkerConfigured {
+            print("⚠️ Clicky: ClickyWorkerBaseURL is not set in Info.plist — voice won't work until it points at your worker.")
+        }
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -288,6 +335,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
+        liveVoiceClient.disconnect()
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
@@ -440,6 +488,13 @@ final class CompanionManager: ObservableObject {
                 // manages that state directly until streaming finishes.
                 guard self.voiceState != .responding else { return }
 
+                // In live mode, once the user lets go the answer is already
+                // on its way; show the spinner until Gemini starts talking.
+                if self.isLiveTurnInFlight && !isRecording {
+                    self.voiceState = .processing
+                    return
+                }
+
                 if isFinalizing {
                     self.voiceState = .processing
                 } else if isRecording {
@@ -491,10 +546,15 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Cancel any in-progress response and TTS from a previous utterance
+            // Cancel any in-progress response and speech from a previous utterance
             currentResponseTask?.cancel()
-            elevenLabsTTSClient.stopPlayback()
+            stopAllSpeechPlayback()
             clearDetectedElementLocation()
+            if voiceMode == .live {
+                liveTurnPlaybackDrainTask?.cancel()
+                isLiveTurnInFlight = true
+                voiceState = .idle
+            }
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -518,10 +578,15 @@ final class CompanionManager: ObservableObject {
                         // Partial transcripts are hidden (waveform-only UI)
                     },
                     submitDraftText: { [weak self] finalTranscript in
-                        self?.lastTranscript = finalTranscript
+                        guard let self else { return }
+                        self.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
+                        // In live mode Gemini already heard the audio and is
+                        // answering; the transcript is just for display/history.
+                        if self.voiceMode == .classic {
+                            self.sendTranscriptToGeminiWithScreenshot(transcript: finalTranscript)
+                        }
                     }
                 )
             }
@@ -534,12 +599,15 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            if voiceMode == .live {
+                clearLiveTurnIfItNeverStarted()
+            }
         case .none:
             break
         }
     }
 
-    // MARK: - Companion Prompt
+    // MARK: - Classic Mode Prompt
 
     private static let companionVoiceResponseSystemPrompt = """
     you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
@@ -576,16 +644,151 @@ final class CompanionManager: ObservableObject {
     - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
     """
 
-    // MARK: - AI Response Pipeline
+    // MARK: - Live Voice Pipeline (Gemini Live)
 
-    /// Captures a screenshot, sends it along with the transcript to Claude,
-    /// and plays the response aloud via ElevenLabs TTS. The cursor stays in
+    /// Live mode's system prompt. Same personality as v0's, but pointing is a
+    /// tool call instead of a text tag, because the model's output is audio.
+    private static let companionLiveVoiceSystemPrompt = """
+    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user talks to you with push-to-talk, and with each turn you get one frame showing their screen(s). you answer out loud. this is an ongoing conversation — you remember everything they've said before.
+
+    rules:
+    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
+    - casual and warm, like a smart friend sitting next to them. speak naturally, no lists or reading out formatting.
+    - don't read out code verbatim. describe what the code does or what needs to change conversationally.
+    - if the user's question relates to what's on their screen, reference specific things you see.
+    - if the screen doesn't seem relevant to their question, just answer the question directly.
+    - you can help with anything — coding, writing, general knowledge, brainstorming. use google search when you need fresh facts.
+    - never say "simply" or "just".
+    - don't end with dead-end yes/no questions like "want me to explain more?". instead, when it fits naturally, plant a seed — mention something bigger they could try, or a next-level technique that builds on what you explained. it's okay to end without anything extra.
+    - if the frame shows several screens side by side, the one marked as the cursor screen is the primary focus.
+
+    pointing:
+    you have a small blue triangle cursor that can fly to and point at things on screen, using the point_at_element tool. use it whenever pointing would genuinely help — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app. err on the side of pointing, because it makes your help way more concrete. don't point for general knowledge questions or at something obvious they're already looking at.
+    the tool takes x and y from 0 to 1000 across the whole frame (0,0 is the top-left corner, 1000,1000 the bottom-right) and a short label. call it once, then keep talking as if you're gesturing at it, e.g. "see that button up here? click it."
+    """
+
+    /// Hooks the Live client's callbacks into the companion's state.
+    private func configureLiveVoiceClient() {
+        liveVoiceClient.baseSystemInstruction = Self.companionLiveVoiceSystemPrompt
+        liveVoiceClient.voiceName = selectedVoiceName
+
+        liveVoiceClient.onModelSpeechStarted = { [weak self] in
+            guard let self, self.isLiveTurnInFlight else { return }
+            self.voiceState = .responding
+        }
+
+        liveVoiceClient.onPointRequest = { [weak self] pointRequest in
+            self?.pointAtLiveElement(pointRequest)
+        }
+
+        liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript in
+            self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript)
+        }
+
+        liveVoiceClient.onTurnError = { [weak self] error in
+            guard let self else { return }
+            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
+            print("⚠️ Gemini Live turn error: \(error)")
+            self.isLiveTurnInFlight = false
+            self.speakConnectionErrorFallback()
+            self.voiceState = .idle
+            self.scheduleTransientHideIfNeeded()
+        }
+    }
+
+    /// Called by the live transcription provider when push-to-talk opens.
+    /// Grabs the screen frame and opens the user's turn on the Live session.
+    private func beginLiveTurnWithScreenFrame() async {
+        let compositeScreenFrame: CompanionCompositeScreenFrame?
+        do {
+            compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
+        } catch {
+            print("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
+            compositeScreenFrame = nil
+        }
+
+        currentLiveTurnScreenFrame = compositeScreenFrame
+        liveVoiceClient.beginUserTurn(screenFrameJPEGData: compositeScreenFrame?.jpegData)
+
+        if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
+            liveVoiceClient.sendTurnContextText(compositeScreenFrame.layoutDescription)
+        }
+    }
+
+    private func pointAtLiveElement(_ pointRequest: GeminiLivePointRequest) {
+        guard let currentLiveTurnScreenFrame,
+              let resolvedPoint = currentLiveTurnScreenFrame.resolveNormalizedPoint(
+                normalizedX: pointRequest.normalizedX,
+                normalizedY: pointRequest.normalizedY
+              ) else {
+            print("🎯 Live pointing ignored: no frame for this turn")
+            return
+        }
+
+        detectedElementScreenLocation = Self.globalScreenLocation(
+            forScreenshotPixel: resolvedPoint.pointInScreenshotPixels,
+            in: resolvedPoint.screenCapture
+        )
+        detectedElementDisplayFrame = resolvedPoint.screenCapture.displayFrame
+        ClickyAnalytics.trackElementPointed(elementLabel: pointRequest.elementLabel)
+        print("🎯 Live pointing: (\(Int(pointRequest.normalizedX)), \(Int(pointRequest.normalizedY)))/1000 → \"\(pointRequest.elementLabel ?? "element")\"")
+    }
+
+    /// A press released before the mic session opened never reaches Gemini,
+    /// so no answer will come to clear the spinner. Check shortly after
+    /// release and fall back to idle in that case.
+    private func clearLiveTurnIfItNeverStarted() {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, self.isLiveTurnInFlight else { return }
+            guard !self.liveVoiceClient.isModelTurnInProgress,
+                  !self.buddyDictationManager.isDictationInProgress else { return }
+            self.isLiveTurnInFlight = false
+            self.voiceState = .idle
+            self.scheduleTransientHideIfNeeded()
+        }
+    }
+
+    /// Records the exchange, then waits for the last of the audio to play
+    /// before returning the cursor to idle.
+    private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
+        if !userTranscript.isEmpty || !modelTranscript.isEmpty {
+            conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
+            if conversationHistory.count > 10 {
+                conversationHistory.removeFirst(conversationHistory.count - 10)
+            }
+            liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
+                (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
+            }
+            ClickyAnalytics.trackAIResponseReceived(response: modelTranscript)
+        }
+
+        liveTurnPlaybackDrainTask?.cancel()
+        liveTurnPlaybackDrainTask = Task { [weak self] in
+            while self?.liveVoiceClient.isModelAudioPlaying == true {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.isLiveTurnInFlight = false
+            // Only drop to idle if the user hasn't started a new turn.
+            if !self.buddyDictationManager.isDictationInProgress {
+                self.voiceState = .idle
+                self.scheduleTransientHideIfNeeded()
+            }
+        }
+    }
+
+    // MARK: - Classic Voice Pipeline (Apple Speech → Gemini Flash → Gemini TTS)
+
+    /// Captures a screenshot, sends it along with the transcript to Gemini,
+    /// and plays the response aloud via Gemini TTS. The cursor stays in
     /// the spinner/processing state until TTS audio begins playing.
-    /// Claude's response may include a [POINT:x,y:label] tag which triggers
+    /// The response may include a [POINT:x,y:label] tag which triggers
     /// the buddy to fly to that element on screen.
-    private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+    private func sendTranscriptToGeminiWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
-        elevenLabsTTSClient.stopPlayback()
+        stopAllSpeechPlayback()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -597,20 +800,18 @@ final class CompanionManager: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                // Build image labels with the actual screenshot pixel dimensions
-                // so Claude's coordinate space matches the image it sees. We
-                // scale from screenshot pixels to display points ourselves.
+                // Label each image with its pixel dimensions so the model's
+                // coordinate space matches the image it sees.
                 let labeledImages = screenCaptures.map { capture in
                     let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
                     return (data: capture.imageData, label: capture.label + dimensionInfo)
                 }
 
-                // Pass conversation history so Claude remembers prior exchanges
                 let historyForAPI = conversationHistory.map { entry in
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
@@ -622,20 +823,18 @@ final class CompanionManager: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
                 let spokenText = parseResult.spokenText
 
-                // Handle element pointing if Claude returned coordinates.
                 // Switch to idle BEFORE setting the location so the triangle
-                // becomes visible and can fly to the target. Without this, the
-                // spinner hides the triangle and the flight animation is invisible.
+                // becomes visible and can fly to the target. The spinner
+                // hides the triangle otherwise.
                 let hasPointCoordinate = parseResult.coordinate != nil
                 if hasPointCoordinate {
                     voiceState = .idle
                 }
 
-                // Pick the screen capture matching Claude's screen number,
+                // Pick the screen capture matching the screen number,
                 // falling back to the cursor screen if not specified.
                 let targetScreenCapture: CompanionScreenCapture? = {
                     if let screenNumber = parseResult.screenNumber,
@@ -647,48 +846,23 @@ final class CompanionManager: ObservableObject {
 
                 if let pointCoordinate = parseResult.coordinate,
                    let targetScreenCapture {
-                    // Claude's coordinates are in the screenshot's pixel space
-                    // (top-left origin, e.g. 1280x831). Scale to the display's
-                    // point space (e.g. 1512x982), then convert to AppKit global coords.
-                    let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
-                    let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
-                    let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
-                    let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
-                    let displayFrame = targetScreenCapture.displayFrame
-
-                    // Clamp to screenshot coordinate space
-                    let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                    let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-
-                    // Scale from screenshot pixels to display points
-                    let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                    let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-
-                    // Convert from top-left origin (screenshot) to bottom-left origin (AppKit)
-                    let appKitY = displayHeight - displayLocalY
-
-                    // Convert display-local coords to global screen coords
-                    let globalLocation = CGPoint(
-                        x: displayLocalX + displayFrame.origin.x,
-                        y: appKitY + displayFrame.origin.y
+                    detectedElementScreenLocation = Self.globalScreenLocation(
+                        forScreenshotPixel: pointCoordinate,
+                        in: targetScreenCapture
                     )
-
-                    detectedElementScreenLocation = globalLocation
-                    detectedElementDisplayFrame = displayFrame
+                    detectedElementDisplayFrame = targetScreenCapture.displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
                     print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
                 } else {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
 
-                // Save this exchange to conversation history (with the point tag
-                // stripped so it doesn't confuse future context)
+                // Save the exchange with the point tag stripped so it doesn't
+                // confuse future context.
                 conversationHistory.append((
                     userTranscript: transcript,
                     assistantResponse: spokenText
                 ))
-
-                // Keep only the last 10 exchanges to avoid unbounded context growth
                 if conversationHistory.count > 10 {
                     conversationHistory.removeFirst(conversationHistory.count - 10)
                 }
@@ -697,17 +871,15 @@ final class CompanionManager: ObservableObject {
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
 
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
+                // Keep the spinner until audio actually starts playing.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
+                        try await geminiTTSClient.speakText(spokenText)
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
+                        print("⚠️ Gemini TTS error, falling back to system voice: \(error)")
+                        speakWithSystemVoice(spokenText)
                     }
                 }
             } catch is CancellationError {
@@ -715,7 +887,7 @@ final class CompanionManager: ObservableObject {
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                speakConnectionErrorFallback()
             }
 
             if !Task.isCancelled {
@@ -725,8 +897,55 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Shared Helpers
+
+    /// Converts a pixel position in a screenshot (top-left origin) to a global
+    /// AppKit screen location (bottom-left origin) on that screenshot's display.
+    static func globalScreenLocation(
+        forScreenshotPixel screenshotPixel: CGPoint,
+        in screenCapture: CompanionScreenCapture
+    ) -> CGPoint {
+        let screenshotWidth = CGFloat(screenCapture.screenshotWidthInPixels)
+        let screenshotHeight = CGFloat(screenCapture.screenshotHeightInPixels)
+        let displayWidth = CGFloat(screenCapture.displayWidthInPoints)
+        let displayHeight = CGFloat(screenCapture.displayHeightInPoints)
+        let displayFrame = screenCapture.displayFrame
+
+        let clampedX = max(0, min(screenshotPixel.x, screenshotWidth))
+        let clampedY = max(0, min(screenshotPixel.y, screenshotHeight))
+
+        // Scale from screenshot pixels to display points
+        let displayLocalX = clampedX * (displayWidth / screenshotWidth)
+        let displayLocalY = clampedY * (displayHeight / screenshotHeight)
+
+        // Flip from top-left origin (screenshot) to bottom-left origin (AppKit)
+        let appKitY = displayHeight - displayLocalY
+
+        return CGPoint(
+            x: displayLocalX + displayFrame.origin.x,
+            y: appKitY + displayFrame.origin.y
+        )
+    }
+
+    private var isAnySpeechPlaying: Bool {
+        switch voiceMode {
+        case .live:
+            return liveVoiceClient.isModelAudioPlaying
+        case .classic:
+            return geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
+        }
+    }
+
+    private func stopAllSpeechPlayback() {
+        liveVoiceClient.interruptModelSpeech()
+        if voiceMode == .classic {
+            geminiTTSClient.stopPlayback()
+        }
+        systemSpeechSynthesizer.stopSpeaking()
+    }
+
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
-    /// waits for TTS playback and any pointing animation to finish, then
+    /// waits for speech and any pointing animation to finish, then
     /// fades out the overlay after a 1-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
@@ -734,8 +953,7 @@ final class CompanionManager: ObservableObject {
 
         transientHideTask?.cancel()
         transientHideTask = Task {
-            // Wait for TTS audio to finish playing
-            while elevenLabsTTSClient.isPlaying {
+            while isAnySpeechPlaying {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -747,7 +965,6 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
             }
 
-            // Pause 1s after everything finishes, then fade out
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             overlayWindowManager.fadeOutAndHideOverlay()
@@ -755,23 +972,29 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Speaks a hardcoded error message using macOS system TTS when API
-    /// credits run out. Uses NSSpeechSynthesizer so it works even when
-    /// ElevenLabs is down.
-    private func speakCreditsErrorFallback() {
-        let utterance = "I'm all out of credits. Please DM Farza and tell him to bring me back to life."
-        let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(utterance)
+    /// macOS's built-in voice, used when Gemini can't be reached so the user
+    /// still hears what went wrong.
+    private let systemSpeechSynthesizer = NSSpeechSynthesizer()
+
+    private func speakWithSystemVoice(_ text: String) {
+        systemSpeechSynthesizer.startSpeaking(text)
         voiceState = .responding
+    }
+
+    private func speakConnectionErrorFallback() {
+        let utterance = ClickyWorkerConfiguration.isWorkerConfigured
+            ? "I couldn't reach Gemini. Check that your worker is deployed and your API key is set, then try again."
+            : "I'm not set up yet. Put your worker's address in the app's Info.plist and try again."
+        speakWithSystemVoice(utterance)
     }
 
     // MARK: - Point Tag Parsing
 
-    /// Result of parsing a [POINT:...] tag from Claude's response.
+    /// Result of parsing a [POINT:...] tag from the model's response.
     struct PointingParseResult {
         /// The response text with the [POINT:...] tag removed — this is what gets spoken.
         let spokenText: String
-        /// The parsed pixel coordinate, or nil if Claude said "none" or no tag was found.
+        /// The parsed pixel coordinate, or nil if the model said "none" or no tag was found.
         let coordinate: CGPoint?
         /// Short label describing the element (e.g. "run button"), or "none".
         let elementLabel: String?
@@ -779,7 +1002,7 @@ final class CompanionManager: ObservableObject {
         let screenNumber: Int?
     }
 
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
+    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of the model's response.
     /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
     static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
         // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
@@ -826,8 +1049,16 @@ final class CompanionManager: ObservableObject {
 
     /// Sets up the onboarding video player, starts playback, and schedules
     /// the demo interaction at 40s. Called by BlueCursorView when onboarding starts.
+    ///
+    /// v0 streamed Farza's own intro video from Mux. The clone reads the URL
+    /// from Info.plist (OnboardingVideoURL); with none set, it skips the video
+    /// and runs the pointing demo and the "try talking" prompt straight away.
     func setupOnboardingVideo() {
-        guard let videoURL = URL(string: "https://stream.mux.com/e5jB8UuSrtFABVnTHCR7k3sIsmcUHCyhtLu1tzqLlfs.m3u8") else { return }
+        guard let videoURLString = AppBundleConfiguration.stringValue(forKey: "OnboardingVideoURL"),
+              let videoURL = URL(string: videoURLString) else {
+            runOnboardingWithoutVideo()
+            return
+        }
 
         let player = AVPlayer(url: videoURL)
         player.isMuted = false
@@ -876,6 +1107,16 @@ final class CompanionManager: ObservableObject {
                     self.startOnboardingPromptStream()
                 }
             }
+        }
+    }
+
+    private func runOnboardingWithoutVideo() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            ClickyAnalytics.trackOnboardingDemoTriggered()
+            self?.performOnboardingDemoInteraction()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) { [weak self] in
+            self?.startOnboardingPromptStream()
         }
     }
 
@@ -961,7 +1202,7 @@ final class CompanionManager: ObservableObject {
     the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. origin (0,0) is top-left. x increases rightward, y increases downward.
     """
 
-    /// Captures a screenshot and asks Claude to find something interesting to
+    /// Captures a screenshot and asks Gemini to find something interesting to
     /// point at, then triggers the buddy's flight animation. Used during
     /// onboarding to demo the pointing feature while the intro video plays.
     func performOnboardingDemoInteraction() {
@@ -972,7 +1213,7 @@ final class CompanionManager: ObservableObject {
             do {
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
 
-                // Only send the cursor screen so Claude can't pick something
+                // Only send the cursor screen so the model can't pick something
                 // on a different monitor that we can't point at.
                 guard let cursorScreenCapture = screenCaptures.first(where: { $0.isCursorScreen }) else {
                     print("🎯 Onboarding demo: no cursor screen found")
@@ -982,7 +1223,7 @@ final class CompanionManager: ObservableObject {
                 let dimensionInfo = " (image dimensions: \(cursorScreenCapture.screenshotWidthInPixels)x\(cursorScreenCapture.screenshotHeightInPixels) pixels)"
                 let labeledImages = [(data: cursorScreenCapture.imageData, label: cursorScreenCapture.label + dimensionInfo)]
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.onboardingDemoSystemPrompt,
                     userPrompt: "look around my screen and find something interesting to point at",
@@ -996,23 +1237,13 @@ final class CompanionManager: ObservableObject {
                     return
                 }
 
-                let screenshotWidth = CGFloat(cursorScreenCapture.screenshotWidthInPixels)
-                let screenshotHeight = CGFloat(cursorScreenCapture.screenshotHeightInPixels)
-                let displayWidth = CGFloat(cursorScreenCapture.displayWidthInPoints)
-                let displayHeight = CGFloat(cursorScreenCapture.displayHeightInPoints)
+                let globalLocation = Self.globalScreenLocation(
+                    forScreenshotPixel: pointCoordinate,
+                    in: cursorScreenCapture
+                )
                 let displayFrame = cursorScreenCapture.displayFrame
 
-                let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-                let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-                let appKitY = displayHeight - displayLocalY
-                let globalLocation = CGPoint(
-                    x: displayLocalX + displayFrame.origin.x,
-                    y: appKitY + displayFrame.origin.y
-                )
-
-                // Set custom bubble text so the pointing animation uses Claude's
+                // Set custom bubble text so the pointing animation uses the model's
                 // comment instead of a random phrase
                 detectedElementBubbleText = parseResult.spokenText
                 detectedElementScreenLocation = globalLocation

@@ -280,8 +280,13 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     /// rapid follow-up requests that arrive before macOS updates its cache.
     private var lastPermissionRequestCompletedAt: Date?
 
-    override init() {
-        let transcriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+    override convenience init() {
+        self.init(transcriptionProvider: BuddyTranscriptionProviderFactory.makeDefaultProvider())
+    }
+
+    /// Lets the Live voice mode plug in a provider that streams the mic audio
+    /// to Gemini Live instead of to a speech-to-text service.
+    init(transcriptionProvider: any BuddyTranscriptionProvider) {
         self.transcriptionProvider = transcriptionProvider
         self.transcriptionProviderDisplayName = transcriptionProvider.displayName
         super.init()

@@ -1,30 +1,63 @@
 /**
- * Clicky Proxy Worker
+ * Clicky Proxy Worker (Gemini edition)
  *
- * Proxies requests to Claude and ElevenLabs APIs so the app never
- * ships with raw API keys. Keys are stored as Cloudflare secrets.
+ * Holds the Gemini API key so the app never ships with it. The key is a
+ * Cloudflare secret; the app only ever sees short-lived tokens or proxied
+ * responses.
  *
  * Routes:
- *   POST /chat  → Anthropic Messages API (streaming)
- *   POST /tts   → ElevenLabs TTS API
+ *   POST /live-token → mints a single-use Gemini Live ephemeral token. The app
+ *                      opens the Live WebSocket directly with it (voice in,
+ *                      screenshot frames in, voice out).
+ *   POST /chat       → Gemini streamGenerateContent (SSE). Used for the
+ *                      onboarding demo and the classic (non-Live) voice mode.
+ *   POST /tts        → Gemini TTS. Returns raw 24kHz 16-bit mono PCM bytes.
+ *                      Used only by the classic voice mode.
+ *   GET  /config     → non-secret model names, for debugging.
+ *
+ * Optional: set the APP_SHARED_SECRET secret and the same value as
+ * ClickyAppSharedSecret in the app's Info.plist. Requests without the
+ * matching `x-clicky-secret` header are rejected, so a stranger who finds
+ * your worker URL can't burn your free-tier quota.
  */
 
 interface Env {
-  ANTHROPIC_API_KEY: string;
-  ELEVENLABS_API_KEY: string;
-  ELEVENLABS_VOICE_ID: string;
-  ASSEMBLYAI_API_KEY: string;
+  GEMINI_API_KEY: string;
+  APP_SHARED_SECRET?: string;
+  GEMINI_LIVE_MODEL: string;
+  GEMINI_CHAT_MODEL: string;
+  GEMINI_TTS_MODEL: string;
+  GEMINI_TTS_VOICE: string;
 }
+
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+    if (env.APP_SHARED_SECRET && request.headers.get("x-clicky-secret") !== env.APP_SHARED_SECRET) {
+      return new Response("Unauthorized", { status: 401 });
     }
 
     try {
+      if (request.method === "GET" && url.pathname === "/config") {
+        return jsonResponse({
+          liveModel: env.GEMINI_LIVE_MODEL,
+          chatModel: env.GEMINI_CHAT_MODEL,
+          ttsModel: env.GEMINI_TTS_MODEL,
+          ttsVoice: env.GEMINI_TTS_VOICE,
+        });
+      }
+
+      if (request.method !== "POST") {
+        return new Response("Method not allowed", { status: 405 });
+      }
+
+      if (url.pathname === "/live-token") {
+        return await handleLiveToken(env);
+      }
+
       if (url.pathname === "/chat") {
         return await handleChat(request, env);
       }
@@ -32,38 +65,89 @@ export default {
       if (url.pathname === "/tts") {
         return await handleTTS(request, env);
       }
-
-      if (url.pathname === "/transcribe-token") {
-        return await handleTranscribeToken(env);
-      }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
-      return new Response(
-        JSON.stringify({ error: String(error) }),
-        { status: 500, headers: { "content-type": "application/json" } }
-      );
+      return jsonResponse({ error: String(error) }, 500);
     }
 
     return new Response("Not found", { status: 404 });
   },
 };
 
-async function handleChat(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
+/**
+ * Mints a Gemini Live ephemeral token. `uses: 1` means one WebSocket session
+ * per token; session resumption can reuse it within expireTime. A new session
+ * must start within newSessionExpireTime (2 minutes).
+ *
+ * The token is deliberately not locked with bidiGenerateContentSetup: a locked
+ * token pins the whole setup (system prompt, voice, tools), but the app builds
+ * those per session, including recent conversation for memory.
+ */
+async function handleLiveToken(env: Env): Promise<Response> {
+  const now = Date.now();
+  const expireTime = new Date(now + 30 * 60 * 1000).toISOString();
+  const newSessionExpireTime = new Date(now + 2 * 60 * 1000).toISOString();
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch(`${GEMINI_API_BASE}/auth_tokens`, {
     method: "POST",
     headers: {
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+      "x-goog-api-key": env.GEMINI_API_KEY,
       "content-type": "application/json",
     },
-    body,
+    body: JSON.stringify({
+      uses: 1,
+      expireTime,
+      newSessionExpireTime,
+    }),
   });
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`[/chat] Anthropic API error ${response.status}: ${errorBody}`);
+    console.error(`[/live-token] Gemini auth_tokens error ${response.status}: ${errorBody}`);
+    return new Response(errorBody, {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const tokenPayload = (await response.json()) as { name?: string };
+  if (!tokenPayload.name) {
+    return jsonResponse({ error: "Gemini returned no token name" }, 502);
+  }
+
+  return jsonResponse({
+    token: tokenPayload.name,
+    model: env.GEMINI_LIVE_MODEL,
+    expireTime,
+  });
+}
+
+/**
+ * Proxies a Gemini generateContent body to the streaming endpoint. The app
+ * sends a standard Gemini request body (contents, systemInstruction,
+ * generationConfig). The model comes from the body's optional "model" field,
+ * falling back to GEMINI_CHAT_MODEL.
+ */
+async function handleChat(request: Request, env: Env): Promise<Response> {
+  const requestBody = (await request.json()) as Record<string, unknown>;
+  const requestedModel = typeof requestBody.model === "string" ? requestBody.model : env.GEMINI_CHAT_MODEL;
+  delete requestBody.model;
+
+  const response = await fetch(
+    `${GEMINI_API_BASE}/models/${encodeURIComponent(requestedModel)}:streamGenerateContent?alt=sse`,
+    {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": env.GEMINI_API_KEY,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(`[/chat] Gemini error ${response.status}: ${errorBody}`);
     return new Response(errorBody, {
       status: response.status,
       headers: { "content-type": "application/json" },
@@ -73,69 +157,76 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   return new Response(response.body, {
     status: response.status,
     headers: {
-      "content-type": response.headers.get("content-type") || "text/event-stream",
+      "content-type": "text/event-stream",
       "cache-control": "no-cache",
     },
   });
 }
 
-async function handleTranscribeToken(env: Env): Promise<Response> {
-  const response = await fetch(
-    "https://streaming.assemblyai.com/v3/token?expires_in_seconds=480",
-    {
-      method: "GET",
-      headers: {
-        authorization: env.ASSEMBLYAI_API_KEY,
-      },
-    }
-  );
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error(`[/transcribe-token] AssemblyAI token error ${response.status}: ${errorBody}`);
-    return new Response(errorBody, {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    });
+/**
+ * Speaks `text` with Gemini TTS and returns the raw PCM (24kHz, 16-bit, mono).
+ * Gemini returns the audio base64-encoded inside JSON; decoding here keeps the
+ * app side as simple as it was with ElevenLabs.
+ */
+async function handleTTS(request: Request, env: Env): Promise<Response> {
+  const { text } = (await request.json()) as { text?: string };
+  if (!text) {
+    return jsonResponse({ error: "missing text" }, 400);
   }
 
-  const data = await response.text();
-  return new Response(data, {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-async function handleTTS(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
-  const voiceId = env.ELEVENLABS_VOICE_ID;
-
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    `${GEMINI_API_BASE}/models/${encodeURIComponent(env.GEMINI_TTS_MODEL)}:generateContent`,
     {
       method: "POST",
       headers: {
-        "xi-api-key": env.ELEVENLABS_API_KEY,
+        "x-goog-api-key": env.GEMINI_API_KEY,
         "content-type": "application/json",
-        accept: "audio/mpeg",
       },
-      body,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } },
+          },
+        },
+      }),
     }
   );
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`[/tts] ElevenLabs API error ${response.status}: ${errorBody}`);
+    console.error(`[/tts] Gemini TTS error ${response.status}: ${errorBody}`);
     return new Response(errorBody, {
       status: response.status,
       headers: { "content-type": "application/json" },
     });
   }
 
-  return new Response(response.body, {
-    status: response.status,
-    headers: {
-      "content-type": response.headers.get("content-type") || "audio/mpeg",
-    },
+  const ttsPayload = (await response.json()) as {
+    candidates?: { content?: { parts?: { inlineData?: { data?: string } }[] } }[];
+  };
+  const base64Audio = ttsPayload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)
+    ?.inlineData?.data;
+  if (!base64Audio) {
+    return jsonResponse({ error: "Gemini TTS returned no audio" }, 502);
+  }
+
+  const binaryString = atob(base64Audio);
+  const pcmBytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index++) {
+    pcmBytes[index] = binaryString.charCodeAt(index);
+  }
+
+  return new Response(pcmBytes, {
+    status: 200,
+    headers: { "content-type": "audio/L16; rate=24000; channels=1" },
+  });
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
   });
 }

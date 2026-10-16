@@ -29,72 +29,16 @@ protocol BuddyTranscriptionProvider {
     ) async throws -> any BuddyStreamingTranscriptionSession
 }
 
+/// Picks the transcription backend for the classic (non-Live) voice mode.
+/// The Live voice mode doesn't use this: it hands BuddyDictationManager a
+/// GeminiLiveCompanionTranscriptionProvider directly.
+///
+/// v0 offered AssemblyAI and OpenAI here too. Both needed their own paid keys,
+/// so the clone keeps only Apple's on-device Speech framework, which is free.
 enum BuddyTranscriptionProviderFactory {
-    private enum PreferredProvider: String {
-        case assemblyAI = "assemblyai"
-        case openAI = "openai"
-        case appleSpeech = "apple"
-    }
-
     static func makeDefaultProvider() -> any BuddyTranscriptionProvider {
-        let provider = resolveProvider()
+        let provider = AppleSpeechTranscriptionProvider()
         print("🎙️ Transcription: using \(provider.displayName)")
         return provider
-    }
-
-    private static func resolveProvider() -> any BuddyTranscriptionProvider {
-        let preferredProviderRawValue = AppBundleConfiguration
-            .stringValue(forKey: "VoiceTranscriptionProvider")?
-            .lowercased()
-        let preferredProvider = preferredProviderRawValue.flatMap(PreferredProvider.init(rawValue:))
-
-        let assemblyAIProvider = AssemblyAIStreamingTranscriptionProvider()
-        let openAIProvider = OpenAIAudioTranscriptionProvider()
-
-        if preferredProvider == .appleSpeech {
-            return AppleSpeechTranscriptionProvider()
-        }
-
-        if preferredProvider == .assemblyAI {
-            if assemblyAIProvider.isConfigured {
-                return assemblyAIProvider
-            }
-
-            print("⚠️ Transcription: AssemblyAI preferred but not configured, falling back")
-
-            if openAIProvider.isConfigured {
-                print("⚠️ Transcription: using OpenAI as fallback")
-                return openAIProvider
-            }
-
-            print("⚠️ Transcription: using Apple Speech as fallback")
-            return AppleSpeechTranscriptionProvider()
-        }
-
-        if preferredProvider == .openAI {
-            if openAIProvider.isConfigured {
-                return openAIProvider
-            }
-
-            print("⚠️ Transcription: OpenAI preferred but not configured, falling back")
-
-            if assemblyAIProvider.isConfigured {
-                print("⚠️ Transcription: using AssemblyAI as fallback")
-                return assemblyAIProvider
-            }
-
-            print("⚠️ Transcription: using Apple Speech as fallback")
-            return AppleSpeechTranscriptionProvider()
-        }
-
-        if assemblyAIProvider.isConfigured {
-            return assemblyAIProvider
-        }
-
-        if openAIProvider.isConfigured {
-            return openAIProvider
-        }
-
-        return AppleSpeechTranscriptionProvider()
     }
 }

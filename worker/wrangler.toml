@@ -1,6 +1,13 @@
 name = "clicky-proxy"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-23"
+
+# Secrets (set with `npx wrangler secret put <NAME>`):
+#   GEMINI_API_KEY     - from https://aistudio.google.com/apikey
+#   APP_SHARED_SECRET  - optional; must match ClickyAppSharedSecret in Info.plist
 
 [vars]
-ELEVENLABS_VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
+GEMINI_LIVE_MODEL = "gemini-3.8-live"
+GEMINI_CHAT_MODEL = "gemini-3.8-flash"
+GEMINI_TTS_MODEL = "gemini-3.8-flash-lite-tts"
+GEMINI_TTS_VOICE = "Kore"
