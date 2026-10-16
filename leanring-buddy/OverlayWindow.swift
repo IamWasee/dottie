@@ -130,6 +130,37 @@ struct BlueCursorView: View {
     @State private var bubbleOpacity: Double = 1.0
     @State private var cursorOpacity: Double = 0.0
 
+    // MARK: - Cursor Artwork
+
+    /// The arrow is 24pt tall, the hand 26pt, both at the artwork's own aspect.
+    private static let arrowCursorSize = CGSize(width: 17.4, height: 24)
+    private static let handCursorSize = CGSize(width: 20.2, height: 26)
+    /// Where the hand's fingertip sits inside its artwork (unit coordinates).
+    private static let handFingertipAnchor = UnitPoint(x: 0.39, y: 0.03)
+
+    /// The arrow or hand shows when idle or responding; listening and
+    /// thinking use the waveform and spinner instead.
+    private var isShowingCursorArtwork: Bool {
+        companionManager.voiceState == .idle || companionManager.voiceState == .responding
+    }
+
+    /// While pointing, `cursorPosition` sits a little right of and below the
+    /// target (see startNavigatingToElement). The hand is placed so its
+    /// fingertip lands on the target itself.
+    private var handCursorCenter: CGPoint {
+        let fingertip = CGPoint(
+            x: cursorPosition.x - Self.pointingOffsetFromTarget.width,
+            y: cursorPosition.y - Self.pointingOffsetFromTarget.height
+        )
+        return CGPoint(
+            x: fingertip.x + Self.handCursorSize.width * (0.5 - Self.handFingertipAnchor.x),
+            y: fingertip.y + Self.handCursorSize.height * (0.5 - Self.handFingertipAnchor.y)
+        )
+    }
+
+    /// How far the buddy parks from the element it points at.
+    private static let pointingOffsetFromTarget = CGSize(width: 8, height: 12)
+
     // MARK: - Buddy Navigation State
 
     /// The buddy's current behavioral mode (following cursor, navigating, or pointing).
@@ -294,21 +325,27 @@ struct BlueCursorView: View {
                     }
             }
 
-            // Blue triangle cursor — shown when idle or while TTS is playing (responding).
-            // All three states (triangle, waveform, spinner) stay in the view tree
-            // permanently and cross-fade via opacity so SwiftUI doesn't remove/re-insert
-            // them (which caused a visible cursor "pop").
+            // Dottie's cursor — the arrow is the everyday look, shown when idle or
+            // while responding. When she points at something on screen, the
+            // arrow cross-fades into the hand. Every state (arrow, hand,
+            // waveform, spinner) stays in the view tree permanently and
+            // cross-fades via opacity so SwiftUI doesn't remove/re-insert them
+            // (which caused a visible cursor "pop").
             //
             // During cursor following: fast spring animation for snappy tracking.
             // During navigation: NO implicit animation — the frame-by-frame bezier
             // timer controls position directly at 60fps for a smooth arc flight.
-            Triangle()
-                .fill(DS.Colors.overlayCursorBlue)
-                .frame(width: 16, height: 16)
-                .rotationEffect(.degrees(triangleRotationDegrees))
-                .shadow(color: DS.Colors.overlayCursorBlue, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
+            Image("DottieCursorArrow")
+                .resizable()
+                .interpolation(.high)
+                .frame(width: Self.arrowCursorSize.width, height: Self.arrowCursorSize.height)
+                // The artwork already leans like a cursor, which the old triangle
+                // reached at -35°, so the image's resting rotation is 0°.
+                .rotationEffect(.degrees(triangleRotationDegrees + 35.0))
+                .shadow(color: Color.black.opacity(0.35), radius: 1.5, x: 0.5, y: 1.5)
+                .shadow(color: DS.Colors.overlayCursorBlue.opacity(buddyFlightScale > 1.0 ? 0.8 : 0), radius: (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
-                .opacity(buddyIsVisibleOnThisScreen && (companionManager.voiceState == .idle || companionManager.voiceState == .responding) ? cursorOpacity : 0)
+                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode != .pointingAtTarget ? cursorOpacity : 0)
                 .position(cursorPosition)
                 .animation(
                     buddyNavigationMode == .followingCursor
@@ -317,10 +354,24 @@ struct BlueCursorView: View {
                     value: cursorPosition
                 )
                 .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
+                .animation(.easeInOut(duration: 0.15), value: buddyNavigationMode)
                 .animation(
                     buddyNavigationMode == .navigatingToTarget ? nil : .easeInOut(duration: 0.3),
                     value: triangleRotationDegrees
                 )
+
+            // Pointing hand — shown while Dottie points at something, placed so
+            // the fingertip sits right on the spot she means.
+            Image("DottieCursorHand")
+                .resizable()
+                .interpolation(.high)
+                .frame(width: Self.handCursorSize.width, height: Self.handCursorSize.height)
+                .shadow(color: Color.black.opacity(0.35), radius: 1.5, x: 0.5, y: 1.5)
+                .scaleEffect(buddyNavigationMode == .pointingAtTarget ? 1.0 : 0.85, anchor: Self.handFingertipAnchor)
+                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode == .pointingAtTarget ? cursorOpacity : 0)
+                .position(handCursorCenter)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: buddyNavigationMode)
+                .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
 
             // Blue waveform — replaces the triangle while listening
             BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
@@ -463,8 +514,8 @@ struct BlueCursorView: View {
         // Offset the target so the buddy sits beside the element rather than
         // directly on top of it — 8px to the right, 12px below.
         let offsetTarget = CGPoint(
-            x: targetInSwiftUI.x + 8,
-            y: targetInSwiftUI.y + 12
+            x: targetInSwiftUI.x + Self.pointingOffsetFromTarget.width,
+            y: targetInSwiftUI.y + Self.pointingOffsetFromTarget.height
         )
 
         // Clamp target to screen bounds with padding
