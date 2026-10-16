@@ -144,6 +144,13 @@ enum ClickyAnalytics {
     }
 
     /// Gemini Live handed a question to the stronger model.
+    static func trackDictation(outcome: String, recordingSeconds: TimeInterval) {
+        capture("dictation_finished", properties: [
+            "outcome": outcome,
+            "recording_seconds": Int(recordingSeconds.rounded())
+        ])
+    }
+
     static func trackClickyTaskStarted() {
         capture("clicky_task_started")
     }

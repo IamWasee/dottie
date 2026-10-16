@@ -34,6 +34,9 @@ final class NotchPresenter: ObservableObject {
     @Published private(set) var surface: Surface = .compact
     @Published var isHovering = false
     @Published var audioPowerLevel: CGFloat = 0
+    /// Word next to the eyes while listening or thinking ("dictating" while
+    /// hold-to-dictate is recording).
+    @Published private(set) var activityLabel = "listening"
     /// What Clicky is saying, as it says it.
     @Published private(set) var liveCaptionText = ""
     /// The last finished answer, shown on the text response surface.
@@ -60,14 +63,16 @@ final class NotchPresenter: ObservableObject {
 
     // MARK: - Inputs from the companion
 
-    func showListening() {
+    func showListening(label: String = "listening") {
         cancelAutoDismiss()
         liveCaptionText = ""
+        activityLabel = label
         surface = .listening
     }
 
-    func showThinking() {
+    func showThinking(label: String = "thinking") {
         guard surface != .textInput else { return }
+        activityLabel = label
         surface = .thinking
     }
 

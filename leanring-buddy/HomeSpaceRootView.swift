@@ -222,6 +222,9 @@ private struct HomeSettingsView: View {
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
     // Same key ClickyComputerUse.isAlwaysAllowed reads.
     @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
+    // Same keys ClickyDictationController reads.
+    @AppStorage("clickyDictationEnabled") private var isDictationEnabled = true
+    @AppStorage(ClickyDictationController.customWordsDefaultsKey) private var dictationCustomWords = ""
 
     var body: some View {
         ScrollView {
@@ -268,6 +271,23 @@ private struct HomeSettingsView: View {
                         .toggleStyle(.switch)
                     }
                     settingsHint("With the cursor off, it only appears while you're talking to Clicky.")
+                }
+
+                settingsGroup(title: "Dictation") {
+                    settingsRow(label: "Hold \(GlobalPushToTalkShortcutMonitor.dictationShortcutDisplayText) to dictate") {
+                        Toggle("", isOn: $isDictationEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Words to spell your way")
+                            .font(.system(size: 13))
+                            .foregroundColor(DS.Colors.textPrimary)
+                        TextField("Names, product words, jargon (comma-separated)", text: $dictationCustomWords)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                    }
+                    settingsHint("Hold the key, talk, and let go: Clicky types the cleaned-up text wherever your cursor is. If there's nowhere to type, it goes to your clipboard.")
                 }
 
                 settingsGroup(title: "Using your Mac") {

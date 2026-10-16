@@ -45,9 +45,14 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ⬜ Bundle cua-driver inside the app (`Contents/Helpers/cua-driver`) instead of asking the user to install it
 - ⬜ Try it for real on a Mac
 
-## Phase 6: dictation
+## Phase 6: dictation ⏳
 
-- ⬜ Hold-to-dictate into any text field: Gemini transcription, cleanup pass, text injection, learned dictionary
+- ✅ Hold right Option, talk, let go: the text is typed wherever the cursor is (`ClickyDictationController`). A key pressed during the hold (an Option special character) or Escape throws the recording away
+- ✅ One Gemini call on the Worker (`/dictate`, `GEMINI_DICTATION_MODEL`) hears the recording and tidies it: fillers and false starts out, punctuation in, self-corrections applied, spoken formatting followed. It gets the app name, the text before the cursor and the user's own spellings as context. Shipped Clicky uses Deepgram plus a separate cleanup call; the clone stays on the one free Gemini key
+- ✅ Paste with a temporary clipboard swap that puts the user's clipboard back; clipboard fallback (with a notch card) when the field can't take it, the user switched apps, or a password field is focused
+- ✅ Settings: on/off and a custom words list
+- ⬜ Learn corrections automatically (`DictationCorrectionLearner`), streaming partial text, language picker
+- ⬜ Try it for real on a Mac
 
 ## Phase 7: accounts and integrations (optional for a personal clone)
 

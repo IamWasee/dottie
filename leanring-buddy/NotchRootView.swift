@@ -97,7 +97,7 @@ struct NotchRootView: View {
     private var listeningContent: some View {
         HStack(spacing: 12) {
             NotchEyeView(mood: .listening)
-            Text("listening")
+            Text(notchPresenter.activityLabel)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
             Spacer(minLength: 0)
@@ -109,7 +109,7 @@ struct NotchRootView: View {
     private var thinkingContent: some View {
         HStack(spacing: 12) {
             NotchEyeView(mood: .thinking)
-            Text("thinking")
+            Text(notchPresenter.activityLabel)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
             Spacer(minLength: 0)
