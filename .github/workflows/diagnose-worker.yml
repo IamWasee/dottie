@@ -35,14 +35,13 @@ jobs:
           printf '%s\n' '{"id":"1","date":"2026-10-15T14:00:00Z","kind":"chat","text":"user: im redesigning my portfolio site in figma, its called NovaFolio\ndottie: nice"}' '{"id":"2","date":"2026-10-15T16:00:00Z","kind":"screen","text":"Editing hero section of NovaFolio in Figma"}' > "$B/journal.jsonl"
           printf -- '- Name: Sam\n- Working on: NovaFolio portfolio\n' > "$B/profile.md"
           echo "TODO: fix the contact form" > $HOME/Projects/site/notes.txt
-          cat > $HOME/clihome/.gemini/settings.json <<'J'
-          {"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]},
-           "mcpServers":{"everything":{"command":"'"$HOME"'/rt/node-v24.22.0-darwin-arm64/bin/npx","args":["-y","@modelcontextprotocol/server-everything"],"env":{"PATH":"'"$HOME"'/rt/node-v24.22.0-darwin-arm64/bin:/usr/bin:/bin"}}}}
-          J
+          N=$HOME/rt/node-v24.22.0-darwin-arm64/bin
+          printf '{"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]},"mcpServers":{"everything":{"command":"%s/npx","args":["-y","@modelcontextprotocol/server-everything"],"env":{"PATH":"%s:/usr/bin:/bin"}}}}' "$N" "$N" > $HOME/clihome/.gemini/settings.json
+          python3 -m json.tool $HOME/clihome/.gemini/settings.json > /dev/null && echo settings-ok
           printf '# Brain\nYou are Dottie'"'"'s second brain. Memory folder: %s (journal.jsonl, profile.md). Answer in two sentences.\n' "$B" > $HOME/brainws/AGENTS.md
           cd $HOME/brainws
           export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1 PATH=$HOME/rt/node-v24.22.0-darwin-arm64/bin:$PATH
-          $HOME/rt/gemini -m gemini-3.6-flash -p "Dottie's question for you: what was I working on yesterday, and what's left to do in my site project folder? Also use the everything MCP server's echo tool to echo the word hello." -o stream-json --approval-mode yolo --skip-trust --include-directories "$B" --include-directories $HOME/Projects/site --session-id 31111111-2222-4333-8444-555555555555 < /dev/null > b.jsonl 2> b.err; echo "exit $?"
+          $HOME/rt/gemini -m gemini-3.6-flash -p "Dottie's question for you: what was I working on yesterday, and what's left to do in my site project folder? Also use the everything MCP server's echo tool to echo the word hello." -o stream-json --approval-mode yolo --skip-trust --include-directories "$B" --include-directories $HOME/Projects/site --session-id 31111111-2222-4333-8444-555555555555 < /dev/null > b.jsonl 2> b.err || echo "exit $?"; tail -c 1500 b.err
           grep -o '"tool_name":"[^"]*"' b.jsonl | sort | uniq -c
           grep '"role":"assistant"' b.jsonl | sed 's/.*"content":"\([^"]*\)".*/\1/' | tr -d '\n'; echo
           grep '"type":"result"' b.jsonl | cut -c1-200; grep -i "mcp\|everything" b.err | head -5
