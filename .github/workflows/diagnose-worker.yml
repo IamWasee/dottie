@@ -25,7 +25,7 @@ jobs:
           W = os.environ["W"]
           def chat(body):
               t = time.time()
-              req = urllib.request.Request(W + "/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+              req = urllib.request.Request(W + "/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "User-Agent": "Dottie/1.0"})
               try:
                   raw = urllib.request.urlopen(req, timeout=120).read().decode()
               except Exception as e:
