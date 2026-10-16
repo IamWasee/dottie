@@ -86,6 +86,8 @@ final class NotchPresenter: ObservableObject {
     @Published var draftText = ""
     /// What the running screen task is doing right now ("clicking Sign in").
     @Published private(set) var screenTaskStepText = ""
+    /// Small heading over the step: "on it" for a job, "showing you" for a guide.
+    @Published private(set) var screenTaskTitle = "on it"
     /// True while a screen task runs; the notch comes back to it after a
     /// voice turn or a card.
     private(set) var isScreenTaskRunning = false
@@ -188,9 +190,10 @@ final class NotchPresenter: ObservableObject {
 
     /// A screen task started or moved on to its next step. Doesn't cover a
     /// voice turn or a card that's showing; the step shows once they close.
-    func showScreenTaskStep(_ stepText: String) {
+    func showScreenTaskStep(_ stepText: String, title: String = "on it") {
         isScreenTaskRunning = true
         screenTaskStepText = stepText
+        screenTaskTitle = title
         if surface == .compact {
             surface = .screenTask
         }
