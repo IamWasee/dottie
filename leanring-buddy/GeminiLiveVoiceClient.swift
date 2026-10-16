@@ -86,6 +86,9 @@ final class GeminiLiveVoiceClient {
     /// The model handed a task to a background Clicky (start_clicky_task).
     /// Returns a short status for Live to relay; the work runs on its own.
     var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String) -> String)?
+    /// The model asked to click, type, press keys, scroll, open a page or
+    /// draw on screen. Returns what happened, for the model to relay.
+    var onScreenAction: (@MainActor (DottieScreenAction) async -> String)?
 
     // MARK: - Configuration
 
@@ -368,12 +371,7 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": [
-                    Self.pointAtElementFunctionDeclaration,
-                    Self.sendToHigherModelFunctionDeclaration,
-                    Self.startClickyTaskFunctionDeclaration,
-                    Self.searchWebFunctionDeclaration
-                ]]
+                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -479,6 +477,15 @@ final class GeminiLiveVoiceClient {
             "required": ["task"]
         ]
     ]
+
+    private static var coreFunctionDeclarations: [[String: Any]] {
+        [
+            pointAtElementFunctionDeclaration,
+            sendToHigherModelFunctionDeclaration,
+            startClickyTaskFunctionDeclaration,
+            searchWebFunctionDeclaration
+        ]
+    }
 
     private static let searchWebFunctionDeclaration: [String: Any] = [
         "name": "search_web",
@@ -694,6 +701,8 @@ final class GeminiLiveVoiceClient {
                 handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
             case "search_web":
                 handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case _ where DottieScreenAction.functionNames.contains(functionName):
+                handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["error": "unknown function"])
@@ -762,6 +771,26 @@ final class GeminiLiveVoiceClient {
                 functionName: "search_web",
                 response: ["result": searchResults]
             )
+        }
+    }
+
+    /// Clicks, typing, keys, scrolling, pages and drawing. Live waits for
+    /// the result so it can say what happened.
+    private func handleScreenActionCall(functionCallID: String, functionName: String, functionArguments: [String: Any]) {
+        guard !isDiscardingModelAudioForCurrentTurn,
+              let onScreenAction,
+              let screenAction = DottieScreenAction(functionName: functionName, arguments: functionArguments) else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["error": "couldn't do that right now."])
+            return
+        }
+
+        pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
+            let actionResult = await onScreenAction(screenAction)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
+            self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                      response: ["result": actionResult])
         }
     }
 
