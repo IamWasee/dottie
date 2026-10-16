@@ -18,6 +18,7 @@
 //  Saved in ~/Library/Application Support/ClickyClone/Clickys/routines.json.
 //
 
+import Combine
 import Foundation
 
 struct ClickyRoutine: Codable, Identifiable, Equatable {

@@ -18,6 +18,7 @@
 //
 
 import AppKit
+import Combine
 import Foundation
 
 struct ClickySkill: Identifiable, Equatable {
