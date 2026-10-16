@@ -143,7 +143,7 @@ private struct NewClickyForm: View {
     @State private var agentPurpose = ""
     @State private var firstTask = ""
 
-    private let isGeminiCLIInstalled = GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil
+    private let isDotsRuntimeReady = GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil
 
     var body: some View {
         ScrollView {
@@ -156,10 +156,10 @@ private struct NewClickyForm: View {
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if !isGeminiCLIInstalled {
-                    Text("Dots run on Gemini CLI, which isn't installed yet. In Terminal, run `npm install -g @google/gemini-cli` (needs Node.js), then reopen this window.")
+                if !isDotsRuntimeReady {
+                    Text("Dottie is still getting Dots ready (a one-time download of about 70 MB). You can make a Dot now; its first task starts as soon as that's done.")
                         .font(.system(size: 12))
-                        .foregroundColor(DS.Colors.warningText)
+                        .foregroundColor(DS.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 

@@ -21,7 +21,7 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
     let requiresSpeechRecognitionPermission = false
     var isConfigured: Bool { ClickyWorkerConfiguration.isWorkerConfigured }
     var unavailableExplanation: String? {
-        isConfigured ? nil : "set ClickyWorkerBaseURL in Info.plist to your worker's URL."
+        isConfigured ? nil : "add the server address in Settings → Connection."
     }
 
     private let liveVoiceClient: GeminiLiveVoiceClient

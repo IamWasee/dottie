@@ -13,7 +13,11 @@ Dottie is a clone of [HeyClicky](https://www.heyclicky.com/), built on top of Fa
 
 See [ROADMAP.md](ROADMAP.md) for which shipped-Clicky features are done and what's next.
 
-## Setup
+## Install
+
+**[Download Dottie.dmg](https://github.com/IamWasee/dottie/releases/latest/download/Dottie.dmg)**. [INSTALL.md](INSTALL.md) walks through installing it on any Mac, and the one-time setup that makes GitHub build the app and its server for you (no Mac tools needed).
+
+## Build from source
 
 You need a Mac with macOS 14.2+, Xcode 16+, Node 18+, a free [Cloudflare](https://cloudflare.com) account, and a Gemini API key.
 
@@ -29,13 +33,13 @@ npx wrangler secret put APP_SHARED_SECRET   # optional: any random string
 npx wrangler deploy
 ```
 
-Wrangler prints a URL like `https://clicky-proxy.yourname.workers.dev`. Model names live in `worker/wrangler.toml` under `[vars]`, so you can switch models without rebuilding the app.
+Wrangler prints a URL like `https://dottie.yourname.workers.dev`. (The Release workflow does all of this for you; see [INSTALL.md](INSTALL.md).) Model names live in `worker/wrangler.toml` under `[vars]`, so you can switch models without rebuilding the app.
 
 For local Worker development, put the same values in `worker/.dev.vars` and run `npx wrangler dev`.
 
 ### 2. Point the app at your Worker
 
-Open `leanring-buddy/Info.plist` and set:
+Open `leanring-buddy/Info.plist` and set the keys below (or leave the URL empty and paste it into Home → Settings → Connection after launching):
 
 | Key | Value |
 |---|---|
@@ -50,13 +54,7 @@ Open `leanring-buddy/Info.plist` and set:
 
 ### Background Dots (optional)
 
-Dots are helpers that work on their own in a folder on your Mac and report back in the notch. They run on Google's open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli), which needs Node.js:
-
-```bash
-npm install -g @google/gemini-cli
-```
-
-Nothing else to set up: the app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Dots in Home → Dots, or just ask Dottie out loud to hand a task off.
+Dots are helpers that work on their own in a folder on your Mac and report back in the notch. They run on Google's open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli). Nothing to install: on first launch Dottie downloads pinned copies of Node.js and Gemini CLI (about 70 MB, checked against hashes in `DotsRuntimeInstaller.swift`) into `~/Library/Application Support/Dottie/Runtime`. A Gemini CLI you installed yourself works too. The app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Dots in Home → Dots, or just ask Dottie out loud to hand a task off.
 
 Dots click and type in your apps through the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver), which the build puts inside Dottie.app for you (a build phase downloads a pinned release once, checks its checksum and caches it). It runs under Dottie's own Accessibility and Screen Recording permissions, so there's nothing extra to install or allow. If the build was offline, Settings says the driver is missing; rebuild online, or install it yourself with `/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"`.
 

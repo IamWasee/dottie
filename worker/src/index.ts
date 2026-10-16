@@ -59,6 +59,17 @@ export default {
       }
     }
 
+    // Open to anyone: says the Worker is up and has a key, nothing more.
+    // The release workflow and Dottie's Settings use it to check an address.
+    if (request.method === "GET" && url.pathname === "/health") {
+      return jsonResponse({
+        ok: true,
+        app: "dottie",
+        hasGeminiKey: Boolean(env.GEMINI_API_KEY),
+        requiresAppSecret: Boolean(env.APP_SHARED_SECRET),
+      });
+    }
+
     if (env.APP_SHARED_SECRET && request.headers.get("x-clicky-secret") !== env.APP_SHARED_SECRET) {
       return new Response("Unauthorized", { status: 401 });
     }

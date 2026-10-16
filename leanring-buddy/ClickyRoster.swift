@@ -490,7 +490,7 @@ final class ClickyRoster: ObservableObject {
     }
 
     private func runDueRoutines() {
-        guard isNetworkAvailable, GeminiCLIAgentRuntime.locateGeminiCLIExecutable() != nil else { return }
+        guard isNetworkAvailable else { return }
         for dueRoutine in routineStore.dueRoutines(at: Date()) {
             runRoutine(dueRoutine)
         }

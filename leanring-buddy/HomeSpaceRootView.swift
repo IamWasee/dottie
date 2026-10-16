@@ -248,6 +248,10 @@ private struct HomeSettingsView: View {
     @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true
     @AppStorage(ScreenAnnotationManager.enabledDefaultsKey) private var isScreenAnnotationEnabled = true
     @AppStorage(ClickyDictationController.customWordsDefaultsKey) private var dictationCustomWords = ""
+    @AppStorage(ClickyWorkerConfiguration.userWorkerBaseURLDefaultsKey) private var userWorkerBaseURL = ""
+    @AppStorage(ClickyWorkerConfiguration.userAppSharedSecretDefaultsKey) private var userAppSharedSecret = ""
+    @State private var serverCheckMessage: String?
+    @State private var isCheckingServer = false
 
     var body: some View {
         ScrollView {
@@ -364,13 +368,7 @@ private struct HomeSettingsView: View {
                 }
 
                 settingsGroup(title: "Connection") {
-                    settingsRow(label: "Worker") {
-                        Text(ClickyWorkerConfiguration.isWorkerConfigured ? ClickyWorkerConfiguration.workerBaseURL : "Not set")
-                            .foregroundColor(ClickyWorkerConfiguration.isWorkerConfigured ? DS.Colors.textSecondary : DS.Colors.warningText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    settingsHint("Set ClickyWorkerBaseURL in Info.plist to your Cloudflare Worker's address.")
+                    connectionSettings
                 }
 
                 settingsGroup(title: "History") {
@@ -413,6 +411,63 @@ private struct HomeSettingsView: View {
             Spacer()
             accessory()
                 .font(.system(size: 12))
+        }
+    }
+
+    // MARK: - Connection
+
+    @ViewBuilder
+    private var connectionSettings: some View {
+        if let builtInWorkerBaseURL = ClickyWorkerConfiguration.builtInWorkerBaseURL, userWorkerBaseURL.isEmpty {
+            settingsRow(label: "Server") {
+                Text(builtInWorkerBaseURL)
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            settingsHint("Built into this copy of Dottie. It holds the Gemini key, so the app never sees it.")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Server address")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                HStack(spacing: 8) {
+                    TextField("https://dottie.yourname.workers.dev", text: $userWorkerBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                    Button(isCheckingServer ? "Checking…" : "Check") { checkServer() }
+                        .disabled(userWorkerBaseURL.isEmpty || isCheckingServer)
+                        .pointerCursor()
+                }
+                SecureField("App secret (only if the server has one)", text: $userAppSharedSecret)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+            }
+            if let serverCheckMessage {
+                Text(serverCheckMessage)
+                    .font(.system(size: 11))
+                    .foregroundColor(serverCheckMessage.hasPrefix("Connected") ? DS.Colors.textSecondary : DS.Colors.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            settingsHint("This copy of Dottie wasn't built with a server address. Paste the address of the Dottie server (whoever set up Dottie for you has it; INSTALL.md explains how to make one).")
+        }
+    }
+
+    private func checkServer() {
+        isCheckingServer = true
+        serverCheckMessage = nil
+        let addressToCheck = userWorkerBaseURL
+        Task { @MainActor in
+            let healthCheckResult = await ClickyWorkerConfiguration.checkHealth(ofBaseURL: addressToCheck)
+            isCheckingServer = false
+            switch healthCheckResult {
+            case .ready:
+                serverCheckMessage = "Connected. Dottie is ready to talk."
+            case .missingGeminiKey:
+                serverCheckMessage = "The server is up but has no Gemini key yet. Add GEMINI_API_KEY to it (see INSTALL.md)."
+            case .unreachable(let reason):
+                serverCheckMessage = "Couldn't reach it: \(reason)"
+            }
         }
     }
 
