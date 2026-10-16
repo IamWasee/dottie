@@ -972,22 +972,23 @@ final class CompanionManager: ObservableObject {
     }
 
     private func configureClickyRoster() {
-        clickyRoster.onAgentTurnFinished = { [weak self] finishedAgent, finalReply, succeeded, computerUseRequest in
+        clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
             guard let self else { return }
-            if let computerUseRequest {
+            let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
+            if let computerUseRequest = turnResult.computerUseRequest {
                 // Ask in the notch; the answer comes back through
                 // onAnswerComputerUseRequest below.
                 self.notchPresenter.showAgentUpdate(
-                    title: finishedAgent.name,
+                    title: updateTitle,
                     text: computerUseRequest,
-                    computerUseRequestAgentID: finishedAgent.id
+                    computerUseRequestAgentID: turnResult.agent.id
                 )
                 return
             }
-            let updateText = finalReply.isEmpty
-                ? (succeeded ? "Finished." : "Stopped without a reply.")
-                : finalReply
-            self.notchPresenter.showAgentUpdate(title: finishedAgent.name, text: updateText)
+            let updateText = turnResult.finalReply.isEmpty
+                ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
+                : turnResult.finalReply
+            self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
         }
 
         notchPresenter.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed, alwaysAllow in

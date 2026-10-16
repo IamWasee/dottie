@@ -10,7 +10,8 @@
 //
 //  Each turn is one process:
 //    gemini -m <model> -p <message> -o stream-json --approval-mode yolo
-//           --skip-trust (--session-id <uuid> | --resume <uuid>)
+//           --skip-trust --include-directories <skills library>
+//           (--session-id <uuid> | --resume <uuid>)
 //  run inside the agent's workspace folder. The CLI's newline-delimited JSON
 //  events (init, message, tool_use, tool_result, error, result) are parsed
 //  into GeminiCLIAgentEvent values.
@@ -135,6 +136,7 @@ final class GeminiCLIAgentRuntime {
         cliHomeURL: URL,
         model: String,
         isComputerUseApproved: Bool,
+        additionalDirectoryURLs: [URL],
         onEvent: @escaping @Sendable (GeminiCLIAgentEvent) -> Void
     ) async throws {
         guard let geminiExecutableURL = Self.locateGeminiCLIExecutable() else {
@@ -153,7 +155,8 @@ final class GeminiCLIAgentRuntime {
             "-o", "stream-json",
             "--approval-mode", "yolo",
             "--skip-trust"
-        ] + (isFirstTurn
+        ] + additionalDirectoryURLs.flatMap { ["--include-directories", $0.path] }
+          + (isFirstTurn
             ? ["--session-id", sessionID.uuidString.lowercased()]
             : ["--resume", sessionID.uuidString.lowercased()])
 
@@ -228,14 +231,15 @@ final class GeminiCLIAgentRuntime {
     /// installed. Gemini CLI ignores the auth type in workspace settings.
     /// Cheap enough to run before every turn, so installing cua-driver takes
     /// effect without a relaunch.
-    static func prepareCLIHome(at cliHomeURL: URL) {
+    static func prepareCLIHome(at cliHomeURL: URL, skillLibraryURL: URL) {
         let settingsFolderURL = cliHomeURL.appendingPathComponent(".gemini", isDirectory: true)
         try? FileManager.default.createDirectory(at: settingsFolderURL, withIntermediateDirectories: true)
 
         let cuaDriverURL = ClickyComputerUse.locateCuaDriverExecutable()
         var cliSettings: [String: Any] = [
             "security": ["auth": ["selectedType": "gemini-api-key"]],
-            "context": ["fileName": "AGENTS.md"]
+            "context": ["fileName": "AGENTS.md"],
+            "skills": ["disabled": ClickySkillLibrary.hiddenBuiltInSkillNames]
         ]
         if let cuaDriverURL {
             ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
@@ -245,7 +249,12 @@ final class GeminiCLIAgentRuntime {
         }
 
         // Gemini CLI reads AGENTS.md from its home folder for every agent.
-        try? ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil)
+        let globalAgentInstructions = [
+            ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil),
+            ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
+            ClickyRoutinePrompts.globalAgentInstructions
+        ].joined(separator: "\n")
+        try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
 
         if let settingsData = try? JSONSerialization.data(withJSONObject: cliSettings, options: [.prettyPrinted, .sortedKeys]) {
