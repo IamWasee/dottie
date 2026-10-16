@@ -5,7 +5,7 @@ on:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       W: https://dottie.vidershub.workers.dev
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -13,54 +13,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Push-to-talk with automatic detection
+      - name: Models that mention computer use
         run: |
-          curl -sS -X POST -H 'content-type: application/json' $W/tts -d '{"text":"What is the capital of France? Answer briefly."}' -o speech24.pcm
-          ls -la speech24.pcm
-          cat > ptt.mjs <<'JS'
+          curl -sS "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=$GEMINI_API_KEY" | jq -r '.models[] | "\(.name) | \(.supportedGenerationMethods|join(","))"' | grep -iE "computer|flash|pro" | head -60
+      - name: Draw a fake speed dial
+        run: |
+          pip install -q pillow
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          W,H=1440,936
+          im=Image.new("RGB",(W,H),(70,90,120)); d=ImageDraw.Draw(im)
+          try: f=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",18)
+          except: f=ImageFont.load_default()
+          d.rectangle([0,0,W,60],fill=(30,30,35)); d.text((20,20),"Speed Dial   |   Enter search or web address",fill="white",font=f)
+          d.rectangle([465,150,1000,190],fill=(40,50,70)); d.text((480,160),"Search the web",fill=(200,200,200),font=f)
+          names=["twitch.tv","airbnb","warships","belmont","booking.com","pinterest.com","gx games","eneba","doom","youtube.com","harvard","youtube","aniwatch","animesuge","instagram","physics","catflix.su","facebook.com"]
+          boxes={}
+          for i,n in enumerate(names):
+            r,c=divmod(i,6); x=325+c*138; y=230+r*91
+            d.rectangle([x,y,x+121,y+74],fill=(90,120,160)); d.text((x+10,y+28),n,fill="white",font=f)
+            boxes[n]=(x,y,x+121,y+74)
+          im.save("dial.jpg",quality=85)
+          b=boxes["pinterest.com"]; print("pinterest box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
+          b=boxes["facebook.com"]; print("facebook box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
+          PY
+      - name: Function calling with a screenshot through /chat
+        run: |
+          cat > fc.mjs <<'JS'
           import fs from "fs";
-          const W = process.env.W;
-          const [model, label, cfgJSON, trailingSilenceMs, extraText] = process.argv.slice(2);
-          const pcm24 = fs.readFileSync("speech24.pcm");
-          const in24 = new Int16Array(pcm24.buffer, pcm24.byteOffset, pcm24.length >> 1);
-          const n16 = Math.floor(in24.length * 2 / 3); const s16 = new Int16Array(n16);
-          for (let i = 0; i < n16; i++) { const x = i * 1.5, a = Math.floor(x), f = x - a; s16[i] = in24[a] * (1 - f) + (in24[a + 1] ?? 0) * f; }
-          const speech = Buffer.from(s16.buffer);
-          const silence = Buffer.alloc(Number(trailingSilenceMs) * 32);
-          const audio = Buffer.concat([speech, silence]);
-          const t = await (await fetch(W + "/live-token", { method: "POST" })).json();
-          const ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(t.token));
-          const t0 = Date.now(); let tEnd = 0; const log = []; let heard = "", said = ""; let firstOut = 0, turns = 0;
-          const stamp = (m) => log.push(`${Date.now() - t0}ms ${m}`);
-          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-          const done = new Promise((resolve) => {
-            ws.onopen = () => ws.send(JSON.stringify({ setup: { model: "models/" + model, generationConfig: { responseModalities: ["AUDIO"] }, systemInstruction: { parts: [{ text: process.env.SYS || "You are a helpful voice assistant." }] }, inputAudioTranscription: {}, outputAudioTranscription: {}, ...JSON.parse(cfgJSON) } }));
-            ws.onmessage = async (e) => {
-              const m = JSON.parse(typeof e.data === "string" ? e.data : Buffer.from(await e.data.arrayBuffer()).toString());
-              if (m.setupComplete) {
-                stamp("setup ok");
-                for (let i = 0; i < audio.length; i += 3200) { ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: audio.subarray(i, i + 3200).toString("base64") } } })); await sleep(100); }
-                tEnd = Date.now(); stamp("released");
-                if (extraText) ws.send(JSON.stringify({ realtimeInput: { text: extraText } }));
-                if (process.env.BURST) { const z = Buffer.alloc(Number(process.env.BURST) * 32); for (let i = 0; i < z.length; i += 3200) ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: z.subarray(i, i + 3200).toString("base64") } } })); }
-                ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
-              }
-              const sc = m.serverContent || {};
-              if (sc.inputTranscription?.text) { if (!heard) stamp("first heard"); heard += sc.inputTranscription.text; }
-              if (sc.outputTranscription?.text) { if (!firstOut) { firstOut = Date.now(); stamp(`first output (${tEnd ? (firstOut - tEnd) + "ms after release" : "BEFORE release"})`); } said += sc.outputTranscription.text; }
-              if (sc.interrupted) stamp("interrupted");
-              if (sc.turnComplete) { turns++; stamp("turnComplete"); }
-            };
-            ws.onclose = (e) => { stamp(`close ${e.code} ${e.reason.slice(0, 80)}`); resolve(); };
-            setTimeout(() => { ws.close(); resolve(); }, 30000);
-          });
-          await done;
-          console.log(`== ${label} ${model}\nheard: ${heard.trim()}\nsaid: ${said.trim().slice(0, 160)}\nturns: ${turns}\n` + log.join("\n"));
-          process.exit(0);
+          const img = fs.readFileSync("dial.jpg").toString("base64");
+          const tools = [{ functionDeclarations: [
+            { name: "click", description: "Click an element on the screenshot.", parameters: { type: "object", properties: {
+              box_2d: { type: "array", items: { type: "integer" }, description: "[ymin, xmin, ymax, xmax] of the element, 0-1000" },
+              label: { type: "string" } }, required: ["box_2d", "label"] } },
+            { name: "finish", description: "The task is done.", parameters: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } } ] }];
+          for (const model of process.argv.slice(2)) {
+            const t0 = Date.now();
+            const body = { model, contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: img } }, { text: "Task: open the facebook bookmark. Take the next step." }] }],
+              tools, toolConfig: { functionCallingConfig: { mode: "ANY" } } };
+            const r = await fetch(process.env.W + "/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+            const txt = await r.text();
+            const calls = [...txt.matchAll(/"functionCall":\s*(\{.*?\})\s*(,\s*"thoughtSignature"|\})/g)].map(m => m[1]);
+            console.log(model, r.status, Date.now() - t0 + "ms", calls.join(" ") || txt.slice(0, 300));
+          }
           JS
-          T='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":1200,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
-          L='{"realtimeInputConfig":{"automaticActivityDetection":{"silenceDurationMs":60000,"endOfSpeechSensitivity":"END_SENSITIVITY_LOW"}}}'
-          for i in 1 2 3; do BURST=1500 node ptt.mjs gemini-3.8-live burst1500 "$T" 200 ""; done
-          for i in 1 2 3; do BURST=1500 node ptt.mjs gemini-3.1-flash-live-preview burst1500 "$T" 200 ""; done
-          for i in 1 2; do node ptt.mjs gemini-3.1-flash-live-preview plain "$T" 200 ""; done
-          BURST=1500 node ptt.mjs gemini-3.1-flash-live-preview burst-context "$T" 200 "(The screenshot shows one screen.)"
+          node fc.mjs gemini-3.8-flash gemini-3.7-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite
