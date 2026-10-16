@@ -146,6 +146,12 @@ final class CompanionManager: ObservableObject {
     /// The screenshot frame sent with the current live turn. Pointing tool
     /// calls are in this frame's coordinate space.
     private var currentLiveTurnScreenFrame: CompanionCompositeScreenFrame?
+    private var currentLiveTurnScreenFrameCapturedAt: Date?
+
+    /// Circle to ask: the cursor trail while the talk shortcut is held.
+    let screenAnnotationManager = ScreenAnnotationManager()
+    /// What the user circled during the latest voice turn, if anything.
+    private var currentTurnAnnotation: ScreenAnnotation?
 
     /// True from push-to-talk press until the live answer has finished
     /// playing. Keeps the dictation state observer from flipping the cursor
@@ -681,6 +687,8 @@ final class CompanionManager: ObservableObject {
             currentResponseTask?.cancel()
             stopAllSpeechPlayback()
             clearDetectedElementLocation()
+            currentTurnAnnotation = nil
+            screenAnnotationManager.startTracking()
             if voiceMode == .live {
                 liveTurnPlaybackDrainTask?.cancel()
                 isLiveTurnInFlight = true
@@ -729,6 +737,11 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackPushToTalkReleased()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
+            // Before the turn closes, so Live gets the marked frame inside it.
+            currentTurnAnnotation = screenAnnotationManager.finishTracking()
+            if voiceMode == .live, let currentTurnAnnotation {
+                sendAnnotationToLiveTurn(currentTurnAnnotation)
+            }
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
             if voiceMode == .live {
                 clearLiveTurnIfItNeverStarted()
@@ -756,6 +769,7 @@ final class CompanionManager: ObservableObject {
     - focus on giving a thorough, useful explanation. don't end with simple yes/no questions like "want me to explain more?" or "should i show you?" — those are dead ends that force the user to just say yes.
     - instead, when it fits naturally, end by planting a seed — mention something bigger or more ambitious they could try, a related concept that goes deeper, or a next-level technique that builds on what you just explained. make it something worth coming back for, not a question they'd just nod to. it's okay to not end with anything extra if the answer is complete on its own.
     - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
+    - if a screen image has a bright blue hand-drawn ring on it, the user circled that with their cursor while talking. it's what they're asking about.
 
     element pointing:
     you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
@@ -792,6 +806,7 @@ final class CompanionManager: ObservableObject {
     - never say "simply" or "just".
     - don't end with dead-end yes/no questions like "want me to explain more?". instead, when it fits naturally, plant a seed — mention something bigger they could try, or a next-level technique that builds on what you explained. it's okay to end without anything extra.
     - if the frame shows several screens side by side, the one marked as the cursor screen is the primary focus.
+    - the user can circle things with their cursor while talking. if a frame shows a bright blue hand-drawn ring, that's what they marked and are asking about.
 
     pointing:
     you have a small blue triangle cursor that can fly to and point at things on screen, using the point_at_element tool. use it whenever pointing would genuinely help — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app. err on the side of pointing, because it makes your help way more concrete. don't point for general knowledge questions or at something obvious they're already looking at.
@@ -859,10 +874,39 @@ final class CompanionManager: ObservableObject {
         }
 
         currentLiveTurnScreenFrame = compositeScreenFrame
+        currentLiveTurnScreenFrameCapturedAt = compositeScreenFrame == nil ? nil : Date()
         liveVoiceClient.beginUserTurn(screenFrameJPEGData: compositeScreenFrame?.jpegData)
 
         if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
             liveVoiceClient.sendTurnContextText(compositeScreenFrame.layoutDescription)
+        }
+    }
+
+    /// Sends the turn's frame again with the circled area marked, plus a
+    /// note saying what the ring means. Only when this turn's frame has
+    /// been captured, which also means its Live turn is open.
+    private func sendAnnotationToLiveTurn(_ annotation: ScreenAnnotation) {
+        guard let currentLiveTurnScreenFrame,
+              let frameCapturedAt = currentLiveTurnScreenFrameCapturedAt,
+              let trackingStartedAt = screenAnnotationManager.trackingStartedAt,
+              frameCapturedAt >= trackingStartedAt,
+              let annotatedFrameJPEGData = annotation.drawRing(on: currentLiveTurnScreenFrame) else { return }
+        liveVoiceClient.sendScreenFrame(jpegData: annotatedFrameJPEGData)
+        liveVoiceClient.sendTurnContextText(ScreenAnnotation.modelContextText)
+    }
+
+    /// Screenshot images for the classic and higher models, with the turn's
+    /// circled area drawn on the screen it's on.
+    private func labeledScreenImages(
+        from screenCaptures: [CompanionScreenCapture],
+        annotation: ScreenAnnotation?
+    ) -> [(data: Data, label: String)] {
+        screenCaptures.map { capture in
+            let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
+            if let annotation, let annotatedImageData = annotation.drawRing(on: capture) {
+                return (data: annotatedImageData, label: capture.label + dimensionInfo + " — the blue ring is what the user circled")
+            }
+            return (data: capture.imageData, label: capture.label + dimensionInfo)
         }
     }
 
@@ -1208,6 +1252,7 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.cancelCurrentModelResponse()
         stopAllSpeechPlayback()
         clearDetectedElementLocation()
+        screenAnnotationManager.clear()
 
         isLiveTurnInFlight = false
         currentLiveTurnTypedText = nil
@@ -1242,10 +1287,7 @@ final class CompanionManager: ObservableObject {
 
         do {
             let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-            let labeledImages = screenCaptures.map { capture in
-                let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
-                return (data: capture.imageData, label: capture.label + dimensionInfo)
-            }
+            let labeledImages = labeledScreenImages(from: screenCaptures, annotation: currentTurnAnnotation)
             let historyForAPI = conversationHistory.map { entry in
                 (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
             }
@@ -1316,11 +1358,13 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 // Label each image with its pixel dimensions so the model's
-                // coordinate space matches the image it sees.
-                let labeledImages = screenCaptures.map { capture in
-                    let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
-                    return (data: capture.imageData, label: capture.label + dimensionInfo)
-                }
+                // coordinate space matches the image it sees. A voice turn
+                // where the user circled something gets the ring drawn in.
+                let turnAnnotation = inputKind == .voice ? currentTurnAnnotation : nil
+                let labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
+                let promptForModel = turnAnnotation == nil
+                    ? transcript
+                    : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
 
                 let historyForAPI = conversationHistory.map { entry in
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
@@ -1330,7 +1374,7 @@ final class CompanionManager: ObservableObject {
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
-                    userPrompt: transcript,
+                    userPrompt: promptForModel,
                     onTextChunk: { _ in
                         // No streaming text display — spinner stays until TTS plays
                     }
