@@ -245,6 +245,7 @@ private struct HomeSettingsView: View {
     // Same keys ClickyDictationController reads.
     @AppStorage("clickyDictationEnabled") private var isDictationEnabled = true
     @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true
+    @AppStorage(ScreenAnnotationManager.enabledDefaultsKey) private var isScreenAnnotationEnabled = true
     @AppStorage(ClickyDictationController.customWordsDefaultsKey) private var dictationCustomWords = ""
 
     var body: some View {
@@ -295,6 +296,12 @@ private struct HomeSettingsView: View {
                         }
                     }
                     settingsHint("Click a shortcut, then press the new one: modifier keys on their own (like right option or fn), or modifiers with a key (like cmd + shift + space). You hold it the same way to talk or dictate.")
+                    settingsRow(label: "Circle things with the cursor while you talk") {
+                        Toggle("", isOn: $isScreenAnnotationEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    settingsHint("While you hold the talk shortcut, move the cursor around something to circle it. Dottie sees exactly what you marked.")
                 }
 
                 settingsGroup(title: "Appearance") {

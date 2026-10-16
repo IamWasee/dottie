@@ -27,7 +27,7 @@ Status key: ✅ written, ⏳ in progress, ⬜ not started. "Written" means the c
 - ✅ Typed messages from the notch or Home, answered out loud like spoken ones
 - ✅ Home window: saved conversation transcript (persisted to Application Support) and settings (voice, notch, cursor, worker status, clear history)
 - ✅ Custom hotkeys (`ClickyHotkeyRecorder`): record your own talk and dictation shortcuts in Settings, modifiers alone or with a key
-- ⬜ Screen annotation: circle a region and ask about it (`ScreenAnnotationManager`)
+- ✅ Screen annotation: circle a region with the cursor while holding the talk shortcut and ask about it (`ScreenAnnotationManager`); the ring is drawn onto the screenshot the model sees
 - ✅ Notch hover peek of Dots: each Dot's status light (working, something new, idle) and last line; click one to open its chat in Home
 - ⬜ Notch hover peek of files
 
