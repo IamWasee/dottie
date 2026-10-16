@@ -84,6 +84,9 @@ final class ClickyRoster: ObservableObject {
     /// Set when something (the notch) asks Home to show a Dot's chat; Home
     /// clears it once it has.
     @Published private(set) var agentIDRequestedInHome: UUID?
+    /// Helpers the user deleted since launch, so Dottie can say so instead
+    /// of looking for them.
+    private(set) var recentlyDeletedAgentNames: [String] = []
 
     /// Called when a turn ends. The companion shows it in the notch.
     var onAgentTurnFinished: ((ClickyAgentTurnResult) -> Void)?
@@ -156,6 +159,7 @@ final class ClickyRoster: ObservableObject {
             enabledSkillNames: skillLibrary.skills.map(\.name)
         )
         prepareWorkspace(for: newAgent)
+        recentlyDeletedAgentNames.removeAll { $0.caseInsensitiveCompare(agentName) == .orderedSame }
         agents.insert(newAgent, at: 0)
         transcriptsByAgentID[newAgent.id] = []
         saveRoster()
@@ -166,6 +170,8 @@ final class ClickyRoster: ObservableObject {
         stopAgent(agent)
         agents.removeAll { $0.id == agent.id }
         transcriptsByAgentID[agent.id] = nil
+        recentlyDeletedAgentNames.removeAll { $0.caseInsensitiveCompare(agent.name) == .orderedSame }
+        recentlyDeletedAgentNames.append(agent.name)
         routineStore.deleteRoutines(forAgentID: agent.id)
         saveRoster()
         // Move the folder to the Trash rather than deleting the agent's work.

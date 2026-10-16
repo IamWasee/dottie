@@ -48,18 +48,36 @@ enum PointingRefiner {
         roughPoint: CGPoint,
         displayFrame: CGRect
     ) async -> CGPoint? {
+        let elementFrame = await refineFrame(
+            elementLabel: elementLabel,
+            userQuestion: userQuestion,
+            roughPoint: roughPoint,
+            displayFrame: displayFrame
+        )
+        return elementFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
+    }
+
+    /// The element's whole frame in global AppKit coordinates, for marks
+    /// that should hug it (a circle around it, a box), or nil if it
+    /// couldn't be found.
+    static func refineFrame(
+        elementLabel: String?,
+        userQuestion: String,
+        roughPoint: CGPoint,
+        displayFrame: CGRect
+    ) async -> CGRect? {
         let labelWords = significantWords(in: elementLabel ?? "")
 
-        if !labelWords.isEmpty, let accessibilityPoint = AccessibilityElementSearch.bestMatch(
+        if !labelWords.isEmpty, let accessibilityFrame = AccessibilityElementSearch.bestMatch(
             forLabelWords: labelWords,
             near: roughPoint
         ) {
-            print("🎯 Pointing refined by Accessibility: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(accessibilityPoint.x)),\(Int(accessibilityPoint.y))")
-            return accessibilityPoint
+            print("🎯 Pointing refined by Accessibility: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(accessibilityFrame.midX)),\(Int(accessibilityFrame.midY))")
+            return accessibilityFrame
         }
 
         guard let elementLabel, !elementLabel.isEmpty else { return nil }
-        let visionPoint = await withTimeout(seconds: refinementTimeoutSeconds) {
+        let visionFrame = await withTimeout(seconds: refinementTimeoutSeconds) {
             await VisionElementLocator.locate(
                 elementLabel: elementLabel,
                 userQuestion: userQuestion,
@@ -67,10 +85,10 @@ enum PointingRefiner {
                 displayFrame: displayFrame
             )
         }
-        if let visionPoint {
-            print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(visionPoint.x)),\(Int(visionPoint.y))")
+        if let visionFrame {
+            print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(visionFrame.midX)),\(Int(visionFrame.midY))")
         }
-        return visionPoint
+        return visionFrame
     }
 
     /// Lowercased words that name the thing, without filler like "the" or
@@ -117,11 +135,12 @@ private enum AccessibilityElementSearch {
     private static let maximumElementSize = CGSize(width: 700, height: 250)
 
     private struct Candidate {
-        let center: CGPoint
+        let frame: CGRect
         let score: Double
     }
 
-    static func bestMatch(forLabelWords labelWords: [String], near roughPoint: CGPoint) -> CGPoint? {
+    /// The best-matching element's frame in global AppKit coordinates.
+    static func bestMatch(forLabelWords labelWords: [String], near roughPoint: CGPoint) -> CGRect? {
         guard AXIsProcessTrusted() else { return nil }
         let roughPointInAXSpace = axPoint(fromAppKit: roughPoint)
 
@@ -163,7 +182,9 @@ private enum AccessibilityElementSearch {
         }
 
         guard let bestCandidate else { return nil }
-        return appKitPoint(fromAX: bestCandidate.center)
+        let axFrame = bestCandidate.frame
+        let bottomLeft = appKitPoint(fromAX: CGPoint(x: axFrame.minX, y: axFrame.maxY))
+        return CGRect(x: bottomLeft.x, y: bottomLeft.y, width: axFrame.width, height: axFrame.height)
     }
 
     /// How well an element's name matches the label, nudged toward
@@ -195,7 +216,7 @@ private enum AccessibilityElementSearch {
         // Tight names beat names that only contain the words.
         let extraWordPenalty = Double(max(0, elementWords.count - labelWords.count)) * 0.03
         let score = matchFraction - extraWordPenalty - distanceFromGuess / 3000
-        return Candidate(center: center, score: max(score, 0.0001))
+        return Candidate(frame: frame, score: max(score, 0.0001))
     }
 
     private static func enclosingWindow(of element: AXUIElement) -> AXUIElement? {
@@ -272,7 +293,7 @@ private enum VisionElementLocator {
         userQuestion: String,
         roughPoint: CGPoint,
         displayFrame: CGRect
-    ) async -> CGPoint? {
+    ) async -> CGRect? {
         guard let screenshot = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: maximumScreenshotDimension),
               let jpegData = NSBitmapImageRep(cgImage: screenshot)
                 .representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else { return nil }
@@ -316,11 +337,11 @@ private enum VisionElementLocator {
         let answerText = textFromServerSentEvents(responseData)
         guard let box = parseBox(from: answerText) else { return nil }
 
-        let centerX = (box.xmin + box.xmax) / 2 / 1000
-        let centerY = (box.ymin + box.ymax) / 2 / 1000
-        return CGPoint(
-            x: displayFrame.minX + centerX * displayFrame.width,
-            y: displayFrame.maxY - centerY * displayFrame.height
+        return CGRect(
+            x: displayFrame.minX + box.xmin / 1000 * displayFrame.width,
+            y: displayFrame.maxY - box.ymax / 1000 * displayFrame.height,
+            width: (box.xmax - box.xmin) / 1000 * displayFrame.width,
+            height: (box.ymax - box.ymin) / 1000 * displayFrame.height
         )
     }
 

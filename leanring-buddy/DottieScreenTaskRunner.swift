@@ -340,6 +340,7 @@ final class DottieScreenTaskRunner {
     - Look at the screenshot carefully before acting. Click things by their box on the screenshot (box_2d: [ymin, xmin, ymax, xmax], 0-1000 across the image).
     - To use an app, call open_app with its name (it comes to the front). To visit a site in a browser that's already open, click its address bar (or press cmd+l), type the address or search and press return. If the user named a browser, use that browser.
     - To type into a field, pass the field's box_2d to type_text so it's clicked first; use press_enter to submit.
+    - Prefer keyboard shortcuts when one exists, they never miss: close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next/previous tab ctrl+tab / ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, find cmd+f, close window cmd+shift+w.
     - After an action that loads something, the next screenshot shows the result; use wait if it's still loading.
     - Scroll to find things that aren't visible. Prefer obvious, direct paths: menus, tabs, search boxes, profile pages.
     - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you can't go on (it needs a login, a captcha, or something is missing), saying why.

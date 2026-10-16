@@ -196,14 +196,15 @@ struct NotchRootView: View {
         HStack(spacing: 12) {
             NotchEyeView(mood: .thinking)
             VStack(alignment: .leading, spacing: 1) {
-                Text("on it")
+                Text(notchPresenter.screenTaskTitle)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.white.opacity(0.55))
                 Text(notchPresenter.screenTaskStepText.isEmpty ? "starting" : notchPresenter.screenTaskStepText)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Button(action: { notchPresenter.stopScreenTask() }) {

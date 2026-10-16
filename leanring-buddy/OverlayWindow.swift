@@ -638,16 +638,31 @@ struct BlueCursorView: View {
             ?? navigationPointerPhrases.randomElement()
             ?? "right here!"
 
+        let pointedLocation = companionManager.detectedElementScreenLocation
         streamNavigationBubbleCharacter(phrase: pointerPhrase, characterIndex: 0) {
-            // All characters streamed — hold for 3 seconds, then fly back
+            // All characters streamed — hold for 3 seconds (or, during a
+            // guide, until the user does the step), then fly back
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                guard self.buddyNavigationMode == .pointingAtTarget else { return }
-                self.navigationBubbleOpacity = 0.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard self.buddyNavigationMode == .pointingAtTarget else { return }
-                    self.startFlyingBackToCursor()
-                }
+                self.flyBackWhenPointingIsDone(pointedLocation: pointedLocation)
             }
+        }
+    }
+
+    /// A guide keeps the cursor on its target until the step is done; a
+    /// new target takes over with its own flight.
+    private func flyBackWhenPointingIsDone(pointedLocation: CGPoint?) {
+        guard buddyNavigationMode == .pointingAtTarget else { return }
+        if companionManager.keepsPointingUntilCleared {
+            guard companionManager.detectedElementScreenLocation == pointedLocation else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.flyBackWhenPointingIsDone(pointedLocation: pointedLocation)
+            }
+            return
+        }
+        navigationBubbleOpacity = 0.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard self.buddyNavigationMode == .pointingAtTarget else { return }
+            self.startFlyingBackToCursor()
         }
     }
 
