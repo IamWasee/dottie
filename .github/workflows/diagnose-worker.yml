@@ -3,69 +3,49 @@ on:
   push:
     branches: [diagnose-worker]
 jobs:
-  diagnose:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
+  dots:
+    runs-on: macos-15
+    timeout-minutes: 20
     env:
       W: https://dottie.vidershub.workers.dev
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Draw a fake speed dial
+      - name: Install the Dots runtime like Dottie does
         run: |
-          pip install -q pillow
-          python3 - <<'PY'
-          from PIL import Image, ImageDraw, ImageFont
-          W,H=1440,936
-          im=Image.new("RGB",(W,H),(70,90,120)); d=ImageDraw.Draw(im)
-          try: f=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",18)
-          except: f=ImageFont.load_default()
-          d.rectangle([0,0,W,60],fill=(30,30,35)); d.text((20,20),"Speed Dial   |   Enter search or web address",fill="white",font=f)
-          d.rectangle([465,150,1000,190],fill=(40,50,70)); d.text((480,160),"Search the web",fill=(200,200,200),font=f)
-          names=["twitch.tv","airbnb","warships","belmont","booking.com","pinterest.com","gx games","eneba","doom","youtube.com","harvard","youtube","aniwatch","animesuge","instagram","physics","catflix.su","facebook.com"]
-          boxes={}
-          for i,n in enumerate(names):
-            r,c=divmod(i,6); x=325+c*138; y=230+r*91
-            d.rectangle([x,y,x+121,y+74],fill=(90,120,160)); d.text((x+10,y+28),n,fill="white",font=f)
-            boxes[n]=(x,y,x+121,y+74)
-          im.save("dial.jpg",quality=85)
-          b=boxes["pinterest.com"]; print("pinterest box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
-          b=boxes["facebook.com"]; print("facebook box px",b,"center norm",round((b[0]+b[2])/2/W*1000),round((b[1]+b[3])/2/H*1000))
-          PY
-      - name: Two-step loop with function response plus new screenshot
+          set -e
+          R=$HOME/rt; mkdir -p $R; cd $R
+          curl -sSLO https://nodejs.org/dist/v24.22.0/node-v24.22.0-darwin-arm64.tar.gz
+          shasum -a 256 node-v24.22.0-darwin-arm64.tar.gz
+          tar -xzf node-v24.22.0-darwin-arm64.tar.gz
+          curl -sSLO https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.64.0.tgz
+          mkdir g && tar -xzf gemini-cli-0.64.0.tgz -C g
+          printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$R/node-v24.22.0-darwin-arm64/bin/node" "$R/g/package/bundle/gemini.js" > gemini; chmod +x gemini
+          ./gemini --version
+      - name: CLI home like prepareCLIHome
         run: |
-          cat > loop.mjs <<'JS'
-          import fs from "fs";
-          const img = fs.readFileSync("dial.jpg").toString("base64");
-          const tools = [{ functionDeclarations: [
-            { name: "click", description: "Click an element on the screenshot.", parameters: { type: "object", properties: {
-              box_2d: { type: "array", items: { type: "integer" }, description: "[ymin, xmin, ymax, xmax] of the element, 0-1000" },
-              label: { type: "string" } }, required: ["box_2d", "label"] } },
-            { name: "type_text", description: "Type text into the focused field.", parameters: { type: "object", properties: { text: { type: "string" }, press_enter: { type: "boolean" } }, required: ["text"] } },
-            { name: "finish", description: "The task is done; answer is what to tell the user.", parameters: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } } ] }];
-          const [model, level] = process.argv.slice(2);
-          const gen = level ? { thinkingConfig: { thinkingLevel: level } } : {};
-          const contents = [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: img } }, { text: "Task: search the web for kaggle, then tell me which bookmark is right of booking.com. Take the next step." }] }];
-          for (let step = 1; step <= 3; step++) {
-            const t0 = Date.now();
-            const r = await fetch(process.env.W + "/chat", { method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ model, contents, tools, toolConfig: { functionCallingConfig: { mode: "ANY" } }, generationConfig: gen }) });
-            const txt = await r.text();
-            if (r.status !== 200) { console.log(model, level, "step", step, r.status, txt.slice(0, 400)); break; }
-            const parts = [];
-            for (const line of txt.split("\n")) if (line.startsWith("data: ")) { const e = JSON.parse(line.slice(6)); for (const p of e.candidates?.[0]?.content?.parts ?? []) parts.push(p); }
-            const calls = parts.filter(p => p.functionCall);
-            console.log(model, level, "step", step, Date.now() - t0 + "ms", JSON.stringify(calls.map(p => p.functionCall)), "sig:", calls.some(p => p.thoughtSignature));
-            if (!calls.length || calls[0].functionCall.name === "finish") break;
-            contents.push({ role: "model", parts });
-            contents.push({ role: "user", parts: [
-              ...calls.map(p => ({ functionResponse: { name: p.functionCall.name, ...(p.functionCall.id ? { id: p.functionCall.id } : {}), response: { result: "done" } } })),
-              { inlineData: { mimeType: "image/jpeg", data: img } },
-              { text: "Here is the screen now. Take the next step." } ] });
-          }
-          JS
-          for m in gemini-3.6-flash gemini-3.5-flash; do node loop.mjs $m; done
-          node loop.mjs gemini-3.6-flash low || true
-          node loop.mjs gemini-3.6-flash minimal || true
+          H=$HOME/clihome/.gemini; mkdir -p $H
+          cat > $H/settings.json <<'J'
+          {"security":{"auth":{"selectedType":"gemini-api-key"}},"context":{"fileName":"AGENTS.md"},"tools":{"exclude":["google_web_search"]}}
+          J
+          mkdir -p $HOME/ws/output $HOME/ws/tmp $HOME/ws/.gemini
+          printf '{"context":{"fileName":"AGENTS.md"},"model":{"name":"gemini-3.6-flash"}}' > $HOME/ws/.gemini/settings.json
+          printf '# Helper\nYou are Helper, a background helper. Put anything you make in output/. Finish the job before you reply.\n' > $HOME/ws/AGENTS.md
+      - name: Turn 1 - build a website
+        run: |
+          cd $HOME/ws
+          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
+          start=$(date +%s)
+          $HOME/rt/gemini -m gemini-3.6-flash -p "Build me a simple one-page website for a coffee shop called Bean There, with a menu and opening hours. Put it in output/site." -o stream-json --approval-mode yolo --skip-trust --session-id 11111111-2222-4333-8444-555555555555 < /dev/null > t1.jsonl 2> t1.err; echo "exit $? after $(( $(date +%s)-start ))s"
+          cut -c1-300 t1.jsonl | head -60; echo ---stderr; tail -c 1500 t1.err
+          find output -type f | head; wc -c output/site/* 2>/dev/null || true
+      - name: Turn 2 - resume
+        run: |
+          cd $HOME/ws
+          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
+          $HOME/rt/gemini -m gemini-3.6-flash -p "What did you just build? One sentence." -o stream-json --approval-mode yolo --skip-trust --resume 11111111-2222-4333-8444-555555555555 < /dev/null > t2.jsonl 2> t2.err; echo "exit $?"
+          cut -c1-300 t2.jsonl | tail -8; echo ---stderr; tail -c 800 t2.err
+      - name: Include directories outside the workspace
+        run: |
+          cd $HOME/ws; mkdir -p $HOME/Desktop $HOME/Documents; echo "hello from desktop" > $HOME/Desktop/note.txt
+          export GOOGLE_GEMINI_BASE_URL=$W/gemini GEMINI_API_KEY=clicky-worker GEMINI_CLI_HOME=$HOME/clihome NO_COLOR=1
+          $HOME/rt/gemini -m gemini-3.6-flash -p "Read ~/Desktop/note.txt with your file tool and tell me what it says." -o stream-json --approval-mode yolo --skip-trust --include-directories $HOME/Desktop --include-directories $HOME/Documents --session-id 21111111-2222-4333-8444-555555555555 < /dev/null > t3.jsonl 2> t3.err; echo "exit $?"
+          cut -c1-300 t3.jsonl | tail -8; tail -c 600 t3.err
