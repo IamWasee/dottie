@@ -29,9 +29,88 @@ struct DottieDrawing: Identifiable, Equatable {
     let note: String?
 }
 
+/// A pen color for teaching drawings. Gold is Dottie's gold-to-purple
+/// marker; the rest are flat chalk colors for telling things apart.
+enum DottieInk: String, CaseIterable {
+    case gold, white, red, blue, green, yellow, pink, purple, orange
+
+    var color: Color {
+        switch self {
+        case .gold: return Color(red: 1.0, green: 0.8, blue: 0.36)
+        case .white: return Color(red: 0.97, green: 0.97, blue: 0.95)
+        case .red: return Color(red: 1.0, green: 0.36, blue: 0.36)
+        case .blue: return Color(red: 0.36, green: 0.66, blue: 1.0)
+        case .green: return Color(red: 0.4, green: 0.88, blue: 0.5)
+        case .yellow: return Color(red: 1.0, green: 0.92, blue: 0.3)
+        case .pink: return Color(red: 1.0, green: 0.5, blue: 0.78)
+        case .purple: return Color(red: 0.72, green: 0.52, blue: 1.0)
+        case .orange: return Color(red: 1.0, green: 0.6, blue: 0.24)
+        }
+    }
+
+    var strokeStyle: AnyShapeStyle {
+        guard self == .gold else { return AnyShapeStyle(color) }
+        return AnyShapeStyle(LinearGradient(
+            colors: [
+                Color(red: 1.0, green: 0.84, blue: 0.38),
+                Color(red: 0.95, green: 0.45, blue: 0.55),
+                Color(red: 0.55, green: 0.3, blue: 0.85)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        ))
+    }
+}
+
+/// One piece of a teaching drawing (explain_on_screen): a pen stroke, a
+/// dot, a filled area, handwritten text, or the dark board it all sits on.
+/// Points are global AppKit coordinates (bottom-left origin).
+struct DottieFigure: Identifiable, Equatable {
+    enum Shape: Equatable {
+        /// smooth: a curve through the points instead of straight segments.
+        case stroke(points: [CGPoint], closed: Bool, smooth: Bool, dashed: Bool, arrowAtStart: Bool, arrowAtEnd: Bool)
+        case dot(center: CGPoint, radius: CGFloat)
+        case fill(points: [CGPoint])
+        /// Written left to right; `origin` is the middle of its left edge.
+        case text(String, origin: CGPoint, fontSize: CGFloat)
+        case board(rect: CGRect)
+    }
+
+    let id = UUID()
+    let shape: Shape
+    var ink: DottieInk = .gold
+    var lineWidth: CGFloat = 3.5
+    /// Seconds after it's added before the pen starts on it.
+    var delay: Double = 0
+    var drawDuration: Double = 0.6
+
+    /// Roughly what it covers, to know which screen draws it.
+    var bounds: CGRect {
+        switch shape {
+        case .stroke(let points, _, _, _, _, _), .fill(let points):
+            return ScreenAnnotation.boundingRect(of: points).insetBy(dx: -20, dy: -20)
+        case .dot(let center, let radius):
+            return CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+        case .text(let text, let origin, let fontSize):
+            let width = DottieFigure.estimatedTextWidth(text, fontSize: fontSize)
+            return CGRect(x: origin.x, y: origin.y - fontSize, width: width, height: fontSize * 2)
+        case .board(let rect):
+            return rect
+        }
+    }
+
+    static func estimatedTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
+        CGFloat(text.count) * fontSize * 0.56 + 6
+    }
+}
+
 @MainActor
 final class DottieDrawingOverlayManager: ObservableObject {
     @Published private(set) var drawings: [DottieDrawing] = []
+    /// Teaching drawings. They stay until cleared, or a while after the
+    /// explanation ends.
+    @Published private(set) var figures: [DottieFigure] = []
+    private var figureFadeOutTask: Task<Void, Never>?
 
     private static let drawingLifetimeSeconds: TimeInterval = 8
     private var overlayWindows: [NSWindow] = []
@@ -51,6 +130,29 @@ final class DottieDrawingOverlayManager: ObservableObject {
     func clear() {
         fadeOutTask?.cancel()
         drawings.removeAll()
+        clearFigures()
+    }
+
+    func addFigures(_ newFigures: [DottieFigure]) {
+        guard !newFigures.isEmpty else { return }
+        showWindowsIfNeeded()
+        figureFadeOutTask?.cancel()
+        figures.append(contentsOf: newFigures)
+    }
+
+    func clearFigures() {
+        figureFadeOutTask?.cancel()
+        figures.removeAll()
+    }
+
+    /// Lets the user read the finished drawing, then fades it.
+    func fadeFigures(after seconds: TimeInterval) {
+        figureFadeOutTask?.cancel()
+        figureFadeOutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.figures.removeAll()
+        }
     }
 
     private func scheduleFadeOut() {
@@ -74,7 +176,9 @@ final class DottieDrawingOverlayManager: ObservableObject {
             window.backgroundColor = .clear
             window.hasShadow = false
             window.ignoresMouseEvents = true
-            window.level = .screenSaver
+            // Just under the cursor's overlay, so the pen stays on top of
+            // the board and the drawing.
+            window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
             window.isReleasedWhenClosed = false
             let hostingView = NSHostingView(rootView: DottieDrawingCanvasView(overlayManager: self, screenFrame: screen.frame))
@@ -94,6 +198,10 @@ private struct DottieDrawingCanvasView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            ForEach(overlayManager.figures.filter { $0.bounds.intersects(screenFrame) }) { figure in
+                DottieFigureView(figure: figure, screenFrame: screenFrame)
+                    .transition(.opacity)
+            }
             ForEach(overlayManager.drawings.filter { $0.targetRect.intersects(screenFrame) }) { drawing in
                 DottieDrawingMarkView(drawing: drawing, localTargetRect: localRect(for: drawing.targetRect), canvasSize: screenFrame.size)
                     .transition(.opacity)
@@ -101,6 +209,7 @@ private struct DottieDrawingCanvasView: View {
         }
         .frame(width: screenFrame.width, height: screenFrame.height, alignment: .topLeading)
         .animation(.easeOut(duration: 0.4), value: overlayManager.drawings)
+        .animation(.easeOut(duration: 0.5), value: overlayManager.figures)
     }
 
     /// Global AppKit (bottom-left origin) to this screen's SwiftUI space.
@@ -185,6 +294,157 @@ private struct DottieDrawingMarkView: View {
         let below = CGPoint(x: markBounds.midX, y: markBounds.maxY + 18)
         if below.y + 16 < canvasSize.height { return below }
         return CGPoint(x: markBounds.midX, y: markBounds.minY - 18)
+    }
+}
+
+/// One teaching figure, drawn the way a pen would: strokes grow from their
+/// start, text is written left to right, the board fades in.
+private struct DottieFigureView: View {
+    let figure: DottieFigure
+    let screenFrame: CGRect
+    @State private var progress: CGFloat = 0
+    /// Arrowheads go on once the line reaches its end.
+    @State private var arrowHeadOpacity: Double = 0
+
+    /// A friendly handwriting face; macOS ships Noteworthy.
+    private static func handwriting(size: CGFloat) -> Font {
+        NSFont(name: "Noteworthy-Bold", size: size) != nil
+            ? .custom("Noteworthy-Bold", size: size)
+            : .system(size: size, weight: .semibold, design: .rounded)
+    }
+
+    var body: some View {
+        content
+            .onAppear {
+                let animation: Animation
+                switch figure.shape {
+                case .text: animation = .linear(duration: figure.drawDuration)
+                case .board, .fill, .dot: animation = .easeOut(duration: figure.drawDuration)
+                case .stroke: animation = .timingCurve(0.45, 0.05, 0.25, 1, duration: figure.drawDuration)
+                }
+                withAnimation(animation.delay(figure.delay)) {
+                    progress = 1
+                }
+                withAnimation(.easeOut(duration: 0.15).delay(figure.delay + figure.drawDuration * 0.92)) {
+                    arrowHeadOpacity = 1
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch figure.shape {
+        case .board(let rect):
+            let localBoard = localRect(rect)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.08, green: 0.09, blue: 0.12).opacity(0.93))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 8)
+                .frame(width: localBoard.width, height: localBoard.height)
+                .position(x: localBoard.midX, y: localBoard.midY)
+                .opacity(Double(progress))
+
+        case .fill(let points):
+            Path { path in
+                path.addLines(points.map(localPoint))
+                path.closeSubpath()
+            }
+            .fill(figure.ink.color.opacity(0.2))
+            .opacity(Double(progress))
+
+        case .dot(let center, let radius):
+            Circle()
+                .fill(figure.ink.color)
+                .frame(width: radius * 2, height: radius * 2)
+                .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
+                .scaleEffect(progress)
+                .position(localPoint(center))
+
+        case .text(let text, let origin, let fontSize):
+            let localOrigin = localPoint(origin)
+            Text(text)
+                .font(Self.handwriting(size: fontSize))
+                .foregroundColor(figure.ink.color)
+                .fixedSize()
+                .shadow(color: .black.opacity(0.55), radius: 1.5, x: 0, y: 1)
+                .mask(
+                    GeometryReader { proxy in
+                        Rectangle().frame(width: proxy.size.width * progress, height: proxy.size.height)
+                    }
+                )
+                .frame(width: 2400, alignment: .leading)
+                .position(x: localOrigin.x + 1200, y: localOrigin.y)
+
+        case .stroke(let points, let closed, let smooth, let dashed, let arrowAtStart, let arrowAtEnd):
+            let localPoints = points.map(localPoint)
+            ZStack {
+                Self.strokePath(through: localPoints, closed: closed, smooth: smooth)
+                    .trim(from: 0, to: progress)
+                    .stroke(figure.ink.strokeStyle, style: StrokeStyle(
+                        lineWidth: figure.lineWidth,
+                        lineCap: .round,
+                        lineJoin: .round,
+                        dash: dashed ? [10, 8] : []
+                    ))
+                Self.arrowHeads(for: localPoints, atStart: arrowAtStart, atEnd: arrowAtEnd, size: 9 + figure.lineWidth * 1.6)
+                    .stroke(figure.ink.strokeStyle, style: StrokeStyle(lineWidth: figure.lineWidth, lineCap: .round, lineJoin: .round))
+                    .opacity(arrowHeadOpacity)
+            }
+            .shadow(color: .black.opacity(0.4), radius: 1.5, x: 0, y: 1)
+        }
+    }
+
+    private func localPoint(_ globalPoint: CGPoint) -> CGPoint {
+        CGPoint(x: globalPoint.x - screenFrame.minX, y: screenFrame.maxY - globalPoint.y)
+    }
+
+    private func localRect(_ globalRect: CGRect) -> CGRect {
+        CGRect(x: globalRect.minX - screenFrame.minX, y: screenFrame.maxY - globalRect.maxY, width: globalRect.width, height: globalRect.height)
+    }
+
+    private static func strokePath(through points: [CGPoint], closed: Bool, smooth: Bool) -> Path {
+        var path = Path()
+        guard let firstPoint = points.first else { return path }
+        guard smooth, points.count > 2 else {
+            path.move(to: firstPoint)
+            for point in points.dropFirst() { path.addLine(to: point) }
+            if closed { path.closeSubpath() }
+            return path
+        }
+        // Catmull-Rom, wrapping around for a closed curve.
+        let loopPoints = closed ? points + [firstPoint] : points
+        path.move(to: firstPoint)
+        for index in 0..<(loopPoints.count - 1) {
+            let previous = index > 0 ? loopPoints[index - 1] : (closed ? points[points.count - 1] : loopPoints[0])
+            let current = loopPoints[index]
+            let next = loopPoints[index + 1]
+            let afterNext = index + 2 < loopPoints.count ? loopPoints[index + 2] : (closed ? loopPoints[1] : next)
+            let control1 = CGPoint(x: current.x + (next.x - previous.x) / 6, y: current.y + (next.y - previous.y) / 6)
+            let control2 = CGPoint(x: next.x - (afterNext.x - current.x) / 6, y: next.y - (afterNext.y - current.y) / 6)
+            path.addCurve(to: next, control1: control1, control2: control2)
+        }
+        return path
+    }
+
+    private static func arrowHeads(for points: [CGPoint], atStart: Bool, atEnd: Bool, size: CGFloat) -> Path {
+        var path = Path()
+        func addHead(tip: CGPoint, from previous: CGPoint) {
+            let direction = atan2(tip.y - previous.y, tip.x - previous.x)
+            for wingAngle in [CGFloat.pi * 0.82, -CGFloat.pi * 0.82] {
+                path.move(to: CGPoint(x: tip.x + size * cos(direction + wingAngle), y: tip.y + size * sin(direction + wingAngle)))
+                path.addLine(to: tip)
+            }
+        }
+        if atEnd, points.count >= 2 {
+            addHead(tip: points[points.count - 1], from: points[points.count - 2])
+        }
+        if atStart, points.count >= 2 {
+            addHead(tip: points[0], from: points[1])
+        }
+        return path
     }
 }
 

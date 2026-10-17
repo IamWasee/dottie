@@ -599,6 +599,8 @@ final class GeminiLiveVoiceClient {
 
         declarations.append(DottieCursorPet.functionDeclaration)
 
+        declarations.append(DottieTeaching.functionDeclaration)
+
         declarations += DottieSmartHome.functionDeclarations
 
         return declarations
@@ -946,7 +948,8 @@ final class GeminiLiveVoiceClient {
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             case _ where DottieMacTools.functionNames.contains(functionName) || DottieWorkTools.functionNames.contains(functionName)
-                || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName):
+                || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName)
+                || functionName == DottieTeaching.functionName:
                 handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
