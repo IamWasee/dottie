@@ -130,7 +130,7 @@ enum DottieScreenAction {
     private static var drawOnScreenDeclaration: [String: Any] {
         [
             "name": "draw_on_screen",
-            "description": "Draw on top of the user's screen to show them something: a circle or box around it, an arrow pointing at it, an underline below it, or a soft highlight over a whole area (a panel or section), with an optional short note. It fades away after a few seconds." + onlyWhenAskedNote,
+            "description": "Quickly mark one control or area of an app: a circle or box around it, an arrow pointing at it, an underline below it, or a soft highlight over a whole area (a panel or section), with an optional short note. It fades away after a few seconds. Use it when the user asks you to circle or mark something. To explain anything (math, a diagram, a video, several things at once), use explain_on_screen instead, which finds things exactly and draws step by step.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [

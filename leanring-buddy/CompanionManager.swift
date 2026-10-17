@@ -56,6 +56,9 @@ final class CompanionManager: ObservableObject {
     /// Custom speech bubble text for the pointing animation. When set,
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
+    /// While Dottie draws an explanation, the stroke her cursor traces with
+    /// its caption; BlueCursorView follows it like a pen.
+    @Published var penTrace: DottiePenTrace?
 
     // MARK: - Onboarding Video State (shared across all screen overlays)
 
@@ -788,6 +791,9 @@ final class CompanionManager: ObservableObject {
             currentResponseTask?.cancel()
             stopAllSpeechPlayback()
             clearDetectedElementLocation()
+            // The user is talking over the explanation: stop drawing, but
+            // leave what's drawn so they can ask about it.
+            stopTeaching(clearingDrawing: false)
             currentTurnAnnotation = nil
             screenAnnotationManager.startTracking()
             if voiceMode == .live {
@@ -950,7 +956,10 @@ final class CompanionManager: ObservableObject {
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
     doing things on screen:
-    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click, type or draw on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. prefer keyboard shortcuts over clicking whenever one exists, they never miss: close a tab cmd+w, new tab cmd+t, reopen a closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close a window cmd+shift+w, switch apps by opening them, zoom cmd+= and cmd+-. when you do click, pass the label exactly as it appears on screen, so the click lands on the right thing. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click or type on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. prefer keyboard shortcuts over clicking whenever one exists, they never miss: close a tab cmd+w, new tab cmd+t, reopen a closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close a window cmd+shift+w, switch apps by opening them, zoom cmd+= and cmd+-. when you do click, pass the label exactly as it appears on screen, so the click lands on the right thing. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+
+    explaining with drawings:
+    you're a tutor with a marker. whenever you explain something visual or mathematical (a geometry or algebra problem in a video, a graph, an equation, a diagram, a chart, a physics setup, a chess position), don't just talk: call explain_on_screen and draw it, without waiting to be asked. mark what's on screen (circle the point, draw the radius, put a right-angle mark where the tangent meets it, arrow from the slope to where it's used) and work the math out step by step on a board (surface board_right or board_left, whichever covers less of what matters): each line of working is a text step, top to bottom, like "m = (8−2)/(5−3) = 3", then "m⊥ = −1/3". give every step a short caption for your cursor ("right angle", "slope = 3") and a say line; they're spoken one by one while it draws, so after calling, say only "okay, watch" or similar. name things already on screen as anchors with a clear description (what it looks like and where) instead of guessing their coordinates; only say you marked something if you anchored it. use plot to draw a function's real graph, measure for lengths, angle with the size, ticks for equal sides. if the user says stop or clear, call clear_drawings.
 
     teaching:
     clicky was made to help people learn their apps, so this matters most. when the user wants to learn how to do something themselves ("how do i add a sound effect in premiere", "where do i go for effects", "walk me through exporting") call guide_user with mode steps: the app points and draws each step, waits for their click, then shows the next. when they want a rundown or tour of the app or screen ("tell me how to use this app", "give me a complete rundown"), call guide_user with mode tour. for a single "where is x" that's visible right now, just point at it. during a guide, when they say next, done or got it, call guide_next; when they say stop, call stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
@@ -1092,6 +1101,9 @@ final class CompanionManager: ObservableObject {
             if functionName == DottieCursorPet.functionName {
                 return self.performCursorTool(arguments: arguments)
             }
+            if functionName == DottieTeaching.functionName {
+                return self.startTeaching(arguments: arguments)
+            }
             if DottieSmartHome.functionNames.contains(functionName) {
                 return await self.performSmartHomeTool(functionName: functionName, arguments: arguments)
             }
@@ -1232,8 +1244,149 @@ final class CompanionManager: ObservableObject {
             return "drew a \(shape.rawValue) on screen."
 
         case .clearDrawings:
+            stopTeaching(clearingDrawing: true)
             drawingOverlayManager.clear()
             return "cleared the drawings."
+        }
+    }
+
+    // MARK: - Teaching with drawings
+
+    private var teachingTask: Task<Void, Never>?
+    /// The step line being said, so a stopped explanation doesn't keep
+    /// talking after the user does.
+    private var teachingNarrationTask: Task<Void, Never>?
+
+    /// explain_on_screen: draws the explanation step by step with the
+    /// cursor as the pen. Returns at once so Live can say "okay, watch";
+    /// each step's line is spoken as it's drawn.
+    private func startTeaching(arguments: [String: Any]) -> String {
+        guard let plan = DottieTeaching.Plan(arguments: arguments) else {
+            return "error: give steps, each with a kind and points."
+        }
+        stopTeaching(clearingDrawing: true)
+        stopGuide()
+        drawingOverlayManager.clear()
+        let mouseLocation = NSEvent.mouseLocation
+        guard let cursorScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main else {
+            return "couldn't find the screen."
+        }
+        let boardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        let screenFrame = currentLiveTurnScreenFrame
+        let userQuestion = currentLiveTurnTypedText ?? lastTranscript ?? ""
+        let hasSpokenLines = plan.steps.contains { $0.say != nil }
+        print("✏️ Teaching: \(plan.steps.count) steps on \(plan.surface.rawValue), \(plan.anchors.count) anchors")
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        showOverlayTransientlyIfNeeded()
+        teachingTask = Task { [weak self] in
+            await self?.runTeaching(plan: plan, screenFrame: screenFrame, displayFrame: cursorScreen.frame,
+                                    boardRect: boardRect, userQuestion: userQuestion, speaksLines: hasSpokenLines)
+        }
+        return hasSpokenLines
+            ? "drawing it now. say only two or three words like 'okay, watch'; each step's line comes to you to say while it's drawn."
+            : "drawing it now, step by step. explain it in the same order, briefly, while it draws."
+    }
+
+    private func runTeaching(
+        plan: DottieTeaching.Plan,
+        screenFrame: CompanionCompositeScreenFrame?,
+        displayFrame: CGRect,
+        boardRect: CGRect?,
+        userQuestion: String,
+        speaksLines: Bool
+    ) async {
+        // Finding the anchors starts now and only holds up the first step
+        // that needs them.
+        let anchorNames = plan.anchorNames
+        var anchorLookup: Task<[String: CGRect], Never>?
+        if !plan.anchors.isEmpty {
+            let anchors = plan.anchors
+            anchorLookup = Task {
+                await DottieTeaching.locateAnchors(anchors, displayFrame: displayFrame, userQuestion: userQuestion)
+            }
+        }
+        var anchorFrames: [String: CGRect]?
+
+        if let boardRect {
+            drawingOverlayManager.addFigures([DottieFigure(shape: .board(rect: boardRect), drawDuration: 0.35)])
+            try? await Task.sleep(nanoseconds: 350_000_000)
+        }
+        // Start with Live's "okay, watch" out of the way, so drawing and
+        // speaking stay together.
+        if speaksLines {
+            for _ in 0..<40 {
+                if !(isLiveTurnInFlight || voiceState != .idle) || Task.isCancelled { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+
+        var missedSteps = 0
+        for step in plan.steps {
+            if Task.isCancelled { break }
+            let usesAnchors = step.points.contains { reference in
+                let name = reference.lowercased()
+                return anchorNames.contains(name) || anchorNames.contains(where: { name.hasPrefix($0 + ".") })
+            }
+            if usesAnchors && anchorFrames == nil {
+                notchPresenter.showScreenTaskStep("finding it on your screen", title: "drawing")
+                anchorFrames = await anchorLookup?.value ?? [:]
+                notchPresenter.endScreenTask()
+                if Task.isCancelled { break }
+            }
+            let space = DottieTeaching.Space(
+                // Anchored steps point at the screen even with a board open.
+                boardRect: usesAnchors ? nil : boardRect,
+                anchorFrames: anchorFrames ?? [:],
+                screenPoint: { normalizedX, normalizedY in
+                    guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else { return nil }
+                    return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
+                }
+            )
+            var narration: Task<Void, Never>?
+            if let line = step.say {
+                narration = Task { [weak self] in await self?.narrate(line) }
+                teachingNarrationTask = narration
+            }
+            if let drawn = DottieTeaching.draw(step, in: space) {
+                let leadInSeconds = 0.4
+                penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
+                                          caption: step.caption.map(DottieMathText.pretty), displayFrame: displayFrame)
+                try? await Task.sleep(nanoseconds: UInt64(leadInSeconds * 1_000_000_000))
+                if Task.isCancelled { break }
+                drawingOverlayManager.addFigures(drawn.figures)
+                // Time to see it and read the caption before the next one.
+                let captionSeconds = step.caption.map { min(2.0, 0.6 + Double($0.count) * 0.04) } ?? 0.3
+                try? await Task.sleep(nanoseconds: UInt64((drawn.duration + captionSeconds) * 1_000_000_000))
+            } else {
+                missedSteps += 1
+                print("✏️ Couldn't draw a \(step.kind.rawValue) step: \(step.points)")
+            }
+            await narration?.value
+        }
+
+        // A stopped explanation was already tidied up, maybe with a new one
+        // under way.
+        guard !Task.isCancelled else { return }
+        penTrace = nil
+        teachingTask = nil
+        teachingNarrationTask = nil
+        if missedSteps > 0 {
+            print("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
+        }
+        drawingOverlayManager.fadeFigures(after: plan.keepsDrawing ? 600 : 60)
+        scheduleTransientHideIfNeeded()
+    }
+
+    /// Stops drawing an explanation. The drawing itself can stay up.
+    private func stopTeaching(clearingDrawing: Bool) {
+        teachingTask?.cancel()
+        teachingTask = nil
+        teachingNarrationTask?.cancel()
+        teachingNarrationTask = nil
+        penTrace = nil
+        if clearingDrawing {
+            drawingOverlayManager.clearFigures()
         }
     }
 
@@ -2490,6 +2643,7 @@ final class CompanionManager: ObservableObject {
     /// the companion is idle, so Escape keeps working normally elsewhere.
     private func handleEscapeInterrupt() {
         let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying || screenTaskRunner.isRunning || guide.isActive
+            || teachingTask != nil
         guard isCompanionBusy else { return }
 
         print("⎋ Escape interrupt")
@@ -2510,6 +2664,7 @@ final class CompanionManager: ObservableObject {
         screenAnnotationManager.clear()
         stopScreenTask()
         stopGuide()
+        stopTeaching(clearingDrawing: true)
         fireLiveTurnFinishedHandler()
 
         isLiveTurnInFlight = false

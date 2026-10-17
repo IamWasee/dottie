@@ -470,6 +470,19 @@ struct BlueCursorView: View {
 
             startNavigatingToElement(screenLocation: screenLocation)
         }
+        .onChange(of: companionManager.penTrace) { newTrace in
+            guard let trace = newTrace else {
+                // The explanation ended or was stopped: put the pen down.
+                if buddyNavigationMode != .followingCursor && !isReturningToCursor
+                    && companionManager.detectedElementScreenLocation == nil {
+                    endPenTrace()
+                }
+                return
+            }
+            guard screenFrame.contains(CGPoint(x: trace.displayFrame.midX, y: trace.displayFrame.midY))
+                  || trace.displayFrame == screenFrame else { return }
+            startPenTrace(trace)
+        }
     }
 
     /// Whether the buddy triangle should be visible on this screen.
@@ -483,7 +496,7 @@ struct BlueCursorView: View {
         case .followingCursor:
             // If another screen's BlueCursorView is navigating to an element,
             // hide the cursor on this screen to prevent a duplicate buddy
-            if companionManager.detectedElementScreenLocation != nil {
+            if companionManager.detectedElementScreenLocation != nil || companionManager.penTrace != nil {
                 return false
             }
             return isCursorOnThisScreen
@@ -587,6 +600,7 @@ struct BlueCursorView: View {
     /// for a "swooping" feel, and the glow intensifies during flight.
     private func animateBezierFlightArc(
         to destination: CGPoint,
+        fixedDurationSeconds: Double? = nil,
         onComplete: @escaping () -> Void
     ) {
         navigationAnimationTimer?.invalidate()
@@ -600,9 +614,9 @@ struct BlueCursorView: View {
 
         // Flight duration scales with distance: short hops are quick, long
         // flights are more dramatic. Clamped to 0.6s–1.4s.
-        let flightDurationSeconds = min(max(distance / 800.0, 0.6), 1.4)
+        let flightDurationSeconds = fixedDurationSeconds ?? min(max(distance / 800.0, 0.6), 1.4)
         let frameInterval: Double = 1.0 / 60.0
-        let totalFrames = Int(flightDurationSeconds / frameInterval)
+        let totalFrames = max(1, Int(flightDurationSeconds / frameInterval))
         var currentFrame = 0
 
         // Control point for the quadratic bezier arc. Offset the midpoint
@@ -736,6 +750,119 @@ struct BlueCursorView: View {
                 characterIndex: characterIndex + 1,
                 onComplete: onComplete
             )
+        }
+    }
+
+    // MARK: - Drawing with the cursor as a pen
+
+    /// Flies to the stroke's start, follows it as it's drawn, then says
+    /// its caption and holds there until the next stroke.
+    private func startPenTrace(_ trace: DottiePenTrace) {
+        guard !showWelcome || welcomeText.isEmpty, !trace.points.isEmpty else { return }
+        // The pen tip sits where the cursor would point.
+        let localPoints = trace.points.map { globalPoint -> CGPoint in
+            let localPoint = convertScreenPointToSwiftUICoordinates(globalPoint)
+            return CGPoint(x: localPoint.x + Self.pointingOffsetFromTarget.width, y: localPoint.y + Self.pointingOffsetFromTarget.height)
+        }
+        navigationAnimationTimer?.invalidate()
+        navigationBubbleText = ""
+        navigationBubbleOpacity = 0.0
+        buddyNavigationMode = .navigatingToTarget
+        isReturningToCursor = false
+        cursorPositionWhenNavigationStarted = convertScreenPointToSwiftUICoordinates(NSEvent.mouseLocation)
+        let traceID = trace.id
+
+        animateBezierFlightArc(to: localPoints[0], fixedDurationSeconds: trace.leadInSeconds) {
+            guard self.companionManager.penTrace?.id == traceID else { return }
+            self.followPenPath(localPoints, durationSeconds: trace.drawSeconds) {
+                guard self.companionManager.penTrace?.id == traceID else { return }
+                self.showPenCaption(trace.caption, traceID: traceID)
+            }
+        }
+    }
+
+    /// Moves along the stroke at the pen's pace, easing in and out.
+    private func followPenPath(_ points: [CGPoint], durationSeconds: Double, onComplete: @escaping () -> Void) {
+        navigationAnimationTimer?.invalidate()
+        triangleRotationDegrees = -35.0
+        buddyFlightScale = 1.0
+        guard points.count > 1, durationSeconds > 0.05 else {
+            if let lastPoint = points.last { cursorPosition = lastPoint }
+            onComplete()
+            return
+        }
+        var cumulativeLengths: [CGFloat] = [0]
+        for index in 1..<points.count {
+            cumulativeLengths.append(cumulativeLengths[index - 1] + hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y))
+        }
+        let totalLength = max(cumulativeLengths[cumulativeLengths.count - 1], 1)
+        let frameInterval: Double = 1.0 / 60.0
+        let totalFrames = max(1, Int(durationSeconds / frameInterval))
+        var currentFrame = 0
+        var segmentIndex = 0
+
+        navigationAnimationTimer = Timer.scheduledTimer(withTimeInterval: frameInterval, repeats: true) { _ in
+            currentFrame += 1
+            if currentFrame >= totalFrames {
+                self.navigationAnimationTimer?.invalidate()
+                self.navigationAnimationTimer = nil
+                self.cursorPosition = points[points.count - 1]
+                onComplete()
+                return
+            }
+            let linearProgress = Double(currentFrame) / Double(totalFrames)
+            let easedProgress = linearProgress * linearProgress * (3.0 - 2.0 * linearProgress)
+            let lengthSoFar = CGFloat(easedProgress) * totalLength
+            while segmentIndex < points.count - 2 && cumulativeLengths[segmentIndex + 1] < lengthSoFar {
+                segmentIndex += 1
+            }
+            let segmentStart = cumulativeLengths[segmentIndex]
+            let segmentLength = max(cumulativeLengths[segmentIndex + 1] - segmentStart, 0.001)
+            let fraction = min(max((lengthSoFar - segmentStart) / segmentLength, 0), 1)
+            let from = points[segmentIndex]
+            let to = points[segmentIndex + 1]
+            self.cursorPosition = CGPoint(x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction)
+        }
+    }
+
+    private func showPenCaption(_ caption: String?, traceID: UUID) {
+        buddyNavigationMode = .pointingAtTarget
+        triangleRotationDegrees = -35.0
+        navigationBubbleText = ""
+        navigationBubbleSize = .zero
+        guard let caption, !caption.isEmpty else {
+            holdPenUntilNextStroke(traceID)
+            return
+        }
+        navigationBubbleOpacity = 1.0
+        navigationBubbleScale = 0.5
+        streamNavigationBubbleCharacter(phrase: caption, characterIndex: 0) {
+            self.holdPenUntilNextStroke(traceID)
+        }
+    }
+
+    /// Stays put with the caption up; the next stroke takes over through
+    /// onChange, and the end of the explanation flies the cursor home.
+    private func holdPenUntilNextStroke(_ traceID: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard self.buddyNavigationMode == .pointingAtTarget else { return }
+            if self.companionManager.penTrace?.id == traceID {
+                self.holdPenUntilNextStroke(traceID)
+            } else if self.companionManager.penTrace == nil {
+                self.endPenTrace()
+            }
+        }
+    }
+
+    private func endPenTrace() {
+        navigationAnimationTimer?.invalidate()
+        navigationAnimationTimer = nil
+        navigationBubbleOpacity = 0.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard self.buddyNavigationMode != .followingCursor, !self.isReturningToCursor,
+                  self.companionManager.penTrace == nil,
+                  self.companionManager.detectedElementScreenLocation == nil else { return }
+            self.startFlyingBackToCursor()
         }
     }
 
