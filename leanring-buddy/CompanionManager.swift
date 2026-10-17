@@ -959,7 +959,7 @@ final class CompanionManager: ObservableObject {
 
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence.
-    jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in order. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting.
+    jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in the order the user said them. inside one task, keep the user's order and words ("merge PR 36, then PR 37"), never reorder. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting. a job the user stopped (with the stop button, escape or by asking) is gone: if they ask for it again, call do_task_on_screen again instead of saying you're on it.
     your look: you can shapeshift. when the user says "turn into a cat", "be a ghost", "change your cursor" or "go walk around", call change_cursor with the shape and its emoji; animals wander around the screen on their own like a pet, other shapes follow the mouse unless the user wants them to roam. "turn back" or "be normal" is shape normal.
     games: when the user asks you to do something inside a game ("go grab that sword", "walk over to the shop", "play this level for me"), call do_task_on_screen with game true: it moves with the keyboard, turns the camera and clicks, in quick steps. if they mean a picture they showed you, pass its name in reference_images.
 
@@ -1135,6 +1135,21 @@ final class CompanionManager: ObservableObject {
         if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
             liveVoiceClient.sendTurnContextText(compositeScreenFrame.layoutDescription)
         }
+        // Not on a guide line, which must be said word for word.
+        if includesScreenFrame && !notesForNextLiveTurn.isEmpty {
+            liveVoiceClient.sendTurnContextText(notesForNextLiveTurn.joined(separator: "\n"))
+            notesForNextLiveTurn = []
+        }
+    }
+
+    /// Things that changed outside the conversation (the user stopped a job
+    /// with the notch button or Escape), told to Live with the next turn.
+    /// Without this, Live still thinks a stopped job is running and answers
+    /// "I'm on it" when the user asks for it again.
+    private var notesForNextLiveTurn: [String] = []
+
+    private func noteStoppedJob(_ description: String) {
+        notesForNextLiveTurn.append("[note] \(description) was stopped and is not running anymore. if the user asks for it again, start it again with the tool; never say you're still working on it.")
     }
 
     /// Sends the turn's frame again with the circled area marked, plus a
@@ -1339,8 +1354,14 @@ final class CompanionManager: ObservableObject {
     @discardableResult
     private func stopScreenTask() -> Bool {
         let hadQueuedTasks = !queuedScreenTasks.isEmpty
+        for queuedTask in queuedScreenTasks {
+            noteStoppedJob("the waiting on-screen job \"\(queuedTask.text)\"")
+        }
         queuedScreenTasks.removeAll()
+        let stoppedTaskText = currentScreenTaskText
         guard screenTaskRunner.stop() else { return hadQueuedTasks }
+        currentScreenTaskText = nil
+        noteStoppedJob("the on-screen job \"\(stoppedTaskText ?? "you started")\"")
         print("🧭 Screen task stopped")
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1353,7 +1374,9 @@ final class CompanionManager: ObservableObject {
         guard screenTaskRunner.isRunning else {
             return queuedScreenTasks.isEmpty ? "nothing is running." : "nothing is running right now."
         }
+        noteStoppedJob("the on-screen job \"\(currentScreenTaskText ?? "you started")\"")
         screenTaskRunner.stop()
+        currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
         if queuedScreenTasks.isEmpty {
@@ -1463,7 +1486,12 @@ final class CompanionManager: ObservableObject {
 
     @discardableResult
     private func stopGuide() -> Bool {
-        guide.stop()
+        let stoppedGoal = currentGuideGoal
+        let didStop = guide.stop()
+        if didStop {
+            noteStoppedJob("the guide for \"\(stoppedGoal ?? "what you were showing")\"")
+        }
+        return didStop
     }
 
     /// Draws the step's marks, points at its target, and says it.
@@ -2332,7 +2360,9 @@ final class CompanionManager: ObservableObject {
             // The same stop button serves jobs and guides.
             self?.stopScreenTask()
             self?.stopGuide()
-            self?.smartHome.tvTaskRunner.stop()
+            if self?.smartHome.tvTaskRunner.stop() == true {
+                self?.noteStoppedJob("the TV job")
+            }
         }
         notchPresenter.onOpenPeekFile = { [weak self] peekFile in
             self?.notchPresenter.isHovering = false

@@ -22,6 +22,15 @@ enum DottieBrowser {
         let dialect: Dialect
     }
 
+    /// True for a web browser: one Dottie knows, or the default browser.
+    static func isBrowser(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        if knownBrowsers[bundleIdentifier] != nil { return true }
+        guard let probeURL = URL(string: "https://example.com"),
+              let defaultBrowserURL = NSWorkspace.shared.urlForApplication(toOpen: probeURL) else { return false }
+        return Bundle(url: defaultBrowserURL)?.bundleIdentifier == bundleIdentifier
+    }
+
     private static let knownBrowsers: [String: Browser] = [
         "com.apple.Safari": Browser(appName: "Safari", dialect: .safari),
         "com.google.Chrome": Browser(appName: "Google Chrome", dialect: .chromium),
