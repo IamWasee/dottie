@@ -15,7 +15,7 @@ jobs:
       - name: Build lab
         run: |
           sed 's/^private enum/enum/' leanring-buddy/PointingRefiner.swift > lab/PointingRefiner.swift
-          cp leanring-buddy/PointingPrecision.swift leanring-buddy/DottieScreenTaskRunner.swift leanring-buddy/DottieScreenAction.swift lab/
+          cp leanring-buddy/PointingPrecision.swift leanring-buddy/DottieScreenTaskRunner.swift leanring-buddy/DottieScreenAction.swift leanring-buddy/GeminiServerSentEvents.swift lab/
           python3 lab/patch.py
           xcrun swiftc -O -parse-as-library -swift-version 5 lab/*.swift -o pointlab
           ./pointlab --screen
@@ -24,7 +24,9 @@ jobs:
           python3 -m venv v
           v/bin/pip -q install playwright pillow
       - name: Run lab
-        run: v/bin/python lab/run2.py 2>&1 | tee out-log.txt
+        run: |
+          v/bin/python lab/run2.py 2>&1 | tee out-log.txt
+          v/bin/python lab/run.py 2>&1 | tee -a out-log.txt
         continue-on-error: true
       - name: Save results
         if: always()

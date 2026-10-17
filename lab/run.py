@@ -41,7 +41,7 @@ def img_part(path):
     return {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(open(path, "rb").read()).decode()}}
 
 def parse_json(text):
-    m = re.search(r"\{.*\}", text, re.S)
+    m = re.search(r"[\[{].*[\]}]", text, re.S)
     try:
         return json.loads(m.group(0)) if m else None
     except Exception:
@@ -157,6 +157,10 @@ with sync_playwright() as p:
                 dt, out = chat("gemini-3.5-flash", [img_part(live_jpg), {"text": LIVE_PROMPT.format(q=q)}], level="low")
                 live = parse_json(out) or {}
                 time.sleep(3)
+                if isinstance(live, list) and live:
+                    live = live[0]
+                if isinstance(live, dict) and "point" in live and "x" not in live:
+                    live = {"y": live["point"][0], "x": live["point"][1], "label": live.get("label")}
                 if "x" in live and "y" in live:
                     rough = [live["x"] / 1000 * SW, live["y"] / 1000 * SH]
                 else:

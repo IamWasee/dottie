@@ -3,12 +3,12 @@ p = "lab/PointingRefiner.swift"
 s = open(p).read()
 old = """        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return parseBox(from: textFromServerSentEvents(responseData))"""
+        return parseBox(from: GeminiServerSentEvents.text(from: responseData))"""
 new = """        let result: (Data, URLResponse)
         do { result = try await URLSession.shared.data(for: request) } catch { FileHandle.standardError.write("VISION ERR \\(error)\\n".data(using: .utf8)!); return nil }
         let (responseData, response) = result
-        let text = textFromServerSentEvents(responseData)
-        FileHandle.standardError.write("VISION status=\\((response as? HTTPURLResponse)?.statusCode ?? -1) parsed=\\(String(describing: parseBox(from: text))) text=\\(text.prefix(200)) raw=\\(String(decoding: responseData.prefix(400), as: UTF8.self))\\n".data(using: .utf8)!)
+        let text = GeminiServerSentEvents.text(from: responseData)
+        if ProcessInfo.processInfo.environment["LAB_VERBOSE"] != nil { FileHandle.standardError.write("VISION status=\\((response as? HTTPURLResponse)?.statusCode ?? -1) parsed=\\(String(describing: parseBox(from: text))) text=\\(text.prefix(200)) raw=\\(String(decoding: responseData.prefix(400), as: UTF8.self))\\n".data(using: .utf8)!) }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return parseBox(from: text)"""
 assert old in s
