@@ -85,7 +85,7 @@ final class GeminiLiveVoiceClient {
     var onHigherModelRequest: (@MainActor (_ question: String) async -> String)?
     /// The model handed a task to a background Clicky (start_helper).
     /// Returns a short status for Live to relay; the work runs on its own.
-    var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String) -> String)?
+    var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String, _ projectName: String?) -> String)?
     /// list_helpers, check_helper, stop_helper, open_helper_result: the
     /// app answers from the helpers' real state.
     var onHelperTool: (@MainActor (_ functionName: String, _ helperName: String?) -> String)?
@@ -394,7 +394,7 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations + DottieMacTools.functionDeclarations]
+                ["functionDeclarations": Self.allFunctionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -501,6 +501,10 @@ final class GeminiLiveVoiceClient {
                 "task": [
                     "type": "STRING",
                     "description": "The task, written so it stands on its own: what to do, any details from the conversation or screen, and what the finished result should be."
+                ],
+                "project": [
+                    "type": "STRING",
+                    "description": "The project this belongs to, for anything being built or worked on over time: an existing project's name to continue it, or a short new name (2-4 words) for something new. Leave empty for one-off tasks like a quick lookup."
                 ]
             ],
             "required": ["task"]
@@ -578,6 +582,29 @@ final class GeminiLiveVoiceClient {
             description: "Open what a helper made for the user to see: a website in the browser, a single file in its app, or the helper's output folder."
         )
     ]
+
+    /// Every tool Live gets: its own, screen actions, Mac tools, work tools,
+
+    /// the cursor's shape and the smart home.
+
+    private static var allFunctionDeclarations: [[String: Any]] {
+
+        var declarations: [[String: Any]] = coreFunctionDeclarations
+
+        declarations += DottieScreenAction.functionDeclarations
+
+        declarations += DottieMacTools.functionDeclarations
+
+        declarations += DottieWorkTools.functionDeclarations
+
+        declarations.append(DottieCursorPet.functionDeclaration)
+
+        declarations += DottieSmartHome.functionDeclarations
+
+        return declarations
+
+    }
+
 
     private static var coreFunctionDeclarations: [[String: Any]] {
         [
@@ -918,7 +945,8 @@ final class GeminiLiveVoiceClient {
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
-            case _ where DottieMacTools.functionNames.contains(functionName):
+            case _ where DottieMacTools.functionNames.contains(functionName) || DottieWorkTools.functionNames.contains(functionName)
+                || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName):
                 handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
@@ -1047,7 +1075,12 @@ final class GeminiLiveVoiceClient {
             return
         }
         let requestedClickyName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let startStatus = onStartClickyTask(requestedClickyName?.isEmpty == true ? nil : requestedClickyName, taskText)
+        let projectName = (functionArguments["project"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startStatus = onStartClickyTask(
+            requestedClickyName?.isEmpty == true ? nil : requestedClickyName,
+            taskText,
+            projectName?.isEmpty == true ? nil : projectName
+        )
         sendFunctionResponse(functionCallID: functionCallID, functionName: "start_helper",
                              response: ["result": startStatus])
     }

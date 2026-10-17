@@ -106,6 +106,8 @@ struct BlueCursorView: View {
     let screenFrame: CGRect
     let isFirstAppearance: Bool
     @ObservedObject var companionManager: CompanionManager
+    /// The cursor's shape and, when it roams, where the pet is.
+    @ObservedObject private var cursorPet: DottieCursorPet
 
     @State private var cursorPosition: CGPoint
     @State private var isCursorOnThisScreen: Bool
@@ -114,6 +116,7 @@ struct BlueCursorView: View {
         self.screenFrame = screenFrame
         self.isFirstAppearance = isFirstAppearance
         self.companionManager = companionManager
+        self._cursorPet = ObservedObject(wrappedValue: companionManager.cursorPet)
 
         // Seed the cursor position from the current mouse location so the
         // buddy doesn't flash at (0,0) before onAppear fires.
@@ -142,6 +145,12 @@ struct BlueCursorView: View {
     /// thinking use the waveform and spinner instead.
     private var isShowingCursorArtwork: Bool {
         companionManager.voiceState == .idle || companionManager.voiceState == .responding
+    }
+
+    /// True while the shapeshifted cursor is out roaming on its own: the
+    /// pet's position drives the cursor instead of the mouse.
+    private var isPetDriving: Bool {
+        cursorPet.isRoamingNow && buddyNavigationMode == .followingCursor
     }
 
     /// While pointing, `cursorPosition` sits a little right of and below the
@@ -345,7 +354,7 @@ struct BlueCursorView: View {
                 .shadow(color: Color.black.opacity(0.35), radius: 1.5, x: 0.5, y: 1.5)
                 .shadow(color: DS.Colors.overlayCursorBlue.opacity(buddyFlightScale > 1.0 ? 0.8 : 0), radius: (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
-                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode != .pointingAtTarget ? cursorOpacity : 0)
+                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode != .pointingAtTarget && cursorPet.costume == nil ? cursorOpacity : 0)
                 .position(cursorPosition)
                 .animation(
                     buddyNavigationMode == .followingCursor
@@ -368,10 +377,36 @@ struct BlueCursorView: View {
                 .frame(width: Self.handCursorSize.width, height: Self.handCursorSize.height)
                 .shadow(color: Color.black.opacity(0.35), radius: 1.5, x: 0.5, y: 1.5)
                 .scaleEffect(buddyNavigationMode == .pointingAtTarget ? 1.0 : 0.85, anchor: Self.handFingertipAnchor)
-                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode == .pointingAtTarget ? cursorOpacity : 0)
+                .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork && buddyNavigationMode == .pointingAtTarget && cursorPet.costume == nil ? cursorOpacity : 0)
                 .position(handCursorCenter)
                 .animation(.spring(response: 0.3, dampingFraction: 0.6), value: buddyNavigationMode)
                 .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
+
+            // Shapeshifted cursor ("turn into a cat"): replaces the arrow and
+            // the hand. While roaming it walks, hops and hangs on its own.
+            if let costume = cursorPet.costume {
+                DottieCursorCostumeArt(costume: costume)
+                    .frame(width: DottieCursorPet.size, height: DottieCursorPet.size)
+                    // Animal emoji face left; turn them to face where they go.
+                    .scaleEffect(x: isPetDriving && cursorPet.facingRight ? -1 : 1, y: 1)
+                    .rotationEffect(
+                        .degrees(isPetDriving ? cursorPet.rotationDegrees : 0),
+                        anchor: isPetDriving && cursorPet.isHanging ? .top : .bottom
+                    )
+                    .offset(y: isPetDriving ? -cursorPet.bobHeight : 0)
+                    .shadow(color: Color.black.opacity(0.3), radius: 1.5, x: 0.5, y: 1.5)
+                    .scaleEffect(buddyFlightScale)
+                    .opacity(buddyIsVisibleOnThisScreen && isShowingCursorArtwork ? cursorOpacity : 0)
+                    .position(cursorPosition)
+                    .animation(
+                        buddyNavigationMode == .followingCursor && !isPetDriving
+                            ? .spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0)
+                            : nil,
+                        value: cursorPosition
+                    )
+                    .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
+                    .allowsHitTesting(false)
+            }
 
             // Blue waveform — replaces the triangle while listening
             BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
@@ -482,6 +517,13 @@ struct BlueCursorView: View {
 
             // During forward navigation or pointing, just skip cursor tracking
             if self.buddyNavigationMode != .followingCursor {
+                return
+            }
+
+            // A roaming pet goes where it likes.
+            if self.cursorPet.isRoamingNow {
+                self.isCursorOnThisScreen = self.screenFrame.contains(self.cursorPet.center)
+                self.cursorPosition = self.convertScreenPointToSwiftUICoordinates(self.cursorPet.center)
                 return
             }
 
@@ -772,6 +814,22 @@ struct BlueCursorView: View {
 
 /// A small blue waveform that replaces the triangle cursor while
 /// the user is holding the push-to-talk shortcut and speaking.
+/// The cursor drawn as an emoji or an SF Symbol.
+private struct DottieCursorCostumeArt: View {
+    let costume: DottieCursorPet.Costume
+
+    var body: some View {
+        if let symbol = costume.symbol {
+            Image(systemName: symbol)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(DS.Colors.overlayCursorBlue)
+        } else {
+            Text(costume.emoji ?? "🐈")
+                .font(.system(size: 25))
+        }
+    }
+}
+
 private struct BlueCursorWaveformView: View {
     let audioPowerLevel: CGFloat
 

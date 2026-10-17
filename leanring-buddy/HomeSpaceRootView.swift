@@ -17,6 +17,9 @@ struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
         case conversation = "Conversation"
         case clickys = "Dots"
+        case projects = "Projects"
+        case pictures = "Pictures"
+        case smartHome = "Smart Home"
         case skills = "Skills"
         case brain = "Brain"
         case meetings = "Meetings"
@@ -29,6 +32,9 @@ struct HomeSpaceRootView: View {
             switch self {
             case .conversation: return "bubble.left.and.bubble.right.fill"
             case .clickys: return "person.2.fill"
+            case .projects: return "folder.fill"
+            case .pictures: return "photo.on.rectangle.angled"
+            case .smartHome: return "house.fill"
             case .skills: return "sparkles"
             case .brain: return "brain.head.profile"
             case .meetings: return "waveform"
@@ -57,6 +63,12 @@ struct HomeSpaceRootView: View {
                     )
                 case .clickys:
                     HomeClickysView(clickyRoster: clickyRoster)
+                case .projects:
+                    HomeProjectsView(projects: companionManager.projects, clickyRoster: clickyRoster)
+                case .pictures:
+                    HomePicturesView(imageMemory: companionManager.imageMemory)
+                case .smartHome:
+                    HomeSmartHomeView(smartHome: companionManager.smartHome)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .brain:
@@ -519,6 +531,7 @@ private struct HomeSettingsView: View {
                         .toggleStyle(.switch)
                     }
                     settingsHint("With the cursor off, it only appears while you're talking to Dottie.")
+                    HomeCursorShapeSettings(cursorPet: companionManager.cursorPet)
                     settingsRow(label: "Notify me when a Dot finishes or needs me") {
                         Toggle("", isOn: $areDotNotificationsEnabled)
                             .labelsHidden()
@@ -748,6 +761,57 @@ private struct HomeSettingsView: View {
 
     private func settingsHint(_ hintText: String) -> some View {
         Text(hintText)
+            .font(.system(size: 11))
+            .foregroundColor(DS.Colors.textTertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Cursor shape
+
+/// Settings → Appearance: the cursor's shape and whether it roams. Saying
+/// "turn into a cat" to Dottie does the same, with any emoji.
+private struct HomeCursorShapeSettings: View {
+    @ObservedObject var cursorPet: DottieCursorPet
+
+    var body: some View {
+        HStack {
+            Text("Cursor shape")
+                .font(.system(size: 13))
+                .foregroundColor(DS.Colors.textPrimary)
+            Spacer()
+            Menu(cursorPet.costume.map { "\($0.emoji ?? "") \($0.name)" } ?? "Arrow") {
+                Button("Arrow") { cursorPet.setCostume(nil) }
+                Divider()
+                ForEach(DottieCursorPet.library, id: \.name) { shape in
+                    Button("\(shape.emoji)  \(shape.name)") {
+                        cursorPet.setCostume(DottieCursorPet.Costume(
+                            name: shape.name,
+                            emoji: shape.emoji,
+                            symbol: nil,
+                            roams: DottieCursorPet.defaultRoaming(forName: shape.name)
+                        ))
+                    }
+                }
+            }
+            .font(.system(size: 12))
+            .frame(width: 160)
+        }
+        if cursorPet.costume != nil {
+            HStack {
+                Text("Walk around the screen on its own")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { cursorPet.costume?.roams == true },
+                    set: { cursorPet.setRoaming($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+        }
+        Text("Or just tell Dottie \u{201C}turn into a cat\u{201D}: any emoji works. A roaming shape walks along your windows, jumps between them and hangs from the search bar, and comes back to the mouse when you talk to her.")
             .font(.system(size: 11))
             .foregroundColor(DS.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)

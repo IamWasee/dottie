@@ -30,6 +30,24 @@
 	<string>Dottie reads, adds and ticks off reminders when you ask.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Dottie reads, adds and ticks off reminders when you ask.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Dottie looks at your TV through an HDMI capture card when you set one up in Home.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Dottie finds and controls your TVs, lights and Home Assistant on your Wi-Fi when you ask.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_androidtvremote2._tcp</string>
+		<string>_googlecast._tcp</string>
+		<string>_adb-tls-connect._tcp</string>
+		<string>_adb-tls-pairing._tcp</string>
+		<string>_hue._tcp</string>
+		<string>_home-assistant._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSContactsUsageDescription</key>
 	<string>Dottie looks up a contact's number, email or birthday when you ask.</string>
 </dict>

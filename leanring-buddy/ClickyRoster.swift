@@ -94,6 +94,8 @@ final class ClickyRoster: ObservableObject {
 
     /// Folders the Brain agent may work in, from DottieBrain.
     var brainFolderURLsProvider: (@MainActor () -> [URL])?
+    /// Folders every Dot may work in besides its own (the projects folder).
+    var sharedFolderURLs: [URL] = []
 
     /// Called when a turn ends. The companion shows it in the notch.
     var onAgentTurnFinished: ((ClickyAgentTurnResult) -> Void)?
@@ -297,7 +299,7 @@ final class ClickyRoster: ObservableObject {
 
         lastTurnSucceededByAgentID[agentID] = false
 
-        let additionalDirectoryURLs = [skillLibrary.libraryURL]
+        let additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
             + (agent.isBrain == true
                 ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
                 : [])

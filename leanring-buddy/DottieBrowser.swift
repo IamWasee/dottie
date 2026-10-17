@@ -159,6 +159,62 @@ enum DottieBrowser {
             ?? tabs.first { $0.title.lowercased().contains(lowercasedText) || $0.url.lowercased().contains(lowercasedText) }
     }
 
+    // MARK: - Watching a video to the end
+
+    /// Waits until the main video on the page in front has played through
+    /// once: it ended, or (a reel that loops) it jumped back to the start.
+    /// Returns what happened, for the screen job to carry on from.
+    static func waitForVideoToEnd(maximumSeconds: Double) async -> String {
+        guard let browser = currentBrowser(),
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier.flatMap({ knownBrowsers[$0] }) != nil else {
+            return "the video isn't in a browser Dottie can read. if the screen shows its length or time left, call wait with that many seconds; for a reel with no timer, wait about 30 seconds."
+        }
+        var askedForPageAccess = false
+        var lastPosition: Double?
+        var sawPlayback = false
+        let deadline = Date().addingTimeInterval(min(max(maximumSeconds, 5), 900))
+        while Date() < deadline {
+            if Task.isCancelled { return "stopped." }
+            let output = await runPageScript(Self.videoStateJavaScript, in: browser)
+            guard let stateData = output.data(using: .utf8),
+                  let state = try? JSONSerialization.jsonObject(with: stateData) as? [String: Any] else {
+                if output.trimmingCharacters(in: .whitespacesAndNewlines) == "none" {
+                    return sawPlayback ? "the video is gone from the page, so it's done." : "there's no video playing on this page yet. start it, then call wait_for_video_end again."
+                }
+                // Reading the page needs the browser's JavaScript switch;
+                // ask the user once, then try again.
+                if !askedForPageAccess, output.contains("enable_page_access") {
+                    askedForPageAccess = true
+                    let enableResult = await enablePageAccess(in: browser)
+                    if enableResult.hasPrefix("turned on") { continue }
+                }
+                return "couldn't watch the video: \(DottieMacActions.shortened(output, to: 200)). if the screen shows its length or time left, call wait with that many seconds instead."
+            }
+            let position = (state["t"] as? NSNumber)?.doubleValue ?? 0
+            let duration = (state["d"] as? NSNumber)?.doubleValue ?? 0
+            let isPaused = (state["p"] as? Bool) ?? false
+            let hasEnded = (state["e"] as? Bool) ?? false
+            if hasEnded {
+                return "the video finished."
+            }
+            if let lastPosition, sawPlayback, position + 1 < lastPosition {
+                return "the video played through once and started over (it loops), so it's done. carry on with the next step."
+            }
+            if duration.isFinite, duration > 0, position >= duration - 0.35, sawPlayback {
+                return "the video reached its end."
+            }
+            if !isPaused, position > 0.2 { sawPlayback = true }
+            lastPosition = position
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return "the video was still playing after \(Int(maximumSeconds)) seconds, so I stopped waiting."
+    }
+
+    /// The biggest video in view: position, length, paused, ended.
+    private static let videoStateJavaScript = """
+    (function(){var best=null,bestArea=0;document.querySelectorAll('video').forEach(function(v){var r=v.getBoundingClientRect();var w=Math.max(0,Math.min(r.right,innerWidth)-Math.max(r.left,0));var h=Math.max(0,Math.min(r.bottom,innerHeight)-Math.max(r.top,0));if(w*h>bestArea&&v.readyState>0){bestArea=w*h;best=v;}});if(!best)return 'none';return JSON.stringify({t:best.currentTime,d:isFinite(best.duration)?best.duration:0,p:best.paused,e:best.ended});})()
+    """
+
     // MARK: - Tabs in every browser
 
     /// One open browser and its tabs, in the order to look through them:

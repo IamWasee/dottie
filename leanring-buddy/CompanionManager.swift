@@ -111,6 +111,12 @@ final class CompanionManager: ObservableObject {
     let brain = DottieBrain()
     /// Pictures the user added in Home → Conversation, remembered by name.
     let imageMemory = DottieImageMemory()
+    /// One folder per thing the user is making (see DottieProjects).
+    let projects = DottieProjects()
+    /// The cursor's shape ("turn into a cat") and its roaming pet mode.
+    let cursorPet = DottieCursorPet()
+    /// TVs, lights and everything else smart in the house.
+    let smartHome = DottieSmartHome()
     /// Meeting mode: off until the user starts it.
     let meetingRecorder = DottieMeetingRecorder()
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
@@ -156,6 +162,7 @@ final class CompanionManager: ObservableObject {
     private var pendingSpokenBrainQuestion: String?
     private var currentGuideGoal: String?
     private var brainCancellables = Set<AnyCancellable>()
+    private var cursorPetCancellable: AnyCancellable?
     /// Counts narrated lines so a stale safety timeout can't end a newer one.
     private var narrationCount = 0
     /// Called once when the current Live turn has finished speaking (or
@@ -901,9 +908,18 @@ final class CompanionManager: ObservableObject {
         }
         let pictureList = imageMemory.promptSummary
         if !pictureList.isEmpty {
-            prompt += "\n\npictures the user showed you (saved; you know them by these names and descriptions):\n" + pictureList
-                + "\nwhen the user means one of these (\"grab that sword\", \"where's the thing i showed you\"), pass its exact name in do_task_on_screen's reference_images, or use the exact name as the point_at_element label, so the picture itself is matched on screen."
+            prompt += "\n\npictures the user showed you, and ones you saved yourself (you know them by these names and descriptions; the description says where each is from):\n" + pictureList
+                + "\nwhen the user means one of these (\"grab that sword\", \"pick up the guardian core\", \"where's the thing i showed you\"), pass its exact name in do_task_on_screen's reference_images, or use the exact name as the point_at_element label, so the picture itself is matched on screen. use what the description says (the game it's from, what it's for) as context. find_pictures searches them; save_picture saves a new one from the screen."
+        } else {
+            prompt += "\n\npictures: you can save a picture of something on screen with save_picture to remember its look or place, and find it again later by name."
         }
+        let projectList = projects.promptSummary
+        if !projectList.isEmpty {
+            prompt += "\n\nthe user's projects (pass the name to start_helper or start_team to keep working on one):\n" + projectList
+        }
+        let homeSummary = smartHome.promptSummary
+        prompt += "\n\nsmart home: you're the user's home controller. home_devices lists their TVs, lights, plugs, blinds, locks, thermostats, vacuums, speakers, scenes and cameras; control_device does one thing right away (lights on, dim to 30, TV volume up, open youtube on the tv, look at the front door camera); tv_task does a multi-step job on a TV while watching its screen (put on the next episode of bluey). for apple home devices, use the user's shortcuts or the home app on screen."
+            + (homeSummary.isEmpty ? " nothing is set up yet; if they ask, they add devices in your Home window under Smart Home." : "\n" + homeSummary)
         return prompt
     }
 
@@ -942,6 +958,7 @@ final class CompanionManager: ObservableObject {
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence.
     jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in order. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting.
+    your look: you can shapeshift. when the user says "turn into a cat", "be a ghost", "change your cursor" or "go walk around", call change_cursor with the shape and its emoji; animals wander around the screen on their own like a pet, other shapes follow the mouse unless the user wants them to roam. "turn back" or "be normal" is shape normal.
     games: when the user asks you to do something inside a game ("go grab that sword", "walk over to the shop", "play this level for me"), call do_task_on_screen with game true: it moves with the keyboard, turns the camera and clicks, in quick steps. if they mean a picture they showed you, pass its name in reference_images.
 
     second brain:
@@ -956,6 +973,8 @@ final class CompanionManager: ObservableObject {
     - helpers change all the time and the user can create, use or delete them in the app without you. never answer about helpers from memory or from earlier in the conversation. whenever the user asks about helpers (what are they doing, is it done, what did it say, did it work, which ones exist), call list_helpers or check_helper first and answer from what it returns. if a helper isn't there anymore, say it was deleted.
     - check_helper gives a helper's latest task, steps, reply and files; tell the user the gist in a sentence or two, not the whole reply.
     - stop_helper stops one that's working. open_helper_result opens what it made (a website in the browser, a file, or its folder).
+    - projects: anything the user is building or will come back to (a website, an app, a document set, a game guide) lives in a project, its own folder. pass project to start_helper: an existing name from the projects list to keep working on it ("let's work on the coffee store site again"), or a short new name for something new. a different new thing gets a different project. list_projects shows them all.
+    - teams: for a big job with clearly separate parts, or when the user asks for a team, call start_team: each part goes to its own helper (research, design, html, javascript, marketing...) and they work at the same time in the project folder. tell the user who's on what in a few words.
 
     your mac powers:
     only when the user asks, you can act on their mac directly. these are quicker and surer than clicking, so prefer them:
@@ -1022,7 +1041,8 @@ final class CompanionManager: ObservableObject {
             case "list":
                 return self.screenTaskQueueSummary()
             default:
-                return self.stopScreenTask() ? "stopped everything; the list is clear." : "nothing was running."
+                let didStopTV = self.smartHome.tvTaskRunner.stop()
+                return self.stopScreenTask() || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
             }
         }
 
@@ -1041,9 +1061,9 @@ final class CompanionManager: ObservableObject {
             return self.stopGuide() ? "stopped the guide." : "no guide was running."
         }
 
-        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText in
+        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText, projectName in
             guard let self else { return "couldn't start it right now." }
-            return self.startClickyTask(clickyName: clickyName, taskText: taskText)
+            return self.startClickyTask(clickyName: clickyName, taskText: taskText, projectName: projectName)
         }
 
         liveVoiceClient.onBrainTool = { [weak self] functionName, text in
@@ -1066,6 +1086,15 @@ final class CompanionManager: ObservableObject {
 
         liveVoiceClient.onMacTool = { [weak self] functionName, arguments in
             guard let self else { return "couldn't do that right now." }
+            if DottieWorkTools.functionNames.contains(functionName) {
+                return await self.performWorkTool(functionName: functionName, arguments: arguments)
+            }
+            if functionName == DottieCursorPet.functionName {
+                return self.performCursorTool(arguments: arguments)
+            }
+            if DottieSmartHome.functionNames.contains(functionName) {
+                return await self.performSmartHomeTool(functionName: functionName, arguments: arguments)
+            }
             return await self.macTools.perform(functionName: functionName, arguments: arguments)
         }
 
@@ -1249,6 +1278,13 @@ final class CompanionManager: ObservableObject {
             print("🧭 Step \(stepNumber): \(stepDescription)")
             self?.notchPresenter.showScreenTaskStep(stepDescription)
         }
+        screenTaskRunner.onSavePicture = { [weak self] imageData, name, description in
+            guard let self,
+                  let item = self.imageMemory.add(imageData: imageData, name: name, description: description, savedByDottie: true) else {
+                return "couldn't save the picture."
+            }
+            return "saved as \"\(item.name)\" in the picture library."
+        }
         screenTaskRunner.onWillClick = { [weak self] point, displayFrame in
             guard let self else { return }
             // Fly there first so the user sees what's about to be clicked.
@@ -1259,7 +1295,11 @@ final class CompanionManager: ObservableObject {
         }
         currentScreenTaskText = taskText
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
-        let referenceImages = imageMemory.items(matching: job.referenceImageNames).compactMap { item in
+        // Pictures named in the job count even when Live didn't pass them.
+        let referenceItems = job.referenceImageNames.isEmpty
+            ? imageMemory.items(mentionedIn: taskText)
+            : imageMemory.items(matching: job.referenceImageNames)
+        let referenceImages = referenceItems.compactMap { item in
             imageMemory.jpegData(for: item).map {
                 DottieScreenTaskRunner.ReferenceImage(name: item.name, description: item.description, jpegData: $0)
             }
@@ -1605,13 +1645,28 @@ final class CompanionManager: ObservableObject {
     /// Starts a background task from voice. Uses the named Clicky (creating
     /// it if it doesn't exist yet), or a general "Helper" Clicky.
     /// Returns a short status for the voice model to relay.
-    func startClickyTask(clickyName: String?, taskText: String) -> String {
+    func startClickyTask(clickyName: String?, taskText: String, projectName: String? = nil) -> String {
         guard ClickyWorkerConfiguration.isWorkerConfigured else {
             return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
         }
         var notes: [String] = []
+        var messageForHelper = taskText
+        var projectForTask: DottieProjects.Project?
+        if let projectName, !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let (project, isNew) = projects.findOrCreate(named: projectName, summary: String(taskText.prefix(140)))
+            projectForTask = project
+            messageForHelper = projects.taskPreamble(for: project, isNew: isNew) + taskText
+            notes.append(isNew ? "made a new project, \"\(project.name)\"." : "this continues the project \"\(project.name)\".")
+            if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
+        }
+        // Back on a project: the Dot that last worked on it remembers it.
+        let projectHelper = projectForTask?.helperNames.last.flatMap { helperName in
+            clickyRoster.agents.first { $0.name == helperName && !clickyRoster.isRunning($0) }
+        }
         let targetAgent: ClickyAgent
-        if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
+        if clickyName == nil, let projectHelper {
+            targetAgent = projectHelper
+        } else if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
             targetAgent = existingAgent
         } else if let clickyName {
             let wasDeleted = clickyRoster.recentlyDeletedAgentNames.contains { $0.caseInsensitiveCompare(clickyName) == .orderedSame }
@@ -1634,8 +1689,11 @@ final class CompanionManager: ObservableObject {
             }
         }
 
+        if let projectForTask {
+            projects.noteWork(on: projectForTask.id, by: targetAgent.name)
+        }
         // A busy helper the user named takes the task next, in order.
-        let tasksAhead = clickyRoster.sendOrQueueMessage(taskText, to: targetAgent)
+        let tasksAhead = clickyRoster.sendOrQueueMessage(messageForHelper, to: targetAgent)
         if tasksAhead > 0 {
             return "\(targetAgent.name) is busy, so this is lined up: it starts after \(tasksAhead == 1 ? "its current task" : "\(tasksAhead - 1) more tasks after its current one"). say that in a few words."
         }
@@ -1648,6 +1706,122 @@ final class CompanionManager: ObservableObject {
         }
         notes.append("check_helper shows how it's going.")
         return "started. \(targetAgent.name) is working on it and will report back in the notch. " + notes.joined(separator: " ")
+    }
+
+    // MARK: - Projects, teams and pictures (DottieWorkTools)
+
+    private func performWorkTool(functionName: String, arguments: [String: Any]) async -> String {
+        func text(_ key: String) -> String? {
+            let value = (arguments[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == true ? nil : value
+        }
+        switch functionName {
+        case "list_projects":
+            return projects.listForVoice()
+        case "start_team":
+            let parts = ((arguments["parts"] as? [Any]) ?? []).compactMap { rawPart -> (helper: String, task: String)? in
+                guard let part = rawPart as? [String: Any],
+                      let helper = (part["helper"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !helper.isEmpty,
+                      let task = (part["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !task.isEmpty else { return nil }
+                return (helper, task)
+            }
+            return startTeam(goal: text("goal") ?? "", projectName: text("project"), parts: parts)
+        case "save_picture":
+            guard let name = text("name") else { return "give the picture a name." }
+            return await savePictureFromScreen(
+                name: name,
+                description: text("description") ?? "",
+                normalizedX: (arguments["x"] as? NSNumber)?.doubleValue,
+                normalizedY: (arguments["y"] as? NSNumber)?.doubleValue,
+                label: text("label")
+            )
+        case "find_pictures":
+            let matches = imageMemory.search(text("query") ?? "")
+            guard !matches.isEmpty else { return "no saved pictures match that." }
+            return matches.map { item in
+                "- \(item.name)\(item.savedByDottie == true ? " (you saved it)" : "")" + (item.description.isEmpty ? "" : ": \(item.description)")
+            }.joined(separator: "\n")
+        default:
+            return "unknown tool."
+        }
+    }
+
+    /// Hands each part of a big job to its own Dot, all in one project
+    /// folder, with every Dot told who else is doing what.
+    private func startTeam(goal: String, projectName: String?, parts: [(helper: String, task: String)]) -> String {
+        guard ClickyWorkerConfiguration.isWorkerConfigured else {
+            return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
+        }
+        let teamParts = Array(parts.prefix(5))
+        guard teamParts.count >= 2 else {
+            return teamParts.first.map { startClickyTask(clickyName: $0.helper, taskText: $0.task, projectName: projectName) }
+                ?? "give the team at least two parts."
+        }
+        let fallbackProjectName = goal.split(separator: " ").prefix(4).joined(separator: " ")
+        let (project, isNew) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
+        if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
+
+        let roster = teamParts.map { "- \($0.helper): \($0.task)" }.joined(separator: "\n")
+        var startedLines: [String] = []
+        for part in teamParts {
+            let memberName = part.helper
+            let member = clickyRoster.agents.first { $0.isBrain != true && $0.name.caseInsensitiveCompare(memberName) == .orderedSame }
+                ?? clickyRoster.createAgent(name: memberName, purpose: "Team member: \(memberName).")
+            let teamNote = """
+            You're the \(member.name) part of a team working on this together, all at the same time, in the same project folder. The whole job: \(goal)
+            The team:
+            \(roster)
+            Only do your own part. Don't delete or rewrite files that belong to another part; if your part depends on theirs (a file name, a class name, an API), agree on it by writing it in TEAM-NOTES.md in the project folder, and read that file before you start and before you finish.
+            """
+            let message = projects.taskPreamble(for: project, isNew: isNew, teamNote: teamNote) + part.task
+            projects.noteWork(on: project.id, by: member.name)
+            let tasksAhead = clickyRoster.sendOrQueueMessage(message, to: member)
+            startedLines.append(tasksAhead > 0 ? "\(member.name) (after its current task)" : member.name)
+        }
+        ClickyAnalytics.trackClickyTaskStarted()
+        return "started a team on \"\(project.name)\"\(isNew ? " (new project)" : ""): \(startedLines.joined(separator: ", ")). each reports back in the notch when its part is done. say who's on what in a few words."
+    }
+
+    /// Crops the thing at (x, y) on this turn's screen, or saves the whole
+    /// screen, into the picture library under the given name.
+    private func savePictureFromScreen(name: String, description: String, normalizedX: Double?, normalizedY: Double?, label: String?) async -> String {
+        var cropFrame: CGRect?
+        var displayFrame: CGRect?
+        if let normalizedX, let normalizedY,
+           let location = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label ?? name) {
+            displayFrame = location.displayFrame
+            // The thing's outline when it was found, else a square around
+            // the point, with some surroundings so it can be recognized.
+            let thingFrame = location.elementFrame ?? CGRect(x: location.point.x - 90, y: location.point.y - 90, width: 180, height: 180)
+            let padding = max(24, max(thingFrame.width, thingFrame.height) * 0.25)
+            cropFrame = thingFrame.insetBy(dx: -padding, dy: -padding).intersection(location.displayFrame)
+        }
+        let captureFrame = displayFrame
+            ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.frame
+            ?? NSScreen.main?.frame
+        guard let captureFrame,
+              let screenImage = await DottieDisplayCapture.captureImage(displayFrame: captureFrame, maximumDimension: 2880) else {
+            return "couldn't see the screen to save it."
+        }
+        var savedImage = screenImage
+        if let cropFrame, !cropFrame.isEmpty {
+            let pixelsPerPoint = CGFloat(screenImage.width) / captureFrame.width
+            let pixelRect = CGRect(
+                x: (cropFrame.minX - captureFrame.minX) * pixelsPerPoint,
+                y: (captureFrame.maxY - cropFrame.maxY) * pixelsPerPoint,
+                width: cropFrame.width * pixelsPerPoint,
+                height: cropFrame.height * pixelsPerPoint
+            ).integral
+            if let croppedImage = screenImage.cropping(to: pixelRect) {
+                savedImage = croppedImage
+            }
+        }
+        guard let pngData = NSBitmapImageRep(cgImage: savedImage).representation(using: .png, properties: [:]),
+              let item = imageMemory.add(imageData: pngData, name: name, description: description, savedByDottie: true) else {
+            return "couldn't save the picture."
+        }
+        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
+        return "saved as \"\(item.name)\"\(cropFrame == nil ? " (the whole screen)" : ""). it's in Home → Pictures, and you can find it by that name later. say so in a few words."
     }
 
     /// list_helpers, check_helper, stop_helper and open_helper_result.
@@ -1687,10 +1861,109 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Smart home (DottieSmartHome)
+
+    private func performSmartHomeTool(functionName: String, arguments: [String: Any]) async -> String {
+        switch functionName {
+        case "home_devices":
+            return await smartHome.listForVoice()
+        case "control_device":
+            return await smartHome.control(arguments: arguments)
+        case "tv_task":
+            return startTVTask(task: (arguments["task"] as? String) ?? "", tvName: arguments["tv"] as? String)
+        default:
+            return "unknown home tool."
+        }
+    }
+
+    private func startTVTask(task: String, tvName: String?) -> String {
+        guard !task.isEmpty else { return "what should I do on the TV?" }
+        guard let tv = smartHome.tv(named: tvName) else {
+            return smartHome.setup.tvs.isEmpty
+                ? "no TV is set up yet. tell the user to add it in your Home window, under Smart Home."
+                : "which TV? the user has: \(smartHome.setup.tvs.map(\.name).joined(separator: ", "))."
+        }
+        guard smartHome.canSee(tv) else {
+            return "you can't see \(tv.name)'s screen (it needs a capture card), so do it with control_device presses instead."
+        }
+        let runner = smartHome.tvTaskRunner
+        runner.stop()
+        let showsInNotch = !screenTaskRunner.isRunning
+        runner.onProgress = { [weak self] stepText in
+            guard showsInNotch else { return }
+            self?.notchPresenter.showScreenTaskStep(stepText, title: "on the TV")
+        }
+        if showsInNotch { notchPresenter.showScreenTaskStep("looking at the TV", title: "on the TV") }
+        print("📺 TV task on \(tv.name): \(task)")
+        runner.start(task: task, controls: smartHome.tvControls(for: tv)) { [weak self] outcome in
+            guard let self else { return }
+            if showsInNotch && !self.screenTaskRunner.isRunning { self.notchPresenter.endScreenTask() }
+            let resultText: String
+            switch outcome {
+            case .finished(let answer): resultText = answer
+            case .failed(let reason): resultText = "it couldn't be finished: \(reason)"
+            case .stopped: return
+            }
+            print("📺 TV task result: \(resultText)")
+            self.brain.record(.screenJob, "did on the TV (\(tv.name)): \(task). result: \(resultText)")
+            Task { [weak self] in
+                for _ in 0..<60 {
+                    guard let self else { return }
+                    let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle
+                        || self.buddyDictationManager.isDictationInProgress || self.notchPresenter.surface == .textInput
+                    if !isBusy { break }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+                self?.speakScreenTaskResult(taskText: "on the TV: \(task)", resultText: resultText)
+            }
+        }
+        return "started on \(tv.name). say you're on it in a few words, then stop; the result comes back in a later message."
+    }
+
+    private func configureCursorPet() {
+        // The pet comes to the mouse while the user talks to Dottie, while
+        // she points, and during guides and screen jobs.
+        cursorPet.shouldPause = { [weak self] in
+            guard let self else { return true }
+            return self.voiceState != .idle
+                || self.detectedElementScreenLocation != nil
+                || self.screenTaskRunner.isRunning
+                || self.guide.isActive
+        }
+        cursorPet.start()
+        // A pet out roaming has to be seen even with the cursor set to hide.
+        cursorPetCancellable = cursorPet.$costume
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] costume in
+                guard let self, costume?.roams == true, !self.isOverlayVisible, self.hasCompletedOnboarding else { return }
+                self.overlayWindowManager.hasShownOverlayBefore = true
+                self.overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+                self.isOverlayVisible = true
+            }
+    }
+
+    private func performCursorTool(arguments: [String: Any]) -> String {
+        cursorPet.perform(arguments: arguments)
+    }
+
     private func configureBrain() {
         clickyRoster.brainFolderURLsProvider = { [weak self] in
             self?.brain.folderURLs ?? []
         }
+        clickyRoster.sharedFolderURLs = [projects.rootFolderURL]
+        // Pictures, projects and smart home devices edited in Home reach
+        // voice Dottie on her next connection.
+        Publishers.Merge3(
+            imageMemory.$items.map { _ in () }.dropFirst(),
+            projects.$projects.map { _ in () }.dropFirst(),
+            smartHome.$setup.map { _ in () }.dropFirst()
+        )
+        .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+        .sink { [weak self] in
+            guard let self else { return }
+            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
+        }
+        .store(in: &brainCancellables)
         brain.onProfileChanged = { [weak self] _ in
             guard let self else { return }
             // Takes effect on the next Live connection.
@@ -1843,6 +2116,7 @@ final class CompanionManager: ObservableObject {
 
     private func configureClickyRoster() {
         configureBrain()
+        configureCursorPet()
         configureMeetingMode()
         configurePhoneBridge()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
@@ -2019,6 +2293,7 @@ final class CompanionManager: ObservableObject {
             // The same stop button serves jobs and guides.
             self?.stopScreenTask()
             self?.stopGuide()
+            self?.smartHome.tvTaskRunner.stop()
         }
         notchPresenter.onOpenPeekFile = { [weak self] peekFile in
             self?.notchPresenter.isHovering = false
@@ -2545,6 +2820,8 @@ final class CompanionManager: ObservableObject {
     /// if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
+        // A roaming pet keeps the overlay up.
+        if cursorPet.costume?.roams == true { return }
 
         transientHideTask?.cancel()
         transientHideTask = Task {
