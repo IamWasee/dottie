@@ -31,6 +31,21 @@ enum DottieBrowser {
         "company.thebrowser.Browser": Browser(appName: "Arc", dialect: .arc)
     ]
 
+    /// Browsers without usable tab scripting. Their tabs are read and
+    /// switched through Accessibility instead (the tab strip's buttons).
+    private static let accessibilityOnlyBrowserIDs: Set<String> = [
+        "com.operasoftware.Opera",
+        "com.operasoftware.OperaGX",
+        "com.operasoftware.OperaAir",
+        "org.mozilla.firefox",
+        "app.zen-browser.zen",
+        "com.kagi.kagimacOS",
+        "org.chromium.Chromium",
+        "com.duckduckgo.macos.browser",
+        "ai.perplexity.comet",
+        "com.openai.atlas"
+    ]
+
     private struct BrowserTab {
         let windowIndex: Int
         let tabIndex: Int
@@ -57,20 +72,26 @@ enum DottieBrowser {
     // MARK: - Entry point
 
     static func perform(action: String, target: String?, value: String?) async -> String {
+        let trimmedTarget = target?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Tabs are looked for in every open browser, whichever app is in
+        // front, so "switch to my YouTube tab" works from anywhere.
+        switch action {
+        case "list_tabs":
+            return await listTabsInEveryBrowser()
+        case "switch_tab":
+            return await switchTabInAnyBrowser(matching: trimmedTarget, isConfirmed: isConfirmation(trimmedValue))
+        default:
+            break
+        }
         guard let browser = currentBrowser() else {
             return "no supported browser is open (Safari, Chrome, Arc, Brave, Edge or Vivaldi). open_url opens a page in the default browser instead."
         }
-        let trimmedTarget = target?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         switch action {
-        case "list_tabs":
-            return await listTabs(in: browser)
         case "read_page":
             return await runPageScript(Self.readPageJavaScript, in: browser)
         case "open_url":
             return await openURL(trimmedTarget, newTab: trimmedValue.lowercased() != "same tab", in: browser)
-        case "switch_tab":
-            return await switchTab(matching: trimmedTarget, in: browser)
         case "close_tab":
             return await closeTab(matching: trimmedTarget, in: browser)
         case "fill":
@@ -126,17 +147,6 @@ enum DottieBrowser {
         }
     }
 
-    private static func listTabs(in browser: Browser) async -> String {
-        guard let tabs = await readTabs(in: browser) else {
-            return automationBlockedMessage(browser)
-        }
-        guard !tabs.isEmpty else { return "\(browser.appName) has no tabs open." }
-        let lines = tabs.prefix(80).map { tab in
-            "- \(tab.isActive ? "[showing] " : "")window \(tab.windowIndex), tab \(tab.tabIndex): \(DottieMacActions.shortened(tab.title, to: 80)) (\(DottieMacActions.shortened(tab.url, to: 80)))"
-        }
-        return "\(tabs.count) tabs in \(browser.appName):\n" + lines.joined(separator: "\n")
-    }
-
     private static func findTab(matching text: String, in tabs: [BrowserTab]) -> BrowserTab? {
         let lowercasedText = text.lowercased()
         if lowercasedText.isEmpty || lowercasedText == "current" || lowercasedText == "this" {
@@ -149,11 +159,109 @@ enum DottieBrowser {
             ?? tabs.first { $0.title.lowercased().contains(lowercasedText) || $0.url.lowercased().contains(lowercasedText) }
     }
 
-    private static func switchTab(matching text: String, in browser: Browser) async -> String {
-        guard let tabs = await readTabs(in: browser) else { return automationBlockedMessage(browser) }
-        guard let tab = findTab(matching: text, in: tabs) else {
-            return "no tab matches \(text). call list_tabs to see them."
+    // MARK: - Tabs in every browser
+
+    /// One open browser and its tabs, in the order to look through them:
+    /// the one in front, then the default browser, then the rest.
+    private struct OpenBrowser {
+        let bundleID: String
+        let appName: String
+        let scriptable: Browser?
+        let processID: pid_t
+    }
+
+    private static func openBrowsers() -> [OpenBrowser] {
+        let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let defaultBrowserID = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
+            .flatMap { Bundle(url: $0)?.bundleIdentifier }
+        let browsers = NSWorkspace.shared.runningApplications.compactMap { application -> OpenBrowser? in
+            guard let bundleID = application.bundleIdentifier,
+                  knownBrowsers[bundleID] != nil || accessibilityOnlyBrowserIDs.contains(bundleID) else { return nil }
+            return OpenBrowser(
+                bundleID: bundleID,
+                appName: knownBrowsers[bundleID]?.appName ?? application.localizedName ?? bundleID,
+                scriptable: knownBrowsers[bundleID],
+                processID: application.processIdentifier
+            )
         }
+        func rank(_ browser: OpenBrowser) -> Int {
+            browser.bundleID == frontmostID ? 0 : (browser.bundleID == defaultBrowserID ? 1 : 2)
+        }
+        return browsers.sorted { rank($0) < rank($1) }
+    }
+
+    private static func isConfirmation(_ value: String) -> Bool {
+        ["confirmed", "confirm", "yes", "switch anyway"].contains(value.lowercased())
+    }
+
+    private static func listTabsInEveryBrowser() async -> String {
+        let browsers = openBrowsers()
+        guard !browsers.isEmpty else { return "no browser is open." }
+        var sections: [String] = []
+        for browser in browsers {
+            if let scriptable = browser.scriptable {
+                guard let tabs = await readTabs(in: scriptable) else {
+                    sections.append(automationBlockedMessage(scriptable))
+                    continue
+                }
+                let lines = tabs.prefix(60).map { tab in
+                    "- \(tab.isActive ? "[showing] " : "")window \(tab.windowIndex), tab \(tab.tabIndex): \(DottieMacActions.shortened(tab.title, to: 80)) (\(DottieMacActions.shortened(tab.url, to: 80)))"
+                }
+                sections.append("\(tabs.count) tabs in \(browser.appName):\n" + lines.joined(separator: "\n"))
+            } else {
+                let tabs = accessibilityTabs(in: browser)
+                let lines = tabs.prefix(60).map { "- \($0.isSelected ? "[showing] " : "")\(DottieMacActions.shortened($0.title, to: 80))" }
+                sections.append("\(tabs.count) tabs in \(browser.appName):\n" + lines.joined(separator: "\n"))
+            }
+        }
+        let frontmostName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "another app"
+        let isBrowserInFront = browsers.first.map { $0.bundleID == NSWorkspace.shared.frontmostApplication?.bundleIdentifier } ?? false
+        return (isBrowserInFront ? "" : "the user is in \(frontmostName), not a browser. ") + sections.joined(separator: "\n\n")
+    }
+
+    /// Finds the tab in any open browser. When the user isn't in that
+    /// browser right now, asks first instead of yanking them out of their
+    /// app (the model asks, then calls again with value "confirmed").
+    private static func switchTabInAnyBrowser(matching text: String, isConfirmed: Bool) async -> String {
+        let browsers = openBrowsers()
+        guard !browsers.isEmpty else { return "no browser is open, so there are no tabs to switch to." }
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        var searchedNames: [String] = []
+        var blockedMessages: [String] = []
+
+        for browser in browsers {
+            searchedNames.append(browser.appName)
+            let isInFront = browser.bundleID == frontmostApplication?.bundleIdentifier
+            if let scriptable = browser.scriptable {
+                guard let tabs = await readTabs(in: scriptable) else {
+                    blockedMessages.append(automationBlockedMessage(scriptable))
+                    continue
+                }
+                guard let tab = findTab(matching: text, in: tabs) else { continue }
+                if !isInFront && !isConfirmed {
+                    return askBeforeSwitching(tabTitle: tab.title, browserName: browser.appName, frontmostName: frontmostApplication?.localizedName)
+                }
+                return await select(tab, in: scriptable)
+            } else {
+                let tabs = accessibilityTabs(in: browser)
+                guard let tab = findAccessibilityTab(matching: text, in: tabs) else { continue }
+                if !isInFront && !isConfirmed {
+                    return askBeforeSwitching(tabTitle: tab.title, browserName: browser.appName, frontmostName: frontmostApplication?.localizedName)
+                }
+                return select(tab, in: browser)
+            }
+        }
+        if !blockedMessages.isEmpty {
+            return blockedMessages.joined(separator: " ")
+        }
+        return "no tab matches \(text) in \(searchedNames.joined(separator: ", ")). call list_tabs to see every open tab, then tell the user which ones you found."
+    }
+
+    private static func askBeforeSwitching(tabTitle: String, browserName: String, frontmostName: String?) -> String {
+        "found it: \"\(DottieMacActions.shortened(tabTitle, to: 80))\" in \(browserName), but the user is in \(frontmostName ?? "another app") right now, not \(browserName). don't switch yet: ask them in a few words, like \"you're in \(frontmostName ?? "another app"), your tab's in \(browserName). still want me to switch?\" if they say yes, call browser again with action switch_tab, the same target, and value \"confirmed\"."
+    }
+
+    private static func select(_ tab: BrowserTab, in browser: Browser) async -> String {
         let selectLine = browser.dialect == .safari
             ? "set current tab of window \(tab.windowIndex) to tab \(tab.tabIndex) of window \(tab.windowIndex)"
             : "set active tab index of window \(tab.windowIndex) to \(tab.tabIndex)"
@@ -165,7 +273,71 @@ enum DottieBrowser {
         end tell
         """
         let result = await DottieMacActions.runProcess("/usr/bin/osascript", arguments: ["-e", script], timeout: 15)
-        return result.exitCode == 0 ? "switched to \(tab.title)." : "couldn't switch tabs: \(DottieMacActions.shortened(result.errorOutput, to: 200))"
+        return result.exitCode == 0 ? "switched to \(tab.title) in \(browser.appName)." : "couldn't switch tabs: \(DottieMacActions.shortened(result.errorOutput, to: 200))"
+    }
+
+    // MARK: - Tabs through Accessibility
+
+    private struct AccessibilityTab {
+        let title: String
+        let isSelected: Bool
+        let element: AXUIElement
+        let window: AXUIElement
+    }
+
+    /// The tab strip's buttons in every window of the browser.
+    private static func accessibilityTabs(in browser: OpenBrowser) -> [AccessibilityTab] {
+        let applicationElement = AXUIElementCreateApplication(browser.processID)
+        var tabs: [AccessibilityTab] = []
+        for window in accessibilityChildren(of: applicationElement, attribute: kAXWindowsAttribute) {
+            collectTabs(in: window, window: window, depth: 0, into: &tabs)
+        }
+        return tabs
+    }
+
+    private static func collectTabs(in element: AXUIElement, window: AXUIElement, depth: Int, into tabs: inout [AccessibilityTab]) {
+        guard depth < 12, tabs.count < 200 else { return }
+        if accessibilityString(element, kAXRoleAttribute) == kAXTabGroupRole as String {
+            for child in accessibilityChildren(of: element, attribute: kAXChildrenAttribute) {
+                let role = accessibilityString(child, kAXRoleAttribute)
+                guard role == kAXRadioButtonRole as String || accessibilityString(child, kAXSubroleAttribute) == "AXTabButton" else { continue }
+                let title = accessibilityString(child, kAXTitleAttribute) ?? accessibilityString(child, kAXDescriptionAttribute) ?? ""
+                guard !title.isEmpty else { continue }
+                var selectedValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(child, kAXValueAttribute as CFString, &selectedValue)
+                tabs.append(AccessibilityTab(title: title, isSelected: (selectedValue as? Int) == 1, element: child, window: window))
+            }
+            if !tabs.isEmpty { return }
+        }
+        for child in accessibilityChildren(of: element, attribute: kAXChildrenAttribute) {
+            collectTabs(in: child, window: window, depth: depth + 1, into: &tabs)
+        }
+    }
+
+    private static func findAccessibilityTab(matching text: String, in tabs: [AccessibilityTab]) -> AccessibilityTab? {
+        let lowercasedText = text.lowercased()
+        guard !lowercasedText.isEmpty else { return tabs.first { $0.isSelected } }
+        return tabs.first { $0.title.lowercased() == lowercasedText }
+            ?? tabs.first { $0.title.lowercased().contains(lowercasedText) }
+    }
+
+    private static func select(_ tab: AccessibilityTab, in browser: OpenBrowser) -> String {
+        AXUIElementPerformAction(tab.element, kAXPressAction as CFString)
+        AXUIElementPerformAction(tab.window, kAXRaiseAction as CFString)
+        NSRunningApplication(processIdentifier: browser.processID)?.activate()
+        return "switched to \(tab.title) in \(browser.appName)."
+    }
+
+    private static func accessibilityChildren(of element: AXUIElement, attribute: String) -> [AXUIElement] {
+        var childrenValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &childrenValue) == .success else { return [] }
+        return childrenValue as? [AXUIElement] ?? []
+    }
+
+    private static func accessibilityString(_ element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
     }
 
     private static func closeTab(matching text: String, in browser: Browser) async -> String {

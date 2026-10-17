@@ -136,6 +136,13 @@ final class DottieScreenTaskRunner {
         var contents: [[String: Any]] = []
         var pendingFunctionResponseParts: [[String: Any]] = []
         var consecutiveRequestFailures = 0
+        // Spotting a stuck loop: what the screen looked like before the last
+        // actions, and the actions themselves.
+        var previousScreenFingerprint: [UInt8]?
+        var didActSinceLastLook = false
+        var recentActionSignatures: [String] = []
+        var actionLog: [String] = []
+        let lessonsText = DottieScreenLessons.shared.promptText(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
 
         let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
         for stepNumber in 1...stepLimit {
@@ -145,15 +152,25 @@ final class DottieScreenTaskRunner {
             guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: screenshotDimension) else {
                 return .failed(reason: "I couldn't see the screen. Dottie needs Screen Recording permission.")
             }
-            let screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
+            var screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
+            let screenFingerprint = Self.fingerprint(of: screen.image)
+            if !isGameMode, didActSinceLastLook,
+               let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
+                screenNote += "\nThe screen looks exactly the same as before your last action, so it probably didn't work (or it was already done). Don't repeat it: look at what's really on screen and try a different way, like pressing return, clicking a different spot or result, closing a popup, scrolling, or waiting."
+            }
+            if let repeatedAction = Self.repeatedAction(in: recentActionSignatures) {
+                screenNote += "\nYou've done \(repeatedAction) several times and it isn't getting you further. Stop doing it. Check which steps of the task are already done on this screen and move to the next one, or try a completely different way."
+            }
+            previousScreenFingerprint = screenFingerprint
+            didActSinceLastLook = false
             // Every function call needs its response in the next user turn,
             // so a failed request puts these back for the retry.
             let functionResponsesForThisTurn = pendingFunctionResponseParts
             var userParts = functionResponsesForThisTurn
             userParts.append(["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]])
             userParts.append(["text": contents.isEmpty
-                ? "Task from the user: \(taskText)\n\n\(screenNote)\nThis is the screen now. Take the first step."
-                : "\(screenNote)\nThis is the screen now. Take the next step."])
+                ? "Task from the user: \(taskText)\n\(lessonsText)\n\(screenNote)\nThis is the screen now. Take the first step."
+                : "\(screenNote)\nThis is the screen now. First check it against the task: which steps are already done? Then take the first step that isn't done yet."])
             contents.append(["role": "user", "parts": userParts])
             pendingFunctionResponseParts = []
             Self.dropOldScreenshots(from: &contents)
@@ -205,15 +222,22 @@ final class DottieScreenTaskRunner {
 
                 if functionName == "finish" {
                     let answer = (arguments["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if let lesson = (arguments["lesson"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lesson.isEmpty {
+                        DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName)
+                    }
                     return .finished(answer: answer.isEmpty ? "All done." : answer)
                 }
 
+                recentActionSignatures.append(Self.signature(functionName: functionName, arguments: arguments))
+                if recentActionSignatures.count > 6 { recentActionSignatures.removeFirst() }
+                actionLog.append(Self.signature(functionName: functionName, arguments: arguments))
                 let result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
                 var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
                 if let functionCallID = functionCall["id"] as? String {
                     functionResponse["id"] = functionCallID
                 }
                 pendingFunctionResponseParts.append(["functionResponse": functionResponse])
+                didActSinceLastLook = true
             }
 
             // Let pages load and animations finish before the next look.
@@ -221,7 +245,55 @@ final class DottieScreenTaskRunner {
             try? await Task.sleep(nanoseconds: isGameMode ? 200_000_000 : 900_000_000)
         }
 
+        if !isGameMode {
+            // Next time, the job starts knowing this path didn't work.
+            DottieScreenLessons.shared.add(
+                "This didn't finish in \(stepLimit) steps. Ended up repeating: \(actionLog.suffix(4).joined(separator: "; ")). Try a different route next time.",
+                task: taskText,
+                appName: NSWorkspace.shared.frontmostApplication?.localizedName
+            )
+        }
         return .failed(reason: "That took more than \(stepLimit) steps, so I stopped.")
+    }
+
+    // MARK: - Spotting a stuck loop
+
+    /// A tiny grayscale copy of the screen, to tell whether an action
+    /// changed anything.
+    private static func fingerprint(of image: CGImage) -> [UInt8] {
+        let width = 64, height = 40
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return pixels
+    }
+
+    /// Nearly no pixel moved (a blinking caret or clock doesn't count).
+    private static func isSameScreen(_ first: [UInt8], _ second: [UInt8]) -> Bool {
+        guard first.count == second.count, !first.isEmpty else { return false }
+        let changedPixels = zip(first, second).filter { abs(Int($0) - Int($1)) > 12 }.count
+        return Double(changedPixels) / Double(first.count) < 0.003
+    }
+
+    private static func signature(functionName: String, arguments: [String: Any]) -> String {
+        let label = (arguments["label"] as? String) ?? (arguments["text"] as? String) ?? (arguments["keys"] as? String)
+            ?? (arguments["url"] as? String) ?? (arguments["name"] as? String) ?? (arguments["direction"] as? String) ?? ""
+        return label.isEmpty ? functionName : "\(functionName) \"\(label.prefix(60))\""
+    }
+
+    /// An action done three times in the last four (scrolling and waiting
+    /// repeat legitimately, so they need more).
+    private static func repeatedAction(in signatures: [String]) -> String? {
+        guard let lastSignature = signatures.last else { return nil }
+        let isNaturallyRepeated = lastSignature.hasPrefix("scroll") || lastSignature.hasPrefix("wait")
+        let repeatCount = signatures.suffix(isNaturallyRepeated ? 6 : 4).filter { $0 == lastSignature }.count
+        return repeatCount >= (isNaturallyRepeated ? 5 : 3) ? lastSignature : nil
     }
 
     // MARK: - Actions
@@ -519,6 +591,8 @@ final class DottieScreenTaskRunner {
     - Prefer keyboard shortcuts when one exists, they never miss: close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next/previous tab ctrl+tab / ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, find cmd+f, close window cmd+shift+w.
     - After an action that loads something, the next screenshot shows the result; use wait if it's still loading.
     - Scroll to find things that aren't visible. Prefer obvious, direct paths: menus, tabs, search boxes, profile pages.
+    - Every turn, check the new screenshot against the task before acting: what's already done? If the step you were on already happened (the chat is open, the text is typed, the page loaded), move on to the next step instead of doing it again.
+    - Expect hiccups: popups and cookie banners (close them or press escape), slow pages (wait once, then reload or go another way), search results that don't show (press return, or click the result that's there), things not where you expected (scroll, use the app's search, or its menu bar). If an action didn't change the screen, never repeat it as is: try something else.
     - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you can't go on (it needs a login, a captcha, or something is missing), saying why.
 
     Safety:
@@ -643,7 +717,10 @@ final class DottieScreenTaskRunner {
             [
                 "name": "finish",
                 "description": "End the task. answer is what Dottie tells the user: the result they asked for, or why it couldn't be done. One or two short sentences.",
-                "parameters": ["type": "object", "properties": ["answer": ["type": "string"]], "required": ["answer"]]
+                "parameters": ["type": "object", "properties": [
+                    "answer": ["type": "string"],
+                    "lesson": ["type": "string", "description": "One short tip for doing this kind of job in this app or site next time: the path that worked, or what to avoid. Leave empty if it was straightforward."]
+                ], "required": ["answer"]]
             ]
         ]
     }
