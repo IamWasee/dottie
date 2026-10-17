@@ -765,6 +765,7 @@ final class DottieScreenTaskRunner {
     - Prefer keyboard shortcuts when one exists, they never miss: close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next/previous tab ctrl+tab / ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, find cmd+f, close window cmd+shift+w.
     - After an action that loads something, the next screenshot shows the result; use wait if it's still loading.
     - Scroll to find things that aren't visible. Prefer obvious, direct paths: menus, tabs, search boxes, profile pages.
+    - When the task names several things ("merge PR 36 and 37", "reply to sam, then anna"), do them one at a time in exactly the order the user gave, even when a later one is listed first on screen or is easier to reach. Finish one completely before starting the next.
     - Every turn, check the new screenshot against the task before acting: what's already done? If the step you were on already happened (the chat is open, the text is typed, the page loaded), move on to the next step instead of doing it again.
     - To watch a video or reel once (\"watch it, then like it\"), start it, call wait_for_video_end, and go on when it returns.
     - Expect hiccups: popups and cookie banners (close them or press escape), slow pages (wait once, then reload or go another way), search results that don't show (press return, or click the result that's there), things not where you expected (scroll, use the app's search, or its menu bar). If an action didn't change the screen, never repeat it as is: try something else.
