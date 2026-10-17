@@ -40,11 +40,18 @@ struct Lab {
             return
         }
         if args.count > 2, args[1] == "--task" {
+            // --task "<text>" [--game] [--ref <name> <jpeg>]
+            let isGame = args.contains("--game")
+            var referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []
+            if let refIndex = args.firstIndex(of: "--ref"), args.count > refIndex + 2,
+               let refData = try? Data(contentsOf: URL(fileURLWithPath: args[refIndex + 2])) {
+                referenceImages.append(.init(name: args[refIndex + 1], description: "", jpegData: refData))
+            }
             let runner = DottieScreenTaskRunner()
             runner.onProgress = { step, text in FileHandle.standardError.write("STEP \(step): \(text)\n".data(using: .utf8)!) }
             let started = Date()
             let outcome: String = await withCheckedContinuation { continuation in
-                runner.start(task: args[2]) { outcome in
+                runner.start(task: args[2], isGameMode: isGame, referenceImages: referenceImages) { outcome in
                     switch outcome {
                     case .finished(let answer): continuation.resume(returning: "finished: \(answer)")
                     case .stopped: continuation.resume(returning: "stopped")
@@ -53,6 +60,16 @@ struct Lab {
                 }
             }
             print("OUTCOME after \(Int(-started.timeIntervalSinceNow))s: \(outcome)")
+            return
+        }
+        if args.count > 3, args[1] == "--point-ref" {
+            // --point-ref <label> <jpeg>: point at the thing in the picture.
+            let refData = try? Data(contentsOf: URL(fileURLWithPath: args[3]))
+            let started = Date()
+            let frame = await PointingRefiner.refineFrame(elementLabel: args[2], userQuestion: "where is the \(args[2])?",
+                                                          roughPoint: CGPoint(x: screen.frame.midX, y: screen.frame.midY),
+                                                          displayFrame: screen.frame, referenceImageJPEG: refData)
+            print("POINTREF \(box(frame, H) ?? []) t=\(-started.timeIntervalSinceNow)")
             return
         }
         let data = try! Data(contentsOf: URL(fileURLWithPath: args[1]))

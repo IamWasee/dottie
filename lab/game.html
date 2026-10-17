@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Island</title>
+<style>body{margin:0;background:#3a7;overflow:hidden;font:14px Arial}#hud{position:fixed;top:8px;left:8px;background:#0008;color:#fff;padding:6px 10px;border-radius:6px}
+.item{position:absolute;width:56px;height:56px}#p{position:absolute;width:40px;height:40px;background:#e33;border:3px solid #fff;border-radius:8px}</style></head><body>
+<div id="hud">WASD to move · E to pick up</div><div id="p"></div>
+<img class="item" id="golden" src="golden.png" style="left:78%;top:70%">
+<img class="item" id="silver" src="silver.png" style="left:20%;top:72%">
+<img class="item" id="shield" src="shield.png" style="left:75%;top:18%">
+<img class="item" id="potion" src="potion.png" style="left:15%;top:20%">
+<script>
+const p=document.getElementById('p');let x=innerWidth/2-20,y=innerHeight/2-20;const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='e')pick()});addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
+function pick(){for(const it of document.querySelectorAll('.item')){if(it.style.display==='none')continue;const r=it.getBoundingClientRect();const cx=x+20,cy=y+20;if(Math.abs(cx-(r.left+28))<55&&Math.abs(cy-(r.top+28))<55){it.style.display='none';document.title='PICKED '+it.id;document.getElementById('hud').textContent='Picked up '+it.id}}}
+let last=performance.now();function loop(t){const dt=(t-last)/1000;last=t;const v=(keys['shift']?320:180)*dt;if(keys['w'])y-=v;if(keys['s'])y+=v;if(keys['a'])x-=v;if(keys['d'])x+=v;x=Math.max(0,Math.min(innerWidth-40,x));y=Math.max(0,Math.min(innerHeight-40,y));p.style.left=x+'px';p.style.top=y+'px';requestAnimationFrame(loop)}requestAnimationFrame(loop);
+</script></body></html>
