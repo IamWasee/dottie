@@ -21,7 +21,7 @@ final class DottieMacTools {
     nonisolated static let functionNames: Set<String> = [
         "run_shortcut", "list_shortcuts", "run_applescript",
         "get_schedule", "add_calendar_event", "get_reminders", "add_reminder", "complete_reminder", "find_contact",
-        "browser", "meeting_notes"
+        "browser", "meeting_notes", "take_screenshot"
     ]
 
     func perform(functionName: String, arguments: [String: Any]) async -> String {
@@ -63,6 +63,10 @@ final class DottieMacTools {
             case "latest": return meetingRecorder.latestMeetingNotes()
             default: return meetingRecorder.statusSummary()
             }
+        case "take_screenshot":
+            let what = text("what") ?? "screen"
+            if what == "open_last" { return DottieScreenshot.openLast() }
+            return await DottieScreenshot.take(area: what, destination: text("save_to") ?? "file")
         default:
             return "unknown tool."
         }
@@ -156,6 +160,14 @@ final class DottieMacTools {
             "Meeting mode: take notes of a meeting or call the user is in by listening to their mic and their Mac's audio. start only when the user asks you to take notes or start meeting mode, never on your own. stop when they say the meeting's over or to stop; the summary with action items comes back to you later. status tells you what's been said so far (for 'what did they just say'). latest reads the notes from their most recent meeting.",
             ["action": ["type": "STRING", "enum": ["start", "stop", "status", "latest"], "description": "What to do."]],
             required: ["action"]
+        ),
+        declaration(
+            "take_screenshot",
+            "Take a real screenshot the user keeps, like command-shift-3: a full-resolution PNG saved where macOS saves screenshots (usually the Desktop), without your cursor in it. Use it whenever the user asks for a screenshot or screen grab. screen is the screen their cursor is on; all_screens saves one per display; window is the app window in front; pick lets them drag over the part they want; open_last opens the screenshot you just took. Say where it went in a few words.",
+            [
+                "what": ["type": "STRING", "enum": ["screen", "all_screens", "window", "pick", "open_last"], "description": "What to capture. screen unless they said otherwise."],
+                "save_to": ["type": "STRING", "enum": ["file", "clipboard", "both"], "description": "file unless they asked to copy it (clipboard) or both."]
+            ]
         )
     ]
 }
