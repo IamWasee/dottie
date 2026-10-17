@@ -254,6 +254,9 @@ private struct ClickyAgentChatView: View {
                                         ? { isAllowed, alwaysAllow in answerComputerUseRequest(isAllowed: isAllowed, alwaysAllow: alwaysAllow) }
                                         : nil
                                 )
+                                .deletableRow(copyText: transcriptItem.text) {
+                                    withAnimation { clickyRoster.deleteTranscriptItem(transcriptItem.id, fromAgentID: agent.id) }
+                                }
                                 .id(transcriptItem.id)
                             }
                             if clickyRoster.isRunning(agent) {

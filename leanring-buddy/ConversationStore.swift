@@ -62,6 +62,11 @@ final class ConversationStore: ObservableObject {
         saveEntriesToDisk()
     }
 
+    func delete(entryID: UUID) {
+        entries.removeAll { $0.id == entryID }
+        saveEntriesToDisk()
+    }
+
     func clearAll() {
         entries.removeAll()
         saveEntriesToDisk()

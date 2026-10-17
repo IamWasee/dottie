@@ -23,15 +23,15 @@ enum DottieBrowser {
     }
 
     /// True for a web browser: one Dottie knows, or the default browser.
-    static func isBrowser(bundleIdentifier: String?) -> Bool {
+    nonisolated static func isBrowser(bundleIdentifier: String?) -> Bool {
         guard let bundleIdentifier else { return false }
-        if knownBrowsers[bundleIdentifier] != nil { return true }
+        if knownBrowsers[bundleIdentifier] != nil || accessibilityOnlyBrowserIDs.contains(bundleIdentifier) { return true }
         guard let probeURL = URL(string: "https://example.com"),
               let defaultBrowserURL = NSWorkspace.shared.urlForApplication(toOpen: probeURL) else { return false }
         return Bundle(url: defaultBrowserURL)?.bundleIdentifier == bundleIdentifier
     }
 
-    private static let knownBrowsers: [String: Browser] = [
+    nonisolated private static let knownBrowsers: [String: Browser] = [
         "com.apple.Safari": Browser(appName: "Safari", dialect: .safari),
         "com.google.Chrome": Browser(appName: "Google Chrome", dialect: .chromium),
         "com.brave.Browser": Browser(appName: "Brave Browser", dialect: .chromium),
@@ -42,7 +42,7 @@ enum DottieBrowser {
 
     /// Browsers without usable tab scripting. Their tabs are read and
     /// switched through Accessibility instead (the tab strip's buttons).
-    private static let accessibilityOnlyBrowserIDs: Set<String> = [
+    nonisolated private static let accessibilityOnlyBrowserIDs: Set<String> = [
         "com.operasoftware.Opera",
         "com.operasoftware.OperaGX",
         "com.operasoftware.OperaAir",
@@ -63,9 +63,83 @@ enum DottieBrowser {
         let url: String
     }
 
-    /// The browser in front, else the default browser, else any open one.
+    // MARK: - The user's browser
+
+    nonisolated private static let lastUsedBrowserDefaultsKey = "dottieLastUsedBrowser"
+    private static var activationObserver: NSObjectProtocol?
+
+    /// Remembers the browser the user last switched to, since the one they
+    /// use (say Opera GX) isn't always their default browser.
+    static func startTrackingBrowserUse() {
+        guard activationObserver == nil else { return }
+        if let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, isBrowser(bundleIdentifier: frontmostID) {
+            UserDefaults.standard.set(frontmostID, forKey: lastUsedBrowserDefaultsKey)
+        }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { notification in
+            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard let bundleIdentifier = application?.bundleIdentifier,
+                  bundleIdentifier != Bundle.main.bundleIdentifier,
+                  isBrowser(bundleIdentifier: bundleIdentifier) else { return }
+            UserDefaults.standard.set(bundleIdentifier, forKey: lastUsedBrowserDefaultsKey)
+        }
+    }
+
+    /// The browser the user is using: the one in front, else the one they
+    /// used last, else the default browser.
+    nonisolated static var usersBrowserBundleIdentifier: String? {
+        if let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, isBrowser(bundleIdentifier: frontmostID) {
+            return frontmostID
+        }
+        if let lastUsedID = UserDefaults.standard.string(forKey: lastUsedBrowserDefaultsKey),
+           NSWorkspace.shared.urlForApplication(withBundleIdentifier: lastUsedID) != nil {
+            return lastUsedID
+        }
+        guard let defaultBrowserURL = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) else { return nil }
+        return Bundle(url: defaultBrowserURL)?.bundleIdentifier
+    }
+
+    nonisolated static var usersBrowserName: String? {
+        guard let bundleIdentifier = usersBrowserBundleIdentifier,
+              let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        return FileManager.default.displayName(atPath: applicationURL.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    /// Opens a page (or a local HTML file) in the user's browser rather than
+    /// whatever the system default is.
+    @discardableResult
+    static func openInUsersBrowser(_ url: URL) async -> Bool {
+        guard let bundleIdentifier = usersBrowserBundleIdentifier,
+              let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return NSWorkspace.shared.open(url)
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        return (try? await NSWorkspace.shared.open([url], withApplicationAt: applicationURL, configuration: configuration)) != nil
+    }
+
+    /// For Dots' AGENTS.md: which browser to use, so they don't open a
+    /// different one.
+    nonisolated static var agentInstructions: String {
+        guard let browserName = usersBrowserName else { return "" }
+        return """
+        # The user's web browser
+
+        The user's browser is \(browserName). When a job needs a web page open in a browser (to show the user something, or to click around in it with computer use), use \(browserName): `open -a "\(browserName)" "<url>"`, or work in \(browserName)'s window. Never open Safari, Chrome or any other browser unless the user names it. To just read a page, use `web_fetch` or `curl` instead of a browser.
+
+        """
+    }
+
+    /// The browser to script: the user's browser when Dottie can script it.
+    /// When the user's browser can't be scripted (Opera, Firefox), nil, so
+    /// Dottie never drives a different browser instead of theirs.
     private static func currentBrowser() -> Browser? {
         let runningBundleIDs = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
+        if let usersID = usersBrowserBundleIdentifier, runningBundleIDs.contains(usersID) {
+            if let browser = knownBrowsers[usersID] { return browser }
+            if accessibilityOnlyBrowserIDs.contains(usersID) { return nil }
+        }
         if let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, let browser = knownBrowsers[frontmostID] {
             return browser
         }
@@ -94,6 +168,16 @@ enum DottieBrowser {
             break
         }
         guard let browser = currentBrowser() else {
+            if action == "open_url" {
+                var address = trimmedTarget
+                if !address.contains("://") { address = "https://" + address }
+                guard let url = URL(string: address), !trimmedTarget.isEmpty else { return "that isn't a web address." }
+                let browserName = usersBrowserName ?? "the browser"
+                return await openInUsersBrowser(url) ? "opened \(url.host ?? address) in \(browserName)." : "couldn't open that page."
+            }
+            if let browserName = usersBrowserName {
+                return "\(browserName) can't be controlled this way. use the screen instead (do_task_on_screen, or look and point); never switch to another browser."
+            }
             return "no supported browser is open (Safari, Chrome, Arc, Brave, Edge or Vivaldi). open_url opens a page in the default browser instead."
         }
         switch action {
@@ -445,7 +529,7 @@ enum DottieBrowser {
         let script = "tell application \"\(browser.appName)\"\nactivate\n\(body)\nend tell"
         let result = await DottieMacActions.runProcess("/usr/bin/osascript", arguments: ["-e", script], timeout: 15)
         if result.exitCode != 0, let pageURL = URL(string: normalizedURLText) {
-            NSWorkspace.shared.open(pageURL)
+            await openInUsersBrowser(pageURL)
         }
         return "opened \(normalizedURLText)."
     }
