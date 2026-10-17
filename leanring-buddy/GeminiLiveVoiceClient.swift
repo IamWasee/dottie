@@ -97,7 +97,7 @@ final class GeminiLiveVoiceClient {
     /// The model handed a multi-step job on the screen to the task runner
     /// (do_task_on_screen). Returns a short status; the result is spoken
     /// in a later turn when the job finishes.
-    var onStartScreenTask: (@MainActor (_ task: String) -> String)?
+    var onStartScreenTask: (@MainActor (_ task: String, _ isGame: Bool, _ referenceImageNames: [String]) -> String)?
     /// The user asked to stop the running screen task (stop_screen_task).
     /// scope: "all" (stop and clear the list), "current" (skip to the next
     /// job) or "list" (what's running and waiting).
@@ -629,13 +629,22 @@ final class GeminiLiveVoiceClient {
     /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
     private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
         "name": "do_task_on_screen",
-        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there. Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
+        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there, or playing a video game for the user (set game). Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
         "parameters": [
             "type": "OBJECT",
             "properties": [
                 "task": [
                     "type": "STRING",
                     "description": "The whole job in the user's words, every step in order, plus details from the conversation (names, apps, what to report back)."
+                ],
+                "game": [
+                    "type": "BOOLEAN",
+                    "description": "True when the job is playing or doing something inside a video game (walking somewhere, picking up or using an item, fighting, building), so it runs in quick game mode with movement keys and camera control."
+                ],
+                "reference_images": [
+                    "type": "ARRAY",
+                    "items": ["type": "STRING"],
+                    "description": "Names of saved pictures the user showed you that this job is about, exactly as listed under 'pictures the user showed you', like ['golden sword']. The job gets the pictures to match on screen."
                 ]
             ],
             "required": ["task"]
@@ -1024,8 +1033,10 @@ final class GeminiLiveVoiceClient {
                                  response: ["error": "couldn't start that right now."])
             return
         }
+        let isGame = (functionArguments["game"] as? Bool) ?? ((functionArguments["game"] as? NSNumber)?.boolValue ?? false)
+        let referenceImageNames = (functionArguments["reference_images"] as? [Any])?.compactMap { $0 as? String } ?? []
         sendFunctionResponse(functionCallID: functionCallID, functionName: "do_task_on_screen",
-                             response: ["result": onStartScreenTask(taskText)])
+                             response: ["result": onStartScreenTask(taskText, isGame, referenceImageNames)])
     }
 
     private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {

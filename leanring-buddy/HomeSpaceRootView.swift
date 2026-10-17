@@ -11,6 +11,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
@@ -116,6 +117,15 @@ private struct HomeConversationView: View {
     @ObservedObject var conversationStore: ConversationStore
     @ObservedObject var shortcutMonitor: GlobalPushToTalkShortcutMonitor
     @State private var typedMessage = ""
+    /// Pictures waiting to go with the next message.
+    @State private var attachedImages: [AttachedImage] = []
+    @State private var isDropTargeted = false
+
+    private struct AttachedImage: Identifiable {
+        let id = UUID()
+        let data: Data
+        let thumbnail: NSImage
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,7 +150,7 @@ private struct HomeConversationView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
                             ForEach(conversationStore.entries) { entry in
-                                HomeConversationEntryView(entry: entry)
+                                HomeConversationEntryView(entry: entry, imageFolderURL: companionManager.imageMemory.folderURL)
                                     .id(entry.id)
                             }
                         }
@@ -159,6 +169,16 @@ private struct HomeConversationView: View {
 
             Divider().background(DS.Colors.borderSubtle)
             composer
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(DS.Colors.accent, lineWidth: 2)
+                .padding(4)
+                .opacity(isDropTargeted ? 1 : 0)
+        )
+        .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted) { providers in
+            loadImages(from: providers)
+            return true
         }
     }
 
@@ -181,39 +201,137 @@ private struct HomeConversationView: View {
         .padding(.horizontal, 40)
     }
 
+    private var canSend: Bool {
+        !typedMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachedImages.isEmpty
+    }
+
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Type to Dottie", text: $typedMessage)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(DS.Colors.textPrimary)
-                .onSubmit(sendTypedMessage)
-            Button(action: sendTypedMessage) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundColor(typedMessage.isEmpty ? DS.Colors.textTertiary : DS.Colors.accent)
+        VStack(alignment: .leading, spacing: 8) {
+            if !attachedImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(attachedImages) { attachedImage in
+                            Image(nsImage: attachedImage.thumbnail)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(alignment: .topTrailing) {
+                                    Button {
+                                        attachedImages.removeAll { $0.id == attachedImage.id }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.white)
+                                            .background(Circle().fill(Color.black.opacity(0.6)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(x: 5, y: -5)
+                                }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                Text("Dottie saves pictures and remembers them by name, so later you can say \u{201C}go grab that\u{201D}.")
+                    .font(.system(size: 10))
+                    .foregroundColor(DS.Colors.textTertiary)
             }
-            .buttonStyle(.plain)
-            .pointerCursor(isEnabled: !typedMessage.isEmpty)
-            .disabled(typedMessage.isEmpty)
+            HStack(spacing: 10) {
+                Button(action: pickImages) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.system(size: 15))
+                        .foregroundColor(DS.Colors.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Add a picture (or drop or paste one)")
+                TextField(attachedImages.isEmpty ? "Type to Dottie" : "Say what it is, like \u{201C}this is my golden sword\u{201D}", text: $typedMessage)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                    .onSubmit(sendTypedMessage)
+                Button(action: sendTypedMessage) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(canSend ? DS.Colors.accent : DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor(isEnabled: canSend)
+                .disabled(!canSend)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+        .onPasteCommand(of: [.image, .fileURL]) { providers in
+            loadImages(from: providers)
+        }
     }
 
     private func sendTypedMessage() {
         let messageText = typedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !messageText.isEmpty else { return }
+        guard canSend else { return }
+        let imageDataList = attachedImages.map(\.data)
         typedMessage = ""
-        companionManager.sendTypedMessage(messageText)
+        attachedImages = []
+        companionManager.sendTypedMessage(messageText, imageDataList: imageDataList)
+    }
+
+    private func pickImages() {
+        let openPanel = NSOpenPanel()
+        openPanel.allowedContentTypes = [.image]
+        openPanel.allowsMultipleSelection = true
+        openPanel.canChooseDirectories = false
+        openPanel.message = "Pick pictures for Dottie to remember"
+        guard openPanel.runModal() == .OK else { return }
+        for url in openPanel.urls {
+            if let data = try? Data(contentsOf: url) { attach(data) }
+        }
+    }
+
+    /// Dropped or pasted pictures: image files, or image data (a screenshot
+    /// copied to the clipboard).
+    private func loadImages(from providers: [NSItemProvider]) {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, let data = try? Data(contentsOf: url), NSImage(data: data) != nil else { return }
+                    DispatchQueue.main.async { attach(data) }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    guard let data else { return }
+                    DispatchQueue.main.async { attach(data) }
+                }
+            }
+        }
+    }
+
+    private func attach(_ data: Data) {
+        guard let thumbnail = NSImage(data: data), attachedImages.count < 6 else { return }
+        attachedImages.append(AttachedImage(data: data, thumbnail: thumbnail))
     }
 }
 
 private struct HomeConversationEntryView: View {
     let entry: ConversationEntry
+    let imageFolderURL: URL
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let imageFileNames = entry.imageFileNames, !imageFileNames.isEmpty {
+                HStack(spacing: 6) {
+                    Spacer(minLength: 60)
+                    ForEach(imageFileNames, id: \.self) { fileName in
+                        if let image = NSImage(contentsOf: imageFolderURL.appendingPathComponent(fileName)) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: 140, maxHeight: 140)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                    }
+                }
+            }
             if !entry.userText.isEmpty {
                 HStack {
                     Spacer(minLength: 60)

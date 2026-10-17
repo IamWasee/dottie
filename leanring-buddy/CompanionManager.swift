@@ -109,6 +109,8 @@ final class CompanionManager: ObservableObject {
     let clickyRoster = ClickyRoster()
     /// Memory, the Brain agent's settings and the screen journal.
     let brain = DottieBrain()
+    /// Pictures the user added in Home → Conversation, remembered by name.
+    let imageMemory = DottieImageMemory()
     /// Meeting mode: off until the user starts it.
     let meetingRecorder = DottieMeetingRecorder()
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
@@ -136,6 +138,9 @@ final class CompanionManager: ObservableObject {
     /// Text the user typed for the current live turn, if it was typed rather
     /// than spoken. Live only transcribes audio, so we remember it ourselves.
     private var currentLiveTurnTypedText: String?
+    /// Saved pictures sent with the current typed turn, for its conversation
+    /// entry.
+    private var currentTurnImageFileNames: [String] = []
     /// The second look at where Live pointed; replaced by the next point request.
     private var livePointingRefinementTask: Task<Void, Never>?
     /// What voice Dottie draws on screen when asked.
@@ -889,10 +894,17 @@ final class CompanionManager: ObservableObject {
 
     /// The Live prompt with what the second brain knows about the user.
     private func currentLiveSystemPrompt() -> String {
-        let basePrompt = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
+        var prompt = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
         let profile = brain.profileForPrompt
-        guard !profile.isEmpty else { return basePrompt }
-        return basePrompt + "\n\nwhat your second brain knows about the user (use it naturally, don't recite it):\n" + profile
+        if !profile.isEmpty {
+            prompt += "\n\nwhat your second brain knows about the user (use it naturally, don't recite it):\n" + profile
+        }
+        let pictureList = imageMemory.promptSummary
+        if !pictureList.isEmpty {
+            prompt += "\n\npictures the user showed you (saved; you know them by these names and descriptions):\n" + pictureList
+                + "\nwhen the user means one of these (\"grab that sword\", \"where's the thing i showed you\"), pass its exact name in do_task_on_screen's reference_images, or use the exact name as the point_at_element label, so the picture itself is matched on screen."
+        }
+        return prompt
     }
 
     // MARK: - Live Voice Pipeline (Gemini Live)
@@ -930,6 +942,7 @@ final class CompanionManager: ObservableObject {
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence.
     jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in order. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting.
+    games: when the user asks you to do something inside a game ("go grab that sword", "walk over to the shop", "play this level for me"), call do_task_on_screen with game true: it moves with the keyboard, turns the camera and clicks, in quick steps. if they mean a picture they showed you, pass its name in reference_images.
 
     second brain:
     you have a second brain that remembers everything you and the helpers have done with the user, and can dig through their files, command-line tools and connected apps.
@@ -996,9 +1009,9 @@ final class CompanionManager: ObservableObject {
             return await self.performScreenAction(screenAction)
         }
 
-        liveVoiceClient.onStartScreenTask = { [weak self] taskText in
+        liveVoiceClient.onStartScreenTask = { [weak self] taskText, isGame, referenceImageNames in
             guard let self else { return "couldn't start it right now." }
-            return self.startScreenTask(taskText)
+            return self.startScreenTask(ScreenJob(text: taskText, isGame: isGame, referenceImageNames: referenceImageNames))
         }
 
         liveVoiceClient.onStopScreenTask = { [weak self] scope in
@@ -1197,30 +1210,39 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Multi-step screen tasks
 
+    /// A job for the screen task runner: what to do, whether it's a game,
+    /// and which saved pictures it's about.
+    private struct ScreenJob {
+        let text: String
+        var isGame = false
+        var referenceImageNames: [String] = []
+    }
+
     /// Jobs asked for while another was running, oldest first. Each starts
     /// when the one before it finishes.
-    private var queuedScreenTasks: [String] = []
+    private var queuedScreenTasks: [ScreenJob] = []
 
     /// Starts a multi-step job, or lines it up behind the running one.
     /// Returns a short status for Live to relay.
-    private func startScreenTask(_ taskText: String) -> String {
+    private func startScreenTask(_ job: ScreenJob) -> String {
         guard DottieScreenActionPerformer.canPostEvents else {
             return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
         }
         if screenTaskRunner.isRunning {
-            queuedScreenTasks.append(taskText)
-            print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(taskText)")
+            queuedScreenTasks.append(job)
+            print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
             refreshScreenTaskTitle()
             let position = queuedScreenTasks.count
             return "added to the list: it starts after the current job\(position > 1 ? " and \(position - 1) more" : ""). say that in a few words; each result comes to you as it finishes."
         }
-        runScreenTask(taskText)
+        runScreenTask(job)
         return "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
     }
 
-    private func runScreenTask(_ taskText: String) {
+    private func runScreenTask(_ job: ScreenJob) {
+        let taskText = job.text
         stopGuide()
-        print("🧭 Screen task: \(taskText)")
+        print("🧭 Screen task\(job.isGame ? " (game)" : ""): \(taskText)")
         showOverlayTransientlyIfNeeded()
 
         screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
@@ -1237,7 +1259,12 @@ final class CompanionManager: ObservableObject {
         }
         currentScreenTaskText = taskText
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
-        screenTaskRunner.start(task: taskText) { [weak self] outcome in
+        let referenceImages = imageMemory.items(matching: job.referenceImageNames).compactMap { item in
+            imageMemory.jpegData(for: item).map {
+                DottieScreenTaskRunner.ReferenceImage(name: item.name, description: item.description, jpegData: $0)
+            }
+        }
+        screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
             self?.finishScreenTask(taskText: taskText, outcome: outcome)
         }
     }
@@ -1257,9 +1284,9 @@ final class CompanionManager: ObservableObject {
     /// Starts the next waiting job, if there is one.
     private func startNextQueuedScreenTask() {
         guard !screenTaskRunner.isRunning, !queuedScreenTasks.isEmpty else { return }
-        let nextTaskText = queuedScreenTasks.removeFirst()
-        print("🧭 Next queued screen task: \(nextTaskText)")
-        runScreenTask(nextTaskText)
+        let nextJob = queuedScreenTasks.removeFirst()
+        print("🧭 Next queued screen task: \(nextJob.text)")
+        runScreenTask(nextJob)
     }
 
     /// Stops the running job and drops every waiting one. Returns true if
@@ -1299,7 +1326,7 @@ final class CompanionManager: ObservableObject {
             lines.append("doing now: \(currentScreenTaskText) (\(notchPresenter.screenTaskStepText))")
         }
         for (index, queuedTask) in queuedScreenTasks.enumerated() {
-            lines.append("\(index + 1). next: \(queuedTask)")
+            lines.append("\(index + 1). next: \(queuedTask.text)")
         }
         return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
     }
@@ -1429,6 +1456,12 @@ final class CompanionManager: ObservableObject {
         scheduleTransientHideIfNeeded()
     }
 
+    /// The saved picture whose name is this pointing label, if any.
+    private func savedPictureJPEG(named label: String?) -> Data? {
+        guard let label, let item = imageMemory.items(matching: [label]).first else { return nil }
+        return imageMemory.jpegData(for: item)
+    }
+
     /// Where a 0-1000 point in this turn's frame is on screen, after the
     /// same second look pointing gets.
     private func refinedScreenLocation(
@@ -1449,7 +1482,8 @@ final class CompanionManager: ObservableObject {
             elementLabel: label,
             userQuestion: currentLiveTurnTypedText ?? "",
             roughPoint: roughScreenLocation,
-            displayFrame: displayFrame
+            displayFrame: displayFrame,
+            referenceImageJPEG: savedPictureJPEG(named: label)
         ).flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: $0.midX, y: $0.midY)) ? $0 : nil }
         let finalPoint = refinedFrame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? roughScreenLocation
         // The frame spans every display side by side, so "size" is relative
@@ -1481,12 +1515,14 @@ final class CompanionManager: ObservableObject {
         // before the cursor flies, so it lands on the thing itself.
         livePointingRefinementTask?.cancel()
         let userQuestion = currentLiveTurnTypedText ?? ""
+        let referenceImageJPEG = savedPictureJPEG(named: pointRequest.elementLabel)
         livePointingRefinementTask = Task { [weak self] in
             let refinedScreenLocation = await PointingRefiner.refine(
                 elementLabel: pointRequest.elementLabel,
                 userQuestion: userQuestion,
                 roughPoint: roughScreenLocation,
-                displayFrame: displayFrame
+                displayFrame: displayFrame,
+                referenceImageJPEG: referenceImageJPEG
             )
             guard let self, !Task.isCancelled else { return }
             // Still on the display the guess was on, or the guess wins.
@@ -1527,8 +1563,10 @@ final class CompanionManager: ObservableObject {
             conversationStore.append(
                 userText: userTranscript,
                 clickyText: modelTranscript,
-                inputKind: typedTextForThisTurn == nil ? .voice : .typed
+                inputKind: typedTextForThisTurn == nil ? .voice : .typed,
+                imageFileNames: typedTextForThisTurn == nil ? [] : currentTurnImageFileNames
             )
+            currentTurnImageFileNames = []
             conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
             if conversationHistory.count > Self.rememberedExchangeCount {
                 conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
@@ -2033,10 +2071,47 @@ final class CompanionManager: ObservableObject {
 
     /// Sends a typed message (from the notch or Home) as a turn, with a
     /// screenshot like a spoken one. Clicky answers out loud as usual.
-    func sendTypedMessage(_ messageText: String) {
+    /// A typed message with pictures: each is saved to image memory (named
+    /// and described by Gemini) first, then the message tells Live what was
+    /// saved, so "go grab that sword" works now and in later sessions.
+    func sendTypedMessage(_ messageText: String, imageDataList: [Data]) {
+        guard !imageDataList.isEmpty else {
+            sendTypedMessage(messageText)
+            return
+        }
+        let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        notchPresenter.showThinking(label: "looking at your picture")
+        Task { [weak self] in
+            guard let self else { return }
+            var savedItems: [DottieImageMemory.Item] = []
+            for imageData in imageDataList {
+                if let savedItem = await self.imageMemory.add(imageData: imageData, userText: trimmedMessageText) {
+                    savedItems.append(savedItem)
+                }
+            }
+            guard !savedItems.isEmpty else {
+                self.notchPresenter.collapse()
+                if !trimmedMessageText.isEmpty { self.sendTypedMessage(trimmedMessageText) }
+                return
+            }
+            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
+            let pictureNotes = savedItems.map { item in
+                "\"\(item.name)\"" + (item.description.isEmpty ? "" : " (\(item.description))")
+            }.joined(separator: ", ")
+            let turnText = "[the user added \(savedItems.count == 1 ? "a picture" : "pictures"), now saved as \(pictureNotes). "
+                + "when they ask about it or to find, point at or grab it, pass its name to do_task_on_screen's reference_images, or use it as the label when pointing.] "
+                + (trimmedMessageText.isEmpty ? "say in a few words that you've saved it and what it is." : trimmedMessageText)
+            let recordedText = trimmedMessageText.isEmpty ? "(picture)" : trimmedMessageText
+            self.currentTurnImageFileNames = savedItems.map(\.fileName)
+            self.sendTypedMessage(recordedText, turnText: turnText)
+        }
+    }
+
+    func sendTypedMessage(_ messageText: String, turnText: String? = nil) {
         let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedMessageText.isEmpty else { return }
         guard !buddyDictationManager.isDictationInProgress else { return }
+        if turnText == nil { currentTurnImageFileNames = [] }
 
         transientHideTask?.cancel()
         transientHideTask = nil
@@ -2049,9 +2124,9 @@ final class CompanionManager: ObservableObject {
 
         switch voiceMode {
         case .classic:
-            sendTranscriptToGeminiWithScreenshot(transcript: trimmedMessageText, inputKind: .typed)
+            sendTranscriptToGeminiWithScreenshot(transcript: turnText ?? trimmedMessageText, inputKind: .typed)
         case .live:
-            startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: trimmedMessageText)
+            startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: turnText ?? trimmedMessageText)
         }
     }
 

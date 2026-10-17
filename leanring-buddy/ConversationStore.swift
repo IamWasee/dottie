@@ -22,6 +22,8 @@ struct ConversationEntry: Codable, Identifiable, Equatable {
     let inputKind: InputKind
     let userText: String
     let clickyText: String
+    /// Pictures the user added with this message, in image memory's folder.
+    var imageFileNames: [String]?
 }
 
 @MainActor
@@ -41,7 +43,7 @@ final class ConversationStore: ObservableObject {
         loadEntriesFromDisk()
     }
 
-    func append(userText: String, clickyText: String, inputKind: ConversationEntry.InputKind) {
+    func append(userText: String, clickyText: String, inputKind: ConversationEntry.InputKind, imageFileNames: [String] = []) {
         let trimmedUserText = userText.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedClickyText = clickyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUserText.isEmpty || !trimmedClickyText.isEmpty else { return }
@@ -51,7 +53,8 @@ final class ConversationStore: ObservableObject {
             createdAt: Date(),
             inputKind: inputKind,
             userText: trimmedUserText,
-            clickyText: trimmedClickyText
+            clickyText: trimmedClickyText,
+            imageFileNames: imageFileNames.isEmpty ? nil : imageFileNames
         ))
         if entries.count > Self.maximumStoredEntries {
             entries.removeFirst(entries.count - Self.maximumStoredEntries)
