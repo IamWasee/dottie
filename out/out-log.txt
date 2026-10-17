@@ -1,0 +1,19 @@
+GOLDEN SWORD GT [798.71875, 527.796875, 56, 56]
+GAME RUN 0 
+ OUTCOME after 21s: finished: I walked to the golden sword and picked it up successfully!
+
+TASK status=200 t=1.8468189239501953 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "walk_to","args": {"player_box_2d": [500,477,570,527],"view": "top_down","target_box_2d": [693,792,76
+STEP 1: walking over
+TASK status=200 t=1.8030660152435303 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "click","args": {"label": "player","box_2d": [500,477,570,527]},"id": "call_1774629"},"thoughtSignatu
+STEP 2: clicking player
+TASK status=200 t=1.6583501100540161 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "walk_to","args": {"view": "top_down","player_box_2d": [500,477,570,527],"target_box_2d": [693,792,76
+STEP 3: walking over
+TASK status=200 t=1.673198938369751 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "walk_to","args": {"target_box_2d": [693,792,763,820],"player_box_2d": [875,959,919,1000],"view": "top
+STEP 4: walking over
+TASK status=200 t=1.5722589492797852 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "walk_to","args": {"player_box_2d": [662,739,723,785],"view": "top_down","target_box_2d": [693,792,76
+STEP 5: walking over
+TASK status=200 t=1.551414966583252 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "press_keys","args": {"keys": "e"},"id": "call_388715"},"thoughtSignature": "EmAKXgFpFH0T2i/1otDWZm2U0
+STEP 6: pressing e
+TASK status=200 t=1.9120780229568481 body=5 raw=data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "finish","args": {"answer": "I walked to the golden sword and picked it up successfully!"},"id": "cal
+TITLE AFTER: PICKED golden
+ok 1024x768
