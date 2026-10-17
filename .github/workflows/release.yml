@@ -196,11 +196,12 @@ jobs:
             exit 1
           fi
           # Inside out: helper executables, then nested bundles, then the app.
+          # Nested code keeps its own entitlements (Sparkle's XPC services).
           find "$app/Contents" \( -path "*/Helpers/*" -o -path "*/Frameworks/*" \) -type f -perm -u+x | while read -r nested; do
-            codesign --force --sign "$identity" --keychain "$keychain" "$nested"
+            codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements,flags "$nested"
           done
           find "$app/Contents" -depth \( -name "*.framework" -o -name "*.xpc" -o -name "*.app" \) | while read -r bundle; do
-            codesign --force --sign "$identity" --keychain "$keychain" "$bundle"
+            codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements,flags "$bundle"
           done
           codesign --force --sign "$identity" --keychain "$keychain" \
             --entitlements leanring-buddy/leanring-buddy.entitlements "$app"
