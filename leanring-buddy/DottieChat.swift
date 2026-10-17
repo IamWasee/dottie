@@ -25,18 +25,8 @@ enum DottieChat {
             print("⚠️ DottieChat request failed: \(String(decoding: responseData.prefix(300), as: UTF8.self))")
             return nil
         }
-        // /chat streams server-sent events; skip thinking parts.
-        var answerText = ""
-        for line in String(decoding: responseData, as: UTF8.self).split(separator: "\n") where line.hasPrefix("data: ") {
-            guard let eventData = line.dropFirst(6).data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
-                  let candidates = event["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { continue }
-            for part in parts where (part["thought"] as? Bool) != true {
-                answerText += part["text"] as? String ?? ""
-            }
-        }
+        // /chat streams server-sent events.
+        let answerText = GeminiServerSentEvents.text(from: responseData)
         return answerText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
