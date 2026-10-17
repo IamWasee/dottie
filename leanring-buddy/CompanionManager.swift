@@ -109,6 +109,14 @@ final class CompanionManager: ObservableObject {
     let clickyRoster = ClickyRoster()
     /// Memory, the Brain agent's settings and the screen journal.
     let brain = DottieBrain()
+    /// Meeting mode: off until the user starts it.
+    let meetingRecorder = DottieMeetingRecorder()
+    /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
+    /// and meeting notes, as voice tools.
+    private(set) lazy var macTools = DottieMacTools(meetingRecorder: meetingRecorder)
+    /// Texting Dottie from a phone through the user's own Telegram bot.
+    let phoneBridge = DottiePhoneBridge()
+    private var meetingCancellable: AnyCancellable?
     /// Hold right Option to dictate into any app.
     let dictationController = ClickyDictationController()
     private var dictationCancellables: Set<AnyCancellable> = []
@@ -935,6 +943,16 @@ final class CompanionManager: ObservableObject {
     - helpers change all the time and the user can create, use or delete them in the app without you. never answer about helpers from memory or from earlier in the conversation. whenever the user asks about helpers (what are they doing, is it done, what did it say, did it work, which ones exist), call list_helpers or check_helper first and answer from what it returns. if a helper isn't there anymore, say it was deleted.
     - check_helper gives a helper's latest task, steps, reply and files; tell the user the gist in a sentence or two, not the whole reply.
     - stop_helper stops one that's working. open_helper_result opens what it made (a website in the browser, a file, or its folder).
+
+    your mac powers:
+    only when the user asks, you can act on their mac directly. these are quicker and surer than clicking, so prefer them:
+    - apps and settings: run_applescript (music or spotify, finder, notes, mail drafts, volume, dark mode, opening or quitting apps, arranging windows). run_shortcut runs one of their apple shortcuts by name; list_shortcuts lists them.
+    - calendar and reminders: get_schedule for "what's my day look like" or "am i free friday", add_calendar_event, get_reminders, add_reminder ("remind me to call mom at 5"), complete_reminder. answer in a sentence, like "three things today, first is standup at ten".
+    - contacts: find_contact for someone's number, email or birthday.
+    - the browser: browser reads the page they're on (read_page), lists, opens, switches and closes tabs, fills in form fields and clicks buttons by their text. use it for anything inside a web page instead of clicking on the screen. if it says page access is off, call it with enable_page_access.
+    - anything that sends, deletes or buys pops up a dialog asking the user first, so go ahead when they ask; if they say no, drop it.
+    - meeting mode: when the user says to take notes or start meeting mode, call meeting_notes with start; when they say the meeting's over, stop. never start it on your own. the notes come back to you later and are saved in home → meetings. status tells you what's been said so far; latest reads their last meeting's notes.
+    - the user can text you from their phone (home → phone): a helper called Phone does the job and texts back.
     """
 
     /// Hooks the Live client's callbacks into the companion's state.
@@ -1031,6 +1049,11 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onHelperTool = { [weak self] functionName, helperName in
             guard let self else { return "helpers aren't available right now." }
             return self.answerHelperTool(functionName: functionName, helperName: helperName)
+        }
+
+        liveVoiceClient.onMacTool = { [weak self] functionName, arguments in
+            guard let self else { return "couldn't do that right now." }
+            return await self.macTools.perform(functionName: functionName, arguments: arguments)
         }
 
         liveVoiceClient.onTurnError = { [weak self] error in
@@ -1674,6 +1697,11 @@ final class CompanionManager: ObservableObject {
     private func speakBrainAnswer(question: String, answer: String) {
         let instructionText = "your second brain answered the user's question \"\(question)\": \(answer)\n"
             + "tell the user now, in your own voice, in one to three short sentences. if it asks the user something, ask it."
+        speakWhenFree(recordedUserText: "(brain: \(question))", instructionText: instructionText)
+    }
+
+    /// Has Dottie say something on her own once any turn in progress ends.
+    private func speakWhenFree(recordedUserText: String, instructionText: String) {
         transientHideTask?.cancel()
         transientHideTask = nil
         Task { [weak self] in
@@ -1688,17 +1716,105 @@ final class CompanionManager: ObservableObject {
             case .classic:
                 self.sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
             case .live:
-                self.startLiveTextTurn(recordedUserText: "(brain: \(question))", turnText: instructionText)
+                self.startLiveTextTurn(recordedUserText: recordedUserText, turnText: instructionText)
             }
         }
     }
 
+    // MARK: - Meeting mode
+
+    private func configureMeetingMode() {
+        meetingCancellable = meetingRecorder.$isRecording
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isRecording in
+                self?.notchPresenter.isMeetingRecording = isRecording
+            }
+        meetingRecorder.onMeetingSaved = { [weak self] title, summary, _ in
+            guard let self else { return }
+            self.brain.record(.meeting, "meeting \"\(title)\":\n\(summary.prefix(3000))")
+            self.notchPresenter.showAgentUpdate(title: "Meeting notes · \(title)", text: summary)
+            self.speakWhenFree(
+                recordedUserText: "(meeting notes ready)",
+                instructionText: "the meeting notes are ready and saved in home → meetings:\n\(summary.prefix(2500))\n"
+                    + "tell the user in one or two short sentences: the gist, and how many action items there are. don't read it all out."
+            )
+        }
+    }
+
+    // MARK: - Phone
+
+    private static let phoneHelperName = "Phone"
+
+    private func configurePhoneBridge() {
+        phoneBridge.onMessage = { [weak self] text in
+            self?.handlePhoneMessage(text)
+        }
+        phoneBridge.statusProvider = { [weak self] in
+            guard let self else { return "" }
+            var lines = ["Helpers:", self.clickyRoster.helperListSummary()]
+            if self.screenTaskRunner.isRunning {
+                lines.append("On screen: " + self.screenTaskQueueSummary())
+            }
+            if self.meetingRecorder.isRecording {
+                lines.append("Meeting notes are on (\(self.meetingRecorder.elapsedText)).")
+            }
+            return lines.joined(separator: "\n")
+        }
+        phoneBridge.screenshotProvider = {
+            let screenCaptures = try? await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            return (screenCaptures?.first { $0.isCursorScreen } ?? screenCaptures?.first)?.imageData
+        }
+        phoneBridge.onPermissionAnswer = { [weak self] isAllowed in
+            guard let self,
+                  let phoneAgent = self.clickyRoster.agents.first(where: { $0.name == Self.phoneHelperName }),
+                  self.clickyRoster.pendingComputerUseRequest(for: phoneAgent) != nil else {
+                return "Nothing is waiting for permission."
+            }
+            self.notchPresenter.dropComputerUseRequest(forAgentID: phoneAgent.id)
+            if isAllowed {
+                self.clickyRoster.approveComputerUse(for: phoneAgent, alwaysAllow: false)
+                return "Allowed. Carrying on."
+            }
+            self.clickyRoster.declineComputerUse(for: phoneAgent)
+            return "Okay, it won't use the Mac."
+        }
+    }
+
+    /// A text from the user's phone becomes a task for the Phone helper,
+    /// whose reply is texted back from onAgentTurnFinished.
+    private func handlePhoneMessage(_ text: String) {
+        guard ClickyWorkerConfiguration.isWorkerConfigured else {
+            Task { await phoneBridge.send("Dottie isn't connected to its server, so helpers can't run. Check Settings → Connection on the Mac.") }
+            return
+        }
+        let phoneAgent = clickyRoster.agents.first { $0.name == Self.phoneHelperName }
+            ?? clickyRoster.createAgent(name: Self.phoneHelperName, purpose: "Jobs the user texts from their phone while away from the Mac.")
+        brain.record(.phone, "texted from phone: \(text)")
+        let taskText = """
+        (texted by the user from their phone; they may be away from the Mac.) \(text)
+
+        do it, then end with a short reply that reads well as a text message: a few plain lines, no markdown tables.
+        """
+        let tasksAhead = clickyRoster.sendOrQueueMessage(taskText, to: phoneAgent)
+        let receipt = tasksAhead > 0
+            ? "Got it. That's lined up after \(tasksAhead) other task\(tasksAhead == 1 ? "" : "s")."
+            : (DotsRuntimeInstaller.isInstalled ? "On it." : "On it. First run on this Mac, so it's setting up first.")
+        Task { await phoneBridge.send(receipt) }
+    }
+
     private func configureClickyRoster() {
         configureBrain()
+        configureMeetingMode()
+        configurePhoneBridge()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
             guard let self else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
+            let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
             if let computerUseRequest = turnResult.computerUseRequest {
+                if isPhoneHelper {
+                    Task { await self.phoneBridge.send("I need to use your Mac's screen for this: \(computerUseRequest)\nReply allow or deny.") }
+                }
                 // Ask in the notch and in a notification; the answer comes
                 // back through onAnswerComputerUseRequest below.
                 self.notchPresenter.showAgentUpdate(
@@ -1716,6 +1832,9 @@ final class CompanionManager: ObservableObject {
             let updateText = turnResult.finalReply.isEmpty
                 ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
                 : turnResult.finalReply
+            if isPhoneHelper {
+                Task { await self.phoneBridge.send(updateText) }
+            }
             let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
             self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
             if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
@@ -2070,6 +2189,39 @@ final class CompanionManager: ObservableObject {
     /// screenshots. Points the cursor if the answer says to, and returns the
     /// text for Live to speak. Errors come back as instructions for Live to
     /// relay, so the user always hears something.
+    /// Answered the box and text probes in about 2s when the default models
+    /// stalled (checked on a Mac runner, Oct 2026).
+    nonisolated private static let quickBackupModel = "gemini-3.5-flash"
+
+    /// Runs primary; if it hasn't answered after backupAfterSeconds, starts
+    /// backup too and returns whichever answers first.
+    nonisolated private static func firstAnswer<Answer: Sendable>(
+        backupAfterSeconds: Double,
+        primary: @escaping @Sendable () async throws -> Answer,
+        backup: @escaping @Sendable () async throws -> Answer
+    ) async throws -> Answer {
+        try await withThrowingTaskGroup(of: Answer.self) { group in
+            group.addTask { try await primary() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(backupAfterSeconds * 1_000_000_000))
+                return try await backup()
+            }
+            var firstError: Error?
+            while !group.isEmpty {
+                do {
+                    let nextAnswer = try await group.next()
+                    if let nextAnswer {
+                        group.cancelAll()
+                        return nextAnswer
+                    }
+                } catch {
+                    if firstError == nil { firstError = error }
+                }
+            }
+            throw firstError ?? CancellationError()
+        }
+    }
+
     private func answerWithHigherModel(question: String) async -> String {
         print("🧠 Higher model hand-off: \(question)")
         ClickyAnalytics.trackHigherModelHandoff()
@@ -2081,14 +2233,25 @@ final class CompanionManager: ObservableObject {
                 (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
             }
 
-            let (fullResponseText, responseDuration) = try await geminiAPI.analyzeImageStreaming(
-                images: labeledImages,
-                systemPrompt: Self.higherModelSystemPrompt,
-                conversationHistory: historyForAPI,
-                userPrompt: question,
-                modelOverride: "higher",
-                maxOutputTokens: 2048,
-                onTextChunk: { _ in }
+            // The smart model sometimes sits in Google's queue for a minute
+            // or more; if it hasn't answered in 20s, a quick model races it.
+            let geminiAPI = self.geminiAPI
+            let higherModelSystemPrompt = Self.higherModelSystemPrompt
+            let askModel: @Sendable (String) async throws -> (text: String, duration: TimeInterval) = { modelName in
+                try await geminiAPI.analyzeImageStreaming(
+                    images: labeledImages,
+                    systemPrompt: higherModelSystemPrompt,
+                    conversationHistory: historyForAPI,
+                    userPrompt: question,
+                    modelOverride: modelName,
+                    maxOutputTokens: 2048,
+                    onTextChunk: { _ in }
+                )
+            }
+            let (fullResponseText, responseDuration) = try await Self.firstAnswer(
+                backupAfterSeconds: 20,
+                primary: { try await askModel("higher") },
+                backup: { try await askModel(Self.quickBackupModel) }
             )
             print("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
 

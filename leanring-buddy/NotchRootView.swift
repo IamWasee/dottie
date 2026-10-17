@@ -86,7 +86,12 @@ struct NotchRootView: View {
             HStack(spacing: 0) {
                 // Left: a pulsing light while any Dot is working.
                 ZStack {
-                    if notchPresenter.isAnyDotWorking {
+                    if notchPresenter.isMeetingRecording {
+                        Circle()
+                            .fill(Color.red.opacity(0.9))
+                            .frame(width: 6, height: 6)
+                            .help("Dottie is taking meeting notes. Stop them in Home → Meetings, or tell Dottie to stop.")
+                    } else if notchPresenter.isAnyDotWorking {
                         NotchWorkingLight()
                     } else if notchPresenter.isScreenJournalOn {
                         Circle()

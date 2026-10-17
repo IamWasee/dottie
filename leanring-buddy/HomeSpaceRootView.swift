@@ -18,6 +18,8 @@ struct HomeSpaceRootView: View {
         case clickys = "Dots"
         case skills = "Skills"
         case brain = "Brain"
+        case meetings = "Meetings"
+        case phone = "Phone"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -28,6 +30,8 @@ struct HomeSpaceRootView: View {
             case .clickys: return "person.2.fill"
             case .skills: return "sparkles"
             case .brain: return "brain.head.profile"
+            case .meetings: return "waveform"
+            case .phone: return "iphone"
             case .settings: return "gearshape.fill"
             }
         }
@@ -56,6 +60,10 @@ struct HomeSpaceRootView: View {
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .brain:
                     HomeBrainView(brain: companionManager.brain)
+                case .meetings:
+                    HomeMeetingsView(meetingRecorder: companionManager.meetingRecorder)
+                case .phone:
+                    HomePhoneView(phoneBridge: companionManager.phoneBridge)
                 case .settings:
                     HomeSettingsView(
                         companionManager: companionManager,

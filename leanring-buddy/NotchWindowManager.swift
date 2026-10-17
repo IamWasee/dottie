@@ -128,7 +128,8 @@ final class NotchWindowManager {
             }
             .store(in: &presenterCancellables)
         notchPresenter.$isScreenJournalOn
-            .removeDuplicates()
+            .combineLatest(notchPresenter.$isMeetingRecording)
+            .removeDuplicates { $0 == $1 }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }

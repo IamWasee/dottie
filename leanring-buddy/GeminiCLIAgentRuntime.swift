@@ -279,7 +279,8 @@ final class GeminiCLIAgentRuntime {
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,
-            buildingAgentInstructions
+            buildingAgentInstructions,
+            macAppsAgentInstructions
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
@@ -314,6 +315,20 @@ final class GeminiCLIAgentRuntime {
     - Never start a command that keeps running (a dev server, `npm run dev`, a watcher): your turn would never end. To check a page, read it back or run a quick script, then move on.
     - Before you reply, check your work: open the files you wrote, fix broken links and errors, and make sure everything the user asked for is there.
     - In your reply, say what you built and the path to open (for example `output/coffee-site/index.html`). Dottie can open it for the user.
+
+    """
+
+    /// Mac apps through their own scripting, which is quicker and surer
+    /// than clicking on the screen.
+    static let macAppsAgentInstructions = """
+    # Mac apps, calendar and reminders
+
+    You're on the user's Mac, so you can drive apps directly from the shell:
+
+    - `osascript -e '<AppleScript>'` controls scriptable apps: Calendar (read and add events), Reminders (read, add, complete), Notes, Mail (read; make drafts), Music, Finder, Safari and Chrome tabs, system volume and dark mode. Prefer it to clicking on the screen.
+    - `shortcuts list` and `shortcuts run "<name>" --input-path <file> --output-path <file>` run the user's Apple Shortcuts.
+    - macOS may ask the user once to let Dottie control an app; if a script fails with "not authorized" (-1743), say so in your reply.
+    - Never send an email or message, delete anything, or buy anything unless the user's task clearly asks for exactly that. Make a draft instead and say where it is.
 
     """
 

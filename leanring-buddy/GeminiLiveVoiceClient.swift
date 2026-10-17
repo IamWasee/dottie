@@ -109,6 +109,9 @@ final class GeminiLiveVoiceClient {
     var onGuideNext: (@MainActor () -> String)?
     /// The user asked to stop the guide (stop_guide).
     var onStopGuide: (@MainActor () -> String)?
+    /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
+    /// and meeting notes (DottieMacTools). Live waits for the result.
+    var onMacTool: (@MainActor (_ functionName: String, _ arguments: [String: Any]) async -> String)?
 
     // MARK: - Configuration
 
@@ -391,7 +394,7 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations]
+                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations + DottieMacTools.functionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -420,6 +423,12 @@ final class GeminiLiveVoiceClient {
     }
 
     private func composeSystemInstruction() -> String {
+        // Sessions are short, so the time stays right for calendar and
+        // reminder dates.
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "EEEE, MMMM d yyyy, h:mm a"
+        let baseSystemInstruction = self.baseSystemInstruction
+            + "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
         let historyLines = recentConversationHistory.map { exchange in
@@ -900,6 +909,8 @@ final class GeminiLiveVoiceClient {
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+            case _ where DottieMacTools.functionNames.contains(functionName):
+                handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["error": "unknown function"])
@@ -988,6 +999,21 @@ final class GeminiLiveVoiceClient {
             self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
             self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                       response: ["result": actionResult])
+        }
+    }
+
+    private func handleMacToolCall(functionCallID: String, functionName: String, functionArguments: [String: Any]) {
+        guard !isDiscardingModelAudioForCurrentTurn, let onMacTool else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["error": "couldn't do that right now."])
+            return
+        }
+        pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
+            let toolResult = await onMacTool(functionName, functionArguments)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
+            self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                      response: ["result": toolResult])
         }
     }
 

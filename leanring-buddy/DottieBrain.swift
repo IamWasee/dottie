@@ -37,6 +37,8 @@ final class DottieBrain: ObservableObject {
             case guide
             case remembered
             case screen
+            case meeting
+            case phone
         }
 
         let id: UUID

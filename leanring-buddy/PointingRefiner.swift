@@ -27,9 +27,9 @@ import Foundation
 enum PointingRefiner {
     /// The whole second look must finish within this, or Live's guess is used.
     static let refinementTimeoutSeconds: TimeInterval = 5
-    /// Fast enough to answer within the timeout (about 2.5s); the default
-    /// chat model often took 8s, so the cursor fell back to Live's guess.
-    static let visionModel = "gemini-3.6-flash"
+    /// The quickest model that still finds boxes well: about 1-1.5s on a
+    /// Mac runner, against 2.5-8s for gemini-3.6-flash (Oct 2026).
+    static let visionModel = "gemini-3.5-flash-lite"
 
     /// Chromium and Electron apps only build their web content's
     /// accessibility tree when asked, and the first ask can take a moment,
