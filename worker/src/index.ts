@@ -26,6 +26,10 @@
  *                      GOOGLE_GEMINI_BASE_URL and sends the shared secret as
  *                      its "API key"; the real key is swapped in here.
  *
+ * Backup: set the NVIDIA_API_KEY secret (free key from build.nvidia.com) and
+ * text/picture requests that every Gemini model turns down as busy go to
+ * NVIDIA NIM models instead (see nim.ts). Voice and speech stay on Gemini.
+ *
  * Optional: set the APP_SHARED_SECRET secret and the same value as
  * ClickyAppSharedSecret in the app's Info.plist. Requests without the
  * matching `x-clicky-secret` header are rejected, so a stranger who finds
@@ -44,7 +48,15 @@ interface Env {
   /** Comma-separated models to try, in order, when the chosen one is busy. */
   GEMINI_FALLBACK_MODELS?: string;
   GEMINI_TTS_FALLBACK_MODELS?: string;
+  /** Free NVIDIA NIM key; when set, NIM answers when every Gemini model is busy. */
+  NVIDIA_API_KEY?: string;
+  /** Comma-separated NIM models to try, in order. */
+  NIM_MODELS?: string;
 }
+
+const BUSY_STATUSES = [429, 500, 503, 504];
+
+import { answerWithNim, canUseNim } from "./nim";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -95,6 +107,7 @@ export default {
           ttsModel: env.GEMINI_TTS_MODEL,
           ttsVoice: env.GEMINI_TTS_VOICE,
           dictationModel: env.GEMINI_DICTATION_MODEL,
+          nimBackup: env.NVIDIA_API_KEY ? env.NIM_MODELS || "default" : "off",
         });
       }
 
@@ -195,6 +208,15 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     "streamGenerateContent?alt=sse",
     JSON.stringify(requestBody)
   );
+
+  if (BUSY_STATUSES.includes(response.status) && env.NVIDIA_API_KEY && canUseNim(requestBody)) {
+    const nimResponse = await answerWithNim(requestBody, env.NVIDIA_API_KEY, env.NIM_MODELS, true);
+    if (nimResponse) {
+      console.warn(`[/chat] every Gemini model was busy (${response.status}); NIM answered`);
+      await response.body?.cancel();
+      return nimResponse;
+    }
+  }
 
   if (!response.ok) {
     const errorBody = await response.text();
@@ -409,10 +431,28 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
       headers: upstreamHeaders,
       body: requestBody,
     });
-    const isBusy = [429, 500, 503, 504].includes(upstreamResponse.status);
+    const isBusy = BUSY_STATUSES.includes(upstreamResponse.status);
     if (!isBusy || index === upstreamPaths.length - 1) break;
     console.warn(`[/gemini] ${path} answered ${upstreamResponse.status}; trying ${upstreamPaths[index + 1]}`);
     await upstreamResponse.body?.cancel();
+  }
+
+  // Every Gemini model busy: a Dot's generateContent goes to NIM instead.
+  const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
+  if (BUSY_STATUSES.includes(upstreamResponse!.status) && env.NVIDIA_API_KEY && generateMethod && requestBody) {
+    try {
+      const geminiBody = JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
+      if (canUseNim(geminiBody)) {
+        const nimResponse = await answerWithNim(geminiBody, env.NVIDIA_API_KEY, env.NIM_MODELS, Boolean(generateMethod[1]));
+        if (nimResponse) {
+          console.warn(`[/gemini] every Gemini model was busy (${upstreamResponse!.status}); NIM answered`);
+          await upstreamResponse!.body?.cancel();
+          return nimResponse;
+        }
+      }
+    } catch (error) {
+      console.warn(`[/gemini] NIM backup failed: ${error}`);
+    }
   }
 
   const responseHeaders = new Headers();
@@ -592,7 +632,7 @@ async function fetchGeminiWithFallback(env: Env, models: string[], method: strin
       },
       body,
     });
-    const isBusy = [429, 500, 503, 504].includes(response.status);
+    const isBusy = BUSY_STATUSES.includes(response.status);
     if (!isBusy || index === models.length - 1) break;
     console.warn(`${model} answered ${response.status}; trying ${models[index + 1]}`);
     await response.body?.cancel();
