@@ -1,0 +1,36 @@
+name: Pointing Lab
+on:
+  push:
+    branches: [pointing-lab]
+permissions:
+  contents: write
+jobs:
+  lab:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      W: https://dottie.vidershub.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build lab
+        run: |
+          sed 's/^private enum/enum/' leanring-buddy/PointingRefiner.swift > lab/PointingRefiner.swift
+          cp leanring-buddy/PointingPrecision.swift lab/
+          xcrun swiftc -O -parse-as-library -swift-version 5 lab/*.swift -o pointlab
+          ./pointlab --screen
+      - name: Python deps
+        run: |
+          python3 -m venv v
+          v/bin/pip -q install playwright pillow
+      - name: Run lab
+        run: v/bin/python lab/run.py 2>&1 | tee out-log.txt
+        continue-on-error: true
+      - name: Save results
+        if: always()
+        run: |
+          mkdir -p out && cp out-log.txt out/ || true
+          git config user.name lab && git config user.email lab@example.com
+          git checkout --orphan pointing-lab-results
+          git rm -rfq --cached . && git add -f out
+          git commit -qm "Pointing lab results $GITHUB_RUN_ID"
+          git push -f origin pointing-lab-results
