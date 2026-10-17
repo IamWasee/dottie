@@ -155,7 +155,8 @@ final class DottieScreenTaskRunner {
         var didActSinceLastLook = false
         var recentActionSignatures: [String] = []
         var actionLog: [String] = []
-        let lessonsText = DottieScreenLessons.shared.promptText(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
+        let lessonSelection = DottieScreenLessons.shared.select(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
+        let lessonsText = lessonSelection.promptText
 
         let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
         for stepNumber in 1...stepLimit {
@@ -240,8 +241,11 @@ final class DottieScreenTaskRunner {
 
                 if functionName == "finish" {
                     let answer = (arguments["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    // The reward for the tips this job was given.
+                    let didSucceed = (arguments["succeeded"] as? Bool) ?? true
+                    DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: didSucceed)
                     if let lesson = (arguments["lesson"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lesson.isEmpty {
-                        DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName)
+                        DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName, cameFromSuccess: didSucceed)
                     }
                     return .finished(answer: answer.isEmpty ? "All done." : answer)
                 }
@@ -263,6 +267,7 @@ final class DottieScreenTaskRunner {
             try? await Task.sleep(nanoseconds: isGameMode ? 200_000_000 : 900_000_000)
         }
 
+        DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: false)
         if !isGameMode {
             // Next time, the job starts knowing this path didn't work.
             DottieScreenLessons.shared.add(
@@ -951,6 +956,7 @@ final class DottieScreenTaskRunner {
                 "description": "End the task. answer is what Dottie tells the user: the result they asked for, or why it couldn't be done. One or two short sentences.",
                 "parameters": ["type": "object", "properties": [
                     "answer": ["type": "string"],
+                    "succeeded": ["type": "boolean", "description": "true if the task got done, false if it couldn't be."],
                     "lesson": ["type": "string", "description": "One short tip for doing this kind of job in this app or site next time: the path that worked, or what to avoid. Leave empty if it was straightforward."]
                 ], "required": ["answer"]]
             ]

@@ -9,6 +9,11 @@
 //  the same app or site starts with those tips, so Dottie gets better at
 //  the user's own apps over time.
 //
+//  Each tip keeps a score, like reinforcement learning without retraining
+//  the model: every job that used it and got done counts as a win, every
+//  job that used it and failed counts as a loss. Tips that keep working
+//  come first and say so; tips that keep failing are dropped.
+//
 
 import Foundation
 
@@ -21,6 +26,26 @@ final class DottieScreenLessons {
         let task: String
         let appName: String?
         let createdAt: Date
+        // Optional so tips saved before scores existed still load.
+        var id: UUID?
+        var successes: Int?
+        var failures: Int?
+
+        var winCount: Int { successes ?? 0 }
+        var lossCount: Int { failures ?? 0 }
+
+        /// How likely this tip is to help, from 0 to 1. Untried tips sit at
+        /// 0.5; each win or loss moves it.
+        var score: Double { Double(winCount + 1) / Double(winCount + lossCount + 2) }
+
+        /// Tried at least three times and it failed most of them.
+        var hasProvenUseless: Bool { lossCount >= 3 && score < 0.3 }
+    }
+
+    /// The tips one job was given, so its outcome can score them.
+    struct Selection {
+        let promptText: String
+        let lessonIDs: [UUID]
     }
 
     private static let maximumLessons = 120
@@ -40,15 +65,59 @@ final class DottieScreenLessons {
         if let savedData = try? Data(contentsOf: fileURL) {
             lessons = (try? decoder.decode([Lesson].self, from: savedData)) ?? []
         }
+        for index in lessons.indices where lessons[index].id == nil {
+            lessons[index].id = UUID()
+        }
     }
 
-    func add(_ text: String, task: String, appName: String?) {
+    var count: Int { lessons.count }
+
+    /// Saves a new tip. One from a job that just worked starts with a win.
+    func add(_ text: String, task: String, appName: String?, cameFromSuccess: Bool = false) {
         let trimmedText = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))
         guard !trimmedText.isEmpty, !lessons.contains(where: { $0.text == trimmedText }) else { return }
-        lessons.append(Lesson(text: trimmedText, task: String(task.prefix(200)), appName: appName, createdAt: Date()))
+        lessons.append(Lesson(
+            text: trimmedText, task: String(task.prefix(200)), appName: appName, createdAt: Date(),
+            id: UUID(), successes: cameFromSuccess ? 1 : 0, failures: 0
+        ))
         if lessons.count > Self.maximumLessons {
-            lessons.removeFirst(lessons.count - Self.maximumLessons)
+            // Make room by dropping the weakest tips, oldest first.
+            let overflowCount = lessons.count - Self.maximumLessons
+            let weakestFirst = lessons.indices.sorted { firstIndex, secondIndex in
+                let firstScore = lessons[firstIndex].score
+                let secondScore = lessons[secondIndex].score
+                if firstScore != secondScore { return firstScore < secondScore }
+                return firstIndex < secondIndex
+            }
+            let removedIndices = Set(weakestFirst.prefix(overflowCount))
+            lessons = lessons.indices.filter { !removedIndices.contains($0) }.map { lessons[$0] }
         }
+        save()
+    }
+
+    /// The reward: the job that was given these tips got done, or didn't.
+    func recordOutcome(lessonIDs: [UUID], succeeded: Bool) {
+        guard !lessonIDs.isEmpty else { return }
+        for index in lessons.indices {
+            guard let id = lessons[index].id, lessonIDs.contains(id) else { continue }
+            if succeeded {
+                lessons[index].successes = lessons[index].winCount + 1
+            } else {
+                lessons[index].failures = lessons[index].lossCount + 1
+            }
+        }
+        let forgottenCount = lessons.filter(\.hasProvenUseless).count
+        lessons.removeAll(where: \.hasProvenUseless)
+        if forgottenCount > 0 { print("🧠 Forgot \(forgottenCount) screen tip(s) that kept failing") }
+        save()
+    }
+
+    func forgetAll() {
+        lessons = []
+        save()
+    }
+
+    private func save() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(lessons) {
@@ -56,18 +125,32 @@ final class DottieScreenLessons {
         }
     }
 
-    /// Tips from earlier jobs that share an app or words with this one,
-    /// newest first. Empty when there are none.
-    func promptText(forTask task: String, frontmostAppName: String?) -> String {
+    /// Tips from earlier jobs that share an app or words with this one: the
+    /// best-scoring first, then the newest. Empty when there are none.
+    func select(forTask task: String, frontmostAppName: String?) -> Selection {
         let taskWords = Set(Self.words(in: task + " " + (frontmostAppName ?? "")))
-        guard !taskWords.isEmpty else { return "" }
-        let relevantLessons = lessons.reversed().filter { lesson in
+        guard !taskWords.isEmpty else { return Selection(promptText: "", lessonIDs: []) }
+        var candidates: [(lesson: Lesson, order: Int)] = []
+        for (order, lesson) in lessons.enumerated() {
             let lessonWords = Set(Self.words(in: lesson.task + " " + (lesson.appName ?? "") + " " + lesson.text))
-            return !taskWords.isDisjoint(with: lessonWords)
-        }.prefix(Self.lessonsPerJob)
-        guard !relevantLessons.isEmpty else { return "" }
-        return "\nTips from your earlier jobs like this one (use them, but trust the screen):\n"
-            + relevantLessons.map { "- \($0.text)" }.joined(separator: "\n") + "\n"
+            if !taskWords.isDisjoint(with: lessonWords) { candidates.append((lesson, order)) }
+        }
+        candidates.sort { first, second in
+            if first.lesson.score != second.lesson.score { return first.lesson.score > second.lesson.score }
+            return first.order > second.order
+        }
+        let chosen = candidates.prefix(Self.lessonsPerJob).map(\.lesson)
+        guard !chosen.isEmpty else { return Selection(promptText: "", lessonIDs: []) }
+        let lines = chosen.map { lesson -> String in
+            let triedCount = lesson.winCount + lesson.lossCount
+            let record = triedCount == 0 ? "" : " (worked \(lesson.winCount) of \(triedCount) times)"
+            return "- \(lesson.text)\(record)"
+        }
+        return Selection(
+            promptText: "\nTips from your earlier jobs like this one, best first (use them, but trust the screen):\n"
+                + lines.joined(separator: "\n") + "\n",
+            lessonIDs: chosen.compactMap(\.id)
+        )
     }
 
     /// Meaningful words: app and site names, nouns, not filler.

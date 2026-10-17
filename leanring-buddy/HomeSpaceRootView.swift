@@ -437,6 +437,7 @@ private struct HomeSettingsView: View {
     @AppStorage(ClickyWorkerConfiguration.userWorkerBaseURLDefaultsKey) private var userWorkerBaseURL = ""
     @AppStorage(ClickyWorkerConfiguration.userAppSharedSecretDefaultsKey) private var userAppSharedSecret = ""
     @State private var serverCheckMessage: String?
+    @State private var learnedTipCount = DottieScreenLessons.shared.count
     @State private var isCheckingServer = false
     @AppStorage(DictationDictionary.learnsCorrectionsDefaultsKey) private var learnsDictationCorrections = true
     @AppStorage(DictationLanguageCatalog.autoDetectDefaultsKey) private var isDictationLanguageAutoDetected = true
@@ -602,6 +603,14 @@ private struct HomeSettingsView: View {
                     settingsHint(isCuaDriverInstalled
                         ? "Dots can always look at your apps. With this off, they ask in the notch before they click or type."
                         : "Dots operate apps through cua-driver, which the build normally puts inside Dottie. This build doesn't have it (it couldn't be downloaded while building). Rebuild with a network connection, or install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
+                    settingsRow(label: "Tips Dottie learned from her jobs: \(learnedTipCount)") {
+                        Button("Forget them") {
+                            DottieScreenLessons.shared.forgetAll()
+                            learnedTipCount = 0
+                        }
+                        .disabled(learnedTipCount == 0)
+                    }
+                    settingsHint("After each screen or TV job she keeps a tip for next time. Tips that keep working move to the top; ones that keep failing are dropped on their own.")
                 }
 
                 settingsGroup(title: "Connection") {

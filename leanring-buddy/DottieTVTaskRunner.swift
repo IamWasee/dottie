@@ -62,6 +62,9 @@ final class DottieTVTaskRunner {
         var contents: [[String: Any]] = []
         var pendingResponses: [[String: Any]] = []
         var failures = 0
+        // Tips from earlier jobs on this TV, scored by how this one ends.
+        let lessonAppName = "TV \(controls.tvName)"
+        let lessonSelection = DottieScreenLessons.shared.select(forTask: task, frontmostAppName: lessonAppName)
 
         for stepNumber in 1...Self.maximumSteps {
             if Task.isCancelled { return .stopped }
@@ -72,7 +75,7 @@ final class DottieTVTaskRunner {
             var userParts = pendingResponses
             userParts.append(["inlineData": ["mimeType": "image/jpeg", "data": screenJPEG.base64EncodedString()]])
             userParts.append(["text": contents.isEmpty
-                ? "Task from the user, on their TV \"\(controls.tvName)\": \(task)\nThis is the TV screen now. Take the first step."
+                ? "Task from the user, on their TV \"\(controls.tvName)\": \(task)\n\(lessonSelection.promptText)This is the TV screen now. Take the first step."
                 : "This is the TV screen now. Which steps are done? Take the next one, or finish."])
             contents.append(["role": "user", "parts": userParts])
             pendingResponses = []
@@ -99,6 +102,11 @@ final class DottieTVTaskRunner {
                 let name = functionCall["name"] as? String ?? ""
                 let arguments = functionCall["args"] as? [String: Any] ?? [:]
                 if name == "finish" {
+                    let didSucceed = (arguments["succeeded"] as? Bool) ?? true
+                    DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: didSucceed)
+                    if let lesson = (arguments["lesson"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lesson.isEmpty {
+                        DottieScreenLessons.shared.add(lesson, task: task, appName: lessonAppName, cameFromSuccess: didSucceed)
+                    }
                     return .finished((arguments["summary"] as? String) ?? "done.")
                 }
                 let result = await perform(name: name, arguments: arguments, controls: controls, stepNumber: stepNumber)
@@ -109,6 +117,7 @@ final class DottieTVTaskRunner {
             // Give the TV a moment to react before looking again.
             try? await Task.sleep(nanoseconds: 900_000_000)
         }
+        DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: false)
         return .failed("it took more than \(Self.maximumSteps) steps, so I stopped.")
     }
 
@@ -222,7 +231,11 @@ final class DottieTVTaskRunner {
             [
                 "name": "finish",
                 "description": "The job is done (or can't be done). Say the result in one short sentence.",
-                "parameters": ["type": "object", "properties": ["summary": ["type": "string"]], "required": ["summary"]]
+                "parameters": ["type": "object", "properties": [
+                    "summary": ["type": "string"],
+                    "succeeded": ["type": "boolean", "description": "true if the job got done."],
+                    "lesson": ["type": "string", "description": "One short tip for this kind of job on this TV next time (the path that worked, or what to avoid). Empty if it was easy."]
+                ], "required": ["summary"]]
             ]
         ]
     }
