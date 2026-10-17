@@ -17,6 +17,8 @@ struct HomeSpaceRootView: View {
     enum HomeSection: String, CaseIterable, Identifiable {
         case conversation = "Conversation"
         case clickys = "Dots"
+        case projects = "Projects"
+        case pictures = "Pictures"
         case skills = "Skills"
         case brain = "Brain"
         case meetings = "Meetings"
@@ -29,6 +31,8 @@ struct HomeSpaceRootView: View {
             switch self {
             case .conversation: return "bubble.left.and.bubble.right.fill"
             case .clickys: return "person.2.fill"
+            case .projects: return "folder.fill"
+            case .pictures: return "photo.on.rectangle.angled"
             case .skills: return "sparkles"
             case .brain: return "brain.head.profile"
             case .meetings: return "waveform"
@@ -57,6 +61,10 @@ struct HomeSpaceRootView: View {
                     )
                 case .clickys:
                     HomeClickysView(clickyRoster: clickyRoster)
+                case .projects:
+                    HomeProjectsView(projects: companionManager.projects, clickyRoster: clickyRoster)
+                case .pictures:
+                    HomePicturesView(imageMemory: companionManager.imageMemory)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .brain:

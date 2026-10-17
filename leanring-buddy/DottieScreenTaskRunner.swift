@@ -63,6 +63,9 @@ final class DottieScreenTaskRunner {
 
     /// Progress for the notch: step number and what's happening.
     var onProgress: (@MainActor (_ stepNumber: Int, _ description: String) -> Void)?
+    /// Saves a picture of something on screen to the picture library
+    /// (save_picture): image data, name, description. Returns the result.
+    var onSavePicture: (@MainActor (_ imageData: Data, _ name: String, _ description: String) -> String)?
     /// Called before each click with the global point and its display, so
     /// Dottie's cursor can fly there first.
     var onWillClick: (@MainActor (_ point: CGPoint, _ displayFrame: CGRect) async -> Void)?
@@ -429,10 +432,40 @@ final class DottieScreenTaskRunner {
             return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
 
         case "wait":
-            let seconds = min(max((arguments["seconds"] as? NSNumber)?.doubleValue ?? 2, 0.5), 10)
-            onProgress?(stepNumber, "waiting for it to load")
+            let seconds = min(max((arguments["seconds"] as? NSNumber)?.doubleValue ?? 2, 0.5), 120)
+            onProgress?(stepNumber, seconds > 10 ? "waiting \(Int(seconds)) seconds" : "waiting for it to load")
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return "waited \(Int(seconds.rounded())) seconds"
+
+        case "save_picture":
+            let name = text("name") ?? "picture"
+            var pictureImage = screen.image
+            if let box = arguments["box_2d"] as? [Any] {
+                let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+                if numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1] {
+                    let imageWidth = Double(screen.image.width), imageHeight = Double(screen.image.height)
+                    // A little of the surroundings helps recognize it later.
+                    let padding = 0.15
+                    let boxWidth = numbers[3] - numbers[1], boxHeight = numbers[2] - numbers[0]
+                    let cropRect = CGRect(
+                        x: max(0, (numbers[1] - boxWidth * padding) / 1000 * imageWidth),
+                        y: max(0, (numbers[0] - boxHeight * padding) / 1000 * imageHeight),
+                        width: boxWidth * (1 + 2 * padding) / 1000 * imageWidth,
+                        height: boxHeight * (1 + 2 * padding) / 1000 * imageHeight
+                    ).integral
+                    if let croppedImage = screen.image.cropping(to: cropRect) { pictureImage = croppedImage }
+                }
+            }
+            guard let pngData = NSBitmapImageRep(cgImage: pictureImage).representation(using: .png, properties: [:]) else {
+                return "couldn't save the picture."
+            }
+            onProgress?(stepNumber, "remembering \(name)")
+            return onSavePicture?(pngData, name, text("description") ?? "") ?? "pictures can't be saved right now."
+
+        case "wait_for_video_end":
+            let maximumSeconds = (arguments["max_seconds"] as? NSNumber)?.doubleValue ?? 600
+            onProgress?(stepNumber, "watching the video to the end")
+            return await DottieBrowser.waitForVideoToEnd(maximumSeconds: maximumSeconds)
 
         default:
             return "error: unknown action \(functionName)"
@@ -592,6 +625,7 @@ final class DottieScreenTaskRunner {
     - After an action that loads something, the next screenshot shows the result; use wait if it's still loading.
     - Scroll to find things that aren't visible. Prefer obvious, direct paths: menus, tabs, search boxes, profile pages.
     - Every turn, check the new screenshot against the task before acting: what's already done? If the step you were on already happened (the chat is open, the text is typed, the page loaded), move on to the next step instead of doing it again.
+    - To watch a video or reel once (\"watch it, then like it\"), start it, call wait_for_video_end, and go on when it returns.
     - Expect hiccups: popups and cookie banners (close them or press escape), slow pages (wait once, then reload or go another way), search results that don't show (press return, or click the result that's there), things not where you expected (scroll, use the app's search, or its menu bar). If an action didn't change the screen, never repeat it as is: try something else.
     - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you can't go on (it needs a login, a captcha, or something is missing), saying why.
 
@@ -711,8 +745,24 @@ final class DottieScreenTaskRunner {
             ],
             [
                 "name": "wait",
-                "description": "Wait for something to load.",
+                "description": "Wait for something to load (a few seconds), or up to 120 seconds when you know how long something takes.",
                 "parameters": ["type": "object", "properties": ["seconds": ["type": "number"]], "required": ["seconds"]]
+            ],
+            [
+                "name": "save_picture",
+                "description": "Save a picture of something on the screen to remember it by name for later jobs (where a machine is on a game map, what an item looks like). Only when the task asks to remember something, or when it will clearly be needed again.",
+                "parameters": ["type": "object", "properties": [
+                    "name": ["type": "string", "description": "1-4 words, like 'roll machines'."],
+                    "description": ["type": "string", "description": "What it is, where it's from (game or app, which area) and how it looks."],
+                    "box_2d": boxProperty
+                ], "required": ["name", "description"]]
+            ],
+            [
+                "name": "wait_for_video_end",
+                "description": "Wait until the video or reel playing in the browser has played through once (reels loop, so this notices when it starts over), then carry on. Use it when the task says to watch something, play it once, or do something after a video ends.",
+                "parameters": ["type": "object", "properties": [
+                    "max_seconds": ["type": "number", "description": "Give up after this long; default 600."]
+                ]]
             ],
             [
                 "name": "finish",

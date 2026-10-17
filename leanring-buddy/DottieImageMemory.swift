@@ -21,12 +21,14 @@ final class DottieImageMemory: ObservableObject {
         var description: String
         let fileName: String
         let createdAt: Date
+        /// Dottie saved it herself from the screen (save_picture).
+        var savedByDottie: Bool?
     }
 
     @Published private(set) var items: [Item] = []
 
     /// Older pictures are forgotten past this.
-    private static let maximumItems = 60
+    private static let maximumItems = 200
     /// Big enough to show detail, small enough to send along every step.
     private static let maximumImageDimension: CGFloat = 1024
     private static let describingModel = "gemini-3.5-flash-lite"
@@ -67,12 +69,50 @@ final class DottieImageMemory: ObservableObject {
             createdAt: Date()
         )
         items.append(item)
+        trimToMaximum()
+        saveIndex()
+        return item
+    }
+
+    private func trimToMaximum() {
         while items.count > Self.maximumItems {
             let oldestItem = items.removeFirst()
             try? FileManager.default.removeItem(at: fileURL(for: oldestItem))
         }
+    }
+
+    /// Saves a picture with a name and description already known (one
+    /// Dottie took of the screen, or one added in Home → Pictures with its
+    /// own words). No Gemini call.
+    func add(imageData: Data, name: String, description: String, savedByDottie: Bool) -> Item? {
+        guard let jpegData = Self.downscaledJPEG(from: imageData) else { return nil }
+        let itemID = UUID()
+        let fileName = "\(itemID.uuidString).jpg"
+        do {
+            try jpegData.write(to: folderURL.appendingPathComponent(fileName), options: .atomic)
+        } catch {
+            print("⚠️ Couldn't save picture: \(error.localizedDescription)")
+            return nil
+        }
+        let trimmedName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        let item = Item(
+            id: itemID,
+            name: uniqueName(trimmedName.isEmpty ? "picture \(items.count + 1)" : trimmedName),
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+            fileName: fileName,
+            createdAt: Date(),
+            savedByDottie: savedByDottie
+        )
+        items.append(item)
+        trimToMaximum()
         saveIndex()
         return item
+    }
+
+    func updateDescription(_ item: Item, to newDescription: String) {
+        guard let itemIndex = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[itemIndex].description = newDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        saveIndex()
     }
 
     func rename(_ item: Item, to newName: String) {
@@ -118,9 +158,36 @@ final class DottieImageMemory: ObservableObject {
         return matchedItems
     }
 
+    /// Pictures whose name is mentioned in a request ("go pick up the
+    /// guardian core"), so a job gets them even when voice Dottie didn't
+    /// pass them.
+    func items(mentionedIn text: String) -> [Item] {
+        let requestText = " \(Self.normalized(text)) "
+        return items.filter { item in
+            let itemName = Self.normalized(item.name)
+            return !itemName.isEmpty && requestText.contains(" \(itemName) ")
+        }.suffix(4)
+    }
+
+    /// find_pictures: pictures sharing words with the query in their name
+    /// or description (where they're from, what they look like).
+    func search(_ query: String) -> [Item] {
+        let queryWords = Set(Self.normalized(query).split(separator: " ").filter { $0.count > 2 })
+        guard !queryWords.isEmpty else { return Array(items.suffix(10).reversed()) }
+        return items
+            .map { item -> (Item, Int) in
+                let itemWords = Set(Self.normalized(item.name + " " + item.description).split(separator: " "))
+                return (item, itemWords.intersection(queryWords).count)
+            }
+            .filter { $0.1 > 0 }
+            .sorted { $0.1 > $1.1 || ($0.1 == $1.1 && $0.0.createdAt > $1.0.createdAt) }
+            .prefix(10)
+            .map(\.0)
+    }
+
     /// One line per picture, newest first, for voice Dottie's prompt.
     var promptSummary: String {
-        items.suffix(25).reversed().map { item in
+        items.suffix(40).reversed().map { item in
             "- \(item.name)" + (item.description.isEmpty ? "" : ": \(item.description)")
         }.joined(separator: "\n")
     }
