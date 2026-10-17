@@ -165,8 +165,8 @@ jobs:
         # permissions again. Signing every release with the same certificate
         # (repository secrets DOTTIE_SIGNING_P12, base64 of a .p12, and
         # DOTTIE_SIGNING_PASSWORD) keeps them. Without the secrets the build
-        # stays ad-hoc.
-        if: github.event_name != 'pull_request'
+        # stays ad-hoc. Trial runs sign too, so this step is tested before a
+        # release depends on it.
         env:
           SIGNING_P12: ${{ secrets.DOTTIE_SIGNING_P12 }}
           SIGNING_PASSWORD: ${{ secrets.DOTTIE_SIGNING_PASSWORD }}
