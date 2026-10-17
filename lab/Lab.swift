@@ -39,6 +39,22 @@ struct Lab {
             print("ok \(image.width)x\(image.height)")
             return
         }
+        if args.count > 2, args[1] == "--task" {
+            let runner = DottieScreenTaskRunner()
+            runner.onProgress = { step, text in FileHandle.standardError.write("STEP \(step): \(text)\n".data(using: .utf8)!) }
+            let started = Date()
+            let outcome: String = await withCheckedContinuation { continuation in
+                runner.start(task: args[2]) { outcome in
+                    switch outcome {
+                    case .finished(let answer): continuation.resume(returning: "finished: \(answer)")
+                    case .stopped: continuation.resume(returning: "stopped")
+                    case .failed(let reason): continuation.resume(returning: "failed: \(reason)")
+                    }
+                }
+            }
+            print("OUTCOME after \(Int(-started.timeIntervalSinceNow))s: \(outcome)")
+            return
+        }
         let data = try! Data(contentsOf: URL(fileURLWithPath: args[1]))
         let cases = try! JSONDecoder().decode([LabCase].self, from: data)
         PointingRefiner.prepareFrontmostApplicationForSearch()

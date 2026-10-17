@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Games</title>
+<style>body{margin:0;font:15px Arial;background:#fff;color:#222}header{height:56px;background:#f2f4f5;display:flex;align-items:center;padding:0 20px;font-weight:bold}
+h2{margin:24px 20px 8px}.row{display:flex;gap:16px;padding:0 20px;flex-wrap:wrap}.tile{width:150px;cursor:pointer}.thumb{width:150px;height:150px;border-radius:8px}
+.name{font-weight:bold;margin-top:6px}.meta{color:#666;font-size:12px}</style></head><body>
+<header>RoBlocks · Charts</header>
+<script>
+const names=[["Top Trending",["Grow a Garden","Steal a Brainrot","99 Nights in the Forest","Dead Rails","Blox Fruits","Brookhaven RP"]],["Up-and-Coming",["Fisch","Pet Simulator 99","Adopt Me!","Doors","Arsenal","Jailbreak"]],["Popular Now",["Murder Mystery 2","Tower of Hell","Natural Disaster Survival","Bee Swarm Simulator","Royale High","Piggy"]],["Building Games",["Build a Boat for Treasure","Build a Golem","Build a Zoo","Bloxburg","Theme Park Tycoon 2","Lumber Tycoon 2"]]];
+let i=0;for(const [h,games] of names){document.write('<h2>'+h+'</h2><div class=row>');for(const g of games){i++;document.write('<div class=tile onclick="document.title=\'CLICKED '+g.replace(/'/g,'')+'\'"><div class=thumb style="background:hsl('+(i*47%360)+',60%,60%)"></div><div class=name>'+g+'</div><div class=meta>👍 '+(80+i%19)+'%  · '+(i*3.7).toFixed(1)+'K playing</div></div>')}document.write('</div>')}
+</script></body></html>
