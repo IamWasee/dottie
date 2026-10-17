@@ -280,7 +280,8 @@ final class GeminiCLIAgentRuntime {
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,
             buildingAgentInstructions,
-            macAppsAgentInstructions
+            macAppsAgentInstructions,
+            DottieBrowser.agentInstructions
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
@@ -325,7 +326,7 @@ final class GeminiCLIAgentRuntime {
 
     You're on the user's Mac, so you can drive apps directly from the shell:
 
-    - `osascript -e '<AppleScript>'` controls scriptable apps: Calendar (read and add events), Reminders (read, add, complete), Notes, Mail (read; make drafts), Music, Finder, Safari and Chrome tabs, system volume and dark mode. Prefer it to clicking on the screen.
+    - `osascript -e '<AppleScript>'` controls scriptable apps: Calendar (read and add events), Reminders (read, add, complete), Notes, Mail (read; make drafts), Music, Finder, Safari and Chrome tabs (only when that's the user's browser), system volume and dark mode. Prefer it to clicking on the screen.
     - `shortcuts list` and `shortcuts run "<name>" --input-path <file> --output-path <file>` run the user's Apple Shortcuts.
     - macOS may ask the user once to let Dottie control an app; if a script fails with "not authorized" (-1743), say so in your reply.
     - Never send an email or message, delete anything, or buy anything unless the user's task clearly asks for exactly that. Make a draft instead and say where it is.

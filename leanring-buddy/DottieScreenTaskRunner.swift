@@ -391,7 +391,7 @@ final class DottieScreenTaskRunner {
             if let browserName = text("browser") {
                 didOpen = await Self.open(url, inApplicationNamed: browserName)
             } else {
-                didOpen = NSWorkspace.shared.open(url)
+                didOpen = await DottieBrowser.openInUsersBrowser(url)
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             return didOpen ? "opened \(address)" : "couldn't open \(address)"
@@ -982,7 +982,7 @@ final class DottieScreenTaskRunner {
                 "description": "Open a web address in a new tab.",
                 "parameters": ["type": "object", "properties": [
                     "url": ["type": "string"],
-                    "browser": ["type": "string", "description": "Browser app to use if the user named one, like 'Opera GX'. Leave out for the default browser."]
+                    "browser": ["type": "string", "description": "Browser app to use if the user named one, like 'Opera GX'. Leave out to use the browser the user is using."]
                 ], "required": ["url"]]
             ],
             [

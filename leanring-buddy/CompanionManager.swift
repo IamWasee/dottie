@@ -333,6 +333,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        DottieBrowser.startTrackingBrowserUse()
         refreshAllPermissions()
         print("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -1239,7 +1240,7 @@ final class CompanionManager: ObservableObject {
             return "scrolled \(direction.rawValue)."
 
         case .openURL(let url):
-            return NSWorkspace.shared.open(url) ? "opened \(url.host ?? url.absoluteString)." : "couldn't open that page."
+            return await DottieBrowser.openInUsersBrowser(url) ? "opened \(url.host ?? url.absoluteString)." : "couldn't open that page."
 
         case .draw(let shape, let normalizedX, let normalizedY, let normalizedSize, let label, let note):
             guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
