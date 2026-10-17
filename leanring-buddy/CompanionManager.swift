@@ -1000,6 +1000,28 @@ final class CompanionManager: ObservableObject {
     - the user can text you from their phone (home → phone): a helper called Phone does the job and texts back.
     """
 
+    /// Deletes one exchange from Home → Conversation, and from what Dottie
+    /// remembers, so it's gone from her next answer on.
+    func forgetConversationEntry(_ entryID: UUID) {
+        conversationStore.delete(entryID: entryID)
+        reloadRememberedConversation()
+    }
+
+    func forgetWholeConversation() {
+        conversationStore.clearAll()
+        reloadRememberedConversation()
+    }
+
+    private func reloadRememberedConversation() {
+        conversationHistory = conversationStore.entries
+            .suffix(Self.rememberedExchangeCount)
+            .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
+        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
+            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
+        }
+        liveVoiceClient.startFreshSessionSoon()
+    }
+
     /// Hooks the Live client's callbacks into the companion's state.
     private func configureLiveVoiceClient() {
         liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()

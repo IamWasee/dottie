@@ -834,6 +834,12 @@ final class ClickyRoster: ObservableObject {
         try? rosterData.write(to: rosterFileURL, options: .atomic)
     }
 
+    /// Deletes one message from a Dot's chat (Home → Dots).
+    func deleteTranscriptItem(_ itemID: UUID, fromAgentID agentID: UUID) {
+        transcriptsByAgentID[agentID]?.removeAll { $0.id == itemID }
+        saveTranscript(for: agentID)
+    }
+
     private func saveTranscript(for agentID: UUID) {
         guard let agent = agent(withID: agentID) else { return }
         let encoder = JSONEncoder()
