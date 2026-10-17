@@ -13,11 +13,10 @@ with sync_playwright() as p:
     page.goto("file://" + HERE + "/game.html"); time.sleep(2); front()
     rect = page.evaluate("""() => { const r = document.getElementById('golden').getBoundingClientRect(); return [screenX + r.left, screenY + (outerHeight - innerHeight) + r.top, r.width, r.height] }""")
     print("GOLDEN SWORD GT", rect, flush=True)
-    for i in range(2):
+    for i in range(0):
         r = subprocess.run(["./pointlab", "--point-ref", "golden sword", HERE + "/ref-golden.jpg"], capture_output=True, text=True, timeout=120)
         print(r.stdout.strip(), flush=True)
         time.sleep(3)
-    page.click("body", position={"x": 5, "y": 300}); front()
     for attempt in range(2):
         page.reload(); time.sleep(2); front()
         page.mouse.click(5, 300)
