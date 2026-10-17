@@ -11,10 +11,11 @@
 //       window) for an element whose name matches the label Live gave, like
 //       "Sign in" or "Downloads", and use its exact frame. Instant and exact
 //       for native apps, browser toolbars, and web pages that expose their
-//       accessibility tree.
+//       accessibility tree. Only elements near the guess count.
 //    2. On-screen text: Apple's on-device text recognition looks for the
 //       label's words on the display (ScreenTextFinder). Exact, free and
-//       quick, and works in apps that draw their own UI.
+//       quick, and works in apps that draw their own UI. Skipped for counts
+//       like "7M", which sit under an icon rather than on it.
 //    3. Vision: otherwise, a fresh, sharper screenshot of that display goes
 //       to Gemini Flash, which is trained to return bounding boxes, with the
 //       label and Live's guess as a hint. Tiny targets (toolbar icons) get a
@@ -90,7 +91,9 @@ enum PointingRefiner {
 
         // On-device text recognition: exact for anything with a visible
         // label, even in apps with no accessibility info, and no AI call.
-        if let textFrame = await withTimeout(seconds: textSearchTimeoutSeconds, operation: {
+        // A count like "7M" is the number under an icon, not the icon, so
+        // that goes to vision.
+        if !isCount(elementLabel), let textFrame = await withTimeout(seconds: textSearchTimeoutSeconds, operation: {
             await ScreenTextFinder.frameOfText(matching: elementLabel, near: roughPoint, displayFrame: displayFrame)
         }) {
             let snappedFrame = AccessibilitySnap.refinedFrame(textFrame)
@@ -112,6 +115,13 @@ enum PointingRefiner {
         let snappedFrame = AccessibilitySnap.refinedFrame(visionFrame)
         print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
         return snappedFrame
+    }
+
+    /// "7M", "8,429", "1.2K": the number shown under a like or comment
+    /// icon.
+    static func isCount(_ label: String) -> Bool {
+        label.trimmingCharacters(in: .whitespaces)
+            .range(of: #"^[0-9][0-9.,]*\s*[KkMmBb]?$"#, options: .regularExpression) != nil
     }
 
     /// Lowercased words that name the thing, without filler like "the" or
@@ -156,6 +166,11 @@ private enum AccessibilityElementSearch {
     private static let searchTimeBudgetSeconds: TimeInterval = 0.25
     /// Elements bigger than this are containers, not the thing to point at.
     private static let maximumElementSize = CGSize(width: 700, height: 250)
+    /// A same-named element farther than this from Live's guess is a
+    /// different thing: "Search" on a web page is not Chrome's own tab
+    /// search in the corner (seen in testing, Oct 2026). Vision finds the
+    /// rest.
+    private static let maximumDistanceFromGuess: CGFloat = 350
 
     private struct Candidate {
         let frame: CGRect
@@ -236,9 +251,10 @@ private enum AccessibilityElementSearch {
 
         let center = CGPoint(x: frame.midX, y: frame.midY)
         let distanceFromGuess = hypot(center.x - roughPointInAXSpace.x, center.y - roughPointInAXSpace.y)
+        guard distanceFromGuess <= maximumDistanceFromGuess else { return nil }
         // Tight names beat names that only contain the words.
         let extraWordPenalty = Double(max(0, elementWords.count - labelWords.count)) * 0.03
-        let score = matchFraction - extraWordPenalty - distanceFromGuess / 3000
+        let score = matchFraction - extraWordPenalty - distanceFromGuess / 1000
         return Candidate(frame: frame, score: max(score, 0.0001))
     }
 
@@ -338,8 +354,9 @@ private enum VisionElementLocator {
         let overviewPrompt = """
         This is a screenshot of the user's screen. Find this on-screen element: "\(elementLabel)".
         The user asked: "\(userQuestion)".
-        Someone guessed it is near x=\(hintX), y=\(hintY) (0-1000 across the image), but the guess may be off.
-        Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000, for the element itself. If it is not visible, reply {"box_2d": null}.
+        It may be an icon with no text: a heart or thumbs-up for like, a speech bubble for comments, a curved arrow for share, a bell for notifications, a gear for settings, a magnifying glass for search. If the name is a number, it's the icon that number sits under.
+        Someone guessed it is near x=\(hintX), y=\(hintY) (0-1000 across the image), but the guess may be far off, so look at the whole screen.
+        Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000, tight around the element itself. If it is not visible, reply {"box_2d": null}.
         """
         let overviewFrame = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt).map { frame(of: $0, in: displayFrame) }
 
@@ -365,6 +382,7 @@ private enum VisionElementLocator {
         let zoomPrompt = """
         This is a zoomed-in part of the user's screen. Find this element in it: "\(elementLabel)".
         The user asked: "\(userQuestion)".
+        It may be an icon with no text (a heart or thumbs-up for like, a speech bubble for comments, a bell for notifications).
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000 across this zoomed image, for the element itself. If it is not in this image, reply {"box_2d": null}.
         """
         guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt) else { return overviewFrame }
@@ -407,7 +425,7 @@ private enum VisionElementLocator {
 
         guard let (responseData, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return parseBox(from: textFromServerSentEvents(responseData))
+        return parseBox(from: GeminiServerSentEvents.text(from: responseData))
     }
 
     private static func resized(_ image: CGImage, maximumDimension: Int) -> CGImage? {
@@ -426,23 +444,6 @@ private enum VisionElementLocator {
 
     private static func jpegData(_ image: CGImage) -> Data? {
         NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85])
-    }
-
-    /// /chat streams Gemini's answer as server-sent events.
-    private static func textFromServerSentEvents(_ responseData: Data) -> String {
-        let responseText = String(decoding: responseData, as: UTF8.self)
-        var answerText = ""
-        for line in responseText.split(separator: "\n") where line.hasPrefix("data: ") {
-            guard let eventData = line.dropFirst(6).data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
-                  let candidates = event["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { continue }
-            for part in parts where (part["thought"] as? Bool) != true {
-                answerText += part["text"] as? String ?? ""
-            }
-        }
-        return answerText
     }
 
     private static func parseBox(from answerText: String) -> Box? {

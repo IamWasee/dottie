@@ -462,7 +462,7 @@ final class GeminiLiveVoiceClient {
                 ],
                 "label": [
                     "type": "STRING",
-                    "description": "The element's visible text or name, exactly as it appears on screen when it has text (like 'Sign in' or 'Downloads'), else a 1-3 word name like 'download icon'. The app uses it to find the exact spot."
+                    "description": "The element's visible text, exactly as it appears on screen when it has its own text (like 'Sign in' or 'Downloads'). For an icon, a 1-3 word name of what it is, like 'like button', 'comments icon' or 'download icon', never a number or count shown next to it. The app uses it to find the exact spot."
                 ]
             ],
             "required": ["x", "y", "label"]
