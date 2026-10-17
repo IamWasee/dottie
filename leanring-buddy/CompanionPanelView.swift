@@ -736,26 +736,3 @@ struct CompanionPanelView: View {
     }
 
 }
-
-/// Asks for every permission Dottie can use in one go (the same as
-/// Settings → Permissions → Allow everything).
-private struct AllowEverythingButton: View {
-    @ObservedObject private var permissions = DottiePermissions.shared
-
-    var body: some View {
-        Button(action: { Task { await permissions.askForAll() } }) {
-            Text(permissions.currentlyAsking.map { "Asking for \($0.title)…" } ?? "Allow everything at once")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textPrimary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(permissions.isAskingForAll)
-        .pointerCursor()
-    }
-}
