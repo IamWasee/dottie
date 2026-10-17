@@ -85,7 +85,7 @@ final class GeminiLiveVoiceClient {
     var onHigherModelRequest: (@MainActor (_ question: String) async -> String)?
     /// The model handed a task to a background Clicky (start_helper).
     /// Returns a short status for Live to relay; the work runs on its own.
-    var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String, _ projectName: String?) -> String)?
+    var onStartClickyTask: (@MainActor (_ clickyName: String?, _ task: String, _ projectName: String?, _ restart: Bool) -> String)?
     /// list_helpers, check_helper, stop_helper, open_helper_result: the
     /// app answers from the helpers' real state.
     var onHelperTool: (@MainActor (_ functionName: String, _ helperName: String?) -> String)?
@@ -97,7 +97,7 @@ final class GeminiLiveVoiceClient {
     /// The model handed a multi-step job on the screen to the task runner
     /// (do_task_on_screen). Returns a short status; the result is spoken
     /// in a later turn when the job finishes.
-    var onStartScreenTask: (@MainActor (_ task: String, _ isGame: Bool, _ referenceImageNames: [String]) -> String)?
+    var onStartScreenTask: (@MainActor (_ task: String, _ isGame: Bool, _ referenceImageNames: [String], _ restart: Bool) -> String)?
     /// The user asked to stop the running screen task (stop_screen_task).
     /// scope: "all" (stop and clear the list), "current" (skip to the next
     /// job) or "list" (what's running and waiting).
@@ -519,6 +519,10 @@ final class GeminiLiveVoiceClient {
                 "project": [
                     "type": "STRING",
                     "description": "The project this belongs to, for anything being built or worked on over time: an existing project's name to continue it, or a short new name (2-4 words) for something new. Leave empty for one-off tasks like a quick lookup."
+                ],
+                "restart": [
+                    "type": "BOOLEAN",
+                    "description": "True only after the user said yes to starting over a task that matches one a helper is already doing or that was cut off when Dottie closed. Leave out otherwise."
                 ]
             ],
             "required": ["task"]
@@ -688,6 +692,10 @@ final class GeminiLiveVoiceClient {
                     "type": "ARRAY",
                     "items": ["type": "STRING"],
                     "description": "Names of saved pictures the user showed you that this job is about, exactly as listed under 'pictures the user showed you', like ['golden sword']. The job gets the pictures to match on screen."
+                ],
+                "restart": [
+                    "type": "BOOLEAN",
+                    "description": "True only after the user said yes to starting over a job that matches one already running, waiting, or cut off when Dottie closed. Leave out otherwise."
                 ]
             ],
             "required": ["task"]
@@ -1080,8 +1088,9 @@ final class GeminiLiveVoiceClient {
         }
         let isGame = (functionArguments["game"] as? Bool) ?? ((functionArguments["game"] as? NSNumber)?.boolValue ?? false)
         let referenceImageNames = (functionArguments["reference_images"] as? [Any])?.compactMap { $0 as? String } ?? []
+        let restart = (functionArguments["restart"] as? Bool) ?? ((functionArguments["restart"] as? NSNumber)?.boolValue ?? false)
         sendFunctionResponse(functionCallID: functionCallID, functionName: "do_task_on_screen",
-                             response: ["result": onStartScreenTask(taskText, isGame, referenceImageNames)])
+                             response: ["result": onStartScreenTask(taskText, isGame, referenceImageNames, restart)])
     }
 
     private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {
@@ -1093,10 +1102,12 @@ final class GeminiLiveVoiceClient {
         }
         let requestedClickyName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let projectName = (functionArguments["project"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let restart = (functionArguments["restart"] as? Bool) ?? ((functionArguments["restart"] as? NSNumber)?.boolValue ?? false)
         let startStatus = onStartClickyTask(
             requestedClickyName?.isEmpty == true ? nil : requestedClickyName,
             taskText,
-            projectName?.isEmpty == true ? nil : projectName
+            projectName?.isEmpty == true ? nil : projectName,
+            restart
         )
         sendFunctionResponse(functionCallID: functionCallID, functionName: "start_helper",
                              response: ["result": startStatus])

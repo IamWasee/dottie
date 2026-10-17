@@ -333,6 +333,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
         refreshAllPermissions()
         print("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
@@ -1063,9 +1064,9 @@ final class CompanionManager: ObservableObject {
             return await self.performScreenAction(screenAction)
         }
 
-        liveVoiceClient.onStartScreenTask = { [weak self] taskText, isGame, referenceImageNames in
+        liveVoiceClient.onStartScreenTask = { [weak self] taskText, isGame, referenceImageNames, restart in
             guard let self else { return "couldn't start it right now." }
-            return self.startScreenTask(ScreenJob(text: taskText, isGame: isGame, referenceImageNames: referenceImageNames))
+            return self.startScreenTask(ScreenJob(text: taskText, isGame: isGame, referenceImageNames: referenceImageNames, restart: restart))
         }
 
         liveVoiceClient.onStopScreenTask = { [weak self] scope in
@@ -1096,9 +1097,9 @@ final class CompanionManager: ObservableObject {
             return self.stopGuide() ? "stopped the guide." : "no guide was running."
         }
 
-        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText, projectName in
+        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText, projectName, restart in
             guard let self else { return "couldn't start it right now." }
-            return self.startClickyTask(clickyName: clickyName, taskText: taskText, projectName: projectName)
+            return self.startClickyTask(clickyName: clickyName, taskText: taskText, projectName: projectName, restart: restart)
         }
 
         liveVoiceClient.onBrainTool = { [weak self] functionName, text in
@@ -1441,17 +1442,102 @@ final class CompanionManager: ObservableObject {
         var referenceImageNames: [String] = []
         /// Asked for by text: the result is texted back, not spoken.
         var repliesToPhone = false
+        /// The user already said yes to starting over a matching job.
+        var restart = true
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
     /// when the one before it finishes.
-    private var queuedScreenTasks: [ScreenJob] = []
+    private var queuedScreenTasks: [ScreenJob] = [] {
+        didSet { saveOpenScreenJobs() }
+    }
+
+    // MARK: Asking before repeating a job
+
+    private static let openScreenJobsDefaultsKey = "dottieOpenScreenJobs"
+    /// Jobs that were running or waiting when Dottie last quit, so asking
+    /// for one again gets "start it over?" instead of a silent duplicate.
+    private var screenJobsCutOffByQuit: [String] = []
+
+    /// Saved on every change, so whatever is open when Dottie quits (or
+    /// crashes) is known at the next launch.
+    private func saveOpenScreenJobs() {
+        let openJobs = [currentScreenTaskText].compactMap { $0 } + queuedScreenTasks.map(\.text)
+        UserDefaults.standard.set(openJobs, forKey: Self.openScreenJobsDefaultsKey)
+    }
+
+    private func loadScreenJobsCutOffByQuit() {
+        screenJobsCutOffByQuit = UserDefaults.standard.stringArray(forKey: Self.openScreenJobsDefaultsKey) ?? []
+        UserDefaults.standard.removeObject(forKey: Self.openScreenJobsDefaultsKey)
+    }
+
+    /// Two requests are the same job when nearly all the words of the
+    /// shorter one (numbers included, so "PR 36" isn't "PR 37") are in both.
+    private static func isSameJob(_ firstText: String, _ secondText: String) -> Bool {
+        func words(_ text: String) -> Set<String> {
+            Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count > 2 || $0.contains(where: \.isNumber) })
+        }
+        let firstWords = words(firstText)
+        let secondWords = words(secondText)
+        guard !firstWords.isEmpty, !secondWords.isEmpty else { return false }
+        let sharedFraction = Double(firstWords.intersection(secondWords).count) / Double(min(firstWords.count, secondWords.count))
+        return sharedFraction >= 0.75
+    }
+
+    /// What Live should ask before starting a job that matches one that's
+    /// running, waiting, or was cut off by a quit. nil when it's new.
+    private func repeatedScreenJobQuestion(for job: ScreenJob) -> String? {
+        let howToRestart = "if they want it started over, call do_task_on_screen again with the same task and restart true. if not, leave it."
+        if screenTaskRunner.isRunning, let currentScreenTaskText, Self.isSameJob(currentScreenTaskText, job.text) {
+            return "that's the same job that's running right now (\"\(currentScreenTaskText)\"). don't start anything yet: ask the user in a few words, like \"you already asked me for that and I'm on it, want me to cancel it and start over?\". \(howToRestart)"
+        }
+        if let waitingJob = queuedScreenTasks.first(where: { Self.isSameJob($0.text, job.text) }) {
+            return "that job is already waiting in the list (\"\(waitingJob.text)\"). ask the user in a few words if they want it started over now instead. \(howToRestart)"
+        }
+        if let cutOffJob = screenJobsCutOffByQuit.first(where: { Self.isSameJob($0, job.text) }) {
+            return "you were doing this same job when Dottie was closed, and it stopped partway (\"\(cutOffJob)\"). ask the user in a few words, like \"you asked me that before I closed, want me to cancel that one and start it again?\". \(howToRestart)"
+        }
+        return nil
+    }
+
+    /// The same check for helpers: a helper doing the same task, or one
+    /// whose last task got no answer because Dottie quit.
+    private func repeatedHelperTaskQuestion(for taskText: String) -> String? {
+        for agent in clickyRoster.agents where agent.isBrain != true {
+            let transcript = clickyRoster.transcriptsByAgentID[agent.id] ?? []
+            guard let lastUserMessage = transcript.last(where: { $0.kind == .user }),
+                  Self.isSameJob(lastUserMessage.text, taskText) else { continue }
+            let gotAnswer = transcript.last.map { $0.kind == .assistant } ?? false
+            if clickyRoster.isRunning(agent) {
+                return "\(agent.name) is already doing that task. don't start another: ask the user in a few words if they want \(agent.name) to stop and start it over. if yes, call stop_helper for \(agent.name), then start_helper again with restart true."
+            }
+            if !gotAnswer {
+                return "\(agent.name) was doing that same task when Dottie was closed, and it stopped before finishing. ask the user in a few words, like \"you asked \(agent.name) for that before I closed, want me to start it again?\". if yes, call start_helper again with helper_name \(agent.name) and restart true."
+            }
+        }
+        return nil
+    }
 
     /// Starts a multi-step job, or lines it up behind the running one.
     /// Returns a short status for Live to relay.
     private func startScreenTask(_ job: ScreenJob) -> String {
         guard DottieScreenActionPerformer.canPostEvents else {
             return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
+        }
+        if !job.restart, let question = repeatedScreenJobQuestion(for: job) {
+            return question
+        }
+        screenJobsCutOffByQuit.removeAll { Self.isSameJob($0, job.text) }
+        queuedScreenTasks.removeAll { Self.isSameJob($0.text, job.text) }
+        if job.restart, screenTaskRunner.isRunning, let currentScreenTaskText, Self.isSameJob(currentScreenTaskText, job.text) {
+            // Starting over: the old run goes, the new one takes its place.
+            screenTaskRunner.stop()
+            self.currentScreenTaskText = nil
+            notchPresenter.endScreenTask()
+            clearDetectedElementLocation()
+            runScreenTask(job)
+            return "stopped the old one and started it again from the beginning. say so in a few words."
         }
         if screenTaskRunner.isRunning {
             queuedScreenTasks.append(job)
@@ -1505,7 +1591,9 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private var currentScreenTaskText: String?
+    private var currentScreenTaskText: String? {
+        didSet { saveOpenScreenJobs() }
+    }
 
     /// "on it", plus how many jobs are waiting.
     private var screenTaskTitle: String {
@@ -1860,9 +1948,12 @@ final class CompanionManager: ObservableObject {
     /// Starts a background task from voice. Uses the named Clicky (creating
     /// it if it doesn't exist yet), or a general "Helper" Clicky.
     /// Returns a short status for the voice model to relay.
-    func startClickyTask(clickyName: String?, taskText: String, projectName: String? = nil) -> String {
+    func startClickyTask(clickyName: String?, taskText: String, projectName: String? = nil, restart: Bool = true) -> String {
         guard ClickyWorkerConfiguration.isWorkerConfigured else {
             return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
+        }
+        if !restart, let question = repeatedHelperTaskQuestion(for: taskText) {
+            return question
         }
         var notes: [String] = []
         var messageForHelper = taskText
