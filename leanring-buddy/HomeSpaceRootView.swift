@@ -19,6 +19,7 @@ struct HomeSpaceRootView: View {
         case clickys = "Dots"
         case projects = "Projects"
         case pictures = "Pictures"
+        case smartHome = "Smart Home"
         case skills = "Skills"
         case brain = "Brain"
         case meetings = "Meetings"
@@ -33,6 +34,7 @@ struct HomeSpaceRootView: View {
             case .clickys: return "person.2.fill"
             case .projects: return "folder.fill"
             case .pictures: return "photo.on.rectangle.angled"
+            case .smartHome: return "house.fill"
             case .skills: return "sparkles"
             case .brain: return "brain.head.profile"
             case .meetings: return "waveform"
@@ -65,6 +67,8 @@ struct HomeSpaceRootView: View {
                     HomeProjectsView(projects: companionManager.projects, clickyRoster: clickyRoster)
                 case .pictures:
                     HomePicturesView(imageMemory: companionManager.imageMemory)
+                case .smartHome:
+                    HomeSmartHomeView(smartHome: companionManager.smartHome)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
                 case .brain:

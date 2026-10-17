@@ -115,6 +115,8 @@ final class CompanionManager: ObservableObject {
     let projects = DottieProjects()
     /// The cursor's shape ("turn into a cat") and its roaming pet mode.
     let cursorPet = DottieCursorPet()
+    /// TVs, lights and everything else smart in the house.
+    let smartHome = DottieSmartHome()
     /// Meeting mode: off until the user starts it.
     let meetingRecorder = DottieMeetingRecorder()
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
@@ -915,6 +917,9 @@ final class CompanionManager: ObservableObject {
         if !projectList.isEmpty {
             prompt += "\n\nthe user's projects (pass the name to start_helper or start_team to keep working on one):\n" + projectList
         }
+        let homeSummary = smartHome.promptSummary
+        prompt += "\n\nsmart home: you're the user's home controller. home_devices lists their TVs, lights, plugs, blinds, locks, thermostats, vacuums, speakers, scenes and cameras; control_device does one thing right away (lights on, dim to 30, TV volume up, open youtube on the tv, look at the front door camera); tv_task does a multi-step job on a TV while watching its screen (put on the next episode of bluey). for apple home devices, use the user's shortcuts or the home app on screen."
+            + (homeSummary.isEmpty ? " nothing is set up yet; if they ask, they add devices in your Home window under Smart Home." : "\n" + homeSummary)
         return prompt
     }
 
@@ -1036,7 +1041,8 @@ final class CompanionManager: ObservableObject {
             case "list":
                 return self.screenTaskQueueSummary()
             default:
-                return self.stopScreenTask() ? "stopped everything; the list is clear." : "nothing was running."
+                let didStopTV = self.smartHome.tvTaskRunner.stop()
+                return self.stopScreenTask() || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
             }
         }
 
@@ -1085,6 +1091,9 @@ final class CompanionManager: ObservableObject {
             }
             if functionName == DottieCursorPet.functionName {
                 return self.performCursorTool(arguments: arguments)
+            }
+            if DottieSmartHome.functionNames.contains(functionName) {
+                return await self.performSmartHomeTool(functionName: functionName, arguments: arguments)
             }
             return await self.macTools.perform(functionName: functionName, arguments: arguments)
         }
@@ -1852,6 +1861,65 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Smart home (DottieSmartHome)
+
+    private func performSmartHomeTool(functionName: String, arguments: [String: Any]) async -> String {
+        switch functionName {
+        case "home_devices":
+            return await smartHome.listForVoice()
+        case "control_device":
+            return await smartHome.control(arguments: arguments)
+        case "tv_task":
+            return startTVTask(task: (arguments["task"] as? String) ?? "", tvName: arguments["tv"] as? String)
+        default:
+            return "unknown home tool."
+        }
+    }
+
+    private func startTVTask(task: String, tvName: String?) -> String {
+        guard !task.isEmpty else { return "what should I do on the TV?" }
+        guard let tv = smartHome.tv(named: tvName) else {
+            return smartHome.setup.tvs.isEmpty
+                ? "no TV is set up yet. tell the user to add it in your Home window, under Smart Home."
+                : "which TV? the user has: \(smartHome.setup.tvs.map(\.name).joined(separator: ", "))."
+        }
+        guard smartHome.canSee(tv) else {
+            return "you can't see \(tv.name)'s screen (it needs a capture card), so do it with control_device presses instead."
+        }
+        let runner = smartHome.tvTaskRunner
+        runner.stop()
+        let showsInNotch = !screenTaskRunner.isRunning
+        runner.onProgress = { [weak self] stepText in
+            guard showsInNotch else { return }
+            self?.notchPresenter.showScreenTaskStep(stepText, title: "on the TV")
+        }
+        if showsInNotch { notchPresenter.showScreenTaskStep("looking at the TV", title: "on the TV") }
+        print("📺 TV task on \(tv.name): \(task)")
+        runner.start(task: task, controls: smartHome.tvControls(for: tv)) { [weak self] outcome in
+            guard let self else { return }
+            if showsInNotch && !self.screenTaskRunner.isRunning { self.notchPresenter.endScreenTask() }
+            let resultText: String
+            switch outcome {
+            case .finished(let answer): resultText = answer
+            case .failed(let reason): resultText = "it couldn't be finished: \(reason)"
+            case .stopped: return
+            }
+            print("📺 TV task result: \(resultText)")
+            self.brain.record(.screenJob, "did on the TV (\(tv.name)): \(task). result: \(resultText)")
+            Task { [weak self] in
+                for _ in 0..<60 {
+                    guard let self else { return }
+                    let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle
+                        || self.buddyDictationManager.isDictationInProgress || self.notchPresenter.surface == .textInput
+                    if !isBusy { break }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+                self?.speakScreenTaskResult(taskText: "on the TV: \(task)", resultText: resultText)
+            }
+        }
+        return "started on \(tv.name). say you're on it in a few words, then stop; the result comes back in a later message."
+    }
+
     private func configureCursorPet() {
         // The pet comes to the mouse while the user talks to Dottie, while
         // she points, and during guides and screen jobs.
@@ -1883,11 +1951,12 @@ final class CompanionManager: ObservableObject {
             self?.brain.folderURLs ?? []
         }
         clickyRoster.sharedFolderURLs = [projects.rootFolderURL]
-        // Pictures and projects edited in Home reach voice Dottie on her
-        // next connection.
-        Publishers.Merge(
+        // Pictures, projects and smart home devices edited in Home reach
+        // voice Dottie on her next connection.
+        Publishers.Merge3(
             imageMemory.$items.map { _ in () }.dropFirst(),
-            projects.$projects.map { _ in () }.dropFirst()
+            projects.$projects.map { _ in () }.dropFirst(),
+            smartHome.$setup.map { _ in () }.dropFirst()
         )
         .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
         .sink { [weak self] in
@@ -2224,6 +2293,7 @@ final class CompanionManager: ObservableObject {
             // The same stop button serves jobs and guides.
             self?.stopScreenTask()
             self?.stopGuide()
+            self?.smartHome.tvTaskRunner.stop()
         }
         notchPresenter.onOpenPeekFile = { [weak self] peekFile in
             self?.notchPresenter.isHovering = false

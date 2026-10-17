@@ -394,7 +394,8 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations + DottieMacTools.functionDeclarations + DottieWorkTools.functionDeclarations + [DottieCursorPet.functionDeclaration]]
+                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations + DottieMacTools.functionDeclarations + DottieWorkTools.functionDeclarations + [DottieCursorPet.functionDeclaration]
+                    + DottieSmartHome.functionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -923,7 +924,7 @@ final class GeminiLiveVoiceClient {
             case _ where DottieScreenAction.functionNames.contains(functionName):
                 handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             case _ where DottieMacTools.functionNames.contains(functionName) || DottieWorkTools.functionNames.contains(functionName)
-                || functionName == DottieCursorPet.functionName:
+                || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName):
                 handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
