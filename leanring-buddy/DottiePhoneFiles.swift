@@ -3,8 +3,8 @@
 //  leanring-buddy
 //
 //  Files from the Mac, asked for by text: "find my howto presentation",
-//  "send it to me", "put this_file on my Google Drive". A quick Gemini call
-//  reads the text and uses three tools: Spotlight finds files anywhere on
+//  "send it to me", "put this_file on my Google Drive", "send me a
+//  screenshot". A quick Gemini call reads the text and uses its tools: Spotlight finds files anywhere on
 //  the Mac in about a second, Telegram sends a file straight to the phone,
 //  and Google Drive for desktop's folder uploads one to Drive. Without Drive
 //  for desktop, CompanionManager has Dottie upload it at drive.google.com
@@ -34,7 +34,7 @@ final class DottiePhoneFiles {
         let lowered = text.lowercased()
         // Only spend a Gemini call on texts that could be about files.
         let fileWords = ["file", "send", "find", "drive", "presentation", "document", "doc", "pdf", "photo", "picture",
-                         "slides", "keynote", "spreadsheet", "folder", "upload", "share", "that one", "number", "first", "second"]
+                         "slides", "keynote", "spreadsheet", "folder", "upload", "share", "that one", "number", "first", "second", "screen"]
         let mentionsFiles = fileWords.contains { lowered.contains($0) }
         guard mentionsFiles || (!lastMatches.isEmpty && lowered.count < 40) else { return false }
 
@@ -97,6 +97,22 @@ final class DottiePhoneFiles {
                 }
             }
             return results.joined(separator: "\n")
+        case "send_screenshot":
+            guard let sendFileToPhone else { return "the phone isn't connected." }
+            let area = (arguments["area"] as? String) ?? "screen"
+            let takeResult = await DottieScreenshot.take(area: area, destination: "file")
+            let shots = DottieScreenshot.lastScreenshotURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+            // A failed take leaves the previous screenshot in lastScreenshotURLs.
+            guard takeResult.hasPrefix("saved"), !shots.isEmpty else { return takeResult }
+            var results: [String] = []
+            for shot in shots {
+                if let problem = await sendFileToPhone(shot, shot.lastPathComponent) {
+                    results.append("\(shot.lastPathComponent): \(problem)")
+                } else {
+                    results.append("\(shot.lastPathComponent): sent")
+                }
+            }
+            return results.joined(separator: "\n")
         case "save_to_google_drive":
             let files = chosenFiles(arguments)
             guard !files.isEmpty else { return "error: pick files by their number from the search" }
@@ -150,7 +166,8 @@ final class DottiePhoneFiles {
     }
 
     private static let systemInstruction = """
-    You read texts the user sends from their phone to their Mac. If the text is about finding a file on the Mac, sending a file to their phone, or putting a file on Google Drive, use the tools; for anything else call hand_to_helper right away.
+    You read texts the user sends from their phone to their Mac. If the text is about finding a file on the Mac, sending a file to their phone, putting a file on Google Drive, or getting a screenshot of the Mac's screen, use the tools; for anything else call hand_to_helper right away.
+    - "send me a screenshot", "what's on my screen", "ss my mac" means send_screenshot (area screen; all_screens if they say every or both screens; window for just the front window).
     - Search with find_files using the file's name or a distinctive part of it (without words like "presentation" or "file", which aren't in names). Try another spelling or a shorter part if nothing turns up.
     - If one file clearly matches, go ahead with what they asked. If several could be it, reply with the numbered list and ask which.
     - "send it to me", "text it to me", "send it here" means send_files. "put it on drive", "upload to google drive" means save_to_google_drive. If they only asked to find it, reply with what you found.
@@ -168,6 +185,13 @@ final class DottiePhoneFiles {
                 "name": "send_files",
                 "description": "Send files to the user's phone in this chat, by their numbers in the last search.",
                 "parameters": ["type": "object", "properties": ["numbers": ["type": "array", "items": ["type": "integer"]]], "required": ["numbers"]]
+            ],
+            [
+                "name": "send_screenshot",
+                "description": "Take a screenshot of the Mac's screen now and send it to the user's phone in this chat.",
+                "parameters": ["type": "object", "properties": [
+                    "area": ["type": "string", "enum": ["screen", "all_screens", "window"], "description": "screen is the main screen with the cursor; all_screens is every screen; window is the frontmost window."]
+                ]]
             ],
             [
                 "name": "save_to_google_drive",

@@ -490,6 +490,14 @@ final class DottieScreenTaskRunner {
             }
             return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
 
+        case "search_web":
+            let query = ((arguments["query"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return "error: search_web needs a query" }
+            onProgress?(stepNumber, "looking up \(query)")
+            let results = await DottieWebSearch.search(query)
+            // Keep the conversation small; the start of the page has the answer.
+            return String(results.prefix(4000))
+
         case "wait":
             let seconds = min(max((arguments["seconds"] as? NSNumber)?.doubleValue ?? 2, 0.5), 120)
             onProgress?(stepNumber, seconds > 10 ? "waiting \(Int(seconds)) seconds" : "waiting for it to load")
@@ -867,7 +875,8 @@ final class DottieScreenTaskRunner {
     - Every turn, check the new screenshot against the task before acting: what's already done? If the step you were on already happened (the chat is open, the text is typed, the page loaded), move on to the next step instead of doing it again.
     - To watch a video or reel once (\"watch it, then like it\"), start it, call wait_for_video_end, and go on when it returns.
     - Expect hiccups: popups and cookie banners (close them or press escape), slow pages (wait once, then reload or go another way), search results that don't show (press return, or click the result that's there), things not where you expected (scroll, use the app's search, or its menu bar). If an action didn't change the screen, never repeat it as is: try something else.
-    - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you can't go on (it needs a login, a captcha, or something is missing), saying why.
+    - Don't give up when something isn't where you expected. It's usually a click or two away: another tab, a menu or the menu bar, a sidebar, further down, the site's or app's own search, or another page. When you don't know where something lives or how a site or app does it, call search_web (like "where are releases on a github repo" or "how to turn on subtitles in vlc") and follow what it says. Try at least three different ways before deciding it can't be done.
+    - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you truly can't go on (it needs a login, a captcha or a payment, or you've tried several ways), saying what you tried and why it stopped.
 
     Safety:
     - Never type passwords or payment details, and never sign in for the user.
@@ -1044,6 +1053,13 @@ final class DottieScreenTaskRunner {
                 "parameters": ["type": "object", "properties": [
                     "max_seconds": ["type": "number", "description": "Give up after this long; default 600."]
                 ]]
+            ],
+            [
+                "name": "search_web",
+                "description": "Search the web when you don't know where something is or how to do it in this app or site. Returns the top results and the text of the best page.",
+                "parameters": ["type": "object", "properties": [
+                    "query": ["type": "string", "description": "What to look up, like 'where is the download button on github releases'."]
+                ], "required": ["query"]]
             ],
             [
                 "name": "finish",
