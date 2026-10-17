@@ -43,9 +43,12 @@ def img_part(path):
 def parse_json(text):
     m = re.search(r"[\[{].*[\]}]", text, re.S)
     try:
-        return json.loads(m.group(0)) if m else None
+        j = json.loads(m.group(0)) if m else None
     except Exception:
         return None
+    if isinstance(j, list):
+        j = j[0] if j and isinstance(j[0], dict) else None
+    return j
 
 FIND_JS = r"""
 ([pattern, attr]) => {
@@ -157,8 +160,6 @@ with sync_playwright() as p:
                 dt, out = chat("gemini-3.5-flash", [img_part(live_jpg), {"text": LIVE_PROMPT.format(q=q)}], level="low")
                 live = parse_json(out) or {}
                 time.sleep(3)
-                if isinstance(live, list) and live:
-                    live = live[0]
                 if isinstance(live, dict) and "point" in live and "x" not in live:
                     live = {"y": live["point"][0], "x": live["point"][1], "label": live.get("label")}
                 if "x" in live and "y" in live:
