@@ -113,6 +113,8 @@ final class CompanionManager: ObservableObject {
     let imageMemory = DottieImageMemory()
     /// One folder per thing the user is making (see DottieProjects).
     let projects = DottieProjects()
+    /// The cursor's shape ("turn into a cat") and its roaming pet mode.
+    let cursorPet = DottieCursorPet()
     /// Meeting mode: off until the user starts it.
     let meetingRecorder = DottieMeetingRecorder()
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
@@ -158,6 +160,7 @@ final class CompanionManager: ObservableObject {
     private var pendingSpokenBrainQuestion: String?
     private var currentGuideGoal: String?
     private var brainCancellables = Set<AnyCancellable>()
+    private var cursorPetCancellable: AnyCancellable?
     /// Counts narrated lines so a stale safety timeout can't end a newer one.
     private var narrationCount = 0
     /// Called once when the current Live turn has finished speaking (or
@@ -950,6 +953,7 @@ final class CompanionManager: ObservableObject {
     multi-step jobs:
     when the user asks for something on screen that takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank", "find the cheapest flight on this site", "go to my github and open the latest issue"), call do_task_on_screen once with the whole request, every step in order. don't do the steps yourself one by one. say you're on it in a few words, then stop talking; your cursor does the job and you'll get the result in a later message, which you tell the user in one short sentence.
     jobs line up: if they ask for another job while one is running ("also open my email", "after that, check the weather"), call do_task_on_screen for it too; it waits its turn and starts when the current one finishes. several separate jobs in one breath ("check my rank, then reply to sam, then open spotify") are separate do_task_on_screen calls, in order. stop_screen_task with scope "current" skips the running job and moves to the next, "all" stops everything and clears the list (stop, cancel, never mind), and "list" tells you what's running and waiting.
+    your look: you can shapeshift. when the user says "turn into a cat", "be a ghost", "change your cursor" or "go walk around", call change_cursor with the shape and its emoji; animals wander around the screen on their own like a pet, other shapes follow the mouse unless the user wants them to roam. "turn back" or "be normal" is shape normal.
     games: when the user asks you to do something inside a game ("go grab that sword", "walk over to the shop", "play this level for me"), call do_task_on_screen with game true: it moves with the keyboard, turns the camera and clicks, in quick steps. if they mean a picture they showed you, pass its name in reference_images.
 
     second brain:
@@ -1078,6 +1082,9 @@ final class CompanionManager: ObservableObject {
             guard let self else { return "couldn't do that right now." }
             if DottieWorkTools.functionNames.contains(functionName) {
                 return await self.performWorkTool(functionName: functionName, arguments: arguments)
+            }
+            if functionName == DottieCursorPet.functionName {
+                return self.performCursorTool(arguments: arguments)
             }
             return await self.macTools.perform(functionName: functionName, arguments: arguments)
         }
@@ -1845,6 +1852,32 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    private func configureCursorPet() {
+        // The pet comes to the mouse while the user talks to Dottie, while
+        // she points, and during guides and screen jobs.
+        cursorPet.shouldPause = { [weak self] in
+            guard let self else { return true }
+            return self.voiceState != .idle
+                || self.detectedElementScreenLocation != nil
+                || self.screenTaskRunner.isRunning
+                || self.guide.isActive
+        }
+        cursorPet.start()
+        // A pet out roaming has to be seen even with the cursor set to hide.
+        cursorPetCancellable = cursorPet.$costume
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] costume in
+                guard let self, costume?.roams == true, !self.isOverlayVisible, self.hasCompletedOnboarding else { return }
+                self.overlayWindowManager.hasShownOverlayBefore = true
+                self.overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+                self.isOverlayVisible = true
+            }
+    }
+
+    private func performCursorTool(arguments: [String: Any]) -> String {
+        cursorPet.perform(arguments: arguments)
+    }
+
     private func configureBrain() {
         clickyRoster.brainFolderURLsProvider = { [weak self] in
             self?.brain.folderURLs ?? []
@@ -2014,6 +2047,7 @@ final class CompanionManager: ObservableObject {
 
     private func configureClickyRoster() {
         configureBrain()
+        configureCursorPet()
         configureMeetingMode()
         configurePhoneBridge()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
@@ -2716,6 +2750,8 @@ final class CompanionManager: ObservableObject {
     /// if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
+        // A roaming pet keeps the overlay up.
+        if cursorPet.costume?.roams == true { return }
 
         transientHideTask?.cancel()
         transientHideTask = Task {
