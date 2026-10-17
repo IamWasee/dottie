@@ -143,11 +143,11 @@ final class DottieMacTools {
         ),
         declaration(
             "browser",
-            "Control the user's web browser directly (Safari, Chrome, Arc, Brave, Edge). actions: list_tabs; read_page (the page they're on: its text, form fields and buttons, so you can answer about it or fill it in); open_url (target is the address; value 'same tab' to reuse the current tab); switch_tab and close_tab (target is a few words of the tab's title or site, or 'current'); fill (target is the field's label, value is what to put in); click (target is the button or link text); enable_page_access (only when a result says page access is off). Prefer this over clicking on screen for anything inside a web page. Only when the user asks. Never fill in passwords.",
+            "Control the user's web browser directly (Safari, Chrome, Arc, Brave, Edge, Opera, Firefox and more), even when the user is in another app: never say a tab doesn't exist from the screenshot alone, check with list_tabs or switch_tab. actions: list_tabs (every open browser); read_page (the page they're on: its text, form fields and buttons, so you can answer about it or fill it in); open_url (target is the address; value 'same tab' to reuse the current tab); switch_tab and close_tab (target is a few words of the tab's title or site, or 'current'); fill (target is the field's label, value is what to put in); click (target is the button or link text); enable_page_access (only when a result says page access is off). Prefer this over clicking on screen for anything inside a web page. Only when the user asks. Never fill in passwords.",
             [
                 "action": ["type": "STRING", "enum": ["list_tabs", "read_page", "open_url", "switch_tab", "close_tab", "fill", "click", "enable_page_access"], "description": "What to do."],
                 "target": string("The address, tab, field or button, depending on the action."),
-                "value": string("For fill: the text to enter. For open_url: 'same tab' to reuse the current tab.")
+                "value": string("For fill: the text to enter. For open_url: 'same tab' to reuse the current tab. For switch_tab: 'confirmed' once the user said yes to switching away from the app they're in.")
             ],
             required: ["action"]
         ),

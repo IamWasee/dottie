@@ -58,6 +58,18 @@ final class DottieGuide {
         let targetLabel: String?
         let marks: [Mark]
         let displayFrame: CGRect
+        /// Tours only: something Dottie does herself to bring the next part
+        /// into view (scroll down to the templates, open a tab).
+        var reveal: Reveal? = nil
+    }
+
+    struct Reveal {
+        enum Action: String { case scroll, click, keys }
+        let action: Action
+        /// Global AppKit point to scroll at or click.
+        let point: CGPoint?
+        let direction: DottieScreenAction.ScrollDirection
+        let keys: String?
     }
 
     private enum StepWaitResult {
@@ -69,6 +81,8 @@ final class DottieGuide {
 
     private static let guideModel = "gemini-3.6-flash"
     private static let maximumRounds = 15
+    private static let maximumTourRounds = 6
+    private static let maximumTourBeats = 12
     private static let clickWaitTimeoutSeconds: TimeInterval = 120
     private static let lookWaitTimeoutSeconds: TimeInterval = 240
     /// Clicks this close to the target still count.
@@ -204,23 +218,57 @@ final class DottieGuide {
 
     // MARK: - Tour mode
 
+    /// Looks, shows a few parts, and when the next part is off screen or
+    /// behind a tab, scrolls or clicks to it herself and looks again.
     private func runTour(goal: String) async -> String? {
-        onProgress?("looking around")
-        guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1440) else {
-            return "I can't see your screen. I need Screen Recording permission for that."
-        }
-        guard let beats = await requestSteps(goal: goal, mode: .tour, history: [], remainingRounds: 0, screen: screen),
-              !beats.isEmpty else {
+        var history: [String] = []
+        var shownBeatCount = 0
+        for round in 1...Self.maximumTourRounds {
             if Task.isCancelled { return nil }
-            return "Gemini's too busy for a tour right now. Try me again in a sec."
-        }
-        for (beatIndex, beat) in beats.enumerated() {
-            if Task.isCancelled { return nil }
-            onProgress?("\(beatIndex + 1) of \(beats.count): \(beat.say)")
-            await presentStep?(beat)
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            onProgress?(round == 1 ? "looking around" : "looking again")
+            guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1440) else {
+                return "I can't see your screen. I need Screen Recording permission for that."
+            }
+            let beatsLeft = Self.maximumTourBeats - shownBeatCount
+            guard let beats = await requestSteps(goal: goal, mode: .tour, history: history, remainingRounds: beatsLeft, screen: screen),
+                  !beats.isEmpty else {
+                if Task.isCancelled { return nil }
+                return round == 1 ? "Gemini's too busy for a tour right now. Try me again in a sec." : nil
+            }
+            var didReveal = false
+            for beat in beats {
+                if Task.isCancelled { return nil }
+                shownBeatCount += 1
+                onProgress?("\(shownBeatCount): \(beat.say)")
+                await presentStep?(beat)
+                if Task.isCancelled { return nil }
+                if let reveal = beat.reveal {
+                    await perform(reveal)
+                    history.append("\(beat.say) (you \(reveal.action == .scroll ? "scrolled \(reveal.direction.rawValue)" : reveal.action == .click ? "clicked to open it" : "pressed \(reveal.keys ?? "keys")"), so the screen changed)")
+                    didReveal = true
+                    // Everything after a reveal was planned on the old screen.
+                    break
+                }
+                history.append(beat.say)
+                if beat.kind == .done || shownBeatCount >= Self.maximumTourBeats { return nil }
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+            if !didReveal { return nil }
+            try? await Task.sleep(nanoseconds: 900_000_000)
         }
         return nil
+    }
+
+    private func perform(_ reveal: Reveal) async {
+        switch reveal.action {
+        case .scroll:
+            DottieScreenActionPerformer.scroll(direction: reveal.direction, amount: 5, at: reveal.point)
+        case .click:
+            guard let point = reveal.point else { return }
+            DottieScreenActionPerformer.click(at: point, clickCount: 1, isRightClick: false)
+        case .keys:
+            if let keys = reveal.keys { _ = DottieScreenActionPerformer.press(keyCombination: keys) }
+        }
     }
 
     // MARK: - Waiting for the user
@@ -312,11 +360,17 @@ final class DottieGuide {
             \(remainingRounds == 0 ? "This is the last step you can give: use kind 'done' and tell them what's left in one sentence." : "")
             """
         case .tour:
+            let historyText = history.isEmpty ? "Nothing yet; this is the start." : history.joined(separator: "\n")
             return """
             Frontmost app: \(frontmostApp).
             What the user wants: \(goal)
 
-            Give a short tour of what's on screen, as {"steps": [4 to 7 steps]}, each kind "look", in a natural order (top to bottom, left to right, or most important first). Each step marks ONE main part of the window (use highlight for big areas, circle for a single control) and says what it is and what they'd use it for, in one short sentence. If the user asked about something specific, focus the tour on that. The last step can be a short, friendly wrap-up with a tip.
+            Already shown in this tour, oldest first:
+            \(historyText)
+
+            Continue the tour from this screenshot, as {"steps": [1 to 6 steps]}, in a natural order (top to bottom, left to right, or most important first). Don't repeat anything already shown. Each "look" step marks ONE main part of the window (highlight for big areas, circle for a single control) and says what it is and what they'd use it for, in one short sentence. If the user asked about something specific, focus on that.
+            You can operate the app to show things: when the next part worth showing is cut off or not visible (more content below, like a list of templates; inside another tab, section or menu), give a step with a reveal instead of marks: reveal.action "scroll" with direction and box_2d on the area to scroll, "click" with box_2d on the tab, section, menu or disclosure arrow to open, or "keys". Its "say" tells them what you're doing ("let's scroll down to the templates"). A reveal step must be the LAST step you give: you'll get a fresh screenshot after it. Only click things that show or navigate (tabs, menus, sections, expand arrows), never ones that create, change, buy, send or delete.
+            You have \(remainingRounds) steps left. When everything worth seeing is covered, end with a short, friendly wrap-up step of kind "done".
             """
         }
     }
@@ -339,7 +393,17 @@ final class DottieGuide {
                 "say": ["type": "STRING"],
                 "target_box": boxSchema,
                 "target_label": ["type": "STRING"],
-                "marks": ["type": "ARRAY", "items": markSchema]
+                "marks": ["type": "ARRAY", "items": markSchema],
+                "reveal": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "action": ["type": "STRING", "enum": ["scroll", "click", "keys"]],
+                        "box_2d": boxSchema,
+                        "direction": ["type": "STRING", "enum": ["up", "down", "left", "right"]],
+                        "keys": ["type": "STRING"]
+                    ],
+                    "required": ["action"]
+                ]
             ],
             "required": ["kind", "say"]
         ]
@@ -429,14 +493,35 @@ final class DottieGuide {
                 return Mark(shape: shape, rect: rect, note: note?.isEmpty == false ? note : nil)
             }
             let targetLabel = (rawStep["target_label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawReveal = rawStep["reveal"] as? [String: Any]
+            let reveal = rawReveal.flatMap { parseReveal($0, screen: screen) }
+            // A click reveal: point and circle where Dottie is about to click.
+            var revealRect: CGRect?
+            if reveal?.action == .click, let revealBox = rawReveal?["box_2d"] as? [Any] {
+                revealRect = globalRect(fromBox: revealBox, screen: screen)
+            }
             return Step(
-                kind: kind,
+                kind: reveal == nil ? kind : .look,
                 say: say,
-                targetRect: targetRect,
+                targetRect: targetRect ?? revealRect,
                 targetLabel: targetLabel?.isEmpty == false ? targetLabel : nil,
-                marks: marks,
-                displayFrame: screen.displayFrame
+                marks: reveal == nil ? marks : [],
+                displayFrame: screen.displayFrame,
+                reveal: reveal
             )
+        }
+    }
+
+    private static func parseReveal(_ rawReveal: [String: Any], screen: DottieDisplayCapture.Screenshot) -> Reveal? {
+        guard let action = (rawReveal["action"] as? String).flatMap({ Reveal.Action(rawValue: $0.lowercased()) }) else { return nil }
+        let rect = (rawReveal["box_2d"] as? [Any]).flatMap { globalRect(fromBox: $0, screen: screen) }
+        let point = rect.map { CGPoint(x: $0.midX, y: $0.midY) }
+        let direction = (rawReveal["direction"] as? String).flatMap { DottieScreenAction.ScrollDirection(rawValue: $0.lowercased()) } ?? .down
+        let keys = (rawReveal["keys"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch action {
+        case .click where point == nil: return nil
+        case .keys where keys?.isEmpty != false: return nil
+        default: return Reveal(action: action, point: point, direction: direction, keys: keys)
         }
     }
 

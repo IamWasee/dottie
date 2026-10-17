@@ -30,7 +30,8 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     var purpose: String
     let createdAt: Date
     /// Gemini CLI session, so each turn resumes the same conversation.
-    let sessionID: UUID
+    /// Replaced with a fresh one when the CLI has lost the old session.
+    var sessionID: UUID
     let workspaceFolderName: String
     var model: String
     var hasStartedSession: Bool
@@ -296,31 +297,53 @@ final class ClickyRoster: ObservableObject {
 
         lastTurnSucceededByAgentID[agentID] = false
 
+        let additionalDirectoryURLs = [skillLibrary.libraryURL]
+            + (agent.isBrain == true
+                ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
+                : [])
+
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.runtime.runTurn(
-                    agentID: agentID,
-                    sessionID: agent.sessionID,
-                    isFirstTurn: isFirstTurn,
-                    message: fullMessageForAgent,
-                    workspaceURL: agentWorkspaceURL,
-                    cliHomeURL: self.cliHomeURL,
-                    model: agent.model,
-                    isComputerUseApproved: isTurnApprovedForComputerUse,
-                    // So the agent's file tools can save skills there.
-                    additionalDirectoryURLs: [self.skillLibrary.libraryURL]
-                        + (agent.isBrain == true
-                            ? [DottieBrain.defaultBrainFolderURL] + (self.brainFolderURLsProvider?() ?? [])
-                            : [])
-                ) { [weak self] event in
-                    // The main queue is FIFO, so events land in order and
-                    // before finishTurn below.
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            self?.handleRuntimeEvent(event, agentID: agentID)
-                        }
-                    }
+                do {
+                    try await self.runAgentProcess(
+                        agent: agent,
+                        sessionID: agent.sessionID,
+                        isFirstTurn: isFirstTurn,
+                        message: fullMessageForAgent,
+                        workspaceURL: agentWorkspaceURL,
+                        isComputerUseApproved: isTurnApprovedForComputerUse,
+                        additionalDirectoryURLs: additionalDirectoryURLs
+                    )
+                } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
+                            where !isFirstTurn && Self.isLostSessionError(standardErrorTail) {
+                    // Gemini CLI lost the saved conversation (for example
+                    // the first turn failed before it was written). Start a
+                    // fresh session and hand over the recent chat instead,
+                    // rather than failing every turn from now on.
+                    let freshSessionID = self.replaceSession(forAgentID: agentID)
+                    try await self.runAgentProcess(
+                        agent: agent,
+                        sessionID: freshSessionID,
+                        isFirstTurn: true,
+                        message: self.recentConversationContext(forAgentID: agentID) + fullMessageForAgent,
+                        workspaceURL: agentWorkspaceURL,
+                        isComputerUseApproved: isTurnApprovedForComputerUse,
+                        additionalDirectoryURLs: additionalDirectoryURLs
+                    )
+                } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
+                            where isFirstTurn && standardErrorTail.lowercased().contains("already exists") {
+                    // An earlier turn did save the session after all
+                    // (it failed partway): carry on in it.
+                    try await self.runAgentProcess(
+                        agent: agent,
+                        sessionID: agent.sessionID,
+                        isFirstTurn: false,
+                        message: fullMessageForAgent,
+                        workspaceURL: agentWorkspaceURL,
+                        isComputerUseApproved: isTurnApprovedForComputerUse,
+                        additionalDirectoryURLs: additionalDirectoryURLs
+                    )
                 }
             } catch {
                 self.appendTranscriptItem(.error, text: error.localizedDescription, to: agentID)
@@ -333,6 +356,71 @@ final class ClickyRoster: ObservableObject {
         }
     }
 
+    /// One Gemini CLI process for this agent's turn, streaming its events
+    /// into the transcript.
+    private func runAgentProcess(
+        agent: ClickyAgent,
+        sessionID: UUID,
+        isFirstTurn: Bool,
+        message: String,
+        workspaceURL: URL,
+        isComputerUseApproved: Bool,
+        additionalDirectoryURLs: [URL]
+    ) async throws {
+        let agentID = agent.id
+        try await self.runtime.runTurn(
+            agentID: agentID,
+            sessionID: sessionID,
+            isFirstTurn: isFirstTurn,
+            message: message,
+            workspaceURL: workspaceURL,
+            cliHomeURL: self.cliHomeURL,
+            model: agent.model,
+            isComputerUseApproved: isComputerUseApproved,
+            // So the agent's file tools can save skills there.
+            additionalDirectoryURLs: additionalDirectoryURLs
+        ) { [weak self] event in
+            // The main queue is FIFO, so events land in order and
+            // before finishTurn.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.handleRuntimeEvent(event, agentID: agentID)
+                }
+            }
+        }
+    }
+
+    /// Gemini CLI's "Error resuming session: No previous sessions found…".
+    private static func isLostSessionError(_ standardErrorTail: String) -> Bool {
+        let lowercasedError = standardErrorTail.lowercased()
+        return lowercasedError.contains("error resuming session")
+            || lowercasedError.contains("no previous sessions found")
+            || lowercasedError.contains("session not found")
+    }
+
+    /// Gives the agent a new CLI session ID and returns it.
+    private func replaceSession(forAgentID agentID: UUID) -> UUID {
+        let freshSessionID = UUID()
+        if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
+            agents[agentIndex].sessionID = freshSessionID
+            agents[agentIndex].hasStartedSession = false
+            saveRoster()
+        }
+        return freshSessionID
+    }
+
+    /// The last few messages of this agent's chat, so a fresh session still
+    /// knows what was said.
+    private func recentConversationContext(forAgentID agentID: UUID) -> String {
+        let recentLines = (transcriptsByAgentID[agentID] ?? [])
+            .filter { $0.kind == .user || $0.kind == .assistant }
+            .dropLast()   // the message being sent now
+            .suffix(10)
+            .map { ($0.kind == .user ? "User: " : "You: ") + String($0.text.prefix(1500)) }
+        guard !recentLines.isEmpty else { return "" }
+        return "Earlier in this chat (for context):\n" + recentLines.joined(separator: "\n") + "\n\n"
+    }
+
     func stopAgent(_ agent: ClickyAgent) {
         guard isRunning(agent) else { return }
         runtime.stopTurn(agentID: agent.id)
@@ -342,11 +430,10 @@ final class ClickyRoster: ObservableObject {
     private func handleRuntimeEvent(_ event: GeminiCLIAgentEvent, agentID: UUID) {
         switch event {
         case .sessionStarted:
-            // The CLI created the session; later turns must resume it.
-            if let agentIndex = agents.firstIndex(where: { $0.id == agentID }), !agents[agentIndex].hasStartedSession {
-                agents[agentIndex].hasStartedSession = true
-                saveRoster()
-            }
+            // Not saved yet: Gemini CLI only writes the session once a turn
+            // gets an answer, so a first turn that fails (busy, quota) leaves
+            // nothing to resume. It's marked on a successful finish instead.
+            break
         case .assistantTextDelta(let textDelta):
             var transcript = transcriptsByAgentID[agentID] ?? []
             if let lastItem = transcript.last, lastItem.kind == .assistant {
@@ -367,6 +454,11 @@ final class ClickyRoster: ObservableObject {
             appendTranscriptItem(.error, text: warningMessage, to: agentID, persist: false)
         case .finished(let succeeded, _, _):
             lastTurnSucceededByAgentID[agentID] = succeeded
+            // The CLI saved the session; later turns resume it.
+            if succeeded, let agentIndex = agents.firstIndex(where: { $0.id == agentID }), !agents[agentIndex].hasStartedSession {
+                agents[agentIndex].hasStartedSession = true
+                saveRoster()
+            }
         }
     }
 

@@ -120,6 +120,9 @@ private struct HomeConversationView: View {
     /// Pictures waiting to go with the next message.
     @State private var attachedImages: [AttachedImage] = []
     @State private var isDropTargeted = false
+    /// Catches ⌘V with a picture on the clipboard. The text field takes
+    /// ⌘V for itself, so .onPasteCommand never sees pictures.
+    @State private var pasteKeyMonitor: Any?
 
     private struct AttachedImage: Identifiable {
         let id = UUID()
@@ -180,6 +183,47 @@ private struct HomeConversationView: View {
             loadImages(from: providers)
             return true
         }
+        .onAppear(perform: startWatchingForPaste)
+        .onDisappear(perform: stopWatchingForPaste)
+    }
+
+    private func startWatchingForPaste() {
+        guard pasteKeyMonitor == nil else { return }
+        pasteKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers == .command,
+                  event.charactersIgnoringModifiers?.lowercased() == "v",
+                  event.window?.isKeyWindow == true,
+                  !(event.window is NSPanel) else { return event }
+            let pastedImages = Self.imagesOnClipboard()
+            guard !pastedImages.isEmpty else { return event }
+            pastedImages.forEach(attach)
+            return nil
+        }
+    }
+
+    private func stopWatchingForPaste() {
+        if let pasteKeyMonitor { NSEvent.removeMonitor(pasteKeyMonitor) }
+        pasteKeyMonitor = nil
+    }
+
+    /// Picture files copied in Finder, or picture data (a screenshot or an
+    /// image copied from a web page).
+    private static func imagesOnClipboard() -> [Data] {
+        let pasteboard = NSPasteboard.general
+        let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let imageFiles = fileURLs.compactMap { url -> Data? in
+            guard let data = try? Data(contentsOf: url), NSImage(data: data) != nil else { return nil }
+            return data
+        }
+        if !imageFiles.isEmpty { return imageFiles }
+        for imageType in [NSPasteboard.PasteboardType.png, .tiff, NSPasteboard.PasteboardType("public.jpeg")] {
+            if let data = pasteboard.data(forType: imageType), NSImage(data: data) != nil { return [data] }
+        }
+        if let image = NSImage(pasteboard: pasteboard), let tiffData = image.tiffRepresentation {
+            return [tiffData]
+        }
+        return []
     }
 
     private var emptyState: some View {
