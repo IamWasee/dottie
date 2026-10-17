@@ -5,6 +5,9 @@ compatibility_date = "2024-09-23"
 # Secrets (set with `npx wrangler secret put <NAME>`):
 #   GEMINI_API_KEY     - from https://aistudio.google.com/apikey
 #   APP_SHARED_SECRET  - optional; must match ClickyAppSharedSecret in Info.plist
+#   NVIDIA_API_KEY     - optional; free key from https://build.nvidia.com. NIM
+#                        models answer text/picture requests when every Gemini
+#                        model is busy.
 
 [vars]
 GEMINI_LIVE_MODEL = "gemini-3.8-live"
@@ -20,3 +23,5 @@ GEMINI_DICTATION_MODEL = "gemini-3.5-flash-lite"
 # Each model has its own free-tier limit, so this also stretches the quota.
 GEMINI_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.7-flash,gemini-3.5-flash-lite"
 GEMINI_TTS_FALLBACK_MODELS = "gemini-3.8-flash-tts"
+# NVIDIA NIM backups (only with NVIDIA_API_KEY), best first.
+NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"
