@@ -39,6 +39,8 @@ final class DottieScreenTaskRunner {
     }
 
     static let maximumSteps = 30
+    /// Games take many small moves.
+    static let maximumGameSteps = 150
     /// Fast and on the free tier; the Worker falls back to other Flash
     /// models when it's busy.
     private static let taskModel = "gemini-3.6-flash"
@@ -46,6 +48,18 @@ final class DottieScreenTaskRunner {
     /// small; the action log still says what happened.
     private static let keptScreenshotCount = 2
     private static let maximumScreenshotDimension = 1440
+    /// Games favor speed: a smaller frame and the quickest model (a box
+    /// lookup takes about a second on it, Oct 2026).
+    private static let gameScreenshotDimension = 1024
+    private static let gameModel = "gemini-3.5-flash-lite"
+
+    /// A picture the user saved in Home → Conversation that the job needs
+    /// ("grab the golden sword").
+    struct ReferenceImage {
+        let name: String
+        let description: String
+        let jpegData: Data
+    }
 
     /// Progress for the notch: step number and what's happening.
     var onProgress: (@MainActor (_ stepNumber: Int, _ description: String) -> Void)?
@@ -55,12 +69,30 @@ final class DottieScreenTaskRunner {
 
     private(set) var currentTaskText: String?
     private var runTask: Task<Void, Never>?
+    private var isGameMode = false
+    /// Sent at the start of every request, so the pictures are never
+    /// dropped with old screenshots.
+    private var referenceImageParts: [[String: Any]] = []
 
     var isRunning: Bool { runTask != nil }
 
-    func start(task taskText: String, completion: @escaping @MainActor (Outcome) -> Void) {
+    func start(
+        task taskText: String,
+        isGameMode: Bool = false,
+        referenceImages: [ReferenceImage] = [],
+        completion: @escaping @MainActor (Outcome) -> Void
+    ) {
         stop()
         currentTaskText = taskText
+        self.isGameMode = isGameMode
+        referenceImageParts = referenceImages.enumerated().flatMap { index, referenceImage -> [[String: Any]] in
+            [
+                ["text": "Reference picture \(index + 1), \"\(referenceImage.name)\", which the user shared earlier"
+                    + (referenceImage.description.isEmpty ? "" : " (\(referenceImage.description))")
+                    + ". When the task mentions it, it means the thing in this picture: find it on the screen by its look."],
+                ["inlineData": ["mimeType": "image/jpeg", "data": referenceImage.jpegData.base64EncodedString()]]
+            ]
+        }
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
@@ -92,10 +124,12 @@ final class DottieScreenTaskRunner {
         var pendingFunctionResponseParts: [[String: Any]] = []
         var consecutiveRequestFailures = 0
 
-        for stepNumber in 1...Self.maximumSteps {
+        let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
+        for stepNumber in 1...stepLimit {
             if Task.isCancelled { return .stopped }
 
-            guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension) else {
+            let screenshotDimension = isGameMode ? Self.gameScreenshotDimension : Self.maximumScreenshotDimension
+            guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: screenshotDimension) else {
                 return .failed(reason: "I couldn't see the screen. Dottie needs Screen Recording permission.")
             }
             let screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
@@ -167,10 +201,11 @@ final class DottieScreenTaskRunner {
             }
 
             // Let pages load and animations finish before the next look.
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            // Games keep moving, so they get a quick look straight away.
+            try? await Task.sleep(nanoseconds: isGameMode ? 200_000_000 : 900_000_000)
         }
 
-        return .failed(reason: "That took more than \(Self.maximumSteps) steps, so I stopped.")
+        return .failed(reason: "That took more than \(stepLimit) steps, so I stopped.")
     }
 
     // MARK: - Actions
@@ -230,7 +265,10 @@ final class DottieScreenTaskRunner {
             guard let point = clickPoint() else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
             let label = text("label") ?? "it"
             onProgress?(stepNumber, "clicking \(label)")
-            await onWillClick?(point, screen.displayFrame)
+            // In a game, a pause before every click costs the moment.
+            if !isGameMode {
+                await onWillClick?(point, screen.displayFrame)
+            }
             if Task.isCancelled { return "stopped" }
             DottieScreenActionPerformer.click(at: point, clickCount: flag("double_click") ? 2 : 1, isRightClick: flag("right_click"))
             return "clicked \(label)"
@@ -274,6 +312,30 @@ final class DottieScreenTaskRunner {
             let scrollPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 550)
             DottieScreenActionPerformer.scroll(direction: direction, amount: amount, at: scrollPoint)
             return "scrolled \(direction.rawValue)"
+
+        case "hold_keys":
+            guard let keys = text("keys") else { return "error: no keys" }
+            let seconds = (arguments["seconds"] as? NSNumber)?.doubleValue ?? 1
+            onProgress?(stepNumber, "holding \(keys)")
+            return await DottieScreenActionPerformer.hold(keyCombination: keys, seconds: seconds)
+                ? "held \(keys) for \(String(format: "%.1f", min(max(seconds, 0.05), 5)))s"
+                : "unknown key in \(keys); use names like w, a, s, d, space, shift, up, e"
+
+        case "move_mouse":
+            let deltaX = CGFloat((arguments["dx"] as? NSNumber)?.doubleValue ?? 0)
+            let deltaY = CGFloat((arguments["dy"] as? NSNumber)?.doubleValue ?? 0)
+            let button = text("button")?.lowercased() ?? "none"
+            onProgress?(stepNumber, "turning the camera")
+            // dx and dy are 0-1000 across the screenshot, like boxes.
+            let startPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 500)
+            await DottieScreenActionPerformer.moveMouse(
+                from: startPoint,
+                deltaX: deltaX / 1000 * screen.displayFrame.width,
+                deltaY: -deltaY / 1000 * screen.displayFrame.height,
+                button: button,
+                seconds: (arguments["seconds"] as? NSNumber)?.doubleValue ?? 0.4
+            )
+            return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
 
         case "wait":
             let seconds = min(max((arguments["seconds"] as? NSNumber)?.doubleValue ?? 2, 0.5), 10)
@@ -367,6 +429,45 @@ final class DottieScreenTaskRunner {
     - Don't buy anything, send or post messages, delete things, or change account settings unless the task explicitly asks for exactly that.
     - Stay on the task; don't open unrelated things.
     """
+
+    private static let gameInstruction = """
+
+    Game mode: the user asked you to play or do something inside a video game. It's live, so act in short bursts and look again:
+    - Move with hold_keys: w forward, s back, a and d sideways, space jump, w+shift to sprint, for 0.2-2 seconds at a time. Single presses (e to pick up or interact, 1-9 for hotbar slots, space to jump) use press_keys.
+    - Turn the camera with move_mouse: in Roblox and most third-person games hold the right button (button "right"); in first-person games where the mouse turns the view, use button "none". dx 100 is about a tenth of the screen; positive dx turns right, positive dy looks down.
+    - To get to something: turn until it's straight ahead in the middle of the screen, then hold w for a short burst, and check again. Click on-screen buttons, menus and items with click.
+    - Reference pictures show the exact items the user means: match them by shape and color, not just by name.
+    - One or two actions per turn. If nothing changes after several tries, try another way (jump, go around, turn), and finish saying what blocked you if you can't get there.
+    - Never spend real money or in-game currency (Robux, gems), trade, or chat with other players unless the task says exactly that.
+    """
+
+    private static var gameFunctionDeclarations: [[String: Any]] {
+        [
+            [
+                "name": "hold_keys",
+                "description": "Hold keys down together for a while, to move in a game: 'w' to walk forward, 'w+shift' to sprint, 'a', 'd', 's', 'space'.",
+                "parameters": ["type": "object", "properties": [
+                    "keys": ["type": "string"],
+                    "seconds": ["type": "number", "description": "0.05-5; short bursts of 0.2-2 work best."]
+                ], "required": ["keys", "seconds"]]
+            ],
+            [
+                "name": "move_mouse",
+                "description": "Move the mouse to turn the camera or aim in a game. dx and dy are 0-1000 across the screenshot (100 is a tenth of the screen); positive dx turns right, positive dy looks down.",
+                "parameters": ["type": "object", "properties": [
+                    "dx": ["type": "integer"],
+                    "dy": ["type": "integer"],
+                    "button": ["type": "string", "enum": ["right", "left", "none"], "description": "right for Roblox and most third-person games, none for first-person mouse look."],
+                    "seconds": ["type": "number", "description": "How long the move takes, 0.1-3; default 0.4."],
+                    "box_2d": [
+                        "type": "array",
+                        "items": ["type": "integer"],
+                        "description": "Where to start the move; leave out for the middle of the screen."
+                    ]
+                ], "required": ["dx", "dy", "button"]]
+            ]
+        ]
+    }
 
     private static var functionDeclarations: [[String: Any]] {
         let boxProperty: [String: Any] = [
@@ -469,11 +570,16 @@ final class DottieScreenTaskRunner {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        var requestContents = contents
+        if !referenceImageParts.isEmpty, var firstParts = requestContents.first?["parts"] as? [[String: Any]] {
+            firstParts.insert(contentsOf: referenceImageParts, at: 0)
+            requestContents[0]["parts"] = firstParts
+        }
         let requestBody: [String: Any] = [
-            "model": Self.taskModel,
-            "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
-            "contents": contents,
-            "tools": [["functionDeclarations": Self.functionDeclarations]],
+            "model": isGameMode ? Self.gameModel : Self.taskModel,
+            "systemInstruction": ["parts": [["text": Self.systemInstruction + (isGameMode ? Self.gameInstruction : "")]]],
+            "contents": requestContents,
+            "tools": [["functionDeclarations": Self.functionDeclarations + (isGameMode ? Self.gameFunctionDeclarations : [])]],
             "toolConfig": ["functionCallingConfig": ["mode": "ANY"]]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)

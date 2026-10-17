@@ -301,6 +301,91 @@ enum DottieScreenActionPerformer {
         return true
     }
 
+    /// Holds keys down together for a while, like "w" for 1.5 seconds to
+    /// walk forward in a game, or "w+shift" to sprint. Returns false when
+    /// a key name isn't known.
+    static func hold(keyCombination: String, seconds: Double) async -> Bool {
+        let keyNames = keyCombination.lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .split(separator: "+")
+            .map(String.init)
+        let modifierKeys: [String: (keyCode: Int, flag: CGEventFlags)] = [
+            "shift": (kVK_Shift, .maskShift), "ctrl": (kVK_Control, .maskControl), "control": (kVK_Control, .maskControl),
+            "option": (kVK_Option, .maskAlternate), "alt": (kVK_Option, .maskAlternate),
+            "cmd": (kVK_Command, .maskCommand), "command": (kVK_Command, .maskCommand)
+        ]
+        var heldKeys: [(keyCode: CGKeyCode, flag: CGEventFlags)] = []
+        for keyName in keyNames {
+            if let modifierKey = modifierKeys[keyName] {
+                heldKeys.append((CGKeyCode(modifierKey.keyCode), modifierKey.flag))
+            } else if let keyCode = virtualKeyCode(forKeyName: keyName) {
+                heldKeys.append((keyCode, []))
+            } else {
+                return false
+            }
+        }
+        guard !heldKeys.isEmpty else { return false }
+
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        var flags: CGEventFlags = []
+        for heldKey in heldKeys {
+            flags.insert(heldKey.flag)
+            let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: heldKey.keyCode, keyDown: true)
+            keyDown?.flags = flags
+            keyDown?.post(tap: .cghidEventTap)
+        }
+        try? await Task.sleep(nanoseconds: UInt64(min(max(seconds, 0.05), 5) * 1_000_000_000))
+        // Always let go, even when the job was stopped mid-hold.
+        for heldKey in heldKeys.reversed() {
+            flags.remove(heldKey.flag)
+            let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: heldKey.keyCode, keyDown: false)
+            keyUp?.flags = flags
+            keyUp?.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+
+    /// Moves the mouse by (deltaX, deltaY) points from `appKitPoint`
+    /// (positive y is up), smoothly, with a button held or none. Games turn
+    /// the camera this way: Roblox with the right button held, first-person
+    /// games with no button. The pointer stays where it ends, since the
+    /// game owns it.
+    static func moveMouse(from appKitPoint: CGPoint, deltaX: CGFloat, deltaY: CGFloat, button: String, seconds: Double) async {
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        let startLocation = quartzPoint(fromAppKit: appKitPoint)
+        let mouseButton: CGMouseButton = button == "right" ? .right : .left
+        let (downType, dragType, upType): (CGEventType, CGEventType, CGEventType) = button == "right"
+            ? (.rightMouseDown, .rightMouseDragged, .rightMouseUp)
+            : (.leftMouseDown, .leftMouseDragged, .leftMouseUp)
+        let holdsButton = button == "right" || button == "left"
+
+        CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: startLocation, mouseButton: mouseButton)?
+            .post(tap: .cghidEventTap)
+        if holdsButton {
+            CGEvent(mouseEventSource: eventSource, mouseType: downType, mouseCursorPosition: startLocation, mouseButton: mouseButton)?
+                .post(tap: .cghidEventTap)
+        }
+        let stepCount = 20
+        let stepDelay = UInt64(min(max(seconds, 0.1), 3) / Double(stepCount) * 1_000_000_000)
+        let stepX = deltaX / CGFloat(stepCount)
+        let stepY = -deltaY / CGFloat(stepCount)
+        var currentLocation = startLocation
+        for _ in 0..<stepCount {
+            try? await Task.sleep(nanoseconds: stepDelay)
+            currentLocation = CGPoint(x: currentLocation.x + stepX, y: currentLocation.y + stepY)
+            let moveEvent = CGEvent(mouseEventSource: eventSource, mouseType: holdsButton ? dragType : .mouseMoved,
+                                    mouseCursorPosition: currentLocation, mouseButton: mouseButton)
+            // Mouse-locked games read the deltas, not the position.
+            moveEvent?.setIntegerValueField(.mouseEventDeltaX, value: Int64(stepX.rounded()))
+            moveEvent?.setIntegerValueField(.mouseEventDeltaY, value: Int64(stepY.rounded()))
+            moveEvent?.post(tap: .cghidEventTap)
+        }
+        if holdsButton {
+            CGEvent(mouseEventSource: eventSource, mouseType: upType, mouseCursorPosition: currentLocation, mouseButton: mouseButton)?
+                .post(tap: .cghidEventTap)
+        }
+    }
+
     /// Scrolls whatever is under the pointer, or under `appKitPoint` when
     /// given (the pointer goes back where it was afterwards).
     static func scroll(direction: DottieScreenAction.ScrollDirection, amount: Int, at appKitPoint: CGPoint? = nil) {

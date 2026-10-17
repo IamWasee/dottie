@@ -56,28 +56,34 @@ enum PointingRefiner {
         elementLabel: String?,
         userQuestion: String,
         roughPoint: CGPoint,
-        displayFrame: CGRect
+        displayFrame: CGRect,
+        referenceImageJPEG: Data? = nil
     ) async -> CGPoint? {
         let elementFrame = await refineFrame(
             elementLabel: elementLabel,
             userQuestion: userQuestion,
             roughPoint: roughPoint,
-            displayFrame: displayFrame
+            displayFrame: displayFrame,
+            referenceImageJPEG: referenceImageJPEG
         )
         return elementFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
 
     /// The element's whole frame in global AppKit coordinates, for marks
     /// that should hug it (a circle around it, a box), or nil if it
-    /// couldn't be found.
+    /// couldn't be found. With a reference picture (one the user saved in
+    /// Home → Conversation), vision looks for the thing in the picture.
     static func refineFrame(
         elementLabel: String?,
         userQuestion: String,
         roughPoint: CGPoint,
-        displayFrame: CGRect
+        displayFrame: CGRect,
+        referenceImageJPEG: Data? = nil
     ) async -> CGRect? {
         let refinementStart = Date()
-        let labelWords = significantWords(in: elementLabel ?? "")
+        // A saved picture means "the thing that looks like this": its name
+        // is the user's, not text on screen, so go straight to vision.
+        let labelWords = referenceImageJPEG == nil ? significantWords(in: elementLabel ?? "") : []
 
         if !labelWords.isEmpty, let accessibilityFrame = AccessibilityElementSearch.bestMatch(
             forLabelWords: labelWords,
@@ -93,7 +99,7 @@ enum PointingRefiner {
         // label, even in apps with no accessibility info, and no AI call.
         // A count like "7M" is the number under an icon, not the icon, so
         // that goes to vision.
-        if !isCount(elementLabel), let textFrame = await withTimeout(seconds: textSearchTimeoutSeconds, operation: {
+        if referenceImageJPEG == nil, !isCount(elementLabel), let textFrame = await withTimeout(seconds: textSearchTimeoutSeconds, operation: {
             await ScreenTextFinder.frameOfText(matching: elementLabel, near: roughPoint, displayFrame: displayFrame)
         }) {
             let snappedFrame = AccessibilitySnap.refinedFrame(textFrame)
@@ -108,7 +114,8 @@ enum PointingRefiner {
                 userQuestion: userQuestion,
                 roughPoint: roughPoint,
                 displayFrame: displayFrame,
-                deadline: deadline
+                deadline: deadline,
+                referenceImageJPEG: referenceImageJPEG
             )
         }
         guard let visionFrame else { return nil }
@@ -340,7 +347,8 @@ private enum VisionElementLocator {
         userQuestion: String,
         roughPoint: CGPoint,
         displayFrame: CGRect,
-        deadline: Date
+        deadline: Date,
+        referenceImageJPEG: Data? = nil
     ) async -> CGRect? {
         // One full-resolution capture: downscaled for the first look,
         // cropped for the zoomed one.
@@ -351,14 +359,19 @@ private enum VisionElementLocator {
         // Live's guess as a hint, in the same 0-1000 space as the answer.
         let hintX = Int(((roughPoint.x - displayFrame.minX) / displayFrame.width * 1000).rounded())
         let hintY = Int(((displayFrame.maxY - roughPoint.y) / displayFrame.height * 1000).rounded())
-        let overviewPrompt = """
+        let referenceNote = referenceImageJPEG == nil ? "" : """
+        The first image is a picture the user shared earlier of "\(elementLabel)"; find the thing that looks like it (same shape and colors) in the second image, the screen. It may be smaller, rotated or partly covered. The box is on the second image.
+
+        """
+        let overviewPrompt = referenceNote + """
         This is a screenshot of the user's screen. Find this on-screen element: "\(elementLabel)".
         The user asked: "\(userQuestion)".
         It may be an icon with no text: a heart or thumbs-up for like, a speech bubble for comments, a curved arrow for share, a bell for notifications, a gear for settings, a magnifying glass for search. If the name is a number, it's the icon that number sits under.
         Someone guessed it is near x=\(hintX), y=\(hintY) (0-1000 across the image), but the guess may be far off, so look at the whole screen.
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000, tight around the element itself. If it is not visible, reply {"box_2d": null}.
         """
-        let overviewFrame = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt).map { frame(of: $0, in: displayFrame) }
+        let overviewFrame = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt, referenceImageJPEG: referenceImageJPEG)
+            .map { frame(of: $0, in: displayFrame) }
 
         // Big, clear targets are done. Tiny ones, or a miss, get a closer look.
         if let overviewFrame, min(overviewFrame.width, overviewFrame.height) >= smallTargetSize {
@@ -379,13 +392,15 @@ private enum VisionElementLocator {
         ).integral
         guard let zoomedImage = nativeImage.cropping(to: cropRectInPixels),
               let zoomedJPEG = jpegData(zoomedImage) else { return overviewFrame }
-        let zoomPrompt = """
+        let zoomPrompt = referenceNote + """
         This is a zoomed-in part of the user's screen. Find this element in it: "\(elementLabel)".
         The user asked: "\(userQuestion)".
         It may be an icon with no text (a heart or thumbs-up for like, a speech bubble for comments, a bell for notifications).
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000 across this zoomed image, for the element itself. If it is not in this image, reply {"box_2d": null}.
         """
-        guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt) else { return overviewFrame }
+        guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt, referenceImageJPEG: referenceImageJPEG) else {
+            return overviewFrame
+        }
         print("🎯 Zoom pass refined the vision guess")
         return frame(of: zoomedBox, in: zoomRect)
     }
@@ -400,7 +415,7 @@ private enum VisionElementLocator {
         )
     }
 
-    private static func askForBox(jpegData: Data, prompt: String) async -> Box? {
+    private static func askForBox(jpegData: Data, prompt: String, referenceImageJPEG: Data? = nil) async -> Box? {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = PointingRefiner.refinementTimeoutSeconds + 2
@@ -410,10 +425,11 @@ private enum VisionElementLocator {
             "model": PointingRefiner.visionModel,
             "contents": [[
                 "role": "user",
-                "parts": [
-                    ["inlineData": ["mimeType": "image/jpeg", "data": jpegData.base64EncodedString()]],
-                    ["text": prompt]
-                ]
+                "parts": (referenceImageJPEG.map { [["inlineData": ["mimeType": "image/jpeg", "data": $0.base64EncodedString()]]] } ?? [])
+                    + [
+                        ["inlineData": ["mimeType": "image/jpeg", "data": jpegData.base64EncodedString()]],
+                        ["text": prompt]
+                    ]
             ]],
             "generationConfig": [
                 "maxOutputTokens": 2048,
