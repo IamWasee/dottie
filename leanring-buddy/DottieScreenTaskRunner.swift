@@ -120,12 +120,17 @@ final class DottieScreenTaskRunner {
                 consecutiveRequestFailures += 1
                 print("⚠️ Screen task step \(stepNumber) failed: \(error.localizedDescription)")
                 if consecutiveRequestFailures >= 3 {
-                    return .failed(reason: "Gemini's too busy to keep going right now.")
+                    let statusCode = (error as NSError).code
+                    let wasBusy = [429, 500, 503, 504].contains(statusCode) || (error as? URLError)?.code == .timedOut
+                    return .failed(reason: wasBusy
+                        ? "Gemini's too busy to keep going right now."
+                        : "Gemini stopped giving me steps (\(statusCode == -2 ? "empty answer" : "error \(statusCode)")), so I stopped.")
                 }
-                // Try the same step again with the same conversation.
+                // Try the same step again with the same conversation, a
+                // little later each time so a per-minute limit can reset.
                 contents.removeLast()
                 pendingFunctionResponseParts = functionResponsesForThisTurn
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(consecutiveRequestFailures) * 2_000_000_000)
                 continue
             }
             if Task.isCancelled { return .stopped }
@@ -431,6 +436,32 @@ final class DottieScreenTaskRunner {
     }
 
     private func requestNextActions(contents: [[String: Any]]) async throws -> [[String: Any]] {
+        do {
+            return try await requestNextActionsOnce(contents: contents)
+        } catch let error as NSError where error.code == 400 && error.localizedDescription.localizedCaseInsensitiveContains("signature") {
+            // The Worker answers with another model when the first is busy,
+            // and Gemini 3 can reject a function call signed by a different
+            // model. Google's documented placeholder skips that check.
+            print("⚠️ Screen task: retrying without thought signatures")
+            return try await requestNextActionsOnce(contents: Self.contentsWithPlaceholderSignatures(contents))
+        }
+    }
+
+    private static func contentsWithPlaceholderSignatures(_ contents: [[String: Any]]) -> [[String: Any]] {
+        contents.map { content in
+            guard let parts = content["parts"] as? [[String: Any]] else { return content }
+            var updatedContent = content
+            updatedContent["parts"] = parts.map { part in
+                guard part["thoughtSignature"] != nil else { return part }
+                var updatedPart = part
+                updatedPart["thoughtSignature"] = "skip_thought_signature_validator"
+                return updatedPart
+            }
+            return updatedContent
+        }
+    }
+
+    private func requestNextActionsOnce(contents: [[String: Any]]) async throws -> [[String: Any]] {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         // A step normally takes 2-8s. One stuck in Google's queue (seen at
@@ -458,16 +489,7 @@ final class DottieScreenTaskRunner {
         // /chat streams server-sent events; gather every part, keeping each
         // function call whole with its thought signature (Gemini needs it
         // back on the next turn).
-        var modelParts: [[String: Any]] = []
-        let responseText = String(decoding: responseData, as: UTF8.self)
-        for line in responseText.split(separator: "\n") where line.hasPrefix("data: ") {
-            guard let eventData = line.dropFirst(6).data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
-                  let candidates = event["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { continue }
-            modelParts.append(contentsOf: parts)
-        }
+        let modelParts = GeminiServerSentEvents.parts(from: responseData)
         guard !modelParts.isEmpty else {
             throw NSError(domain: "DottieScreenTaskRunner", code: -2, userInfo: [NSLocalizedDescriptionKey: "empty answer"])
         }

@@ -403,17 +403,7 @@ final class DottieGuide {
             return nil
         }
         // /chat streams server-sent events.
-        var answerText = ""
-        for line in String(decoding: responseData, as: UTF8.self).split(separator: "\n") where line.hasPrefix("data: ") {
-            guard let eventData = line.dropFirst(6).data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
-                  let candidates = event["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { continue }
-            for part in parts where (part["thought"] as? Bool) != true {
-                answerText += part["text"] as? String ?? ""
-            }
-        }
+        let answerText = GeminiServerSentEvents.text(from: responseData)
         return answerText
     }
 
