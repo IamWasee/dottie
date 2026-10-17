@@ -394,8 +394,7 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": Self.coreFunctionDeclarations + DottieScreenAction.functionDeclarations + DottieMacTools.functionDeclarations + DottieWorkTools.functionDeclarations + [DottieCursorPet.functionDeclaration]
-                    + DottieSmartHome.functionDeclarations]
+                ["functionDeclarations": Self.allFunctionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -583,6 +582,29 @@ final class GeminiLiveVoiceClient {
             description: "Open what a helper made for the user to see: a website in the browser, a single file in its app, or the helper's output folder."
         )
     ]
+
+    /// Every tool Live gets: its own, screen actions, Mac tools, work tools,
+
+    /// the cursor's shape and the smart home.
+
+    private static var allFunctionDeclarations: [[String: Any]] {
+
+        var declarations: [[String: Any]] = coreFunctionDeclarations
+
+        declarations += DottieScreenAction.functionDeclarations
+
+        declarations += DottieMacTools.functionDeclarations
+
+        declarations += DottieWorkTools.functionDeclarations
+
+        declarations.append(DottieCursorPet.functionDeclaration)
+
+        declarations += DottieSmartHome.functionDeclarations
+
+        return declarations
+
+    }
+
 
     private static var coreFunctionDeclarations: [[String: Any]] {
         [

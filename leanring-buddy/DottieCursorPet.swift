@@ -117,7 +117,14 @@ final class DottieCursorPet: ObservableObject {
 
     /// Shapes with a name, for "turn into a cat" and the picker in Settings.
     /// Anything else can be any emoji or SF Symbol.
-    static let library: [(name: String, emoji: String)] = [
+    struct Shape: Hashable {
+        let name: String
+        let emoji: String
+    }
+
+    static let library: [Shape] = libraryPairs.map { Shape(name: $0.0, emoji: $0.1) }
+
+    private static let libraryPairs: [(String, String)] = [
         ("cat", "🐈"), ("black cat", "🐈‍⬛"), ("kitten", "🐱"), ("dog", "🐕"), ("puppy", "🐶"), ("fox", "🦊"),
         ("rabbit", "🐇"), ("bunny", "🐰"), ("mouse", "🐁"), ("hamster", "🐹"), ("hedgehog", "🦔"), ("squirrel", "🐿️"),
         ("bear", "🐻"), ("panda", "🐼"), ("koala", "🐨"), ("monkey", "🐒"), ("tiger", "🐅"), ("lion", "🦁"),
@@ -152,7 +159,7 @@ final class DottieCursorPet: ObservableObject {
 
     static let functionName = "change_cursor"
 
-    static var functionDeclaration: [String: Any] {
+    nonisolated static var functionDeclaration: [String: Any] {
         [
             "name": functionName,
             "description": "Change how your cursor looks: turn into a cat, a ghost, a rocket, anything with an emoji or an SF Symbol, or back to the normal arrow. With roam on, the shape walks around the screen on its own like a pet (along windows, jumping between them, hanging from the search bar) instead of following the mouse. Use it when the user asks you to turn into something, change your look, or walk around; animals roam unless the user says otherwise.",
@@ -468,7 +475,9 @@ final class DottieCursorPet: ObservableObject {
             var childrenValue: CFTypeRef?
             if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenValue) == .success,
                let children = childrenValue as? [AXUIElement] {
-                queue.append(contentsOf: children.prefix(60).map { ($0, depth + 1) })
+                for child in children.prefix(60) {
+                    queue.append((element: child, depth: depth + 1))
+                }
             }
         }
         return nil

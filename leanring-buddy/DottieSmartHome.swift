@@ -207,18 +207,31 @@ final class DottieSmartHome: ObservableObject {
         foundDevices.append(device)
     }
 
+    /// Makes sure a lookup answers once, whichever callback comes first.
+    private final class ResolveOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var hasAnswered = false
+
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !hasAnswered else { return false }
+            hasAnswered = true
+            return true
+        }
+    }
+
     /// A Bonjour service's IPv4 address and port.
     private static func resolveAddress(of endpoint: NWEndpoint) async -> (String, UInt16)? {
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<(String, UInt16)?, Never>) in
             let parameters = NWParameters.tcp
             if let ipOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
                 ipOptions.version = .v4
             }
             let connection = NWConnection(to: endpoint, using: parameters)
-            var didResume = false
-            func finish(_ address: (String, UInt16)?) {
-                guard !didResume else { return }
-                didResume = true
+            let resolveOnce = ResolveOnce()
+            let finish: @Sendable ((String, UInt16)?) -> Void = { address in
+                guard resolveOnce.claim() else { return }
                 connection.cancel()
                 continuation.resume(returning: address)
             }
@@ -448,7 +461,11 @@ final class DottieSmartHome: ObservableObject {
                 ))
             }
         }
-        lights = newLights.sorted { ($0.isRoom ? 0 : 1, $0.name) < ($1.isRoom ? 0 : 1, $1.name) }
+        // Rooms first, then lights, each by name.
+        lights = newLights.sorted { first, second in
+            if first.isRoom != second.isRoom { return first.isRoom }
+            return first.name < second.name
+        }
     }
 
     private var hueBaseURL: String? {
@@ -525,7 +542,7 @@ final class DottieSmartHome: ObservableObject {
         guard let url = setup.homeAssistantURL, let token = secrets.homeAssistantToken,
               let (json, _) = await Self.requestJSON(method: "GET", url: "\(url)/api/states", token: token),
               let states = json as? [[String: Any]] else { return }
-        homeAssistantEntities = states.compactMap { entity in
+        homeAssistantEntities = states.compactMap { entity -> HomeAssistantEntity? in
             guard let entityID = entity["entity_id"] as? String,
                   Self.usefulDomains.contains(String(entityID.split(separator: ".").first ?? "")) else { return nil }
             let attributes = entity["attributes"] as? [String: Any]
@@ -535,7 +552,10 @@ final class DottieSmartHome: ObservableObject {
                 state: entity["state"] as? String ?? "unknown"
             )
         }
-        .sorted { ($0.domain, $0.name) < ($1.domain, $1.name) }
+        .sorted { first, second in
+            if first.domain != second.domain { return first.domain < second.domain }
+            return first.name < second.name
+        }
     }
 
     func callHomeAssistant(domain: String, service: String, entityID: String, extra: [String: Any] = [:]) async -> Bool {
@@ -561,7 +581,7 @@ final class DottieSmartHome: ObservableObject {
 
     static let functionNames: Set<String> = ["home_devices", "control_device", "tv_task"]
 
-    static var functionDeclarations: [[String: Any]] {
+    nonisolated static var functionDeclarations: [[String: Any]] {
         [
             [
                 "name": "home_devices",
@@ -621,9 +641,12 @@ final class DottieSmartHome: ObservableObject {
             }.joined(separator: "\n"))
         }
         if !lights.isEmpty {
-            sections.append("Hue lights:\n" + lights.map { light in
-                "- \(light.name)\(light.isRoom ? " (room)" : ""): \(light.isOn ? "on" : "off")\(light.isOn ? light.brightnessPercent.map { " \($0)%" } ?? "" : "")"
-            }.joined(separator: "\n"))
+            let lightLines = lights.map { light -> String in
+                var line = "- \(light.name)" + (light.isRoom ? " (room)" : "") + ": " + (light.isOn ? "on" : "off")
+                if light.isOn, let brightness = light.brightnessPercent { line += " \(brightness)%" }
+                return line
+            }
+            sections.append("Hue lights:\n" + lightLines.joined(separator: "\n"))
         }
         if !homeAssistantEntities.isEmpty {
             sections.append("Home Assistant:\n" + homeAssistantEntities.prefix(80).map { "- \($0.name) (\($0.domain)): \($0.state)" }.joined(separator: "\n"))

@@ -214,7 +214,7 @@ enum DottieTV {
         let focusedPackage = focusLine.flatMap { line -> String? in
             line.split(separator: " ").first { $0.contains("/") }.map { String($0.split(separator: "/").first ?? "") }
         }
-        let appName = focusedPackage.flatMap { package in knownAndroidTVApps.first { $0.value == package }?.key } ?? focusedPackage
+        let appName = focusedPackage.flatMap { packageName in knownAndroidTVApps.first { $0.value == packageName }?.key } ?? focusedPackage
         return (isAwake ? "on" : "asleep") + (appName.map { ", showing \($0)" } ?? "")
     }
 
@@ -283,7 +283,7 @@ enum DottieTV {
         guard let (data, _) = await rokuRequest(host: host, path: "query/apps", method: "GET") else { return [:] }
         let xml = String(decoding: data, as: UTF8.self)
         var apps: [String: String] = [:]
-        let pattern = try? NSRegularExpression(pattern: #"<app id="([^"]+)"[^>]*>([^<]+)</app>"#)
+        let pattern = try? NSRegularExpression(pattern: "<app id=\"([^\"]+)\"[^>]*>([^<]+)</app>")
         pattern?.enumerateMatches(in: xml, range: NSRange(xml.startIndex..., in: xml)) { match, _, _ in
             guard let match, let idRange = Range(match.range(at: 1), in: xml), let nameRange = Range(match.range(at: 2), in: xml) else { return }
             apps[String(xml[nameRange]).lowercased()] = String(xml[idRange])

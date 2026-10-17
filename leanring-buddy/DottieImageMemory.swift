@@ -163,26 +163,30 @@ final class DottieImageMemory: ObservableObject {
     /// pass them.
     func items(mentionedIn text: String) -> [Item] {
         let requestText = " \(Self.normalized(text)) "
-        return items.filter { item in
+        let mentionedItems = items.filter { item in
             let itemName = Self.normalized(item.name)
             return !itemName.isEmpty && requestText.contains(" \(itemName) ")
-        }.suffix(4)
+        }
+        return Array(mentionedItems.suffix(4))
     }
 
     /// find_pictures: pictures sharing words with the query in their name
     /// or description (where they're from, what they look like).
     func search(_ query: String) -> [Item] {
-        let queryWords = Set(Self.normalized(query).split(separator: " ").filter { $0.count > 2 })
+        let queryWords: Set<String> = Set(Self.normalized(query).split(separator: " ").map(String.init).filter { $0.count > 2 })
         guard !queryWords.isEmpty else { return Array(items.suffix(10).reversed()) }
-        return items
-            .map { item -> (Item, Int) in
-                let itemWords = Set(Self.normalized(item.name + " " + item.description).split(separator: " "))
-                return (item, itemWords.intersection(queryWords).count)
-            }
-            .filter { $0.1 > 0 }
-            .sorted { $0.1 > $1.1 || ($0.1 == $1.1 && $0.0.createdAt > $1.0.createdAt) }
-            .prefix(10)
-            .map(\.0)
+        var scoredItems: [(item: Item, score: Int)] = []
+        for item in items {
+            let itemText = Self.normalized(item.name + " " + item.description)
+            let itemWords: Set<String> = Set(itemText.split(separator: " ").map(String.init))
+            let score = itemWords.intersection(queryWords).count
+            if score > 0 { scoredItems.append((item, score)) }
+        }
+        scoredItems.sort { first, second in
+            if first.score != second.score { return first.score > second.score }
+            return first.item.createdAt > second.item.createdAt
+        }
+        return scoredItems.prefix(10).map { $0.item }
     }
 
     /// One line per picture, newest first, for voice Dottie's prompt.
