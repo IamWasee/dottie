@@ -86,6 +86,13 @@ final class DottieScreenTaskRunner {
     /// Sent at the start of every request, so the pictures are never
     /// dropped with old screenshots.
     private var referenceImageParts: [[String: Any]] = []
+    /// Game jobs: where things are, built up while playing (DottieGameMap).
+    private var gameMap: DottieGameMap?
+    /// Camera directions of the last look_around's views, for landmarks
+    /// noted in them.
+    private var lookAroundHeadings: [Double] = []
+    /// Extra pictures for the next turn: zoomed crops, look-around views.
+    private var pendingExtraImageParts: [[String: Any]] = []
 
     var isRunning: Bool { runTask != nil }
 
@@ -101,6 +108,9 @@ final class DottieScreenTaskRunner {
         walkSpeedPointsPerSecond = 220
         lastWalk = nil
         lastRequestStartedAt = nil
+        pendingExtraImageParts = []
+        lookAroundHeadings = []
+        gameMap = isGameMode ? DottieGameMap(gameName: Self.currentGameName()) : nil
         referenceImageParts = referenceImages.enumerated().flatMap { index, referenceImage -> [[String: Any]] in
             [
                 ["text": "Reference picture \(index + 1), \"\(referenceImage.name)\", which the user shared earlier"
@@ -166,11 +176,16 @@ final class DottieScreenTaskRunner {
             }
             previousScreenFingerprint = screenFingerprint
             didActSinceLastLook = false
+            if let mapSummary = gameMap?.summary(currentStep: stepNumber), !mapSummary.isEmpty {
+                screenNote += "\n" + mapSummary
+            }
             // Every function call needs its response in the next user turn,
             // so a failed request puts these back for the retry.
             let functionResponsesForThisTurn = pendingFunctionResponseParts
             var userParts = functionResponsesForThisTurn
             userParts.append(["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]])
+            userParts.append(contentsOf: pendingExtraImageParts)
+            pendingExtraImageParts = []
             userParts.append(["text": contents.isEmpty
                 ? "Task from the user: \(taskText)\n\(lessonsText)\n\(screenNote)\nThis is the screen now. Take the first step."
                 : "\(screenNote)\nThis is the screen now. First check it against the task: which steps are already done? Then take the first step that isn't done yet."])
@@ -408,9 +423,11 @@ final class DottieScreenTaskRunner {
             guard let keys = text("keys") else { return "error: no keys" }
             let seconds = (arguments["seconds"] as? NSNumber)?.doubleValue ?? 1
             onProgress?(stepNumber, "holding \(keys)")
-            return await DottieScreenActionPerformer.hold(keyCombination: keys, seconds: seconds)
-                ? "held \(keys) for \(String(format: "%.1f", min(max(seconds, 0.05), 5)))s"
-                : "unknown key in \(keys); use names like w, a, s, d, space, shift, up, e"
+            guard await DottieScreenActionPerformer.hold(keyCombination: keys, seconds: seconds) else {
+                return "unknown key in \(keys); use names like w, a, s, d, space, shift, up, e"
+            }
+            gameMap?.noteMovement(keys: keys, seconds: min(max(seconds, 0.05), 5))
+            return "held \(keys) for \(String(format: "%.1f", min(max(seconds, 0.05), 5)))s"
 
         case "walk_to":
             return await walk(arguments: arguments, screen: screen, stepNumber: stepNumber)
@@ -422,13 +439,23 @@ final class DottieScreenTaskRunner {
             onProgress?(stepNumber, "turning the camera")
             // dx and dy are 0-1000 across the screenshot, like boxes.
             let startPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 500)
+            let deltaXPoints = deltaX / 1000 * screen.displayFrame.width
             await DottieScreenActionPerformer.moveMouse(
                 from: startPoint,
-                deltaX: deltaX / 1000 * screen.displayFrame.width,
+                deltaX: deltaXPoints,
                 deltaY: -deltaY / 1000 * screen.displayFrame.height,
                 button: button,
                 seconds: (arguments["seconds"] as? NSNumber)?.doubleValue ?? 0.4
             )
+            if let gameMap, button != "left", deltaXPoints != 0 {
+                // Measure this game's camera speed on small turns, where
+                // the before and after views still overlap.
+                if abs(deltaXPoints) < screen.displayFrame.width * 0.3,
+                   let afterImage = await DottieDisplayCapture.captureImage(displayFrame: screen.displayFrame, maximumDimension: 640) {
+                    gameMap.calibrate(before: screen.image, after: afterImage, turnedMousePoints: deltaXPoints)
+                }
+                gameMap.noteCameraTurn(mousePoints: deltaXPoints)
+            }
             return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
 
         case "wait":
@@ -436,6 +463,98 @@ final class DottieScreenTaskRunner {
             onProgress?(stepNumber, seconds > 10 ? "waiting \(Int(seconds)) seconds" : "waiting for it to load")
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return "waited \(Int(seconds.rounded())) seconds"
+
+        case "zoom":
+            guard let box = arguments["box_2d"] as? [Any] else { return "error: zoom needs box_2d" }
+            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+            guard numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1],
+                  let sharpImage = await DottieDisplayCapture.captureImage(displayFrame: screen.displayFrame, maximumDimension: 2880) else {
+                return "error: box_2d must be [ymin, xmin, ymax, xmax]"
+            }
+            let imageWidth = Double(sharpImage.width), imageHeight = Double(sharpImage.height)
+            let cropRect = CGRect(
+                x: numbers[1] / 1000 * imageWidth, y: numbers[0] / 1000 * imageHeight,
+                width: (numbers[3] - numbers[1]) / 1000 * imageWidth, height: (numbers[2] - numbers[0]) / 1000 * imageHeight
+            ).integral
+            guard let croppedImage = sharpImage.cropping(to: cropRect),
+                  let croppedJPEG = NSBitmapImageRep(cgImage: croppedImage).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
+                return "couldn't zoom there."
+            }
+            onProgress?(stepNumber, "taking a closer look")
+            pendingExtraImageParts.append(["text": "Zoomed-in view of box \(numbers.map { Int($0) }) on the screenshot before this one (sharper; boxes for actions still go on the full screenshot):"])
+            pendingExtraImageParts.append(["inlineData": ["mimeType": "image/jpeg", "data": croppedJPEG.base64EncodedString()]])
+            return "zoomed in; the close-up comes with the next screenshot."
+
+        case "note_landmarks":
+            guard let gameMap else { return "landmarks are for game mode." }
+            let rawLandmarks = (arguments["landmarks"] as? [Any]) ?? []
+            var notedNames: [String] = []
+            for case let rawLandmark as [String: Any] in rawLandmarks {
+                guard let name = (rawLandmark["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+                      let screenX = (rawLandmark["screen_x"] as? NSNumber)?.doubleValue else { continue }
+                let view = (rawLandmark["view"] as? NSNumber)?.intValue ?? 0
+                let heading = view >= 1 && view <= lookAroundHeadings.count ? lookAroundHeadings[view - 1] : nil
+                gameMap.noteLandmark(
+                    name: name,
+                    description: (rawLandmark["description"] as? String) ?? "",
+                    screenX: screenX,
+                    distanceSeconds: (rawLandmark["distance_seconds"] as? NSNumber)?.doubleValue ?? 5,
+                    step: stepNumber,
+                    cameraHeadingDegrees: heading
+                )
+                notedNames.append(name)
+            }
+            return notedNames.isEmpty ? "nothing noted: each landmark needs a name and screen_x." : "on the map: \(notedNames.joined(separator: ", "))."
+
+        case "walk_to_landmark":
+            guard let gameMap, let name = text("name") else { return "error: walk_to_landmark needs a landmark name in game mode." }
+            guard let route = gameMap.route(toLandmarkNamed: name) else {
+                return "\(name) isn't on the map yet. find it (look_around), note it with note_landmarks, then walk to it."
+            }
+            onProgress?(stepNumber, "heading to \(route.landmark.name)")
+            let displayFrame = screen.displayFrame
+            if abs(route.turnDegrees) > 8 {
+                await DottieScreenActionPerformer.moveMouse(
+                    from: CGPoint(x: displayFrame.midX, y: displayFrame.midY),
+                    deltaX: route.turnMousePoints, deltaY: 0, button: text("button")?.lowercased() ?? "right", seconds: 0.45
+                )
+                gameMap.noteCameraTurn(mousePoints: route.turnMousePoints)
+            }
+            // Stop a little short; the last bit is done by looking.
+            var secondsLeft = min(max(route.walkSeconds - 0.6, 0), 12)
+            while secondsLeft > 0.1 {
+                if Task.isCancelled { return "stopped." }
+                let burst = min(secondsLeft, 4)
+                _ = await DottieScreenActionPerformer.hold(keyCombination: "w", seconds: burst)
+                gameMap.noteMovement(keys: "w", seconds: burst)
+                secondsLeft -= burst
+            }
+            return "turned \(Int(route.turnDegrees))° and walked about \(Int(route.walkSeconds.rounded()))s toward \(route.landmark.name). look at the screen: if it's close, finish with walk_to; if it's not where expected, note it again where you see it."
+
+        case "look_around":
+            guard let gameMap else { return "look_around is for game mode." }
+            let button = text("button")?.lowercased() ?? "right"
+            let quarterTurnPoints = CGFloat(90 / max(gameMap.degreesPerMousePoint, 0.01))
+            let displayFrame = screen.displayFrame
+            lookAroundHeadings = []
+            onProgress?(stepNumber, "looking around")
+            for viewNumber in 1...4 {
+                if Task.isCancelled { return "stopped." }
+                await DottieScreenActionPerformer.moveMouse(
+                    from: CGPoint(x: displayFrame.midX, y: displayFrame.midY),
+                    deltaX: quarterTurnPoints, deltaY: 0, button: button, seconds: 0.35
+                )
+                gameMap.noteCameraTurn(mousePoints: quarterTurnPoints)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard viewNumber < 4 else { break }   // the 4th turn is back to the start
+                lookAroundHeadings.append(gameMap.headingDegrees)
+                if let viewImage = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: 768),
+                   let viewJPEG = NSBitmapImageRep(cgImage: viewImage).representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                    pendingExtraImageParts.append(["text": "Look-around view \(viewNumber): the camera turned \(viewNumber * 90)° right of where it started."])
+                    pendingExtraImageParts.append(["inlineData": ["mimeType": "image/jpeg", "data": viewJPEG.base64EncodedString()]])
+                }
+            }
+            return "turned all the way around. views 1-3 (90°, 180°, 270° right) come with the next screenshot, which faces the start direction again. note everything useful in all of them with note_landmarks (view 1-3 for those, 0 for the main screenshot), then plan your route from the map."
 
         case "save_picture":
             let name = text("name") ?? "picture"
@@ -494,10 +613,15 @@ final class DottieScreenTaskRunner {
             let displayFrame = screen.displayFrame
             let offset = (target.x - displayFrame.midX) / displayFrame.width
             if abs(offset) > 0.08 {
+                // With a measured camera speed, turn exactly; else nudge.
+                let turnPoints = gameMap.map { map -> CGFloat in
+                    CGFloat(Double(offset) * DottieGameMap.horizontalFieldOfViewDegrees / max(map.degreesPerMousePoint, 0.01))
+                } ?? offset * displayFrame.width * 0.6
                 await DottieScreenActionPerformer.moveMouse(
                     from: CGPoint(x: displayFrame.midX, y: displayFrame.midY),
-                    deltaX: offset * displayFrame.width * 0.6, deltaY: 0, button: "right", seconds: 0.35
+                    deltaX: turnPoints, deltaY: 0, button: "right", seconds: 0.35
                 )
+                gameMap?.noteCameraTurn(mousePoints: turnPoints)
                 return "turned \(offset > 0 ? "right" : "left") toward it; look again and walk_to once it's ahead"
             }
             let heightShare = targetFrame.height / displayFrame.height
@@ -506,6 +630,7 @@ final class DottieScreenTaskRunner {
             }
             let seconds = min(2.0, max(0.4, 0.12 / max(heightShare, 0.01)))
             _ = await DottieScreenActionPerformer.hold(keyCombination: "w", seconds: seconds)
+            gameMap?.noteMovement(keys: "w", seconds: seconds)
             return "walked forward for \(String(format: "%.1f", seconds))s; look again"
         }
 
@@ -596,6 +721,22 @@ final class DottieScreenTaskRunner {
     }
 
     /// "Frontmost app: Opera GX, window: Kaggle - Competitions."
+    /// Which game a job is in: the app's name and its window's title.
+    private static func currentGameName() -> String {
+        let applicationName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "game"
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return applicationName }
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        var focusedWindowValue: CFTypeRef?
+        var titleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
+              let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID(),
+              AXUIElementCopyAttributeValue(focusedWindowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+              let windowTitle = titleValue as? String, !windowTitle.isEmpty, windowTitle != applicationName else {
+            return applicationName
+        }
+        return "\(applicationName) \(windowTitle)"
+    }
+
     private static func describeFrontmostWindow() -> String {
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return "" }
         var description = "Frontmost app: \(frontmostApplication.localizedName ?? "unknown")"
@@ -643,6 +784,7 @@ final class DottieScreenTaskRunner {
     - Turn the camera with move_mouse: in Roblox and most third-person games hold the right button (button "right"); in first-person games where the mouse turns the view, use button "none". dx 100 is about a tenth of the screen; positive dx turns right, positive dy looks down.
     - Click on-screen buttons, menus and items with click. If keys seem to do nothing, click the game once to focus it.
     - Reference pictures show the exact items the user means: match them by shape and color, not just by name.
+    - Map memory (3D games with a camera behind the character): at the start, call look_around once and note_landmarks for everything useful in all views. Dottie tracks every move and turn, so each step tells you where your landmarks are from where you stand. To go somewhere you've noted, use walk_to_landmark instead of turning and looking again; when it's close and visible, finish with walk_to. Note new things as you see them, and note a thing again when you see it somewhere other than the map says. Use zoom for small or faraway things.
     - One or two actions per turn. If nothing changes after several tries, try another way (jump, go around, turn), and finish saying what blocked you if you can't get there.
     - Never spend real money or in-game currency (Robux, gems), trade, or chat with other players unless the task says exactly that.
     """
@@ -685,6 +827,41 @@ final class DottieScreenTaskRunner {
                         "description": "Where to start the move; leave out for the middle of the screen."
                     ]
                 ], "required": ["dx", "dy", "button"]]
+            ],
+            [
+                "name": "note_landmarks",
+                "description": "Put things you see on your map of the game (shops, machines, doors, items, paths, players' bases), so you know where they are after turning away. Note anything you may need to go back to, from the main screenshot or a look-around view.",
+                "parameters": ["type": "object", "properties": [
+                    "landmarks": [
+                        "type": "array",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "name": ["type": "string", "description": "Short name, like 'golem machine'."],
+                                "description": ["type": "string", "description": "How it looks, to spot it again."],
+                                "screen_x": ["type": "number", "description": "Where its middle is across that view, 0 (left) to 1000 (right)."],
+                                "distance_seconds": ["type": "number", "description": "Roughly how many seconds of walking to reach it."],
+                                "view": ["type": "integer", "description": "0 for the main screenshot, 1-3 for a look-around view."]
+                            ],
+                            "required": ["name", "screen_x", "distance_seconds"]
+                        ]
+                    ]
+                ], "required": ["landmarks"]]
+            ],
+            [
+                "name": "walk_to_landmark",
+                "description": "Turn toward a landmark on your map and walk there in one go (behind-camera games). Then look and finish the last bit with walk_to.",
+                "parameters": ["type": "object", "properties": [
+                    "name": ["type": "string"],
+                    "button": ["type": "string", "enum": ["right", "none"], "description": "Mouse button for turning the camera: right for Roblox, none for first-person."]
+                ], "required": ["name"]]
+            ],
+            [
+                "name": "look_around",
+                "description": "Turn the camera all the way around in four quarter turns and get a picture of each direction, to see the whole area at once and fill in your map. Do it once at the start of a 3D game, or when you're lost.",
+                "parameters": ["type": "object", "properties": [
+                    "button": ["type": "string", "enum": ["right", "none"], "description": "right for Roblox and most third-person games, none for first-person."]
+                ]]
             ]
         ]
     }
@@ -747,6 +924,11 @@ final class DottieScreenTaskRunner {
                 "name": "wait",
                 "description": "Wait for something to load (a few seconds), or up to 120 seconds when you know how long something takes.",
                 "parameters": ["type": "object", "properties": ["seconds": ["type": "number"]], "required": ["seconds"]]
+            ],
+            [
+                "name": "zoom",
+                "description": "Take a closer, sharper look at part of the screen (small text, icons, items far away). The close-up comes with the next screenshot.",
+                "parameters": ["type": "object", "properties": ["box_2d": boxProperty], "required": ["box_2d"]]
             ],
             [
                 "name": "save_picture",
