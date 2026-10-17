@@ -424,7 +424,6 @@ private struct HomeSettingsView: View {
     @ObservedObject var conversationStore: ConversationStore
     @ObservedObject var shortcutMonitor: GlobalPushToTalkShortcutMonitor
 
-    private let availableVoiceNames = ["Kore", "Puck", "Aoede", "Charon", "Fenrir", "Leda", "Orus", "Zephyr"]
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
     private let isCuaDriverBundled = ClickyComputerUse.isCuaDriverBundled
     // Same key ClickyComputerUse.isAlwaysAllowed reads.
@@ -453,18 +452,7 @@ private struct HomeSettingsView: View {
                     .foregroundColor(DS.Colors.textPrimary)
 
                 settingsGroup(title: "Voice") {
-                    settingsRow(label: "Dottie's voice") {
-                        Picker("", selection: Binding(
-                            get: { companionManager.selectedVoiceName },
-                            set: { companionManager.setSelectedVoiceName($0) }
-                        )) {
-                            ForEach(availableVoiceNames, id: \.self) { voiceName in
-                                Text(voiceName).tag(voiceName)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 140)
-                    }
+                    HomeVoiceChooser(companionManager: companionManager)
                     settingsRow(label: "Personality") {
                         Picker("", selection: Binding(
                             get: { companionManager.selectedPersonality },
@@ -773,6 +761,95 @@ private struct HomeSettingsView: View {
             .font(.system(size: 11))
             .foregroundColor(DS.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Voice
+
+/// Settings → Voice: every voice with a play button, so the user can hear
+/// each one before choosing. Picking a voice plays it too.
+private struct HomeVoiceChooser: View {
+    @ObservedObject var companionManager: CompanionManager
+    @ObservedObject private var voicePreview = DottieVoicePreview.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Dottie's voice")
+                .font(.system(size: 13))
+                .foregroundColor(DS.Colors.textPrimary)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(DottieVoicePreview.voices) { voice in
+                    voiceTile(voice)
+                }
+            }
+            if let problem = voicePreview.problem {
+                Text(problem)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onDisappear { voicePreview.stop() }
+    }
+
+    private func voiceTile(_ voice: DottieVoicePreview.Voice) -> some View {
+        let isSelected = companionManager.selectedVoiceName == voice.name
+        return HStack(spacing: 8) {
+            Button(action: {
+                companionManager.setSelectedVoiceName(voice.name)
+                voicePreview.play(voice.name)
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(voice.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(DS.Colors.textPrimary)
+                        Text(voice.sound)
+                            .font(.system(size: 10))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            previewButton(for: voice.name)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.1) : DS.Colors.surface2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? DS.Colors.textTertiary : DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
+    }
+
+    @ViewBuilder
+    private func previewButton(for voiceName: String) -> some View {
+        Button(action: { voicePreview.toggle(voiceName) }) {
+            Group {
+                if voicePreview.loadingVoiceName == voiceName {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: voicePreview.playingVoiceName == voiceName ? "stop.fill" : "play.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textPrimary)
+                }
+            }
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help("Hear \(voiceName)")
     }
 }
 

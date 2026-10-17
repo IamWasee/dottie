@@ -240,7 +240,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isOverlayVisible: Bool = false
 
     /// The Gemini Live voice the companion speaks with. Persisted to
-    /// UserDefaults. Takes effect on the next Live connection.
+    /// UserDefaults. Takes effect from her next answer.
     @Published var selectedVoiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore"
 
     /// How Dottie talks (Settings → Voice). Takes effect on the next Live
@@ -251,19 +251,15 @@ final class CompanionManager: ObservableObject {
         selectedPersonality = personality
         UserDefaults.standard.set(personality.rawValue, forKey: DottiePersonality.defaultsKey)
         liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        if !liveVoiceClient.isModelTurnInProgress {
-            liveVoiceClient.disconnect()
-        }
+        liveVoiceClient.startFreshSessionSoon()
     }
 
     func setSelectedVoiceName(_ voiceName: String) {
         selectedVoiceName = voiceName
         UserDefaults.standard.set(voiceName, forKey: "selectedGeminiLiveVoice")
+        // Starts a fresh session for her next answer (or right after the
+        // one she's giving), so the new voice is heard straight away.
         liveVoiceClient.voiceName = voiceName
-        // Reconnect with the new voice on the next press, unless mid-answer.
-        if !liveVoiceClient.isModelTurnInProgress {
-            liveVoiceClient.disconnect()
-        }
     }
 
     /// User preference for whether the Clicky cursor should be shown.
