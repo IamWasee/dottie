@@ -451,6 +451,14 @@ private struct HomeSettingsView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
 
+                settingsGroup(title: "Permissions") {
+                    HomePermissionsSettings()
+                }
+
+                settingsGroup(title: "Updates") {
+                    HomeUpdateSettings()
+                }
+
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
                     settingsRow(label: "Personality") {

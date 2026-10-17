@@ -50,7 +50,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             menuBarPanelManager?.showPanelOnLaunch()
         }
         registerAsLoginItemIfNeeded()
-        // startSparkleUpdater()
+        // Updates come from GitHub releases (Settings → Updates).
+        DottieUpdater.shared.startPeriodicChecks()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
