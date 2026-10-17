@@ -86,8 +86,15 @@ final class DottiePhoneFiles {
             guard !files.isEmpty else { return "error: pick files by their number from the search" }
             var results: [String] = []
             for file in files {
-                let problem = await sendFileToPhone?(file, file.lastPathComponent) ?? "the phone isn't connected."
-                results.append(problem.map { "\(file.lastPathComponent): \($0)" } ?? "\(file.lastPathComponent): sent")
+                guard let sendFileToPhone else {
+                    results.append("\(file.lastPathComponent): the phone isn't connected.")
+                    continue
+                }
+                if let problem = await sendFileToPhone(file, file.lastPathComponent) {
+                    results.append("\(file.lastPathComponent): \(problem)")
+                } else {
+                    results.append("\(file.lastPathComponent): sent")
+                }
             }
             return results.joined(separator: "\n")
         case "save_to_google_drive":
