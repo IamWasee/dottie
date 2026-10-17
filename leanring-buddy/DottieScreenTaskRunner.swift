@@ -184,6 +184,18 @@ final class DottieScreenTaskRunner {
             guard ymax >= ymin, xmax >= xmin else { return nil }
             return screen.globalPoint(normalizedX: (xmin + xmax) / 2, normalizedY: (ymin + ymax) / 2)
         }
+        /// The box's middle, moved to the middle of the real control under
+        /// it when there is one, so a box a few pixels off still hits.
+        func clickPoint() -> CGPoint? {
+            guard let box = arguments["box_2d"] as? [Any] else { return nil }
+            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+            guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
+            let topLeft = screen.globalPoint(normalizedX: numbers[1], normalizedY: numbers[0])
+            let bottomRight = screen.globalPoint(normalizedX: numbers[3], normalizedY: numbers[2])
+            let boxFrame = CGRect(x: topLeft.x, y: bottomRight.y, width: bottomRight.x - topLeft.x, height: topLeft.y - bottomRight.y)
+            let snappedFrame = AccessibilitySnap.refinedFrame(boxFrame)
+            return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
+        }
 
         switch functionName {
         case "open_app":
@@ -210,7 +222,7 @@ final class DottieScreenTaskRunner {
             return didOpen ? "opened \(address)" : "couldn't open \(address)"
 
         case "click":
-            guard let point = boxCenter() else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
+            guard let point = clickPoint() else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
             let label = text("label") ?? "it"
             onProgress?(stepNumber, "clicking \(label)")
             await onWillClick?(point, screen.displayFrame)
@@ -220,7 +232,7 @@ final class DottieScreenTaskRunner {
 
         case "type_text":
             guard let typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
-            if let point = boxCenter() {
+            if let point = clickPoint() {
                 await onWillClick?(point, screen.displayFrame)
                 if Task.isCancelled { return "stopped" }
                 DottieScreenActionPerformer.click(at: point, clickCount: 1, isRightClick: false)

@@ -12,9 +12,16 @@
 //       "Sign in" or "Downloads", and use its exact frame. Instant and exact
 //       for native apps, browser toolbars, and web pages that expose their
 //       accessibility tree.
-//    2. Vision: otherwise, a fresh, sharper screenshot of that display goes
+//    2. On-screen text: Apple's on-device text recognition looks for the
+//       label's words on the display (ScreenTextFinder). Exact, free and
+//       quick, and works in apps that draw their own UI.
+//    3. Vision: otherwise, a fresh, sharper screenshot of that display goes
 //       to Gemini Flash, which is trained to return bounding boxes, with the
-//       label and Live's guess as a hint.
+//       label and Live's guess as a hint. Tiny targets (toolbar icons) get a
+//       second, zoomed-in look when there's time.
+//
+//  Whatever is found is then snapped to the real control under it
+//  (AccessibilitySnap), so the cursor lands in the middle of the button.
 //
 //  If neither finds it, the cursor goes to Live's guess as before.
 //
@@ -30,6 +37,8 @@ enum PointingRefiner {
     /// The quickest model that still finds boxes well: about 1-1.5s on a
     /// Mac runner, against 2.5-8s for gemini-3.6-flash (Oct 2026).
     static let visionModel = "gemini-3.5-flash-lite"
+    /// Text recognition normally takes well under a second.
+    static let textSearchTimeoutSeconds: TimeInterval = 1.2
 
     /// Chromium and Electron apps only build their web content's
     /// accessibility tree when asked, and the first ask can take a moment,
@@ -66,6 +75,7 @@ enum PointingRefiner {
         roughPoint: CGPoint,
         displayFrame: CGRect
     ) async -> CGRect? {
+        let refinementStart = Date()
         let labelWords = significantWords(in: elementLabel ?? "")
 
         if !labelWords.isEmpty, let accessibilityFrame = AccessibilityElementSearch.bestMatch(
@@ -77,18 +87,31 @@ enum PointingRefiner {
         }
 
         guard let elementLabel, !elementLabel.isEmpty else { return nil }
-        let visionFrame = await withTimeout(seconds: refinementTimeoutSeconds) {
+
+        // On-device text recognition: exact for anything with a visible
+        // label, even in apps with no accessibility info, and no AI call.
+        if let textFrame = await withTimeout(seconds: textSearchTimeoutSeconds, operation: {
+            await ScreenTextFinder.frameOfText(matching: elementLabel, near: roughPoint, displayFrame: displayFrame)
+        }) {
+            let snappedFrame = AccessibilitySnap.refinedFrame(textFrame)
+            print("🎯 Pointing refined by on-screen text: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
+            return snappedFrame
+        }
+
+        let deadline = refinementStart.addingTimeInterval(refinementTimeoutSeconds)
+        let visionFrame = await withTimeout(seconds: max(0.5, deadline.timeIntervalSinceNow)) {
             await VisionElementLocator.locate(
                 elementLabel: elementLabel,
                 userQuestion: userQuestion,
                 roughPoint: roughPoint,
-                displayFrame: displayFrame
+                displayFrame: displayFrame,
+                deadline: deadline
             )
         }
-        if let visionFrame {
-            print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(visionFrame.midX)),\(Int(visionFrame.midY))")
-        }
-        return visionFrame
+        guard let visionFrame else { return nil }
+        let snappedFrame = AccessibilitySnap.refinedFrame(visionFrame)
+        print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
+        return snappedFrame
     }
 
     /// Lowercased words that name the thing, without filler like "the" or
@@ -287,28 +310,79 @@ private enum AccessibilityElementSearch {
 @MainActor
 private enum VisionElementLocator {
     private static let maximumScreenshotDimension = 1920
+    /// Targets smaller than this (in points) get a zoomed-in second look.
+    private static let smallTargetSize: CGFloat = 40
+    /// The zoomed-in square, in points.
+    private static let zoomSide: CGFloat = 320
+    /// A zoom pass only starts when at least this much time is left.
+    private static let minimumSecondsForZoom: TimeInterval = 2
+
+    private typealias Box = (ymin: Double, xmin: Double, ymax: Double, xmax: Double)
 
     static func locate(
         elementLabel: String,
         userQuestion: String,
         roughPoint: CGPoint,
-        displayFrame: CGRect
+        displayFrame: CGRect,
+        deadline: Date
     ) async -> CGRect? {
-        guard let screenshot = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: maximumScreenshotDimension),
-              let jpegData = NSBitmapImageRep(cgImage: screenshot)
-                .representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else { return nil }
+        // One full-resolution capture: downscaled for the first look,
+        // cropped for the zoomed one.
+        guard let nativeImage = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: 8000),
+              let overviewImage = resized(nativeImage, maximumDimension: maximumScreenshotDimension),
+              let overviewJPEG = jpegData(overviewImage) else { return nil }
 
         // Live's guess as a hint, in the same 0-1000 space as the answer.
         let hintX = Int(((roughPoint.x - displayFrame.minX) / displayFrame.width * 1000).rounded())
         let hintY = Int(((displayFrame.maxY - roughPoint.y) / displayFrame.height * 1000).rounded())
-
-        let prompt = """
+        let overviewPrompt = """
         This is a screenshot of the user's screen. Find this on-screen element: "\(elementLabel)".
         The user asked: "\(userQuestion)".
         Someone guessed it is near x=\(hintX), y=\(hintY) (0-1000 across the image), but the guess may be off.
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000, for the element itself. If it is not visible, reply {"box_2d": null}.
         """
+        let overviewFrame = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt).map { frame(of: $0, in: displayFrame) }
 
+        // Big, clear targets are done. Tiny ones, or a miss, get a closer look.
+        if let overviewFrame, min(overviewFrame.width, overviewFrame.height) >= smallTargetSize {
+            return overviewFrame
+        }
+        guard deadline.timeIntervalSinceNow >= minimumSecondsForZoom else { return overviewFrame }
+        let zoomCenter = overviewFrame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? roughPoint
+        let zoomRect = CGRect(x: zoomCenter.x - zoomSide / 2, y: zoomCenter.y - zoomSide / 2, width: zoomSide, height: zoomSide)
+            .intersection(displayFrame)
+        guard !zoomRect.isNull, zoomRect.width > 40, zoomRect.height > 40 else { return overviewFrame }
+
+        let pixelsPerPoint = CGFloat(nativeImage.width) / displayFrame.width
+        let cropRectInPixels = CGRect(
+            x: (zoomRect.minX - displayFrame.minX) * pixelsPerPoint,
+            y: (displayFrame.maxY - zoomRect.maxY) * pixelsPerPoint,
+            width: zoomRect.width * pixelsPerPoint,
+            height: zoomRect.height * pixelsPerPoint
+        ).integral
+        guard let zoomedImage = nativeImage.cropping(to: cropRectInPixels),
+              let zoomedJPEG = jpegData(zoomedImage) else { return overviewFrame }
+        let zoomPrompt = """
+        This is a zoomed-in part of the user's screen. Find this element in it: "\(elementLabel)".
+        The user asked: "\(userQuestion)".
+        Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000 across this zoomed image, for the element itself. If it is not in this image, reply {"box_2d": null}.
+        """
+        guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt) else { return overviewFrame }
+        print("🎯 Zoom pass refined the vision guess")
+        return frame(of: zoomedBox, in: zoomRect)
+    }
+
+    /// A 0-1000 box on an image of `area`, in global AppKit coordinates.
+    private static func frame(of box: Box, in area: CGRect) -> CGRect {
+        CGRect(
+            x: area.minX + box.xmin / 1000 * area.width,
+            y: area.maxY - box.ymax / 1000 * area.height,
+            width: (box.xmax - box.xmin) / 1000 * area.width,
+            height: (box.ymax - box.ymin) / 1000 * area.height
+        )
+    }
+
+    private static func askForBox(jpegData: Data, prompt: String) async -> Box? {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = PointingRefiner.refinementTimeoutSeconds + 2
@@ -333,16 +407,25 @@ private enum VisionElementLocator {
 
         guard let (responseData, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return parseBox(from: textFromServerSentEvents(responseData))
+    }
 
-        let answerText = textFromServerSentEvents(responseData)
-        guard let box = parseBox(from: answerText) else { return nil }
+    private static func resized(_ image: CGImage, maximumDimension: Int) -> CGImage? {
+        let scale = min(1, CGFloat(maximumDimension) / CGFloat(max(image.width, image.height)))
+        guard scale < 1 else { return image }
+        let width = Int(CGFloat(image.width) * scale)
+        let height = Int(CGFloat(image.height) * scale)
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
 
-        return CGRect(
-            x: displayFrame.minX + box.xmin / 1000 * displayFrame.width,
-            y: displayFrame.maxY - box.ymax / 1000 * displayFrame.height,
-            width: (box.xmax - box.xmin) / 1000 * displayFrame.width,
-            height: (box.ymax - box.ymin) / 1000 * displayFrame.height
-        )
+    private static func jpegData(_ image: CGImage) -> Data? {
+        NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85])
     }
 
     /// /chat streams Gemini's answer as server-sent events.
@@ -362,7 +445,7 @@ private enum VisionElementLocator {
         return answerText
     }
 
-    private static func parseBox(from answerText: String) -> (ymin: Double, xmin: Double, ymax: Double, xmax: Double)? {
+    private static func parseBox(from answerText: String) -> Box? {
         guard let boxRange = answerText.range(of: #"\[\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*\]"#, options: .regularExpression) else {
             return nil
         }
