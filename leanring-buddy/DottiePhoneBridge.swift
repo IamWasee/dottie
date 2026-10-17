@@ -109,6 +109,47 @@ final class DottiePhoneBridge: ObservableObject {
         }
     }
 
+    /// Sends a file into the chat. Folders (like some Keynote files) go as
+    /// a zip. Returns nil when sent, else why not.
+    func sendDocument(_ fileURL: URL, caption: String) async -> String? {
+        guard let botToken, let pairedChatID,
+              let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendDocument") else { return "the phone isn't paired." }
+        var uploadURL = fileURL
+        var temporaryZipURL: URL?
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            let zipURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileURL.lastPathComponent + ".zip")
+            try? FileManager.default.removeItem(at: zipURL)
+            let zipResult = await DottieMacActions.runProcess("/usr/bin/ditto", arguments: ["-c", "-k", "--keepParent", fileURL.path, zipURL.path], timeout: 120)
+            guard zipResult.exitCode == 0 else { return "couldn't zip it." }
+            uploadURL = zipURL
+            temporaryZipURL = zipURL
+        }
+        defer { if let temporaryZipURL { try? FileManager.default.removeItem(at: temporaryZipURL) } }
+        // Bots can send files up to 50 MB.
+        let fileSize = (try? uploadURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard fileSize <= 50_000_000 else { return "it's over Telegram's 50 MB limit; put it on Google Drive instead." }
+        guard let fileData = try? Data(contentsOf: uploadURL) else { return "couldn't read the file." }
+
+        let boundary = "dottie-\(UUID().uuidString)"
+        var body = Data()
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n\(pairedChatID)\r\n".utf8))
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n".utf8))
+        let safeFileName = uploadURL.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"document\"; filename=\"\(safeFileName)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(fileData)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return "Telegram didn't take it." }
+        appendLog(isFromPhone: false, "(sent \(uploadURL.lastPathComponent))")
+        return nil
+    }
+
     private func sendPhoto(_ jpegData: Data, caption: String) async {
         guard let botToken, let pairedChatID,
               let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendPhoto") else { return }
@@ -190,7 +231,7 @@ final class DottiePhoneBridge: ObservableObject {
         let command = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ ."))
         switch command {
         case "start", "help":
-            await send("Text me a job and a helper on your Mac does it, then replies here. Commands: status, screenshot, allow, deny.")
+            await send("Text me a job and a helper on your Mac does it, then replies here. You can also ask for files: \"find my howto presentation\", \"send it to me\", \"put it on my Google Drive\". Commands: status, screenshot, allow, deny.")
         case "status":
             await send(statusProvider?() ?? "Dottie is running.")
         case "screenshot", "screen":
