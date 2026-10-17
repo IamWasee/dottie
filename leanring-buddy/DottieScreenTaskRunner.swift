@@ -93,6 +93,9 @@ final class DottieScreenTaskRunner {
     private var lookAroundHeadings: [Double] = []
     /// Extra pictures for the next turn: zoomed crops, look-around views.
     private var pendingExtraImageParts: [[String: Any]] = []
+    /// The windows on screen just before the last click, to notice a link
+    /// that opened a new tab or window, maybe in an app behind this one.
+    private var windowsBeforeLastClick: WindowSnapshot?
 
     var isRunning: Bool { runTask != nil }
 
@@ -161,11 +164,22 @@ final class DottieScreenTaskRunner {
         for stepNumber in 1...stepLimit {
             if Task.isCancelled { return .stopped }
 
+            // Before looking: if the last click opened something in an app
+            // behind this one, bring it forward so the screenshot shows it.
+            var windowChangeNote: String?
+            if let windowsBefore = windowsBeforeLastClick {
+                windowsBeforeLastClick = nil
+                windowChangeNote = await Self.followWindowChanges(since: windowsBefore)
+            }
+
             let screenshotDimension = isGameMode ? Self.gameScreenshotDimension : Self.maximumScreenshotDimension
             guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: screenshotDimension) else {
                 return .failed(reason: "I couldn't see the screen. Dottie needs Screen Recording permission.")
             }
             var screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
+            if let windowChangeNote {
+                screenNote += "\n" + windowChangeNote
+            }
             let screenFingerprint = Self.fingerprint(of: screen.image)
             if !isGameMode, didActSinceLastLook,
                let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
@@ -246,10 +260,20 @@ final class DottieScreenTaskRunner {
                     return .finished(answer: answer.isEmpty ? "All done." : answer)
                 }
 
-                recentActionSignatures.append(Self.signature(functionName: functionName, arguments: arguments))
+                let actionSignature = Self.signature(functionName: functionName, arguments: arguments)
+                recentActionSignatures.append(actionSignature)
                 if recentActionSignatures.count > 6 { recentActionSignatures.removeFirst() }
-                actionLog.append(Self.signature(functionName: functionName, arguments: arguments))
-                let result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
+                actionLog.append(actionSignature)
+                let result: String
+                // Clicking the same thing over and over (a link that opens a
+                // new tab each time) piles up tabs, so the third click in a
+                // row is refused.
+                if functionName == "click", !isGameMode,
+                   recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
+                    result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
+                } else {
+                    result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
+                }
                 var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
                 if let functionCallID = functionCall["id"] as? String {
                     functionResponse["id"] = functionCallID
@@ -376,6 +400,9 @@ final class DottieScreenTaskRunner {
                 await onWillClick?(point, screen.displayFrame)
             }
             if Task.isCancelled { return "stopped" }
+            if !isGameMode {
+                windowsBeforeLastClick = Self.windowSnapshot()
+            }
             DottieScreenActionPerformer.click(at: point, clickCount: flag("double_click") ? 2 : 1, isRightClick: flag("right_click"))
             return "clicked \(label)"
 
@@ -735,6 +762,72 @@ final class DottieScreenTaskRunner {
             return applicationName
         }
         return "\(applicationName) \(windowTitle)"
+    }
+
+    // MARK: - New tabs and windows
+
+    struct WindowSnapshot {
+        struct Window {
+            let processID: pid_t
+            let appName: String
+            let title: String
+        }
+        let frontmostProcessID: pid_t?
+        let windows: [CGWindowID: Window]
+    }
+
+    /// Every normal window on screen with its title (titles need the
+    /// Screen Recording permission Dottie already has).
+    static func windowSnapshot() -> WindowSnapshot {
+        let ownProcessID = ProcessInfo.processInfo.processIdentifier
+        var windows: [CGWindowID: WindowSnapshot.Window] = [:]
+        if let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+            for windowInfo in windowList {
+                guard (windowInfo[kCGWindowLayer as String] as? Int) == 0,
+                      let windowNumber = windowInfo[kCGWindowNumber as String] as? Int,
+                      let processID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+                      processID != ownProcessID else { continue }
+                windows[CGWindowID(windowNumber)] = WindowSnapshot.Window(
+                    processID: processID,
+                    appName: windowInfo[kCGWindowOwnerName as String] as? String ?? "an app",
+                    title: windowInfo[kCGWindowName as String] as? String ?? ""
+                )
+            }
+        }
+        return WindowSnapshot(frontmostProcessID: NSWorkspace.shared.frontmostApplication?.processIdentifier, windows: windows)
+    }
+
+    /// What the last click opened, for the model. A link opened in an app
+    /// behind the front one (a browser getting a link from Mail or Slack)
+    /// is brought to the front so the next screenshot shows it.
+    private static func followWindowChanges(since before: WindowSnapshot) async -> String? {
+        let after = windowSnapshot()
+        var changedWindows: [WindowSnapshot.Window] = []
+        for (windowID, window) in after.windows {
+            let earlierWindow = before.windows[windowID]
+            if earlierWindow == nil || (earlierWindow?.title != window.title && !window.title.isEmpty) {
+                changedWindows.append(window)
+            }
+        }
+        guard !changedWindows.isEmpty else { return nil }
+
+        let frontmostProcessID = after.frontmostProcessID
+        if frontmostProcessID != before.frontmostProcessID {
+            let frontWindow = changedWindows.first { $0.processID == frontmostProcessID } ?? changedWindows[0]
+            return "Your last click brought \(frontWindow.appName) to the front\(frontWindow.title.isEmpty ? "" : " (\"\(frontWindow.title.prefix(100))\")"). Carry on there."
+        }
+        // Only a browser: other apps behind (music, chat) retitle their
+        // windows on their own all the time.
+        if let backgroundWindow = changedWindows.first(where: { window in
+            window.processID != frontmostProcessID
+                && DottieBrowser.isBrowser(bundleIdentifier: NSRunningApplication(processIdentifier: window.processID)?.bundleIdentifier)
+        }) {
+            NSRunningApplication(processIdentifier: backgroundWindow.processID)?.activate()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return "Your last click opened \(backgroundWindow.title.isEmpty ? "something" : "\"\(backgroundWindow.title.prefix(100))\"") in \(backgroundWindow.appName) behind the app you were in, so Dottie brought \(backgroundWindow.appName) to the front. It's on this screenshot now. Don't click that link again."
+        }
+        guard let frontWindow = changedWindows.first(where: { $0.processID == frontmostProcessID }) else { return nil }
+        return "Your last click changed the window to \"\(frontWindow.title.prefix(100))\" (a new page or tab). That's what this screenshot shows."
     }
 
     private static func describeFrontmostWindow() -> String {
