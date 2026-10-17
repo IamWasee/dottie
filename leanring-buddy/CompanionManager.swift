@@ -124,6 +124,8 @@ final class CompanionManager: ObservableObject {
     private(set) lazy var macTools = DottieMacTools(meetingRecorder: meetingRecorder)
     /// Texting Dottie from a phone through the user's own Telegram bot.
     let phoneBridge = DottiePhoneBridge()
+    /// Finds, sends and uploads files asked for by text.
+    let phoneFiles = DottiePhoneFiles()
     private var meetingCancellable: AnyCancellable?
     /// Hold right Option to dictate into any app.
     let dictationController = ClickyDictationController()
@@ -1245,6 +1247,8 @@ final class CompanionManager: ObservableObject {
         let text: String
         var isGame = false
         var referenceImageNames: [String] = []
+        /// Asked for by text: the result is texted back, not spoken.
+        var repliesToPhone = false
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
@@ -1305,7 +1309,7 @@ final class CompanionManager: ObservableObject {
             }
         }
         screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
-            self?.finishScreenTask(taskText: taskText, outcome: outcome)
+            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone)
         }
     }
 
@@ -1371,7 +1375,7 @@ final class CompanionManager: ObservableObject {
         return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
     }
 
-    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome) {
+    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false) {
         currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1388,6 +1392,12 @@ final class CompanionManager: ObservableObject {
             return
         }
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
+        if repliesToPhone {
+            startNextQueuedScreenTask()
+            scheduleTransientHideIfNeeded()
+            Task { await phoneBridge.send(resultText) }
+            return
+        }
         let waitingCount = queuedScreenTasks.count
         // The next job starts right away; Dottie tells this result while
         // her cursor gets going on it.
@@ -2061,6 +2071,21 @@ final class CompanionManager: ObservableObject {
         phoneBridge.onMessage = { [weak self] text in
             self?.handlePhoneMessage(text)
         }
+        phoneFiles.sendText = { [weak self] text in
+            await self?.phoneBridge.send(text)
+        }
+        phoneFiles.sendFileToPhone = { [weak self] fileURL, caption in
+            guard let self else { return "the phone isn't connected." }
+            return await self.phoneBridge.sendDocument(fileURL, caption: caption)
+        }
+        phoneFiles.uploadToDriveOnScreen = { [weak self] fileURL in
+            guard let self else { return "can't reach Google Drive." }
+            let jobText = "Upload the file \(fileURL.path) to the user's Google Drive: open drive.google.com in the browser, click New, then File upload. "
+                + "In the file picker press cmd+shift+g, type the path exactly, press return, then click Open (or Upload). "
+                + "Wait until Drive says the upload is complete, then finish."
+            let status = self.startScreenTask(ScreenJob(text: jobText, repliesToPhone: true))
+            return "Google Drive for desktop isn't installed, so Dottie is uploading it in the browser on the Mac (\(status)). A text follows when it's done."
+        }
         phoneBridge.statusProvider = { [weak self] in
             guard let self else { return "" }
             var lines = ["Helpers:", self.clickyRoster.helperListSummary()]
@@ -2099,6 +2124,19 @@ final class CompanionManager: ObservableObject {
             Task { await phoneBridge.send("Dottie isn't connected to its server, so helpers can't run. Check Settings → Connection on the Mac.") }
             return
         }
+        // Files ("find my howto presentation", "put it on my Drive") are
+        // answered right here; everything else goes to the Phone helper.
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.phoneFiles.handle(text) {
+                self.brain.record(.phone, "texted from phone: \(text)")
+                return
+            }
+            self.handPhoneMessageToHelper(text)
+        }
+    }
+
+    private func handPhoneMessageToHelper(_ text: String) {
         let phoneAgent = clickyRoster.agents.first { $0.name == Self.phoneHelperName }
             ?? clickyRoster.createAgent(name: Self.phoneHelperName, purpose: "Jobs the user texts from their phone while away from the Mac.")
         brain.record(.phone, "texted from phone: \(text)")
