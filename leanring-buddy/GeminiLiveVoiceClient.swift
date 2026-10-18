@@ -625,6 +625,8 @@ final class GeminiLiveVoiceClient {
 
         declarations += DottieSmartHome.functionDeclarations
 
+        declarations += DottieToolRegistry.functionDeclarations(for: .voice)
+
         return declarations
 
     }
@@ -977,6 +979,8 @@ final class GeminiLiveVoiceClient {
                 || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName)
                 || functionName == DottieTeaching.functionName:
                 handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+            case _ where DottieToolRegistry.handles(functionName, for: .voice):
+                handleRegisteredToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
             default:
                 sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
                                      response: ["error": "unknown function"])
@@ -1076,6 +1080,23 @@ final class GeminiLiveVoiceClient {
         }
         pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
             let toolResult = await onMacTool(functionName, functionArguments)
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
+            self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                      response: ["result": toolResult])
+        }
+    }
+
+    /// A tool a feature added through DottieToolRegistry.
+    private func handleRegisteredToolCall(functionCallID: String, functionName: String, functionArguments: [String: Any]) {
+        guard !isDiscardingModelAudioForCurrentTurn else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["error": "couldn't do that right now."])
+            return
+        }
+        pendingFunctionCallTasks[functionCallID] = Task { [weak self] in
+            let toolResult = await DottieToolRegistry.run(functionName, arguments: functionArguments, for: .voice)
+                ?? "couldn't do that right now."
             guard let self, !Task.isCancelled else { return }
             self.pendingFunctionCallTasks.removeValue(forKey: functionCallID)
             self.sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
