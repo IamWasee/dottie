@@ -128,8 +128,16 @@ final class NotchWindowManager {
             }
             .store(in: &presenterCancellables)
         notchPresenter.$isScreenJournalOn
-            .combineLatest(notchPresenter.$isMeetingRecording)
+            .combineLatest(notchPresenter.$isMeetingRecording, notchPresenter.$statusLines, notchPresenter.$compactBadgeText)
             .removeDuplicates { $0 == $1 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.resizePanel(for: self.notchPresenter.surface, isHovering: self.notchPresenter.isHovering)
+            }
+            .store(in: &presenterCancellables)
+        notchPresenter.$isKeepWorkingOn
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -179,10 +187,12 @@ final class NotchWindowManager {
             if isHovering {
                 // One row for the eyes and buttons, a row per Dot, then the
                 // newest files the Dots made.
-                let peekRowCount = notchPresenter.peekDotSummaries.count
-                let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10
+                let peekRowCount = notchPresenter.peekDotSummaries.count + notchPresenter.statusLines.count
+                let hasBothLists = !notchPresenter.statusLines.isEmpty && !notchPresenter.peekDotSummaries.isEmpty
+                let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10 + (hasBothLists ? 6 : 0)
                 let peekFilesHeight: CGFloat = notchPresenter.peekFiles.isEmpty ? 0 : Self.peekFilePileHeight + 8
-                let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty
+                // The stop button for a 24/7 job needs the wider row too.
+                let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty && !notchPresenter.isKeepWorkingOn
                 contentSize = CGSize(
                     width: isPeekEmpty ? geometry.notchWidth + 80 : max(geometry.notchWidth + 160, notchPresenter.peekFiles.isEmpty ? 360 : 390),
                     height: geometry.notchHeight + 28 + peekListHeight + peekFilesHeight

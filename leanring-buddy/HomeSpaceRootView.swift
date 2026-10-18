@@ -21,9 +21,11 @@ struct HomeSpaceRootView: View {
         case pictures = "Pictures"
         case smartHome = "Smart Home"
         case skills = "Skills"
+        case tools = "Tools"
         case brain = "Brain"
         case meetings = "Meetings"
         case phone = "Phone"
+        case profile = "Profile"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -36,9 +38,11 @@ struct HomeSpaceRootView: View {
             case .pictures: return "photo.on.rectangle.angled"
             case .smartHome: return "house.fill"
             case .skills: return "sparkles"
+            case .tools: return "wrench.and.screwdriver.fill"
             case .brain: return "brain.head.profile"
             case .meetings: return "waveform"
             case .phone: return "iphone"
+            case .profile: return "star.circle.fill"
             case .settings: return "gearshape.fill"
             }
         }
@@ -71,12 +75,16 @@ struct HomeSpaceRootView: View {
                     HomeSmartHomeView(smartHome: companionManager.smartHome)
                 case .skills:
                     HomeSkillsView(clickyRoster: clickyRoster, skillLibrary: clickyRoster.skillLibrary)
+                case .tools:
+                    HomeToolsView()
                 case .brain:
                     HomeBrainView(brain: companionManager.brain)
                 case .meetings:
                     HomeMeetingsView(meetingRecorder: companionManager.meetingRecorder)
                 case .phone:
                     HomePhoneView(phoneBridge: companionManager.phoneBridge)
+                case .profile:
+                    HomeProfileView(companionManager: companionManager)
                 case .settings:
                     HomeSettingsView(
                         companionManager: companionManager,
@@ -461,22 +469,19 @@ private struct HomeSettingsView: View {
                 settingsGroup(title: "Updates") {
                     HomeUpdateSettings()
                 }
+                settingsGroup(title: "Helpers: Claude via MausBot") { DottieMausBotSettingsCard() }
+
+                settingsGroup(title: "Check everything") {
+                    HomeSelfCheckSettings()
+                }
+
+                settingsGroup(title: "Instant replays") {
+                    HomeReplaySettings()
+                }
 
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
-                    settingsRow(label: "Personality") {
-                        Picker("", selection: Binding(
-                            get: { companionManager.selectedPersonality },
-                            set: { companionManager.setSelectedPersonality($0) }
-                        )) {
-                            ForEach(DottiePersonality.allCases) { personality in
-                                Text(personality.displayName).tag(personality)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 160)
-                    }
-                    settingsHint(companionManager.selectedPersonality.settingsHint)
+                    DottiePersonalitySettings(companionManager: companionManager)
                     settingsRow(label: "Voice mode") {
                         Text(companionManager.voiceMode == .live ? "Gemini Live" : "Classic")
                             .foregroundColor(DS.Colors.textSecondary)
@@ -511,6 +516,11 @@ private struct HomeSettingsView: View {
                             .toggleStyle(.switch)
                     }
                     settingsHint("While you hold the talk shortcut, move the cursor around something to circle it. Dottie sees exactly what you marked.")
+                    DottieEverydayShortcutRows(shortcuts: DottieEveryday.shared.shortcuts, shortcutMonitor: shortcutMonitor)
+                }
+
+                settingsGroup(title: "Everyday") {
+                    DottieEverydaySettings(focus: DottieEveryday.shared.focus)
                 }
 
                 settingsGroup(title: "Appearance") {

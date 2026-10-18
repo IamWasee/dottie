@@ -5,8 +5,10 @@
 //  Background agents ("Clickys"). Shipped Clicky lets you spin up named
 //  agents that work on a task in their own folder while you keep going, and
 //  report back in the notch when they finish (ClickyAgentsRuntime,
-//  CodexAgentSession). The clone runs each turn through Gemini CLI
-//  (GeminiCLIAgentRuntime); this file owns the list of agents, their
+//  CodexAgentSession). The clone runs each turn on Claude through
+//  OpenMausBot when it's set up (DottieMausBotRuntime, each helper is a
+//  MausBot bot), and on Gemini CLI (GeminiCLIAgentRuntime) otherwise or
+//  when Claude's plan runs out. This file owns the list of agents, their
 //  workspaces on disk and their transcripts.
 //
 //  On disk, under ~/Library/Application Support/Dottie/Dots/:
@@ -45,6 +47,14 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     /// Dottie's second brain (see DottieBrain): one per Mac, with the
     /// user's chosen folders and the memory folder.
     var isBrain: Bool?
+    /// The helper's bot in OpenMausBot, when it runs on Claude.
+    var mausBotID: String?
+    var mausBotName: String?
+    /// Fingerprint of what the bot was last given (instructions, skills,
+    /// folder), so it's only updated when something changed.
+    var mausBotSpecHash: String?
+    /// "claude" or "gemini": the engine its latest turn ran on.
+    var lastHelperEngine: String?
 }
 
 struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
@@ -58,6 +68,8 @@ struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
         case computerUseRequest
         /// Marks the start of a scheduled routine run (see ClickyRoutines).
         case routineRun
+        /// A Claude helper stopped for an approval or a question in MausBot.
+        case needsApproval
     }
 
     let id: UUID
@@ -79,6 +91,13 @@ struct ClickyAgentTurnResult {
     /// Set when the turn was a scheduled routine run.
     let routineTitle: String?
 }
+
+/// Another feature (episodic memory) listens for this after every helper
+/// turn, whichever engine ran it.
+private let helperFinishedNotificationName = Notification.Name("dottie.helperFinished")
+
+/// Transcript tool ID of the "Getting started…" step every turn shows at once.
+private let gettingStartedToolID = "dottie-getting-started"
 
 @MainActor
 final class ClickyRoster: ObservableObject {
@@ -104,6 +123,8 @@ final class ClickyRoster: ObservableObject {
     let routineStore: ClickyRoutineStore
 
     private let runtime = GeminiCLIAgentRuntime()
+    /// Claude turns through OpenMausBot (see DottieMausBot).
+    private let mausBotRuntime = DottieMausBotRuntime()
     /// Tasks sent to a Dot while it was busy, oldest first. The next one
     /// starts when its turn ends.
     @Published private(set) var queuedMessagesByAgentID: [UUID: [String]] = [:]
@@ -131,6 +152,7 @@ final class ClickyRoster: ObservableObject {
         GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
         loadRoster()
         startRoutineScheduler()
+        DottieMausBot.shared.warmUpAfterLaunch()
     }
 
     // MARK: - Agents
@@ -196,6 +218,7 @@ final class ClickyRoster: ObservableObject {
     func deleteAgent(_ agent: ClickyAgent) {
         queuedMessagesByAgentID[agent.id] = nil
         stopAgent(agent)
+        mausBotRuntime.cancelFollowUp(agentID: agent.id)
         agents.removeAll { $0.id == agent.id }
         transcriptsByAgentID[agent.id] = nil
         recentlyDeletedAgentNames.removeAll { $0.caseInsensitiveCompare(agent.name) == .orderedSame }
@@ -298,21 +321,38 @@ final class ClickyRoster: ObservableObject {
         routineIDByRunningAgentID[agentID] = routineID
 
         lastTurnSucceededByAgentID[agentID] = false
+        // Something on screen right away, whichever engine picks it up.
+        appendTranscriptItem(.tool, text: "Getting started…", to: agentID, toolID: gettingStartedToolID, persist: false)
 
         let additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
             + (agent.isBrain == true
                 ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
                 : [])
+        let claudeSpec = mausBotSpec(for: agent, extraFolderURLs: additionalDirectoryURLs)
+        // What was said before, for an engine that didn't hear it.
+        let conversationContext = recentConversationContext(forAgentID: agentID)
 
         Task { [weak self] in
             guard let self else { return }
+            if await self.runTurnOnClaudeIfPossible(
+                agent: agent,
+                spec: claudeSpec,
+                message: fullMessageForAgent,
+                conversationContext: conversationContext
+            ) {
+                self.finishTurn(agentID: agentID)
+                return
+            }
+            let previousEngine = self.agent(withID: agentID)?.lastHelperEngine
+            self.setLastHelperEngine("gemini", forAgentID: agentID)
+            let geminiMessage = previousEngine == "claude" ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {
                 do {
                     try await self.runAgentProcess(
                         agent: agent,
                         sessionID: agent.sessionID,
                         isFirstTurn: isFirstTurn,
-                        message: fullMessageForAgent,
+                        message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
                         additionalDirectoryURLs: additionalDirectoryURLs
@@ -341,7 +381,7 @@ final class ClickyRoster: ObservableObject {
                         agent: agent,
                         sessionID: agent.sessionID,
                         isFirstTurn: false,
-                        message: fullMessageForAgent,
+                        message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
                         additionalDirectoryURLs: additionalDirectoryURLs
@@ -426,10 +466,12 @@ final class ClickyRoster: ObservableObject {
     func stopAgent(_ agent: ClickyAgent) {
         guard isRunning(agent) else { return }
         runtime.stopTurn(agentID: agent.id)
+        mausBotRuntime.stopTurn(agentID: agent.id)
         appendTranscriptItem(.status, text: "Stopped", to: agent.id)
     }
 
     private func handleRuntimeEvent(_ event: GeminiCLIAgentEvent, agentID: UUID) {
+        markGettingStartedDone(agentID: agentID)
         switch event {
         case .sessionStarted:
             // Not saved yet: Gemini CLI only writes the session once a turn
@@ -470,11 +512,13 @@ final class ClickyRoster: ObservableObject {
         let skillFolderNamesBeforeTurn = skillFolderNamesBeforeTurnByAgentID.removeValue(forKey: agentID) ?? []
         runningAgentIDs.remove(agentID)
         touchAgent(agentID)
+        markGettingStartedDone(agentID: agentID)
         // A turn that ended with no answer and no error used to look like the
         // Dot just stopped. Say so instead.
         if !succeeded, let lastItem = transcriptsByAgentID[agentID]?.last,
-           lastItem.kind != .assistant, lastItem.kind != .error, lastItem.text != "Stopped" {
-            appendTranscriptItem(.error, text: "Couldn't finish this one: Gemini was too busy to answer. Try sending it again.", to: agentID)
+           lastItem.kind != .assistant, lastItem.kind != .error, lastItem.kind != .needsApproval, lastItem.text != "Stopped" {
+            let engineName = agent(withID: agentID)?.lastHelperEngine == "claude" ? "Claude" : "Gemini"
+            appendTranscriptItem(.error, text: "Couldn't finish this one: \(engineName) was too busy to answer. Try sending it again.", to: agentID)
         }
         saveTranscript(for: agentID)
 
@@ -498,9 +542,11 @@ final class ClickyRoster: ObservableObject {
             saveRoster()
         }
         guard let finishedAgent = agent(withID: agentID) else { return }
-        let finalReply = transcriptsByAgentID[agentID]?
-            .last { $0.kind == .assistant || $0.kind == .error }?
-            .text ?? ""
+        let finalItem = transcriptsByAgentID[agentID]?
+            .last { $0.kind == .assistant || $0.kind == .error || $0.kind == .needsApproval }
+        let finalReply = finalItem.map { item in
+            item.kind == .needsApproval ? "Needs your OK in MausBot: \(item.text)" : item.text
+        } ?? ""
         onAgentTurnFinished?(ClickyAgentTurnResult(
             agent: finishedAgent,
             finalReply: finalReply,
@@ -508,6 +554,9 @@ final class ClickyRoster: ObservableObject {
             computerUseRequest: computerUseRequest,
             routineTitle: routineTitle
         ))
+        if finalItem?.kind != .needsApproval && computerUseRequest == nil {
+            postHelperFinished(agent: finishedAgent, result: finalReply, succeeded: succeeded)
+        }
         // Next task in line, unless the Dot is waiting on the user to allow
         // computer use (the allowed turn runs first, then the line resumes).
         if computerUseRequest == nil, var queuedMessages = queuedMessagesByAgentID[agentID], !queuedMessages.isEmpty {
@@ -848,5 +897,326 @@ final class ClickyRoster: ObservableObject {
         let transcriptToSave = Array((transcriptsByAgentID[agentID] ?? []).suffix(500))
         guard let transcriptData = try? encoder.encode(transcriptToSave) else { return }
         try? transcriptData.write(to: workspaceURL(for: agent).appendingPathComponent("transcript.json"), options: .atomic)
+    }
+}
+
+// MARK: - Claude through OpenMausBot
+
+extension ClickyRoster {
+    /// Runs the turn on Claude when MausBot is ready and Claude is chosen.
+    /// Returns true when the turn was handled there (finished, stopped, or
+    /// waiting for the user in MausBot); false sends it to Gemini CLI, after
+    /// a note in the chat when Claude was expected and couldn't take it.
+    fileprivate func runTurnOnClaudeIfPossible(
+        agent: ClickyAgent,
+        spec: DottieMausBotSpec,
+        message: String,
+        conversationContext: String
+    ) async -> Bool {
+        let agentID = agent.id
+        let launcher: DottieMausBotLauncher
+        switch await DottieMausBot.shared.readinessForHelperTurn() {
+        case .skip:
+            return false
+        case .fallback(let reason):
+            noteClaudeFallback(reason, agentID: agentID)
+            return false
+        case .ready(let readyLauncher):
+            launcher = readyLauncher
+        }
+
+        var currentSpec = spec
+        for attempt in 0..<2 {
+            let identity: DottieMausBotIdentity
+            switch await mausBotRuntime.ensureBot(for: currentSpec, launcher: launcher) {
+            case .failure(let reason):
+                noteClaudeFallback(reason, agentID: agentID)
+                return false
+            case .success(let readyIdentity):
+                identity = readyIdentity
+            }
+            rememberMausBot(identity, forAgentID: agentID)
+
+            let previousEngine = self.agent(withID: agentID)?.lastHelperEngine
+            let hasHistoryElsewhere = previousEngine == "gemini" || (previousEngine == nil && (self.agent(withID: agentID)?.hasStartedSession ?? false))
+            let claudeMessage = !hasHistoryElsewhere
+                ? message
+                : conversationContext + message
+            setLastHelperEngine("claude", forAgentID: agentID)
+
+            let outcome = await mausBotRuntime.runTurn(
+                agentID: agentID,
+                botID: identity.botID,
+                message: claudeMessage,
+                launcher: launcher
+            ) { [weak self] event in
+                self?.handleClaudeEvent(event, agentID: agentID)
+            }
+
+            switch outcome {
+            case .finished(let succeeded, let errorText):
+                lastTurnSucceededByAgentID[agentID] = succeeded
+                if !succeeded, let errorText {
+                    appendTranscriptItem(.error, text: errorText, to: agentID)
+                }
+                return true
+            case .stopped:
+                return true
+            case .needsInput(let question, let threadID, let since):
+                lastTurnSucceededByAgentID[agentID] = true
+                appendTranscriptItem(.needsApproval, text: question, to: agentID)
+                startClaudeFollowUp(agentID: agentID, botID: identity.botID, threadID: threadID, since: since, launcher: launcher)
+                return true
+            case .stillRunning(let threadID, let since):
+                lastTurnSucceededByAgentID[agentID] = true
+                appendTranscriptItem(.status, text: "Still working on it in MausBot. The answer will show up here.", to: agentID)
+                startClaudeFollowUp(agentID: agentID, botID: identity.botID, threadID: threadID, since: since, launcher: launcher)
+                return true
+            case .botMissing where attempt == 0:
+                // Deleted in MausBot: make a fresh bot and try once more.
+                forgetMausBot(forAgentID: agentID)
+                currentSpec = mausBotSpec(for: self.agent(withID: agentID) ?? agent, extraFolderURLs: [])
+                continue
+            case .botMissing:
+                noteClaudeFallback(.engineProblem("the bot is missing"), agentID: agentID)
+                return false
+            case .fallback(let reason):
+                noteClaudeFallback(reason, agentID: agentID)
+                return false
+            }
+        }
+        return false
+    }
+
+    /// Claude's events go to the same transcript handling as Gemini's,
+    /// except the end of the turn, which runTurnOnClaudeIfPossible reads
+    /// from MausBot's own verdict (and which mustn't mark a Gemini session
+    /// as started).
+    private func handleClaudeEvent(_ event: GeminiCLIAgentEvent, agentID: UUID) {
+        switch event {
+        case .finished, .sessionStarted:
+            markGettingStartedDone(agentID: agentID)
+        default:
+            handleRuntimeEvent(event, agentID: agentID)
+        }
+    }
+
+    private func noteClaudeFallback(_ reason: DottieClaudeFallbackReason, agentID: UUID) {
+        DottieMausBot.shared.pauseClaude(for: reason)
+        appendTranscriptItem(.status, text: reason.noteForTranscript, to: agentID, persist: false)
+        if case .engineProblem(let detail) = reason {
+            print("⚠️ Claude helper turn moved to Gemini: \(detail)")
+        }
+    }
+
+    /// Keeps listening after the turn paused in MausBot, and adds what it
+    /// finally says as if the turn had just finished.
+    private func startClaudeFollowUp(agentID: UUID, botID: String, threadID: String, since: Double, launcher: DottieMausBotLauncher) {
+        mausBotRuntime.followUp(agentID: agentID, botID: botID, threadID: threadID, since: since, launcher: launcher) { [weak self] result in
+            self?.finishClaudeFollowUp(agentID: agentID, result: result)
+        }
+    }
+
+    private func finishClaudeFollowUp(agentID: UUID, result: DottieMausBotFollowUpResult) {
+        guard let followedAgent = agent(withID: agentID), !isRunning(followedAgent) else { return }
+        if let replyText = result.replyText {
+            appendTranscriptItem(.assistant, text: replyText, to: agentID)
+        } else if !result.succeeded, let errorText = result.errorText {
+            appendTranscriptItem(.error, text: errorText, to: agentID)
+        } else {
+            return
+        }
+        applyRoutineBlocksInLastReply(agentID: agentID)
+        let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
+        if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
+            agents[agentIndex].hasUnreadReply = true
+            agents[agentIndex].lastActivityAt = Date()
+            saveRoster()
+        }
+        saveTranscript(for: agentID)
+        guard let finishedAgent = agent(withID: agentID) else { return }
+        let finalReply = transcriptsByAgentID[agentID]?.last { $0.kind == .assistant || $0.kind == .error }?.text ?? ""
+        onAgentTurnFinished?(ClickyAgentTurnResult(
+            agent: finishedAgent,
+            finalReply: finalReply,
+            succeeded: result.succeeded,
+            computerUseRequest: computerUseRequest,
+            routineTitle: nil
+        ))
+        postHelperFinished(agent: finishedAgent, result: finalReply, succeeded: result.succeeded)
+    }
+
+    /// Tells listeners (episodic memory, XP) a helper task is done, once
+    /// per finished task, whichever engine ran it.
+    fileprivate func postHelperFinished(agent finishedAgent: ClickyAgent, result: String, succeeded: Bool) {
+        let taskText = transcriptsByAgentID[finishedAgent.id]?
+            .last { $0.kind == .user || $0.kind == .routineRun }?
+            .text ?? ""
+        NotificationCenter.default.post(
+            name: helperFinishedNotificationName,
+            object: nil,
+            userInfo: [
+                "agentID": finishedAgent.id.uuidString,
+                "helper": finishedAgent.name,
+                "title": finishedAgent.name,
+                "task": taskText,
+                "result": result,
+                "summary": String(result.prefix(400)),
+                "succeeded": succeeded,
+                "engine": finishedAgent.lastHelperEngine ?? "gemini"
+            ]
+        )
+    }
+
+    /// Ticks off the "Getting started…" step once real work shows up.
+    fileprivate func markGettingStartedDone(agentID: UUID) {
+        guard var transcript = transcriptsByAgentID[agentID],
+              let stepIndex = transcript.lastIndex(where: { $0.toolID == gettingStartedToolID }),
+              transcript[stepIndex].toolSucceeded == nil else { return }
+        transcript[stepIndex].toolSucceeded = true
+        transcriptsByAgentID[agentID] = transcript
+    }
+
+    fileprivate func setLastHelperEngine(_ engineName: String, forAgentID agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
+              agents[agentIndex].lastHelperEngine != engineName else { return }
+        agents[agentIndex].lastHelperEngine = engineName
+        saveRoster()
+    }
+
+    private func rememberMausBot(_ identity: DottieMausBotIdentity, forAgentID agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }) else { return }
+        let currentAgent = agents[agentIndex]
+        guard currentAgent.mausBotID != identity.botID
+                || currentAgent.mausBotName != identity.botName
+                || currentAgent.mausBotSpecHash != identity.specHash else { return }
+        agents[agentIndex].mausBotID = identity.botID
+        agents[agentIndex].mausBotName = identity.botName
+        agents[agentIndex].mausBotSpecHash = identity.specHash
+        saveRoster()
+    }
+
+    private func forgetMausBot(forAgentID agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }) else { return }
+        agents[agentIndex].mausBotID = nil
+        agents[agentIndex].mausBotName = nil
+        agents[agentIndex].mausBotSpecHash = nil
+        saveRoster()
+    }
+
+    // MARK: Bot instructions
+
+    /// What the helper's bot is given: the same standing instructions Gemini
+    /// CLI reads from AGENTS.md, minus what MausBot does its own way (web
+    /// search, computer use), plus the folders it may use.
+    fileprivate func mausBotSpec(for agent: ClickyAgent, extraFolderURLs: [URL]) -> DottieMausBotSpec {
+        let agentWorkspaceURL = workspaceURL(for: agent)
+        var folderURLs = extraFolderURLs
+        if folderURLs.isEmpty {
+            folderURLs = [skillLibrary.libraryURL] + sharedFolderURLs
+                + (agent.isBrain == true ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? []) : [])
+        }
+        let folderLines = folderURLs.map { "- `\($0.path)`" }.joined(separator: "\n")
+        let helperToolSection = DottieToolRegistry.helperPromptSections
+        let instructionSections = [
+            Self.agentInstructions(for: agent),
+            """
+            ## Your folder and notes
+
+            Your folder is `\(agentWorkspaceURL.path)` (you start there). `AGENTS.md` in it holds your standing notes: read it when you start a task, and add short notes there about the user's preferences and what you learned, so you remember them next time.
+
+            Other folders you may use:
+            \(folderLines)
+
+            """,
+            """
+            # Using the Mac
+
+            When a task needs an app or a website rather than files, use the computer tools you have. The user approves clicking and typing in the MausBot app; if they say no, finish what you can and say what's left.
+
+            """,
+            ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibrary.libraryURL),
+            ClickyRoutinePrompts.globalAgentInstructions,
+            GeminiCLIAgentRuntime.buildingAgentInstructions,
+            GeminiCLIAgentRuntime.macAppsAgentInstructions,
+            DottieBrowser.agentInstructions,
+            helperToolSection
+        ]
+        let instructions = instructionSections
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        let enabledSkillNames = Set(agent.enabledSkillNames ?? [])
+        let skillFiles = skillLibrary.skills
+            .filter { FileManager.default.fileExists(atPath: $0.skillFileURL.path) }
+            .map { (path: $0.skillFileURL.path, isEnabled: enabledSkillNames.contains($0.name)) }
+        let title = agent.isBrain == true
+            ? "Dottie's second brain"
+            : (agent.purpose.isEmpty ? "One of Dottie's helpers" : agent.purpose)
+        return DottieMausBotSpec(
+            helperName: agent.name,
+            title: title,
+            instructions: instructions,
+            workspacePath: agentWorkspaceURL.path,
+            skillFiles: skillFiles,
+            // The Brain's answers are read out loud right away: keep it quick.
+            effort: agent.isBrain == true ? "low" : nil,
+            knownBotID: agent.mausBotID,
+            knownBotName: agent.mausBotName,
+            knownSpecHash: agent.mausBotSpecHash
+        )
+    }
+
+    // MARK: For Home
+
+    /// What the helper is waiting for the user to OK in MausBot, if anything.
+    func pendingMausBotApproval(for agent: ClickyAgent) -> String? {
+        guard !isRunning(agent),
+              let lastItem = transcriptsByAgentID[agent.id]?.last(where: { $0.kind != .tool && $0.kind != .status }),
+              lastItem.kind == .needsApproval else { return nil }
+        return lastItem.text
+    }
+
+    /// The line a helper card shows: the step it's on while working, else
+    /// the start of its latest message.
+    func liveStatusLine(for agent: ClickyAgent) -> String {
+        let transcript = transcriptsByAgentID[agent.id] ?? []
+        if isRunning(agent) {
+            return transcript.last { $0.kind == .tool }?.text ?? "Getting started…"
+        }
+        if let approval = pendingMausBotApproval(for: agent) {
+            return "Needs your OK: \(approval)"
+        }
+        if pendingComputerUseRequest(for: agent) != nil {
+            return "Wants to use your Mac"
+        }
+        guard let latestItem = transcript.last(where: { $0.kind == .assistant || $0.kind == .error || $0.kind == .user }) else {
+            return agent.purpose.isEmpty ? "Ready for a task" : agent.purpose
+        }
+        let firstLine = latestItem.text
+            .components(separatedBy: .newlines)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        return latestItem.kind == .user ? "You: \(firstLine)" : firstLine
+    }
+
+    /// Teams: projects two or more helpers worked on, newest first. Read
+    /// from the projects folder's index (DottieProjects writes it).
+    func helperTeams() -> [(name: String, helperNames: [String])] {
+        guard let projectsFolderURL = sharedFolderURLs.first,
+              let indexData = try? Data(contentsOf: projectsFolderURL.appendingPathComponent("projects.json")) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        let helperNamesHere = Set(agents.map { $0.name.lowercased() })
+        return projects
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .compactMap { project -> (name: String, helperNames: [String])? in
+                var uniqueNames: [String] = []
+                for helperName in project.helperNames where helperNamesHere.contains(helperName.lowercased())
+                    && !uniqueNames.contains(where: { $0.caseInsensitiveCompare(helperName) == .orderedSame }) {
+                    uniqueNames.append(helperName)
+                }
+                return uniqueNames.count >= 2 ? (project.name, uniqueNames) : nil
+            }
     }
 }

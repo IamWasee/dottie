@@ -183,6 +183,16 @@ final class DottieCursorPet: ObservableObject {
             setCostume(nil)
             return "back to the normal arrow."
         }
+        // Special shapes unlock as Dottie levels up (DottieLevels).
+        if let specialShape = DottieLevels.unlockableShape(named: shapeName), case .shape(let specialEmoji) = specialShape.kind {
+            let levels = DottieLevels.shared
+            guard levels.isUnlocked(specialShape) else {
+                return "\(shapeName) is a special shape that unlocks at level \(specialShape.level); you're level \(levels.level). tease them that you have to earn it together."
+            }
+            let roams = (arguments["roam"] as? Bool) ?? false
+            setCostume(Costume(name: shapeName, emoji: specialEmoji, symbol: nil, roams: roams))
+            return "you're the \(shapeName) now, a special shape you unlocked. show off a little."
+        }
         var emoji = (arguments["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         var symbol = (arguments["symbol"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let candidateSymbol = symbol, NSImage(systemSymbolName: candidateSymbol, accessibilityDescription: nil) == nil {

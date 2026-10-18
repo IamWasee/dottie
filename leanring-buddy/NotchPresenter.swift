@@ -39,6 +39,14 @@ struct NotchPeekFile: Identifiable, Equatable {
     var id: String { url.path }
 }
 
+/// Something running in the background (a watch, focus mode), listed in
+/// the hover peek with a stop button.
+struct NotchStatusLine: Identifiable, Equatable {
+    let id: String
+    let symbolName: String
+    let text: String
+}
+
 @MainActor
 final class NotchPresenter: ObservableObject {
     enum Surface: Equatable {
@@ -121,8 +129,20 @@ final class NotchPresenter: ObservableObject {
     /// The closed notch grows a little on each side to show a working
     /// light and the count of Dots with something new.
     var showsCompactDotIndicators: Bool {
-        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn || isMeetingRecording
+        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn || isMeetingRecording || isKeepWorkingOn
+            || !statusLines.isEmpty || compactBadgeText != nil
     }
+
+    /// A 24/7 job is on (DottieKeepWorking): the closed notch shows a moon.
+    @Published var isKeepWorkingOn = false
+    /// Watches and focus mode, shown in the hover peek.
+    @Published var statusLines: [NotchStatusLine] = []
+    /// A few characters next to the closed notch, like focus mode's
+    /// minutes left ("24m").
+    @Published var compactBadgeText: String?
+    /// The button on the current card (Undo, Stop…), if it has one.
+    @Published private(set) var cardActionLabel: String?
+    private var cardAction: (() -> Void)?
 
     /// Meeting mode is listening: the closed notch shows a red light.
     @Published var isMeetingRecording = false
@@ -140,10 +160,11 @@ final class NotchPresenter: ObservableObject {
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
     var onRemoveLearnedDictionaryWord: ((String) -> Void)?
     var onStopScreenTask: (() -> Void)?
+    var onStopStatusLine: ((String) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
     /// Agent reports that arrived while the notch was busy with a voice turn.
-    private var pendingAgentUpdates: [(title: String, text: String, computerUseRequestAgentID: UUID?, learnedDictionaryWord: String?)] = []
+    private var pendingAgentUpdates: [(title: String, text: String, computerUseRequestAgentID: UUID?, learnedDictionaryWord: String?, action: (label: String, run: () -> Void)?)] = []
 
     // MARK: - Inputs from the companion
 
@@ -182,6 +203,8 @@ final class NotchPresenter: ObservableObject {
         lastResponseTitle = nil
         computerUseRequestAgentID = nil
         learnedDictionaryWord = nil
+        cardActionLabel = nil
+        cardAction = nil
         surface = .textResponse
         startAutoDismiss()
     }
@@ -223,8 +246,30 @@ final class NotchPresenter: ObservableObject {
     func showAgentUpdate(title: String, text: String, computerUseRequestAgentID: UUID? = nil) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
-        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: computerUseRequestAgentID, learnedDictionaryWord: nil))
+        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: computerUseRequestAgentID, learnedDictionaryWord: nil, action: nil))
         showNextPendingAgentUpdateIfIdle()
+    }
+
+    /// A card with an optional button (Undo, Stop…). Shown right away if
+    /// the notch is free, otherwise after the current voice turn.
+    func showCard(title: String, text: String, actionLabel: String? = nil, action: (() -> Void)? = nil) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        let cardButton = actionLabel.flatMap { label in action.map { (label: label, run: $0) } }
+        pendingAgentUpdates.append((title: title, text: trimmedText, computerUseRequestAgentID: nil, learnedDictionaryWord: nil, action: cardButton))
+        showNextPendingAgentUpdateIfIdle()
+    }
+
+    func runCardAction() {
+        let action = cardAction
+        cardAction = nil
+        cardActionLabel = nil
+        collapse()
+        action?()
+    }
+
+    func stopStatusLine(_ statusLineID: String) {
+        onStopStatusLine?(statusLineID)
     }
 
     /// Dictation learned a word from a fix the user made. Shipped Clicky
@@ -236,7 +281,8 @@ final class NotchPresenter: ObservableObject {
             title: "Added to your dictionary",
             text: "\u{201C}\(word)\u{201D}. Dictation will write it this way instead of \u{201C}\(originalText)\u{201D}.",
             computerUseRequestAgentID: nil,
-            learnedDictionaryWord: word
+            learnedDictionaryWord: word,
+            action: nil
         ))
         showNextPendingAgentUpdateIfIdle()
     }
@@ -271,6 +317,8 @@ final class NotchPresenter: ObservableObject {
         lastResponseTitle = nextUpdate.title
         computerUseRequestAgentID = nextUpdate.computerUseRequestAgentID
         learnedDictionaryWord = nextUpdate.learnedDictionaryWord
+        cardActionLabel = nextUpdate.action?.label
+        cardAction = nextUpdate.action?.run
         surface = .textResponse
         startAutoDismiss()
         // A permission question waits for an answer instead of timing out.

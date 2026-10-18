@@ -421,8 +421,10 @@ private enum VisionElementLocator {
         request.timeoutInterval = PointingRefiner.refinementTimeoutSeconds + 2
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        // The quickest box model that isn't busy right now.
+        let model = DottieModelPicker.shared.pick(.tiny)
         let requestBody: [String: Any] = [
-            "model": PointingRefiner.visionModel,
+            "model": model,
             "contents": [[
                 "role": "user",
                 "parts": (referenceImageJPEG.map { [["inlineData": ["mimeType": "image/jpeg", "data": $0.base64EncodedString()]]] } ?? [])
@@ -439,7 +441,7 @@ private enum VisionElementLocator {
         guard let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
         request.httpBody = requestBodyData
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: model),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return parseBox(from: GeminiServerSentEvents.text(from: responseData))
     }
