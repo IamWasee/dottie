@@ -186,6 +186,8 @@ final class GeminiCLIAgentRuntime {
         // configured, any placeholder works.
         processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
         processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
+        // Keys for the apps connected in Home → Tools (see prepareCLIHome).
+        processEnvironment.merge(DottieHelperMCPSync.helperSecretEnvironment()) { _, key in key }
         processEnvironment["DOTTIE_SEARCH_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/search"
         // Picks the cua-driver policy for this turn (see ClickyComputerUse).
         processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved
@@ -265,6 +267,11 @@ final class GeminiCLIAgentRuntime {
         // MCP servers the user added in Home → Brain, for the Brain and
         // every Dot.
         var mcpServers = DottieBrain.userMCPServers()
+        // Apps connected in Home → Tools. Their keys arrive as environment
+        // variables (DottieHelperMCPSync.helperSecretEnvironment).
+        for (serverName, serverSettings) in DottieHelperMCPSync.geminiCLIServers() where mcpServers[serverName] == nil {
+            mcpServers[serverName] = serverSettings
+        }
         if let cuaDriverURL {
             ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
             mcpServers[ClickyComputerUse.mcpServerName] = ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL)
@@ -281,7 +288,10 @@ final class GeminiCLIAgentRuntime {
             webSearchAgentInstructions,
             buildingAgentInstructions,
             macAppsAgentInstructions,
-            DottieBrowser.agentInstructions
+            DottieBrowser.agentInstructions,
+            DottieCLIToolsManager.helperInstructions.isEmpty
+                ? ""
+                : "# Command-line tools\n\n" + DottieCLIToolsManager.helperInstructions + "\n"
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)

@@ -13,5 +13,6 @@ enum DottieToolModules {
     static let all: [any DottieToolModule.Type] = [
         DottieEpisodicMemoryTools.self,
         DottieGameTools.self, DottieLevelTools.self, DottieKeepWorkingTools.self,
+        DottieConnectedTools.self,
     ]
 }
