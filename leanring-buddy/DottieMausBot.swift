@@ -417,7 +417,7 @@ enum DottieMausBotCLI {
     ) async -> DottieMausBotCommandResult {
         var environment = DottieMausBotLocator.childEnvironment()
         environment.merge(launcher.extraEnvironment) { _, launcherValue in launcherValue }
-        return await DottieProcessRunner.run(
+        return await DottieMausBotProcessRunner.run(
             executableURL: launcher.executableURL,
             arguments: launcher.leadingArguments + arguments,
             environment: environment,
@@ -437,7 +437,7 @@ enum DottieMausBotCLI {
 /// Runs a process to the end without blocking a thread, collecting stdout
 /// and the tail of stderr. Output is read as it arrives, so a big JSON
 /// document can't fill the pipe and stall the process.
-enum DottieProcessRunner {
+enum DottieMausBotProcessRunner {
     static func run(
         executableURL: URL,
         arguments: [String],
@@ -458,7 +458,7 @@ enum DottieProcessRunner {
         process.standardError = errorPipe
         process.standardInput = FileHandle.nullDevice
 
-        let collector = DottieProcessOutputCollector(onStandardErrorLine: onStandardErrorLine)
+        let collector = DottieMausBotOutputCollector(onStandardErrorLine: onStandardErrorLine)
         outputPipe.fileHandleForReading.readabilityHandler = { fileHandle in
             let availableData = fileHandle.availableData
             guard !availableData.isEmpty else { return }
@@ -508,7 +508,7 @@ enum DottieProcessRunner {
 }
 
 /// Collects a process's output from the pipes' background queues.
-private final class DottieProcessOutputCollector: @unchecked Sendable {
+private final class DottieMausBotOutputCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var collectedOutput = Data()
     private var collectedErrorTail = Data()
@@ -882,7 +882,7 @@ final class DottieMausBot: ObservableObject {
             claudeState = .notInstalled
             return
         }
-        let statusResult = await DottieProcessRunner.run(
+        let statusResult = await DottieMausBotProcessRunner.run(
             executableURL: claudeURL,
             arguments: ["auth", "status", "--json"],
             environment: DottieMausBotLocator.childEnvironment(),
@@ -986,7 +986,7 @@ final class DottieMausBot: ObservableObject {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "\(nodeBinFolderPath):/usr/bin:/bin:/usr/sbin:/sbin"
         environment["NO_COLOR"] = "1"
-        return await DottieProcessRunner.run(
+        return await DottieMausBotProcessRunner.run(
             executableURL: DotsRuntimeInstaller.nodeBinFolderURL.appendingPathComponent("npm"),
             arguments: [
                 "install", "--global",
