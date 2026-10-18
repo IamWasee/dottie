@@ -128,7 +128,7 @@ final class NotchWindowManager {
             }
             .store(in: &presenterCancellables)
         notchPresenter.$isScreenJournalOn
-            .combineLatest(notchPresenter.$isMeetingRecording)
+            .combineLatest(notchPresenter.$isMeetingRecording, notchPresenter.$statusLines, notchPresenter.$compactBadgeText)
             .removeDuplicates { $0 == $1 }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -179,8 +179,9 @@ final class NotchWindowManager {
             if isHovering {
                 // One row for the eyes and buttons, a row per Dot, then the
                 // newest files the Dots made.
-                let peekRowCount = notchPresenter.peekDotSummaries.count
-                let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10
+                let peekRowCount = notchPresenter.peekDotSummaries.count + notchPresenter.statusLines.count
+                let hasBothLists = !notchPresenter.statusLines.isEmpty && !notchPresenter.peekDotSummaries.isEmpty
+                let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10 + (hasBothLists ? 6 : 0)
                 let peekFilesHeight: CGFloat = notchPresenter.peekFiles.isEmpty ? 0 : Self.peekFilePileHeight + 8
                 let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty
                 contentSize = CGSize(
