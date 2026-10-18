@@ -555,7 +555,7 @@ final class ClickyRoster: ObservableObject {
             routineTitle: routineTitle
         ))
         if finalItem?.kind != .needsApproval && computerUseRequest == nil {
-            postHelperFinished(agent: finishedAgent, result: finalReply)
+            postHelperFinished(agent: finishedAgent, result: finalReply, succeeded: succeeded)
         }
         // Next task in line, unless the Dot is waiting on the user to allow
         // computer use (the allowed turn runs first, then the line resumes).
@@ -1043,18 +1043,28 @@ extension ClickyRoster {
             computerUseRequest: computerUseRequest,
             routineTitle: nil
         ))
-        postHelperFinished(agent: finishedAgent, result: finalReply)
+        postHelperFinished(agent: finishedAgent, result: finalReply, succeeded: result.succeeded)
     }
 
-    /// Tells listeners (episodic memory) a helper turn is done.
-    fileprivate func postHelperFinished(agent finishedAgent: ClickyAgent, result: String) {
+    /// Tells listeners (episodic memory, XP) a helper task is done, once
+    /// per finished task, whichever engine ran it.
+    fileprivate func postHelperFinished(agent finishedAgent: ClickyAgent, result: String, succeeded: Bool) {
         let taskText = transcriptsByAgentID[finishedAgent.id]?
             .last { $0.kind == .user || $0.kind == .routineRun }?
             .text ?? ""
         NotificationCenter.default.post(
             name: helperFinishedNotificationName,
             object: nil,
-            userInfo: ["helper": finishedAgent.name, "task": taskText, "result": result]
+            userInfo: [
+                "agentID": finishedAgent.id.uuidString,
+                "helper": finishedAgent.name,
+                "title": finishedAgent.name,
+                "task": taskText,
+                "result": result,
+                "summary": String(result.prefix(400)),
+                "succeeded": succeeded,
+                "engine": finishedAgent.lastHelperEngine ?? "gemini"
+            ]
         )
     }
 
