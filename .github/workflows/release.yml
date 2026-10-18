@@ -131,6 +131,8 @@ jobs:
           if [ -n "$DOTTIE_APP_SECRET" ]; then
             /usr/libexec/PlistBuddy -c "Set :ClickyAppSharedSecret $DOTTIE_APP_SECRET" "$plist"
           fi
+          # In-app updates read this repository's releases.
+          /usr/libexec/PlistBuddy -c "Set :DottieUpdateRepository $GITHUB_REPOSITORY" "$plist"
 
       - name: Build Dottie.app
         env:
@@ -156,6 +158,55 @@ jobs:
             ENABLE_HARDENED_RUNTIME=NO \
             2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)|cua-driver|Permission denied|Command .* failed" || true
           grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Sign with Dottie's own certificate
+        # macOS remembers what you allowed by the app's signing identity. An
+        # ad-hoc build gets a new one every time, so every update asked for
+        # permissions again. Signing every release with the same certificate
+        # (repository secrets DOTTIE_SIGNING_P12, base64 of a .p12, and
+        # DOTTIE_SIGNING_PASSWORD) keeps them. Without the secrets the build
+        # stays ad-hoc. Trial runs sign too, so this step is tested before a
+        # release depends on it.
+        env:
+          SIGNING_P12: ${{ secrets.DOTTIE_SIGNING_P12 }}
+          SIGNING_PASSWORD: ${{ secrets.DOTTIE_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_P12" ]; then
+            echo "No DOTTIE_SIGNING_P12 secret: keeping the ad-hoc signature."
+            exit 0
+          fi
+          app=build/Build/Products/Release/Dottie.app
+          keychain="$RUNNER_TEMP/dottie-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          echo "$SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/dottie-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/dottie-signing.p12" -k "$keychain" -P "$SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/dottie-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # A self-signed certificate has to be trusted for code signing.
+          security find-certificate -c "Dottie Self-Signed Code Signing" -p "$keychain" > "$RUNNER_TEMP/dottie-signing.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/dottie-signing.pem"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/Dottie Self-Signed/ {print $2; exit}')"
+          if [ -z "$identity" ]; then
+            security find-identity -p codesigning "$keychain"
+            echo "::error::The signing certificate isn't usable for code signing."
+            exit 1
+          fi
+          # Inside out: helper executables, then nested bundles, then the app.
+          # Nested code keeps its own entitlements (Sparkle's XPC services).
+          find "$app/Contents" \( -path "*/Helpers/*" -o -path "*/Frameworks/*" \) -type f -perm -u+x | while read -r nested; do
+            codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements,flags "$nested"
+          done
+          find "$app/Contents" -depth \( -name "*.framework" -o -name "*.xpc" -o -name "*.app" \) | while read -r bundle; do
+            codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements,flags "$bundle"
+          done
+          codesign --force --sign "$identity" --keychain "$keychain" \
+            --entitlements leanring-buddy/leanring-buddy.entitlements "$app"
+          codesign -d -r- "$app"
+          security delete-keychain "$keychain"
 
       - name: Check the app
         run: |

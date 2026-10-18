@@ -252,6 +252,8 @@ struct CompanionPanelView: View {
                 screenContentPermissionRow
             }
 
+            AllowEverythingButton()
+                .padding(.top, 8)
         }
     }
 

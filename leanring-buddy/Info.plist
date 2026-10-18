@@ -8,6 +8,8 @@
 	<string>https://your-worker-name.your-subdomain.workers.dev</string>
 	<key>ClickyAppSharedSecret</key>
 	<string></string>
+	<key>DottieUpdateRepository</key>
+	<string>IamWasee/dottie</string>
 	<key>CompanionVoiceMode</key>
 	<string>live</string>
 	<key>OnboardingVideoURL</key>
