@@ -128,7 +128,7 @@ final class NotchWindowManager {
             }
             .store(in: &presenterCancellables)
         notchPresenter.$isScreenJournalOn
-            .combineLatest(notchPresenter.$isMeetingRecording)
+            .combineLatest(notchPresenter.$isMeetingRecording, notchPresenter.$isKeepWorkingOn)
             .removeDuplicates { $0 == $1 }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -182,7 +182,8 @@ final class NotchWindowManager {
                 let peekRowCount = notchPresenter.peekDotSummaries.count
                 let peekListHeight: CGFloat = peekRowCount == 0 ? 0 : CGFloat(peekRowCount) * 22 + 10
                 let peekFilesHeight: CGFloat = notchPresenter.peekFiles.isEmpty ? 0 : Self.peekFilePileHeight + 8
-                let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty
+                // The stop button for a 24/7 job needs the wider row too.
+                let isPeekEmpty = peekRowCount == 0 && notchPresenter.peekFiles.isEmpty && !notchPresenter.isKeepWorkingOn
                 contentSize = CGSize(
                     width: isPeekEmpty ? geometry.notchWidth + 80 : max(geometry.notchWidth + 160, notchPresenter.peekFiles.isEmpty ? 360 : 390),
                     height: geometry.notchHeight + 28 + peekListHeight + peekFilesHeight

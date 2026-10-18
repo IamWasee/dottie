@@ -1540,6 +1540,13 @@ final class CompanionManager: ObservableObject {
             runScreenTask(job)
             return "stopped the old one and started it again from the beginning. say so in a few words."
         }
+        if DottieScreenLock.shared.isLocked {
+            // macOS doesn't let anything see or click the screen while it's
+            // locked; the job starts by itself on unlock.
+            queuedScreenTasks.append(job)
+            DottieFunPack.shared.noteScreenJobWaitingForUnlock(job.text)
+            return "the mac's screen is locked, so this waits in line and starts by itself as soon as the user unlocks. say that in a few words."
+        }
         if screenTaskRunner.isRunning {
             queuedScreenTasks.append(job)
             print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
@@ -1569,6 +1576,7 @@ final class CompanionManager: ObservableObject {
             return "saved as \"\(item.name)\" in the picture library."
         }
         screenTaskRunner.onWillClick = { [weak self] point, displayFrame in
+            await DottieScreenLock.shared.waitUntilUnlocked()
             guard let self else { return }
             // Fly there first so the user sees what's about to be clicked.
             self.livePointingRefinementTask?.cancel()
@@ -1577,6 +1585,7 @@ final class CompanionManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 750_000_000)
         }
         currentScreenTaskText = taskText
+        currentScreenJob = job
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
         // Pictures named in the job count even when Live didn't pass them.
         let referenceItems = job.referenceImageNames.isEmpty
@@ -1595,6 +1604,44 @@ final class CompanionManager: ObservableObject {
     private var currentScreenTaskText: String? {
         didSet { saveOpenScreenJobs() }
     }
+    /// The running job, to put back in line if the screen locks.
+    private var currentScreenJob: ScreenJob?
+
+    // MARK: - Locked screen (DottieScreenLock)
+
+    /// The screen locked mid-job: the job stops and goes back to the front
+    /// of the line with a note to carry on from where it got to, and starts
+    /// again on unlock. Returns the job's text, or nil if none was running.
+    func pauseScreenJobForLock() -> String? {
+        guard screenTaskRunner.isRunning, let runningText = currentScreenTaskText else { return nil }
+        let runningJob = currentScreenJob ?? ScreenJob(text: runningText)
+        screenTaskRunner.stop()
+        currentScreenTaskText = nil
+        currentScreenJob = nil
+        notchPresenter.endScreenTask()
+        clearDetectedElementLocation()
+        let resumeNote = "\n\n(this job was paused partway when the screen locked. look at the screen first and carry on from where it got to; don't redo steps that are already done.)"
+        let resumedText = runningJob.text.contains("paused partway when the screen locked") ? runningJob.text : runningJob.text + resumeNote
+        queuedScreenTasks.insert(ScreenJob(
+            text: resumedText,
+            isGame: runningJob.isGame,
+            referenceImageNames: runningJob.referenceImageNames,
+            repliesToPhone: runningJob.repliesToPhone,
+            restart: true
+        ), at: 0)
+        print("🔒 Paused the screen job until unlock: \(runningText)")
+        return runningText
+    }
+
+    /// The screen unlocked: waiting jobs start again.
+    func resumeScreenJobsAfterUnlock() {
+        startNextQueuedScreenTask()
+    }
+
+    /// Has Dottie say something on her own once she's free (games use it).
+    func speakOnHerOwn(recordedUserText: String, instructionText: String) {
+        speakWhenFree(recordedUserText: recordedUserText, instructionText: instructionText)
+    }
 
     /// "on it", plus how many jobs are waiting.
     private var screenTaskTitle: String {
@@ -1608,7 +1655,7 @@ final class CompanionManager: ObservableObject {
 
     /// Starts the next waiting job, if there is one.
     private func startNextQueuedScreenTask() {
-        guard !screenTaskRunner.isRunning, !queuedScreenTasks.isEmpty else { return }
+        guard !screenTaskRunner.isRunning, !queuedScreenTasks.isEmpty, !DottieScreenLock.shared.isLocked else { return }
         let nextJob = queuedScreenTasks.removeFirst()
         print("🧭 Next queued screen task: \(nextJob.text)")
         runScreenTask(nextJob)
@@ -1673,6 +1720,7 @@ final class CompanionManager: ObservableObject {
         case .finished(let answer):
             print("🧭 Screen task finished: \(answer)")
             resultText = answer
+            DottieLevels.shared.award(.screenJob)
         case .failed(let reason):
             print("🧭 Screen task failed: \(reason)")
             resultText = "it couldn't be finished: \(reason)"
@@ -1787,6 +1835,7 @@ final class CompanionManager: ObservableObject {
         if let guideGoal = currentGuideGoal {
             brain.record(.guide, "showed the user how to: \(guideGoal)")
             currentGuideGoal = nil
+            if spokenGoodbye != nil { DottieLevels.shared.award(.guide) }
         }
         keepsPointingUntilCleared = false
         clearDetectedElementLocation()
@@ -2454,8 +2503,15 @@ final class CompanionManager: ObservableObject {
         configureCursorPet()
         configureMeetingMode()
         configurePhoneBridge()
+        DottieFunPack.shared.attach(to: self)
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
             guard let self else { return }
+            DottieFunPack.shared.helperTurnFinished(
+                agentID: turnResult.agent.id,
+                reply: turnResult.finalReply,
+                succeeded: turnResult.succeeded,
+                routineTitle: turnResult.routineTitle
+            )
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
             let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
             if let computerUseRequest = turnResult.computerUseRequest {

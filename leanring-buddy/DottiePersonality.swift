@@ -6,6 +6,8 @@
 //  little dot who lives in the notch, curious, loyal, remembers the user);
 //  the picker in Settings changes how she talks. The chosen section is
 //  placed near the top of the voice prompts, so it shapes every answer.
+//  `.custom` is the one the user made in Settings ("grumpy pirate who
+//  loves cats"); its details live in DottieCustomPersonalities.
 //
 
 import Foundation
@@ -15,6 +17,11 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
     case patientTutor
     case hypeBuddy
     case deadpan
+    /// The user's own (DottieCustomPersonalities.shared.active).
+    case custom
+
+    /// The built-in ones, for the picker (custom ones are listed after).
+    static let presets: [DottiePersonality] = [.cheekyFriend, .patientTutor, .hypeBuddy, .deadpan]
 
     static let defaultsKey = "dottiePersonality"
     static let defaultPersonality: DottiePersonality = .cheekyFriend
@@ -31,6 +38,7 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
         case .patientTutor: return "Patient tutor"
         case .hypeBuddy: return "Hype buddy"
         case .deadpan: return "Dry and sarcastic"
+        case .custom: return DottieCustomPersonalities.savedActive()?.name ?? "Your own"
         }
     }
 
@@ -40,6 +48,7 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
         case .patientTutor: return "Calm, kind and encouraging. Great for learning."
         case .hypeBuddy: return "High energy. Cheers you on."
         case .deadpan: return "Deadpan one-liners, still helpful."
+        case .custom: return DottieCustomPersonalities.savedActive()?.summary ?? "One you made yourself."
         }
     }
 
@@ -55,6 +64,8 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
 
     private var styleSection: String {
         switch self {
+        case .custom:
+            return DottieCustomPersonalities.savedActive()?.promptSection ?? DottiePersonality.cheekyFriend.styleSection
         case .cheekyFriend:
             return """
             how you talk (cheeky friend):

@@ -121,8 +121,11 @@ final class NotchPresenter: ObservableObject {
     /// The closed notch grows a little on each side to show a working
     /// light and the count of Dots with something new.
     var showsCompactDotIndicators: Bool {
-        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn || isMeetingRecording
+        unreadDotCount > 0 || isAnyDotWorking || isScreenJournalOn || isMeetingRecording || isKeepWorkingOn
     }
+
+    /// A 24/7 job is on (DottieKeepWorking): the closed notch shows a moon.
+    @Published var isKeepWorkingOn = false
 
     /// Meeting mode is listening: the closed notch shows a red light.
     @Published var isMeetingRecording = false

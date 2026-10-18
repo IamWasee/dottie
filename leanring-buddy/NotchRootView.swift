@@ -47,6 +47,10 @@ struct NotchRootView: View {
                     .padding(.bottom, 10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+
+            // Level-ups and unlocked notch effects (DottieLevels).
+            DottieNotchEffectBorder(outline: shapeOutline, isExpanded: isExpanded)
+            DottieLevelUpConfetti()
         }
         .frame(width: notchPresenter.shapeSize.width, height: notchPresenter.shapeSize.height, alignment: .top)
         .clipShape(shapeOutline)
@@ -91,6 +95,11 @@ struct NotchRootView: View {
                             .fill(Color.red.opacity(0.9))
                             .frame(width: 6, height: 6)
                             .help("Dottie is taking meeting notes. Stop them in Home → Meetings, or tell Dottie to stop.")
+                    } else if notchPresenter.isKeepWorkingOn {
+                        Image(systemName: "moon.stars.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(Color(red: 1, green: 0.84, blue: 0.4))
+                            .help("A 24/7 job is running and your Mac is staying awake. Hover the notch to stop it.")
                     } else if notchPresenter.isAnyDotWorking {
                         NotchWorkingLight()
                     } else if notchPresenter.isScreenJournalOn {
@@ -152,6 +161,23 @@ struct NotchRootView: View {
             .buttonStyle(.plain)
             .pointerCursor()
             Spacer(minLength: 0)
+            if notchPresenter.isKeepWorkingOn {
+                Button(action: { DottieKeepWorking.shared.stopAll() }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "moon.stars.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("stop 24/7")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundColor(Color(red: 1, green: 0.84, blue: 0.4))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Stop the 24/7 job and let your Mac sleep again")
+            }
             Button(action: { notchPresenter.onOpenHome?() }) {
                 Image(systemName: "house.fill")
                     .font(.system(size: 11, weight: .semibold))
