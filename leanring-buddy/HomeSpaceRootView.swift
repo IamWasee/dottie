@@ -461,6 +461,7 @@ private struct HomeSettingsView: View {
                 settingsGroup(title: "Updates") {
                     HomeUpdateSettings()
                 }
+                settingsGroup(title: "Helpers: Claude via MausBot") { DottieMausBotSettingsCard() }
 
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
