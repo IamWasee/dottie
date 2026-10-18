@@ -53,10 +53,13 @@ protocol DottieToolModule {
     static var tools: [DottieTool] { get }
     /// Lines added to the voice prompt (keep them short), or "".
     static var voicePromptSection: String { get }
+    /// Lines added to every helper's instructions, or "".
+    static var helperPromptSection: String { get }
 }
 
 extension DottieToolModule {
     static var voicePromptSection: String { "" }
+    static var helperPromptSection: String { "" }
 }
 
 @MainActor
@@ -80,7 +83,15 @@ enum DottieToolRegistry {
     }
 
     static var voicePromptSections: String {
-        DottieToolModules.all.map { $0.voicePromptSection.trimmingCharacters(in: .whitespacesAndNewlines) }
+        joinedSections(DottieToolModules.all.map { $0.voicePromptSection })
+    }
+
+    static var helperPromptSections: String {
+        joinedSections(DottieToolModules.all.map { $0.helperPromptSection })
+    }
+
+    private static func joinedSections(_ sections: [String]) -> String {
+        sections.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
     }
