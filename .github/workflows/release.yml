@@ -65,12 +65,18 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+          # Optional free key from build.nvidia.com: NVIDIA models answer
+          # when every Gemini model is busy.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           npm ci
           npx wrangler deploy 2>&1 | tee deploy.log
           printf '%s' "$GEMINI_API_KEY" | npx wrangler secret put GEMINI_API_KEY
           if [ -n "$DOTTIE_APP_SECRET" ]; then
             printf '%s' "$DOTTIE_APP_SECRET" | npx wrangler secret put APP_SHARED_SECRET
+          fi
+          if [ -n "$NVIDIA_API_KEY" ]; then
+            printf '%s' "$NVIDIA_API_KEY" | npx wrangler secret put NVIDIA_API_KEY
           fi
           worker_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
