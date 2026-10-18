@@ -902,7 +902,9 @@ final class CompanionManager: ObservableObject {
     }
 
     private static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
-        personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
+        let featureSections = DottieToolRegistry.voicePromptSections
+        return personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
+            + (featureSections.isEmpty ? "" : "\n\n" + featureSections)
     }
 
     /// The Live prompt with what the second brain knows about the user.
