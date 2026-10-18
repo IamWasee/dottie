@@ -61,6 +61,9 @@ final class DottieGuide {
         /// Tours only: something Dottie does herself to bring the next part
         /// into view (scroll down to the templates, open a tab).
         var reveal: Reveal? = nil
+        /// Walkthroughs only: go straight on once it's said, without
+        /// waiting for a click or "next" (a tour of Dottie's own app).
+        var movesOnWhenSaid = false
     }
 
     struct Reveal {
@@ -83,6 +86,7 @@ final class DottieGuide {
     private static let maximumRounds = 15
     private static let maximumTourRounds = 6
     private static let maximumTourBeats = 12
+    private static let maximumScriptedSteps = 30
     private static let clickWaitTimeoutSeconds: TimeInterval = 120
     private static let lookWaitTimeoutSeconds: TimeInterval = 240
     /// Clicks this close to the target still count.
@@ -99,6 +103,10 @@ final class DottieGuide {
     private(set) var currentGoal: String?
     private var guideTask: Task<Void, Never>?
     private var clickMonitor: Any?
+    /// Clicks in Dottie's own windows, for walkthroughs of her own app
+    /// (global monitors only see clicks in other apps).
+    private var ownWindowClickMonitor: Any?
+    private var watchesOwnWindows = false
     private var stepWaitContinuation: CheckedContinuation<StepWaitResult, Never>?
     private var activeTargetRect: CGRect?
 
@@ -114,6 +122,22 @@ final class DottieGuide {
             case .steps: goodbye = await self.runSteps(goal: goal)
             case .tour: goodbye = await self.runTour(goal: goal)
             }
+            guard !Task.isCancelled else { return }
+            self.finish(spokenGoodbye: goodbye)
+        }
+    }
+
+    /// A walkthrough of Dottie's own app (DottieSelfKnowledge). The steps
+    /// are known ahead, so there's no screenshot and no model call:
+    /// `nextStep` opens the right screen, finds the control and returns the
+    /// step, or nil when the walkthrough is over.
+    func startScripted(goal: String, nextStep: @escaping @MainActor (_ index: Int) async -> Step?) {
+        stop()
+        currentGoal = goal
+        watchesOwnWindows = true
+        guideTask = Task { [weak self] in
+            guard let self else { return }
+            let goodbye = await self.runScripted(nextStep: nextStep)
             guard !Task.isCancelled else { return }
             self.finish(spokenGoodbye: goodbye)
         }
@@ -142,6 +166,7 @@ final class DottieGuide {
         activeTargetRect = nil
         guideTask = nil
         currentGoal = nil
+        watchesOwnWindows = false
         onEnd?(spokenGoodbye)
     }
 
@@ -214,6 +239,43 @@ final class DottieGuide {
             try? await Task.sleep(nanoseconds: 900_000_000)
         }
         return "That's as far as I can take you for now."
+    }
+
+    // MARK: - Scripted walkthroughs
+
+    private func runScripted(nextStep: @MainActor (_ index: Int) async -> Step?) async -> String? {
+        var consecutiveClicksElsewhere = 0
+        for index in 0..<Self.maximumScriptedSteps {
+            if Task.isCancelled { return nil }
+            guard let step = await nextStep(index) else { return nil }
+            if Task.isCancelled { return nil }
+            onProgress?("step \(index + 1): \(step.say)")
+            await presentStep?(step)
+            if Task.isCancelled { return nil }
+            if step.kind == .done { return nil }
+            if step.movesOnWhenSaid {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            let targetRect = step.kind == .click ? step.targetRect : nil
+            let waitResult = await waitForStepCompletion(
+                targetRect: targetRect,
+                timeout: targetRect == nil ? Self.lookWaitTimeoutSeconds : Self.clickWaitTimeoutSeconds
+            )
+            switch waitResult {
+            case .clickedTarget, .userSaidNext:
+                consecutiveClicksElsewhere = 0
+            case .clickedElsewhere:
+                // Same as steps mode: never nag; two misses in a row end it.
+                consecutiveClicksElsewhere += 1
+                if consecutiveClicksElsewhere >= 2 { return nil }
+            case .timedOut:
+                return nil
+            }
+            // Let the screen change (a page opens, a field appears).
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return nil
     }
 
     // MARK: - Tour mode
@@ -310,6 +372,18 @@ final class DottieGuide {
                 self?.handleUserClick(at: clickLocation)
             }
         }
+        if watchesOwnWindows {
+            ownWindowClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                // The notch and other panels aren't part of the walkthrough.
+                if !(event.window is NSPanel) {
+                    let clickLocation = NSEvent.mouseLocation
+                    Task { @MainActor [weak self] in
+                        self?.handleUserClick(at: clickLocation)
+                    }
+                }
+                return event
+            }
+        }
     }
 
     private func removeClickMonitor() {
@@ -317,6 +391,10 @@ final class DottieGuide {
             NSEvent.removeMonitor(clickMonitor)
         }
         clickMonitor = nil
+        if let ownWindowClickMonitor {
+            NSEvent.removeMonitor(ownWindowClickMonitor)
+        }
+        ownWindowClickMonitor = nil
     }
 
     private func handleUserClick(at clickLocation: CGPoint) {

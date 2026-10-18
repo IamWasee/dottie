@@ -95,6 +95,12 @@ struct HomeSpaceRootView: View {
                 selectedSection = .clickys
             }
         }
+        .onReceive(DottieHomeNavigator.shared.$requestedSection) { requestedSection in
+            // Dottie opened a page herself (about_me open, or a walkthrough).
+            guard let requestedSection else { return }
+            selectedSection = requestedSection
+            DottieHomeNavigator.shared.requestedSection = nil
+        }
     }
 
     private var iconRail: some View {
@@ -113,6 +119,7 @@ struct HomeSpaceRootView: View {
                 .buttonStyle(.plain)
                 .pointerCursor()
                 .help(section.rawValue)
+                .accessibilityLabel(Text(section.rawValue))
             }
             Spacer()
         }
@@ -448,6 +455,7 @@ private struct HomeSettingsView: View {
     @ObservedObject private var dictationDictionary = DictationDictionary.shared
 
     var body: some View {
+        ScrollViewReader { scrollProxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 Text("Settings")
@@ -626,6 +634,15 @@ private struct HomeSettingsView: View {
             .padding(24)
             .frame(maxWidth: 560, alignment: .leading)
         }
+        .onReceive(DottieHomeNavigator.shared.$requestedSettingsGroup) { requestedGroup in
+            // Dottie opened a section herself: scroll to it once laid out.
+            guard let requestedGroup else { return }
+            DottieHomeNavigator.shared.requestedSettingsGroup = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                withAnimation { scrollProxy.scrollTo(requestedGroup, anchor: .top) }
+            }
+        }
+        }
     }
 
     private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -646,6 +663,8 @@ private struct HomeSettingsView: View {
                     .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
             )
         }
+        // Lets Dottie scroll straight to a section (DottieHomeNavigator).
+        .id(title)
     }
 
     private func settingsRow<Accessory: View>(label: String, @ViewBuilder accessory: () -> Accessory) -> some View {

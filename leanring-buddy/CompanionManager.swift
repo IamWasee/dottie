@@ -329,6 +329,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        DottieSelfKnowledge.companionManager = self
         loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
         refreshAllPermissions()
@@ -1724,7 +1725,17 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Guides (teaching the app on screen)
 
-    private func startGuide(goal: String, modeName: String) -> String {
+    /// A walkthrough of Dottie's own app (DottieSelfKnowledge): its steps
+    /// are known ahead, so there are no screenshots or model calls.
+    func startSelfWalkthrough(goal: String, nextStep: @escaping @MainActor (Int) async -> DottieGuide.Step?) -> String {
+        startGuide(goal: goal, modeName: DottieGuide.Mode.steps.rawValue, scriptedNextStep: nextStep)
+    }
+
+    private func startGuide(
+        goal: String,
+        modeName: String,
+        scriptedNextStep: (@MainActor (Int) async -> DottieGuide.Step?)? = nil
+    ) -> String {
         stopScreenTask()
         let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
         currentGuideGoal = goal
@@ -1743,7 +1754,11 @@ final class CompanionManager: ObservableObject {
             self?.guideDidEnd(spokenGoodbye: spokenGoodbye)
         }
         notchPresenter.showScreenTaskStep("looking at your screen", title: "showing you")
-        guide.start(goal: goal, mode: mode)
+        if let scriptedNextStep {
+            guide.startScripted(goal: goal, nextStep: scriptedNextStep)
+        } else {
+            guide.start(goal: goal, mode: mode)
+        }
         return mode == .tour
             ? "started the tour. say only a few words like 'okay, let me show you around'; each part's line comes to you next."
             : "started. say only a few words like 'let me show you'; each step's line comes to you next."
