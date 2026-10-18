@@ -121,7 +121,11 @@ final class GeminiLiveVoiceClient {
     /// each new session so memory survives reconnects and relaunches.
     var recentConversationHistory: [(userTranscript: String, modelTranscript: String)] = []
     /// Prebuilt Gemini voice name (e.g. "Kore", "Puck"). Persisted by the panel.
-    var voiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore"
+    var voiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore" {
+        didSet {
+            if voiceName != oldValue { startFreshSessionSoon() }
+        }
+    }
 
     // MARK: - State
 
@@ -318,6 +322,20 @@ final class GeminiLiveVoiceClient {
         pendingOutgoingMessages.removeAll()
         isRecordingCurrentTurnMessages = false
         outgoingMessageLock.unlock()
+    }
+
+    /// The voice and system instruction are only read at setup, and a
+    /// resumed session keeps the ones it started with. So after a change,
+    /// drop the resumption handle (memory comes back through
+    /// recentConversationHistory) and reconnect once the current answer ends.
+    func startFreshSessionSoon() {
+        sessionResumptionHandle = nil
+        guard connectionState != .disconnected else { return }
+        if isModelTurnInProgress || isUserTurnOpen {
+            shouldDisconnectAfterCurrentTurn = true
+        } else {
+            disconnect()
+        }
     }
 
     // MARK: - Connection

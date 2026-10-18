@@ -614,6 +614,8 @@ struct CompanionPanelView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
             )
+
+            VoicePreviewButton(voiceName: companionManager.selectedVoiceName)
         }
         .padding(.vertical, 4)
     }
@@ -622,6 +624,7 @@ struct CompanionPanelView: View {
         let isSelected = companionManager.selectedVoiceName == voiceName
         return Button(action: {
             companionManager.setSelectedVoiceName(voiceName)
+            DottieVoicePreview.shared.play(voiceName)
         }) {
             Text(voiceName)
                 .font(.system(size: 11, weight: .medium))
@@ -733,4 +736,29 @@ struct CompanionPanelView: View {
         }
     }
 
+}
+
+/// Plays (or stops) a sample of the chosen voice in the panel.
+private struct VoicePreviewButton: View {
+    let voiceName: String
+    @ObservedObject private var voicePreview = DottieVoicePreview.shared
+
+    var body: some View {
+        Button(action: { voicePreview.toggle(voiceName) }) {
+            Group {
+                if voicePreview.loadingVoiceName == voiceName {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: voicePreview.playingVoiceName == voiceName ? "stop.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textSecondary)
+                }
+            }
+            .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .padding(.leading, 6)
+        .help("Hear \(voiceName)")
+    }
 }
