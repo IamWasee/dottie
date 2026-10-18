@@ -108,6 +108,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pick Xcode
+        # The newest Xcode 26 on the runner, so Dottie can use Apple's
+        # on-device model on Macs that have it. Falls back to the default.
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -n "$xcode" ]; then
+            sudo xcode-select -s "$xcode/Contents/Developer"
+          else
+            echo "::warning::No Xcode 26 on this runner: building with the default Xcode."
+          fi
+          xcodebuild -version
+
       - name: Pick the version
         id: version
         env:
