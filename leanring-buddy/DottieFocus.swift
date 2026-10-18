@@ -381,7 +381,8 @@ final class DottieFocus: ObservableObject {
 
     private static func roastLines(for personality: DottiePersonality) -> [String] {
         switch personality {
-        case .cheekyFriend:
+        // A personality the user made gets the cheeky lines.
+        case .cheekyFriend, .custom:
             return [
                 "{thing}? Bold. Not today, though. {minutes} minutes to go.",
                 "Nice try. {thing} will still be there in {minutes} minutes, I promise.",
