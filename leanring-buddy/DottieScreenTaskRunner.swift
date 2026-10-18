@@ -96,6 +96,16 @@ final class DottieScreenTaskRunner {
     /// The windows on screen just before the last click, to notice a link
     /// that opened a new tab or window, maybe in an app behind this one.
     private var windowsBeforeLastClick: WindowSnapshot?
+    /// The model for this job's steps (DottieModelPicker), and how hard
+    /// the job looked: simple jobs use the quickest model.
+    private var jobModel: String?
+    private var jobTier: DottieModelPicker.Tier = .normal
+    /// "⚡ done from memory in 2.1s" when the last job used a replay.
+    private(set) var lastReplayReport: String?
+    /// True while a replay plays (no Gemini calls, quicker cursor).
+    private(set) var isReplaying = false
+    /// A replay the user asked for by name, for the job with this wording.
+    var requestedReplay: (id: UUID, taskText: String)?
 
     var isRunning: Bool { runTask != nil }
 
@@ -111,6 +121,9 @@ final class DottieScreenTaskRunner {
         walkSpeedPointsPerSecond = 220
         lastWalk = nil
         lastRequestStartedAt = nil
+        jobModel = nil
+        jobTier = .normal
+        lastReplayReport = nil
         pendingExtraImageParts = []
         lookAroundHeadings = []
         gameMap = isGameMode ? DottieGameMap(gameName: Self.currentGameName()) : nil
@@ -159,7 +172,44 @@ final class DottieScreenTaskRunner {
         var recentActionSignatures: [String] = []
         var actionLog: [String] = []
         let lessonSelection = DottieScreenLessons.shared.select(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
-        let lessonsText = lessonSelection.promptText
+        var lessonsText = lessonSelection.promptText
+
+        // Instant replay: the same job done before in this app or site
+        // runs again from memory, and Gemini only steps in where the
+        // screen doesn't match.
+        let jobContext = DottieReplayContext.current()
+        var recordedSteps: [DottieReplay.Step] = []
+        var unconfirmedStepIndices: [Int] = []
+        var replayUsed: DottieReplay?
+        var replayedStepCount = 0
+        if !isGameMode, referenceImageParts.isEmpty {
+            let requestedReplay = self.requestedReplay.flatMap { $0.taskText == taskText ? DottieReplayStore.shared.replay(withID: $0.id) : nil }
+            self.requestedReplay = nil
+            if let replay = requestedReplay ?? DottieReplayStore.shared.bestMatch(for: taskText, context: jobContext) {
+                switch await playReplay(replay) {
+                case .stopped:
+                    return .stopped
+                case .finished(let answer, let playedSteps):
+                    if let answer { return .finished(answer: answer) }
+                    replayUsed = replay
+                    recordedSteps = playedSteps
+                    replayedStepCount = playedSteps.count
+                    lessonsText += "\nDottie already did every step of this job from memory: \(playedSteps.map(\.summary).joined(separator: "; ")). Check the screen: if the task is done, call finish with the answer, read fresh from the screen. If not, carry on from here."
+                case .handedOver(let playedSteps, let note):
+                    replayUsed = replay
+                    recordedSteps = playedSteps
+                    replayedStepCount = playedSteps.count
+                    if !playedSteps.isEmpty { lessonsText += "\n" + note }
+                }
+            }
+        }
+        // How hard the job is decides the model; asked while the first
+        // screenshot is taken.
+        let isGameJob = isGameMode
+        let tierTask = Task { () -> DottieModelPicker.Tier in
+            if isGameJob { return .tiny }
+            return await DottieModelPicker.isSimpleScreenJob(taskText) ? .tiny : .normal
+        }
 
         let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
         for stepNumber in 1...stepLimit {
@@ -185,9 +235,16 @@ final class DottieScreenTaskRunner {
             if !isGameMode, didActSinceLastLook,
                let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
                 screenNote += "\nThe screen looks exactly the same as before your last action, so it probably didn't work (or it was already done). Don't repeat it: look at what's really on screen and try a different way, like pressing return, clicking a different spot or result, closing a popup, scrolling, or waiting."
+                // Clicks that changed nothing aren't part of the replay.
+                for index in unconfirmedStepIndices.sorted(by: >) where index < recordedSteps.count {
+                    recordedSteps.remove(at: index)
+                }
+                escalateModelIfSimple()
             }
+            unconfirmedStepIndices = []
             if let repeatedAction = Self.repeatedAction(in: recentActionSignatures) {
                 screenNote += "\nYou've done \(repeatedAction) several times and it isn't getting you further. Stop doing it. Check which steps of the task are already done on this screen and move to the next one, or try a completely different way."
+                escalateModelIfSimple()
             }
             previousScreenFingerprint = screenFingerprint
             didActSinceLastLook = false
@@ -208,6 +265,10 @@ final class DottieScreenTaskRunner {
             pendingFunctionResponseParts = []
             Self.dropOldScreenshots(from: &contents)
 
+            if jobModel == nil {
+                jobTier = await tierTask.value
+                jobModel = DottieModelPicker.shared.pick(jobTier)
+            }
             let modelParts: [[String: Any]]
             do {
                 modelParts = try await requestNextActions(contents: contents)
@@ -229,6 +290,8 @@ final class DottieScreenTaskRunner {
                 // little later each time so a per-minute limit can reset.
                 contents.removeLast()
                 pendingFunctionResponseParts = functionResponsesForThisTurn
+                // A busy or slow model is skipped for a while.
+                jobModel = DottieModelPicker.shared.pick(jobTier)
                 let backoffSeconds = UInt64(consecutiveRequestFailures) * (isRateLimited ? 5 : 2)
                 try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
                 continue
@@ -261,7 +324,14 @@ final class DottieScreenTaskRunner {
                     if let lesson = (arguments["lesson"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lesson.isEmpty {
                         DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName, cameFromSuccess: didSucceed)
                     }
-                    return .finished(answer: answer.isEmpty ? "All done." : answer)
+                    let finalAnswer = answer.isEmpty ? "All done." : answer
+                    if didSucceed, !isGameMode, referenceImageParts.isEmpty, !recordedSteps.isEmpty {
+                        saveReplay(taskText: taskText, context: jobContext, steps: recordedSteps, answer: finalAnswer, replacing: replayUsed)
+                        if replayedStepCount > 0 {
+                            lastReplayReport = "⚡ \(replayedStepCount) of \(recordedSteps.count) steps from memory"
+                        }
+                    }
+                    return .finished(answer: finalAnswer)
                 }
 
                 let actionSignature = Self.signature(functionName: functionName, arguments: arguments)
@@ -276,7 +346,15 @@ final class DottieScreenTaskRunner {
                    recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
                 } else {
+                    // What it takes to do this step again without Gemini.
+                    let replayStep = isGameMode ? nil : await replayStep(functionName: functionName, arguments: arguments, screen: screen)
                     result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
+                    if let replayStep, Self.resultLooksDone(result) {
+                        if replayStep.action == "click" || replayStep.action == "scroll" {
+                            unconfirmedStepIndices.append(recordedSteps.count)
+                        }
+                        recordedSteps.append(replayStep)
+                    }
                 }
                 var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
                 if let functionCallID = functionCall["id"] as? String {
@@ -301,6 +379,129 @@ final class DottieScreenTaskRunner {
             )
         }
         return .failed(reason: "That took more than \(stepLimit) steps, so I stopped.")
+    }
+
+    // MARK: - Instant replays
+
+    private enum ReplayResult {
+        /// All steps done. With an answer the job is finished; without one
+        /// (it reads something off the screen) Gemini takes one look.
+        case finished(answer: String?, playedSteps: [DottieReplay.Step])
+        case handedOver(playedSteps: [DottieReplay.Step], note: String)
+        case stopped
+    }
+
+    private func playReplay(_ replay: DottieReplay) async -> ReplayResult {
+        print("⚡ Replaying \"\(replay.name)\" (\(replay.steps.count) steps)")
+        let startedAt = Date()
+        let player = DottieReplayPlayer()
+        player.onProgress = { [weak self] text in self?.onProgress?(0, text) }
+        player.onWillClick = { [weak self] point, displayFrame in await self?.onWillClick?(point, displayFrame) }
+        isReplaying = true
+        let result = await player.play(replay)
+        isReplaying = false
+        switch result {
+        case .stopped:
+            return .stopped
+        case .completed(let playedSteps):
+            if !replay.needsFreshAnswer, await Self.screenLooksFinished(like: replay) {
+                let seconds = Date().timeIntervalSince(startedAt)
+                DottieReplayStore.shared.noteUsed(replay.id, seconds: seconds)
+                lastReplayReport = "⚡ done from memory in " + String(format: "%.1fs", seconds)
+                print("⚡ Replay done in \(String(format: "%.1f", seconds))s")
+                return .finished(answer: replay.answer, playedSteps: playedSteps)
+            }
+            return .finished(answer: nil, playedSteps: playedSteps)
+        case .handedOver(let playedSteps, let stepIndex, let reason):
+            let doneText = playedSteps.map(\.summary).joined(separator: "; ")
+            let note = "Dottie already did these steps of this job from memory: \(doneText). The next saved step (\(replay.steps[stepIndex].summary)) didn't match the screen (\(reason)). Check the screen and carry on from here."
+            return .handedOver(playedSteps: playedSteps, note: note)
+        }
+    }
+
+    /// The window ends up where the first run ended (by its title), so a
+    /// replay that went somewhere else gets a look from Gemini.
+    private static func screenLooksFinished(like replay: DottieReplay) async -> Bool {
+        guard let finalWindowTitle = replay.finalWindowTitle else {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            return true
+        }
+        let deadline = Date().addingTimeInterval(2.5)
+        repeat {
+            if let windowTitle = DottieReplayContext.current().windowTitle,
+               windowTitle == finalWindowTitle || DottieReplayStore.wordOverlap(windowTitle, finalWindowTitle) >= 0.5 {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        } while Date() < deadline
+        return false
+    }
+
+    /// A step as it can be done again: its arguments, and for clicks and
+    /// fields, everything that finds the target again.
+    private func replayStep(functionName: String, arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) async -> DottieReplay.Step? {
+        let replayableActions: Set<String> = ["open_app", "open_url", "click", "type_text", "press_keys", "scroll", "wait", "wait_for_video_end"]
+        guard replayableActions.contains(functionName) else { return nil }
+        var storedArguments: [String: String] = [:]
+        for key in ["double_click", "right_click", "select_all_first", "press_enter"] {
+            if let value = (arguments[key] as? Bool) ?? (arguments[key] as? NSNumber)?.boolValue, value {
+                storedArguments[key] = "true"
+            }
+        }
+        for key in ["amount", "seconds", "max_seconds"] {
+            if let value = (arguments[key] as? NSNumber)?.doubleValue {
+                storedArguments[key] = key == "amount" ? String(Int(value)) : String(value)
+            }
+        }
+        for key in ["name", "url", "browser", "text", "keys", "direction"] {
+            if let value = arguments[key] as? String, !value.isEmpty {
+                storedArguments[key] = key == "direction" ? value.lowercased() : value
+            }
+        }
+        var target: DottieReplay.Target?
+        if ["click", "type_text", "scroll"].contains(functionName), let point = Self.clickPoint(arguments: arguments, screen: screen) {
+            target = await DottieReplayTargets.capture(at: point, label: arguments["label"] as? String, screen: screen)
+        }
+        if functionName == "click", target == nil { return nil }
+        return DottieReplay.Step(action: functionName, arguments: storedArguments, target: target)
+    }
+
+    /// The action did what it said ("clicked", "typed it"), not an error
+    /// or a refusal.
+    private static func resultLooksDone(_ result: String) -> Bool {
+        let lowercasedResult = result.lowercased()
+        return !["error", "couldn't", "unknown", "refused", "not clicked", "stopped"].contains { lowercasedResult.hasPrefix($0) }
+    }
+
+    private func saveReplay(taskText: String, context: DottieReplayContext, steps: [DottieReplay.Step], answer: String, replacing earlierReplay: DottieReplay?) {
+        let firstAction = steps.first?.action ?? ""
+        let name = taskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        DottieReplayStore.shared.save(DottieReplay(
+            id: earlierReplay?.id ?? UUID(),
+            name: String(name.prefix(1).uppercased() + name.dropFirst().prefix(69)),
+            taskText: taskText,
+            appBundleIdentifier: context.appBundleIdentifier,
+            appName: context.appName,
+            siteHost: context.siteHost,
+            startsOnItsOwn: firstAction == "open_app" || firstAction == "open_url",
+            steps: steps,
+            answer: answer,
+            needsFreshAnswer: DottieReplayStore.needsFreshAnswer(task: taskText, answer: answer),
+            finalWindowTitle: DottieReplayContext.current().windowTitle,
+            createdAt: earlierReplay?.createdAt ?? Date(),
+            lastUsedAt: Date(),
+            useCount: earlierReplay?.useCount ?? 0,
+            lastReplaySeconds: earlierReplay?.lastReplaySeconds
+        ))
+    }
+
+    /// A job that looked simple but isn't going well moves to the normal
+    /// model.
+    private func escalateModelIfSimple() {
+        guard !isGameMode, jobTier == .tiny else { return }
+        jobTier = .normal
+        jobModel = DottieModelPicker.shared.pick(.normal)
+        print("🧭 Screen task: moving to \(jobModel ?? "the normal model")")
     }
 
     // MARK: - Spotting a stuck loop
@@ -362,14 +563,7 @@ final class DottieScreenTaskRunner {
         /// The box's middle, moved to the middle of the real control under
         /// it when there is one, so a box a few pixels off still hits.
         func clickPoint() -> CGPoint? {
-            guard let box = arguments["box_2d"] as? [Any] else { return nil }
-            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
-            guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
-            let topLeft = screen.globalPoint(normalizedX: numbers[1], normalizedY: numbers[0])
-            let bottomRight = screen.globalPoint(normalizedX: numbers[3], normalizedY: numbers[2])
-            let boxFrame = CGRect(x: topLeft.x, y: bottomRight.y, width: bottomRight.x - topLeft.x, height: topLeft.y - bottomRight.y)
-            let snappedFrame = AccessibilitySnap.refinedFrame(boxFrame)
-            return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
+            Self.clickPoint(arguments: arguments, screen: screen)
         }
 
         switch functionName {
@@ -715,8 +909,21 @@ final class DottieScreenTaskRunner {
         return "walked toward it (\(Int(distance)) points away before moving); look again and walk_to again until you're on it"
     }
 
+    /// The box's middle, moved to the middle of the real control under it
+    /// when there is one, so a box a few pixels off still hits.
+    private static func clickPoint(arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
+        guard let box = arguments["box_2d"] as? [Any] else { return nil }
+        let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
+        let topLeft = screen.globalPoint(normalizedX: numbers[1], normalizedY: numbers[0])
+        let bottomRight = screen.globalPoint(normalizedX: numbers[3], normalizedY: numbers[2])
+        let boxFrame = CGRect(x: topLeft.x, y: bottomRight.y, width: bottomRight.x - topLeft.x, height: topLeft.y - bottomRight.y)
+        let snappedFrame = AccessibilitySnap.refinedFrame(boxFrame)
+        return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
+    }
+
     /// Brings a running app forward, else launches it by name.
-    private static func openApplication(named appName: String) async -> Bool {
+    static func openApplication(named appName: String) async -> Bool {
         let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "")
         if let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
             $0.activationPolicy == .regular && ($0.localizedName?.lowercased() == wantedName)
@@ -730,7 +937,7 @@ final class DottieScreenTaskRunner {
         return (try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)) != nil
     }
 
-    private static func open(_ url: URL, inApplicationNamed appName: String) async -> Bool {
+    static func open(_ url: URL, inApplicationNamed appName: String) async -> Bool {
         guard let applicationURL = applicationURL(named: appName) else { return NSWorkspace.shared.open(url) }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -1114,13 +1321,14 @@ final class DottieScreenTaskRunner {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        let requestModel = jobModel ?? (isGameMode ? Self.gameModel : Self.taskModel)
         var requestContents = contents
         if !referenceImageParts.isEmpty, var firstParts = requestContents.first?["parts"] as? [[String: Any]] {
             firstParts.insert(contentsOf: referenceImageParts, at: 0)
             requestContents[0]["parts"] = firstParts
         }
         let requestBody: [String: Any] = [
-            "model": isGameMode ? Self.gameModel : Self.taskModel,
+            "model": requestModel,
             "systemInstruction": ["parts": [["text": Self.systemInstruction + (isGameMode ? Self.gameInstruction : "")]]],
             "contents": requestContents,
             "tools": [["functionDeclarations": Self.functionDeclarations + (isGameMode ? Self.gameFunctionDeclarations : [])]],
@@ -1128,7 +1336,7 @@ final class DottieScreenTaskRunner {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (responseData, response) = try await URLSession.shared.data(for: request)
+        let (responseData, response) = try await DottieModelPicker.shared.data(for: request, model: requestModel)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard statusCode == 200 else {
             throw NSError(domain: "DottieScreenTaskRunner", code: statusCode, userInfo: [
