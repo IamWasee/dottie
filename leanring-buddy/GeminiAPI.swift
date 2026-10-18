@@ -147,6 +147,7 @@ final class GeminiAPI {
         request.httpBody = bodyData
         print("🌐 Gemini streaming request: \(String(format: "%.1f", Double(bodyData.count) / 1_048_576.0))MB, \(images.count) image(s)")
 
+        let requestedModel = modelOverride ?? model ?? "default"
         let (byteStream, response) = try await session.bytes(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -155,6 +156,7 @@ final class GeminiAPI {
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
+            DottieModelPicker.shared.record(model: requestedModel, seconds: Date().timeIntervalSince(startTime), statusCode: httpResponse.statusCode)
             var errorBodyLines: [String] = []
             for try await line in byteStream.lines {
                 errorBodyLines.append(line)
@@ -169,9 +171,13 @@ final class GeminiAPI {
         // Gemini SSE: each event is "data: {GenerateContentResponse}". Each
         // response carries only the new text, so we accumulate it ourselves.
         var accumulatedResponseText = ""
+        var answeringModel: String?
         for try await line in byteStream.lines {
             guard line.hasPrefix("data: ") else { continue }
             let jsonString = String(line.dropFirst(6))
+            if answeringModel == nil {
+                answeringModel = DottieModelPicker.answeringModel(inText: jsonString)
+            }
             guard let jsonData = jsonString.data(using: .utf8),
                   let responsePayload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
                 continue
@@ -184,7 +190,10 @@ final class GeminiAPI {
             await onTextChunk(currentAccumulatedText)
         }
 
-        return (text: accumulatedResponseText, duration: Date().timeIntervalSince(startTime))
+        let duration = Date().timeIntervalSince(startTime)
+        // Teaches the model picker how quick (or busy) this model is.
+        DottieModelPicker.shared.record(model: requestedModel, seconds: duration, statusCode: 200, answeredBy: answeringModel)
+        return (text: accumulatedResponseText, duration: duration)
     }
 
     /// Joins the text parts of the first candidate, skipping "thought" parts

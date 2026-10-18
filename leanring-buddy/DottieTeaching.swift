@@ -202,9 +202,13 @@ enum DottieTeaching {
         \(itemList)
         Reply with only JSON: {"items": [{"name": "...", "box_2d": [ymin, xmin, ymax, xmax]}]}, coordinates normalized 0-1000 across the image, one entry per thing, tight around the thing itself. For a point or dot, a small box around the dot itself, not its label. For the end of a line, a small box at that end. For a circle or shape, the box around the whole shape. Leave out anything you can't see.
         """
-        for model in ["gemini-3.6-flash", PointingRefiner.visionModel] {
+        // The normal model thinks a little first; the quickest one is the
+        // backup. Both skip models that are busy right now.
+        let normalModel = DottieModelPicker.shared.pick(.normal)
+        let quickModel = DottieModelPicker.shared.pick(.tiny)
+        for model in [normalModel, quickModel] {
             if let boxes = await requestBoxes(jpegData: jpegData, prompt: prompt, model: model,
-                                              thinksFirst: model != PointingRefiner.visionModel), !boxes.isEmpty {
+                                              thinksFirst: model == normalModel), !boxes.isEmpty {
                 var frames: [String: CGRect] = [:]
                 for (name, box) in boxes {
                     frames[name.lowercased()] = CGRect(
@@ -246,7 +250,7 @@ enum DottieTeaching {
         ]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = bodyData
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: model),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let answerText = GeminiServerSentEvents.text(from: responseData)
         guard let start = answerText.firstIndex(of: "{"), let end = answerText.lastIndex(of: "}"),

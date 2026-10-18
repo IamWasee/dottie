@@ -2937,10 +2937,15 @@ final class CompanionManager: ObservableObject {
                     onTextChunk: { _ in }
                 )
             }
+            // The fastest model that's good enough and not busy right now.
+            let primaryModel = DottieModelPicker.shared.pick(await DottieModelPicker.tier(forQuestion: question))
+            let backupModel = DottieModelPicker.shared.isCoolingDown(Self.quickBackupModel)
+                ? DottieModelPicker.shared.pick(.normal, avoiding: [primaryModel])
+                : Self.quickBackupModel
             let (fullResponseText, responseDuration) = try await Self.firstAnswer(
                 backupAfterSeconds: 20,
-                primary: { try await askModel("higher") },
-                backup: { try await askModel(Self.quickBackupModel) }
+                primary: { try await askModel(primaryModel) },
+                backup: { try await askModel(backupModel) }
             )
             print("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
 
