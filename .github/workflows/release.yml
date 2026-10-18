@@ -111,6 +111,8 @@ jobs:
       - name: Pick Xcode
         # The newest Xcode 26 on the runner, so Dottie can use Apple's
         # on-device model on Macs that have it. Falls back to the default.
+        # The build keeps Xcode 16's concurrency rules (the two SWIFT_
+        # settings in "Build Dottie.app"), which Dottie was always built with.
         run: |
           xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -1)"
           if [ -n "$xcode" ]; then
@@ -174,6 +176,8 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             ENABLE_HARDENED_RUNTIME=NO \
+            SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
+            SWIFT_APPROACHABLE_CONCURRENCY=NO \
             2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)|cua-driver|Permission denied|Command .* failed" || true
           grep -q "BUILD SUCCEEDED" build.log
 
