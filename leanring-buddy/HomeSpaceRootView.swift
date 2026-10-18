@@ -24,6 +24,7 @@ struct HomeSpaceRootView: View {
         case brain = "Brain"
         case meetings = "Meetings"
         case phone = "Phone"
+        case profile = "Profile"
         case settings = "Settings"
 
         var id: String { rawValue }
@@ -39,6 +40,7 @@ struct HomeSpaceRootView: View {
             case .brain: return "brain.head.profile"
             case .meetings: return "waveform"
             case .phone: return "iphone"
+            case .profile: return "star.circle.fill"
             case .settings: return "gearshape.fill"
             }
         }
@@ -77,6 +79,8 @@ struct HomeSpaceRootView: View {
                     HomeMeetingsView(meetingRecorder: companionManager.meetingRecorder)
                 case .phone:
                     HomePhoneView(phoneBridge: companionManager.phoneBridge)
+                case .profile:
+                    HomeProfileView(companionManager: companionManager)
                 case .settings:
                     HomeSettingsView(
                         companionManager: companionManager,
@@ -464,19 +468,7 @@ private struct HomeSettingsView: View {
 
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
-                    settingsRow(label: "Personality") {
-                        Picker("", selection: Binding(
-                            get: { companionManager.selectedPersonality },
-                            set: { companionManager.setSelectedPersonality($0) }
-                        )) {
-                            ForEach(DottiePersonality.allCases) { personality in
-                                Text(personality.displayName).tag(personality)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 160)
-                    }
-                    settingsHint(companionManager.selectedPersonality.settingsHint)
+                    DottiePersonalitySettings(companionManager: companionManager)
                     settingsRow(label: "Voice mode") {
                         Text(companionManager.voiceMode == .live ? "Gemini Live" : "Classic")
                             .foregroundColor(DS.Colors.textSecondary)
