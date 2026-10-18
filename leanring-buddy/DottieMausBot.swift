@@ -87,7 +87,7 @@ enum DottieHelperEngine: String, CaseIterable, Identifiable {
 }
 
 /// Why a helper turn moved from Claude to the Gemini backup.
-enum DottieClaudeFallbackReason: Equatable {
+enum DottieClaudeFallbackReason: Error, Equatable {
     /// The Claude plan's usage limit ran out.
     case usageLimit
     /// Claude is rate limited or overloaded for a moment.
