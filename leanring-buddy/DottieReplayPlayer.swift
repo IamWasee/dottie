@@ -201,8 +201,8 @@ final class DottieReplayPlayer {
             roots.insert(focusedWindow, at: 0)
         }
         let expectedAXPoint = DottieAX.axPoint(fromAppKit: expectedPoint(for: target))
-        let wantedTitle = target.title.map(ScreenTextFinder.normalized)
-        let wantedDescription = target.descriptionText.map(ScreenTextFinder.normalized)
+        let wantedTitle = target.title.map { ScreenTextFinder.normalized($0) }
+        let wantedDescription = target.descriptionText.map { ScreenTextFinder.normalized($0) }
         let searchDeadline = Date().addingTimeInterval(0.35)
         var visitedCount = 0
         var best: (frame: CGRect, score: Double)?
@@ -218,12 +218,16 @@ final class DottieReplayPlayer {
             var score = 0.0
             if let identifier = target.identifier, DottieAX.string(element, kAXIdentifierAttribute) == identifier { score += 3 }
             if let wantedTitle, !wantedTitle.isEmpty {
-                let title = (DottieAX.string(element, kAXTitleAttribute) ?? (role == "AXStaticText" || role == "AXButton" || role == "AXLink" ? DottieAX.string(element, kAXValueAttribute) : nil))
-                    .map(ScreenTextFinder.normalized)
+                var rawTitle = DottieAX.string(element, kAXTitleAttribute)
+                if rawTitle == nil, let role, ["AXStaticText", "AXButton", "AXLink"].contains(role) {
+                    rawTitle = DottieAX.string(element, kAXValueAttribute)
+                }
+                let title = rawTitle.map { ScreenTextFinder.normalized($0) }
                 if title == wantedTitle { score += 2 } else if score < 3 { continue }
             }
             if let wantedDescription, !wantedDescription.isEmpty {
-                let description = (DottieAX.string(element, kAXDescriptionAttribute) ?? DottieAX.string(element, "AXLabel")).map(ScreenTextFinder.normalized)
+                let rawDescription = DottieAX.string(element, kAXDescriptionAttribute) ?? DottieAX.string(element, "AXLabel")
+                let description = rawDescription.map { ScreenTextFinder.normalized($0) }
                 if description == wantedDescription { score += 1.5 } else if score < 2 { continue }
             }
             guard score >= 1.5, let frame = DottieAX.axFrame(element),

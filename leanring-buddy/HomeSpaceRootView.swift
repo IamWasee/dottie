@@ -462,6 +462,14 @@ private struct HomeSettingsView: View {
                     HomeUpdateSettings()
                 }
 
+                settingsGroup(title: "Check everything") {
+                    HomeSelfCheckSettings()
+                }
+
+                settingsGroup(title: "Instant replays") {
+                    HomeReplaySettings()
+                }
+
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
                     settingsRow(label: "Personality") {

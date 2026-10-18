@@ -1574,7 +1574,8 @@ final class CompanionManager: ObservableObject {
             self.livePointingRefinementTask?.cancel()
             self.detectedElementScreenLocation = point
             self.detectedElementDisplayFrame = displayFrame
-            try? await Task.sleep(nanoseconds: 750_000_000)
+            // A replay already knows its target, so the flight is quicker.
+            try? await Task.sleep(nanoseconds: self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
         }
         currentScreenTaskText = taskText
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
@@ -1673,6 +1674,10 @@ final class CompanionManager: ObservableObject {
         case .finished(let answer):
             print("🧭 Screen task finished: \(answer)")
             resultText = answer
+            // "⚡ done from memory in 2.1s"
+            if let replayReport = screenTaskRunner.lastReplayReport {
+                notchPresenter.showAgentUpdate(title: replayReport, text: answer)
+            }
         case .failed(let reason):
             print("🧭 Screen task failed: \(reason)")
             resultText = "it couldn't be finished: \(reason)"
@@ -2360,6 +2365,18 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Speed pack
+
+    /// Instant replays by voice, and the self-check's Telegram check.
+    private func configureSpeedPack() {
+        DottieSelfCheck.shared.phoneBridge = phoneBridge
+        DottieSpeedTools.startReplayJob = { [weak self] replay in
+            guard let self else { return "Dottie isn't ready yet." }
+            self.screenTaskRunner.requestedReplay = (id: replay.id, taskText: replay.taskText)
+            return self.startScreenTask(ScreenJob(text: replay.taskText))
+        }
+    }
+
     // MARK: - Phone
 
     private static let phoneHelperName = "Phone"
@@ -2454,6 +2471,7 @@ final class CompanionManager: ObservableObject {
         configureCursorPet()
         configureMeetingMode()
         configurePhoneBridge()
+        configureSpeedPack()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
             guard let self else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name

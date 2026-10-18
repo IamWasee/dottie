@@ -68,8 +68,10 @@ struct DottieReplay: Codable, Identifiable, Equatable {
         var target: Target?
 
         var summary: String {
-            let detail = arguments["name"] ?? arguments["url"] ?? arguments["text"].map { "\"\($0.prefix(40))\"" }
-                ?? arguments["keys"] ?? arguments["direction"] ?? target?.label ?? target?.title ?? target?.nearbyText ?? ""
+            var candidates: [String?] = [arguments["name"], arguments["url"]]
+            if let typedText = arguments["text"] { candidates.append("\"\(typedText.prefix(40))\"") }
+            candidates += [arguments["keys"], arguments["direction"], target?.label, target?.title, target?.nearbyText]
+            let detail: String = candidates.compactMap { $0 }.first { !$0.isEmpty } ?? ""
             return detail.isEmpty ? action : "\(action) \(detail)"
         }
     }
