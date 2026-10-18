@@ -133,7 +133,7 @@ extension ClickyRoster {
         let preferredPage = pageCandidates.first { $0.contains("dist/") || $0.contains("build/") }
             ?? pageCandidates.min { $0.count < $1.count }
         if let preferredPage {
-            NSWorkspace.shared.open(outputFolderURL.appendingPathComponent(preferredPage))
+            Task { await DottieBrowser.openInUsersBrowser(outputFolderURL.appendingPathComponent(preferredPage)) }
             return "opened \(preferredPage) from \(agent.name) in the browser."
         }
         if outputFiles.count == 1, let onlyFile = outputFiles.first {

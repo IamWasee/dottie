@@ -166,6 +166,9 @@ private struct HomeConversationView: View {
                         LazyVStack(alignment: .leading, spacing: 18) {
                             ForEach(conversationStore.entries) { entry in
                                 HomeConversationEntryView(entry: entry, imageFolderURL: companionManager.imageMemory.folderURL)
+                                    .deletableRow(copyText: entry.clickyText.isEmpty ? entry.userText : entry.clickyText) {
+                                        withAnimation { companionManager.forgetConversationEntry(entry.id) }
+                                    }
                                     .id(entry.id)
                             }
                         }
@@ -615,7 +618,7 @@ private struct HomeSettingsView: View {
 
                 settingsGroup(title: "History") {
                     settingsRow(label: "\(conversationStore.entries.count) saved exchanges") {
-                        Button("Clear") { conversationStore.clearAll() }
+                        Button("Clear") { companionManager.forgetWholeConversation() }
                             .pointerCursor()
                     }
                 }
