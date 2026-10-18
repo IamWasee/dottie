@@ -914,6 +914,10 @@ final class CompanionManager: ObservableObject {
         if !profile.isEmpty {
             prompt += "\n\nwhat your second brain knows about the user (use it naturally, don't recite it):\n" + profile
         }
+        let recentEpisodes = DottieEpisodicMemory.shared.promptContext(frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
+        if !recentEpisodes.isEmpty {
+            prompt += "\n\nrecent things you remember (bring up only if relevant; memories has the rest):\n" + recentEpisodes
+        }
         let pictureList = imageMemory.promptSummary
         if !pictureList.isEmpty {
             prompt += "\n\npictures the user showed you, and ones you saved yourself (you know them by these names and descriptions; the description says where each is from):\n" + pictureList
@@ -1167,6 +1171,7 @@ final class CompanionManager: ObservableObject {
 
         currentLiveTurnScreenFrame = compositeScreenFrame
         currentLiveTurnScreenFrameCapturedAt = compositeScreenFrame == nil ? nil : Date()
+        DottieEpisodicMemory.shared.noteConversationScreenshot(compositeScreenFrame?.jpegData)
         liveVoiceClient.beginUserTurn(screenFrameJPEGData: compositeScreenFrame?.jpegData)
 
         if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
@@ -1681,6 +1686,9 @@ final class CompanionManager: ObservableObject {
             return
         }
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
+        var jobSucceeded = false
+        if case .finished = outcome { jobSucceeded = true }
+        DottieEpisodicMemory.shared.recordScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded)
         if repliesToPhone {
             startNextQueuedScreenTask()
             scheduleTransientHideIfNeeded()
@@ -2282,6 +2290,16 @@ final class CompanionManager: ObservableObject {
                 self?.notchPresenter.isScreenJournalOn = isEnabled
             }
             .store(in: &brainCancellables)
+        // Episodes: screen ones go in the brain's journal too, and the
+        // recent ones reach voice Dottie on her next connection.
+        DottieEpisodicMemory.shared.onEpisodesChanged = { [weak self] newEpisodes in
+            guard let self else { return }
+            for episode in newEpisodes where episode.source == .screen {
+                self.brain.record(.screen, "\(episode.title): \(episode.summary.prefix(300))")
+            }
+            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
+        }
+        DottieEpisodicMemory.shared.start()
     }
 
     /// Hands a question to the Brain agent; Dottie says the answer when it
@@ -2298,11 +2316,14 @@ final class CompanionManager: ObservableObject {
             .map { "user: \($0.userTranscript)\ndottie: \($0.assistantResponse)" }
             .joined(separator: "\n")
         let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+        let relatedEpisodes = DottieEpisodicMemory.shared.recallNow(query: question, limit: 4).episodes
+        let episodesNote = relatedEpisodes.isEmpty ? "" : "\n\nepisodes from Dottie's memory that may be related:\n"
+            + relatedEpisodes.map(DottieEpisodicMemory.lineForModel).joined(separator: "\n")
         let messageForBrain = """
         Dottie's question for you: \(question)
 
         (context: the user is in \(frontmostApp). recent conversation with Dottie:
-        \(recentChat.isEmpty ? "none" : recentChat))
+        \(recentChat.isEmpty ? "none" : recentChat))\(episodesNote)
         """
         clickyRoster.sendMessage(messageForBrain, to: brainAgent)
         guard clickyRoster.isRunning(brainAgent) else {
