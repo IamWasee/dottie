@@ -102,6 +102,17 @@ struct NotchRootView: View {
                             .help("A 24/7 job is running and your Mac is staying awake. Hover the notch to stop it.")
                     } else if notchPresenter.isAnyDotWorking {
                         NotchWorkingLight()
+                    } else if let compactBadgeText = notchPresenter.compactBadgeText {
+                        Text(compactBadgeText)
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundColor(DS.Colors.warning)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    } else if !notchPresenter.statusLines.isEmpty {
+                        Image(systemName: "eye.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.75))
+                            .help("Dottie is watching something for you. Hover to see it.")
                     } else if notchPresenter.isScreenJournalOn {
                         Circle()
                             .fill(Color.green.opacity(0.85))
@@ -134,6 +145,15 @@ struct NotchRootView: View {
     private var compactHoverContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             compactHoverButtons
+            if !notchPresenter.statusLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(notchPresenter.statusLines) { statusLine in
+                        NotchStatusLineRow(statusLine: statusLine) {
+                            notchPresenter.stopStatusLine(statusLine.id)
+                        }
+                    }
+                }
+            }
             if !notchPresenter.peekDotSummaries.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(notchPresenter.peekDotSummaries) { dotSummary in
@@ -270,6 +290,37 @@ struct NotchRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.top, 8)
+    }
+}
+
+// MARK: - Status lines
+
+/// A watch or focus mode in the hover peek, with a stop button.
+private struct NotchStatusLineRow: View {
+    let statusLine: NotchStatusLine
+    let onStop: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: statusLine.symbolName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(DS.Colors.warning)
+                .frame(width: 10)
+            Text(statusLine.text)
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.8))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button(action: onStop) {
+                Text("stop")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        }
+        .frame(height: 20)
     }
 }
 
@@ -560,6 +611,19 @@ private struct NotchTextResponseSurface: View {
 
     private var responseButtons: some View {
         HStack(spacing: 14) {
+            if let cardActionLabel = notchPresenter.cardActionLabel {
+                Button(action: { notchPresenter.runCardAction() }) {
+                    Text(cardActionLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(DS.Colors.overlayCursorBlue))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+
             Button(action: copyResponse) {
                 Label(didJustCopy ? "Copied" : "Copy", systemImage: didJustCopy ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 11, weight: .medium))

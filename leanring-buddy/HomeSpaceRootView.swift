@@ -507,6 +507,11 @@ private struct HomeSettingsView: View {
                             .toggleStyle(.switch)
                     }
                     settingsHint("While you hold the talk shortcut, move the cursor around something to circle it. Dottie sees exactly what you marked.")
+                    DottieEverydayShortcutRows(shortcuts: DottieEveryday.shared.shortcuts, shortcutMonitor: shortcutMonitor)
+                }
+
+                settingsGroup(title: "Everyday") {
+                    DottieEverydaySettings(focus: DottieEveryday.shared.focus)
                 }
 
                 settingsGroup(title: "Appearance") {

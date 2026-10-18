@@ -127,6 +127,10 @@ final class GeminiLiveVoiceClient {
         }
     }
 
+    /// Set for a turn the user typed in the notch: the answer shows as text
+    /// (the caption still streams) and its audio isn't played.
+    var isAudioOutputMuted = false
+
     // MARK: - State
 
     private(set) var connectionState: ConnectionState = .disconnected
@@ -895,7 +899,9 @@ final class GeminiLiveVoiceClient {
                     hasModelStartedSpeakingThisTurn = true
                     onModelSpeechStarted?()
                 }
-                audioPlayer.enqueuePCM16Audio(pcmAudioData)
+                if !isAudioOutputMuted {
+                    audioPlayer.enqueuePCM16Audio(pcmAudioData)
+                }
             }
         }
 

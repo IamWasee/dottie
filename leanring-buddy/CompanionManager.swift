@@ -786,6 +786,8 @@ final class CompanionManager: ObservableObject {
 
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+            // A spoken turn is always answered out loud.
+            liveVoiceClient.isAudioOutputMuted = false
 
             // Cancel any in-progress response and speech from a previous utterance
             currentResponseTask?.cancel()
@@ -1148,6 +1150,7 @@ final class CompanionManager: ObservableObject {
             print("⚠️ Gemini Live turn error: \(error)")
             self.isLiveTurnInFlight = false
             self.currentLiveTurnIsNarration = false
+            self.liveVoiceClient.isAudioOutputMuted = false
             self.fireLiveTurnFinishedHandler()
             self.speakConnectionErrorFallback()
             self.voiceState = .idle
@@ -1952,6 +1955,7 @@ final class CompanionManager: ObservableObject {
     /// Records the exchange, then waits for the last of the audio to play
     /// before returning the cursor to idle.
     private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
+        liveVoiceClient.isAudioOutputMuted = false
         let typedTextForThisTurn = currentLiveTurnTypedText
         currentLiveTurnTypedText = nil
         let isNarrationTurn = currentLiveTurnIsNarration
@@ -2696,8 +2700,14 @@ final class CompanionManager: ObservableObject {
     private func configureNotch() {
         configureClickyRoster()
         notchPresenter.onSubmitTypedMessage = { [weak self] messageText in
-            self?.sendTypedMessage(messageText)
+            guard let self else { return }
+            // Typed in the notch: the answer shows as text unless the user
+            // wants it read out (DottieTypeBar).
+            DottieEveryday.shared.typeBar.remember(messageText)
+            self.liveVoiceClient.isAudioOutputMuted = !DottieTypeBar.speaksAnswers
+            self.sendTypedMessage(messageText)
         }
+        DottieEveryday.shared.attach(to: self)
         notchPresenter.onOpenHome = { [weak self] in
             self?.openHomeWindow()
         }

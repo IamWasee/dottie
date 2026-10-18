@@ -14,5 +14,6 @@ enum DottieToolModules {
         DottieEpisodicMemoryTools.self,
         DottieGameTools.self, DottieLevelTools.self, DottieKeepWorkingTools.self,
         DottieConnectedTools.self,
+        EverydayTools.self,
     ]
 }
