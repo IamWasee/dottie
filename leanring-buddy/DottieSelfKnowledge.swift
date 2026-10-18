@@ -917,13 +917,20 @@ extension DottieSelfKnowledge {
             let status = permissions.statuses[kind]
             guard status == .notAsked || status == .denied else { continue }
             let isEssential = essentialPermissions.contains(kind)
-            let howToFix = status == .denied || permissionsSwitchedOnInSettings.contains(kind)
-                ? "about_me ask_permission '\(kind.title)' opens its page in System Settings; they switch Dottie on there."
-                : "about_me ask_permission '\(kind.title)' shows macOS's dialog; they click Allow."
+            let opensSystemSettings = status == .denied || permissionsSwitchedOnInSettings.contains(kind)
+            let howToFix: String
+            if opensSystemSettings {
+                howToFix = "about_me ask_permission '\(kind.title)' opens its page in System Settings; they switch Dottie on there."
+            } else {
+                howToFix = "about_me ask_permission '\(kind.title)' shows macOS's dialog; they click Allow."
+            }
+            let titleWords: [String] = kind.title.lowercased().split(separator: " ").map { String($0) }
+            let reasonWords: [String] = kind.reason.lowercased().split(separator: " ").map { String($0) }
+            let problemText: String = "\(kind.title) isn't allowed, so \(kind.reason.lowercased()) won't work."
             problems.append(Problem(
-                text: "\(kind.title) isn't allowed, so \(kind.reason.lowercased()) won't work.",
+                text: problemText,
                 fix: howToFix + " Or Settings → Permissions → Allow everything.",
-                keywords: kind.title.lowercased().split(separator: " ").map(String.init) + kind.reason.lowercased().split(separator: " ").map(String.init) + ["permission"],
+                keywords: titleWords + reasonWords + ["permission"],
                 isMajor: isEssential
             ))
         }
