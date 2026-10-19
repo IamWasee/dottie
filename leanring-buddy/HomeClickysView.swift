@@ -66,6 +66,7 @@ private struct HelperBotsGrid: View {
     @ObservedObject var clickyRoster: ClickyRoster
     @ObservedObject var routineStore: ClickyRoutineStore
     @ObservedObject private var mausBot = DottieMausBot.shared
+    @ObservedObject private var claudeSignIn = DottieClaudeSignIn.shared
     let onOpenAgent: (UUID) -> Void
     let onCreateAgent: () -> Void
 
@@ -122,10 +123,17 @@ private struct HelperBotsGrid: View {
         }
     }
 
-    /// Says which engine helpers are on when it's not Claude yet.
+    /// Says which engine helpers are on, and which Claude account they use.
     @ViewBuilder
     private var engineBanner: some View {
-        if mausBot.preference == .claudeWithBackup && mausBot.hasLookedForMausBot && !mausBot.isSetUp {
+        if claudeSignIn.phase != .idle {
+            DottieClaudeSignInPanel()
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
+                        .fill(DS.Colors.accentSubtle)
+                )
+        } else if mausBot.preference == .claudeWithBackup && mausBot.hasLookedForMausBot && !mausBot.isSetUp {
             bannerRow(
                 text: mausBot.busyText ?? "Helpers are on the free Gemini backup. Set up Claude (through the free MausBot app) to use your Claude plan instead: faster, and they can do a lot more.",
                 buttonTitle: mausBot.isSettingUp ? nil : "Set up Claude",
@@ -142,6 +150,12 @@ private struct HelperBotsGrid: View {
                 text: "\(mausBot.claudePauseReason ?? "Claude is paused"), so helpers use the free backup until \(pausedUntil.formatted(date: .omitted, time: .shortened)).",
                 buttonTitle: "Try Claude now",
                 action: { mausBot.resumeClaude() }
+            )
+        } else if mausBot.preference == .claudeWithBackup && mausBot.isSetUp && mausBot.claudeState == .ready {
+            bannerRow(
+                text: "Helpers use Claude: \(mausBot.claudeAccount?.summary ?? "Signed in").",
+                buttonTitle: "Use a different account",
+                action: { mausBot.switchClaudeAccount() }
             )
         }
     }
