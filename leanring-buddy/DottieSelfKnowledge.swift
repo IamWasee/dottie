@@ -63,7 +63,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     static var voicePromptSection: String {
         let pageNames = HomeSpaceRootView.HomeSection.allCases.map { $0.rawValue.lowercased() }.joined(separator: ", ")
         var section = """
-        about yourself: you're dottie \(appVersion), a mac companion who lives in the notch and the menu bar, with a home window (\(pageNames)). never guess about yourself, your settings or your state: call about_me. features is what you can do; how_to answers "how do i… in dottie"; status is live facts (version, update, permissions, voice, helpers, phone); troubleshoot when one of your own things fails or seems off (it reuses the self-check); open shows a home page or settings section; guide walks them through it on screen step by step (you point, they click; next and stop work like any guide); ask_permission and fix start the fix troubleshoot names.
+        about yourself: you're dottie \(appVersion), a mac companion who lives in the notch and the menu bar, with a home window (\(pageNames)). never guess about yourself, your settings or your state: call about_me. features is what you can do; how_to answers "how do i… in dottie"; status is live facts (version, update, permissions, voice, helpers, phone); troubleshoot when one of your own things fails or seems off (it reuses the self-check); open shows a home page or settings section; guide walks them through it on screen step by step (you point, they click; next and stop work like any guide); ask_permission and fix start the fix troubleshoot names. status names the claude account helpers use; switch_claude_account signs it out and starts a sign-in to pick another.
         helping with dottie: answer a "how do i…" in one sentence, then offer to show them (guide). when one of your own things fails (a missing permission, helpers not ready, phone not paired, an update waiting), say so plainly and offer the fix. asked what you can do: name three or four things in a sentence or two and offer a quick tour (guide with "tour").
         """
         if isNewUser {
@@ -83,7 +83,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     }
 
     private enum Action: String, CaseIterable {
-        case features, status, troubleshoot, how_to, open, guide, ask_permission, fix
+        case features, status, troubleshoot, how_to, open, guide, ask_permission, fix, switch_claude_account
     }
 
     /// Helpers work in the background, so they don't get the on-screen
@@ -95,7 +95,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     private static func aboutMeTool(for audience: DottieTool.Audience) -> DottieTool {
         let actionNames = actions(for: audience).map(\.rawValue)
         let description = audience == .voice
-            ? "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes (uses the self-check). open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt. fix: run a fix troubleshoot named (its id)."
+            ? "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes (uses the self-check). open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt. fix: run a fix troubleshoot named (its id). switch_claude_account: sign Claude out and start a new sign-in so they can pick which Claude account helpers use (status says which one is in use now)."
             : "What Dottie (the app you run in) can do and where each thing lives in her app (features, how_to), her live state (status), and likely problems with their fixes (troubleshoot)."
         return DottieTool(
             name: "about_me",
@@ -141,7 +141,22 @@ enum DottieSelfKnowledge: DottieToolModule {
         case .guide: return startWalkthrough(topic: about)
         case .ask_permission: return await askPermission(named: about)
         case .fix: return await applySelfCheckFix(named: about)
+        case .switch_claude_account: return switchClaudeAccount()
         }
+    }
+
+    /// Signs Claude out, starts a new sign-in and shows its panel in
+    /// Settings, where the user opens the link in a private window.
+    private static func switchClaudeAccount() -> String {
+        let mausBot = DottieMausBot.shared
+        guard mausBot.isSetUp, mausBot.claudeState != .notInstalled else {
+            return "Claude isn't set up for helpers yet, so there's no account to switch. offer to show Settings → Helpers: Claude via MausBot (Set up)."
+        }
+        let previousEmail = mausBot.claudeAccount?.email
+        mausBot.switchClaudeAccount()
+        show(.settings("Helpers: Claude via MausBot"))
+        let previousAccountText = previousEmail.map { " (was \($0))" } ?? ""
+        return "signing Claude out\(previousAccountText) and starting a new sign-in. Settings → Helpers is open: tell them in one line to click Open in a private window there and pick the account. helpers use the free Gemini backup until it's done."
     }
 }
 
@@ -620,8 +635,8 @@ extension DottieSelfKnowledge {
             Feature(
                 id: "mausbot",
                 title: "Helpers on your Claude plan",
-                keywords: ["mausbot", "claude", "claude code", "engine", "backup", "gemini backup", "sign in", "limit", "paused"],
-                summary: "Helpers can run on your Claude plan through MausBot, a free app, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only.",
+                keywords: ["mausbot", "claude", "claude code", "engine", "backup", "gemini backup", "sign in", "limit", "paused", "account", "claude account", "switch account"],
+                summary: "Helpers can run on your Claude plan through MausBot, a free app, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only. It shows which Claude account they use, and Use a different account switches it.",
                 whereToFind: "Settings → Helpers: Claude via MausBot.",
                 place: .settings("Helpers: Claude via MausBot"),
                 steps: [

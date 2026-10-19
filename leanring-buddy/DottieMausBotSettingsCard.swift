@@ -4,13 +4,16 @@
 //
 //  Settings → Helpers: which engine helpers run on, and how Claude through
 //  OpenMausBot is doing (MausBot found, workspace running, Claude signed
-//  in), with one button for whatever is missing. See DottieMausBot.
+//  in, and as whom), with one button for whatever is missing, and "Use a
+//  different account" to switch Claude accounts. See DottieMausBot and
+//  DottieClaudeAccount.
 //
 
 import SwiftUI
 
 struct DottieMausBotSettingsCard: View {
     @ObservedObject private var mausBot = DottieMausBot.shared
+    @ObservedObject private var claudeSignIn = DottieClaudeSignIn.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +68,8 @@ struct DottieMausBotSettingsCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                DottieClaudeSignInPanel()
+
                 actionButtons
             }
 
@@ -88,10 +93,17 @@ struct DottieMausBotSettingsCard: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(mausBot.isSettingUp)
                     .pointerCursor()
+            } else if claudeSignIn.isInProgress {
+                // The sign-in panel above has the buttons.
+                EmptyView()
             } else if mausBot.claudeState == .notSignedIn {
                 Button("Sign in to Claude") { mausBot.openClaudeSignIn() }
                     .keyboardShortcut(.defaultAction)
                     .pointerCursor()
+            } else if mausBot.claudeState == .ready {
+                Button("Use a different account") { mausBot.switchClaudeAccount() }
+                    .pointerCursor()
+                    .help("Sign Claude out and pick another account for the helpers")
             }
             if mausBot.isSetUp {
                 Button("Open MausBot") { mausBot.openMausBot() }
@@ -109,7 +121,7 @@ struct DottieMausBotSettingsCard: View {
             return "Helpers run on Gemini's free tier."
         }
         if mausBot.claudeState == .notSignedIn {
-            return "Sign in opens Terminal and then your browser. Click Allow there once, and Dottie picks it up by itself."
+            return "Sign in opens your browser. Click Allow there once, and Dottie picks it up by itself. " + DottieClaudeSignInPanel.pickAccountTip
         }
         return "Helpers use your Claude plan through MausBot, a free app. Nothing extra to pay. If your Claude limit runs out, helpers switch to the free Gemini backup by themselves and try Claude again later."
     }
