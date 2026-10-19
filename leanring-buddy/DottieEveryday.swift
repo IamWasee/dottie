@@ -92,13 +92,13 @@ final class DottieEveryday {
 
     func refreshStatusLines() {
         guard let notchPresenter else { return }
-        var lines: [NotchStatusLine] = []
+        var lines: [NotchStatusLine] = DottieToolInstaller.shared.statusLines
         if let focusLine = focus.statusLine {
             lines.append(focusLine)
         }
         let watchLines = watches.statusLines
         let roomForWatches = Self.maximumStatusLineCount - lines.count
-        if watchLines.count > roomForWatches {
+        if !watchLines.isEmpty && watchLines.count > roomForWatches {
             lines.append(contentsOf: watchLines.prefix(max(0, roomForWatches - 1)))
             let hiddenCount = watchLines.count - max(0, roomForWatches - 1)
             lines.append(NotchStatusLine(id: "watch:all", symbolName: "eye.fill", text: "\(hiddenCount) more things I'm watching"))
@@ -119,6 +119,8 @@ final class DottieEveryday {
             focus.stop(reason: .stoppedByUser)
         } else if statusLineID == "watch:all" {
             _ = watches.stop(matching: "all")
+        } else if statusLineID.hasPrefix("install:") {
+            DottieToolInstaller.shared.stop(jobID: String(statusLineID.dropFirst(8)))
         } else if statusLineID.hasPrefix("watch:"), let watchID = UUID(uuidString: String(statusLineID.dropFirst(6))) {
             watches.stop(id: watchID)
         }

@@ -592,6 +592,9 @@ private struct HomeCommandLineToolsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            HomeAddToolCard(installer: DottieToolInstaller.shared)
+            HomeAddedToolsCard(installer: DottieToolInstaller.shared)
+
             HomeCard(title: "Command-line tools") {
                 HStack {
                     TextField("Search tools", text: $search)
