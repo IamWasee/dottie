@@ -5,8 +5,9 @@
 //  Settings → Helpers: which engine helpers run on, and how Claude through
 //  OpenMausBot is doing (MausBot found, workspace running, Claude signed
 //  in, and as whom), with one button for whatever is missing, and "Use a
-//  different account" to switch Claude accounts. See DottieMausBot and
-//  DottieClaudeAccount.
+//  different account" to switch Claude accounts. Dottie installs the MausBot
+//  app by itself; its progress shows here too. See DottieMausBot,
+//  DottieMausBotAppInstaller and DottieClaudeAccount.
 //
 
 import SwiftUI
@@ -88,10 +89,10 @@ struct DottieMausBotSettingsCard: View {
     @ViewBuilder
     private var actionButtons: some View {
         HStack(spacing: 8) {
-            if !mausBot.isSetUp || mausBot.claudeState == .notInstalled {
+            if mausBot.needsSetUp {
                 Button("Set up") { mausBot.setUp() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(mausBot.isSettingUp)
+                    .disabled(mausBot.isSettingUp || mausBot.isInstallingDesktopApp)
                     .pointerCursor()
             } else if claudeSignIn.isInProgress {
                 // The sign-in panel above has the buttons.
@@ -123,7 +124,7 @@ struct DottieMausBotSettingsCard: View {
         if mausBot.claudeState == .notSignedIn {
             return "Sign in opens your browser. Click Allow there once, and Dottie picks it up by itself. " + DottieClaudeSignInPanel.pickAccountTip
         }
-        return "Helpers use your Claude plan through MausBot, a free app. Nothing extra to pay. If your Claude limit runs out, helpers switch to the free Gemini backup by themselves and try Claude again later."
+        return "Helpers use your Claude plan through MausBot, a free app Dottie installs for you. Nothing extra to pay. If your Claude limit runs out, helpers switch to the free Gemini backup by themselves and try Claude again later."
     }
 
     private func statusRow(title: String, text: String, isGood: Bool) -> some View {

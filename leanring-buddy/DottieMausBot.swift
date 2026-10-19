@@ -6,10 +6,11 @@
 //  open-source app that runs bots on the Claude Code CLI the user is already
 //  signed in to, so helper work uses their Claude subscription instead of
 //  Gemini's free tier. This file finds MausBot (its Mac app, or the
-//  `openmausbot` npm package), installs it when it's missing, keeps a MausBot
-//  workspace running, checks Claude Code is installed and signed in, and
-//  decides which engine a helper turn runs on. DottieMausBotRuntime runs the
-//  turns themselves.
+//  `openmausbot` npm package), installs it when it's missing (the Mac app
+//  by itself on launch, see DottieMausBotAppInstaller; the npm package only
+//  as Set up's fallback), keeps a MausBot workspace running, checks Claude
+//  Code is installed and signed in, and decides which engine a helper turn
+//  runs on. DottieMausBotRuntime runs the turns themselves.
 //
 //  Everything goes through MausBot's headless CLI (`openmausbot … --json`),
 //  which talks to the workspace on 127.0.0.1:8799 (or 18799, 28799):
@@ -241,7 +242,9 @@ enum DottieMausBotLocator {
     static let desktopAppBundleIdentifier = "com.openmausbot.app"
 
     static func desktopAppURL() -> URL? {
-        if let registeredURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: desktopAppBundleIdentifier) {
+        // Launch Services can still remember a copy that's in the Trash.
+        if let registeredURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: desktopAppBundleIdentifier),
+           !registeredURL.path.contains("/.Trash/") {
             return registeredURL
         }
         let homeDirectoryPath = FileManager.default.homeDirectoryForCurrentUser.path
@@ -595,6 +598,19 @@ final class DottieMausBot: ObservableObject {
     static let pinnedMausBotVersion = "0.1.115"
     /// How long a successful workspace check is trusted before asking again.
     private static let workspaceCheckLifetime: TimeInterval = 120
+    /// When the MausBot app last failed to install by itself (cleared once it
+    /// installs). The next automatic try waits for a later launch.
+    private static let desktopAppInstallFailedAtDefaultsKey = "dottieMausBotAppInstallFailedAt"
+    /// Set once Dottie installed the MausBot app. If it's gone after that,
+    /// the user removed it, so only Set up brings it back.
+    private static let desktopAppInstalledByDottieDefaultsKey = "dottieMausBotAppInstalledByDottie"
+    /// The soonest an automatic install tries again after a failure, so
+    /// relaunching Dottie a few times doesn't download the app each time.
+    private static let desktopAppAutomaticRetryDelay: TimeInterval = 60 * 60
+    /// How long after a helper turn got the workspace it may still be
+    /// getting its bot ready (before claudeTurnStarted), so the workspace
+    /// isn't swapped under it.
+    private static let claudeTurnPreparationAllowance: TimeInterval = 90
 
     enum ClaudeState: Equatable {
         case unknown
@@ -618,6 +634,12 @@ final class DottieMausBot: ObservableObject {
     @Published private(set) var claudePauseReason: String? = DottieHelperEngine.claudePauseReason
     /// Claude turns running now, so the workspace isn't swapped under them.
     @Published private(set) var activeClaudeTurnCount = 0
+    /// Dottie is downloading or installing the MausBot app right now.
+    @Published private(set) var isInstallingDesktopApp = false
+    /// The MausBot app didn't install the last time it was tried, so Set up
+    /// stays on offer to try again.
+    @Published private(set) var didDesktopAppInstallFail =
+        UserDefaults.standard.object(forKey: DottieMausBot.desktopAppInstallFailedAtDefaultsKey) != nil
 
     private(set) var launcher: DottieMausBotLauncher?
     private var ownedWorkspaceProcess: Process?
@@ -629,6 +651,12 @@ final class DottieMausBot: ObservableObject {
     private var cachedHelperModelSelection: String?
     private var hasScheduledWarmUp = false
     private var terminationObserver: NSObjectProtocol?
+    /// The MausBot app's download and install, shared by everyone waiting on it.
+    private var desktopAppInstallTask: Task<Bool, Never>?
+    private var hasTriedAutomaticDesktopAppInstall = false
+    /// Hands the workspace from Dottie's `openmausbot serve` to the app.
+    private var desktopAppSwitchTask: Task<Void, Never>?
+    private var lastClaudeTurnHandedOutAt: Date?
 
     private init() {
         terminationObserver = NotificationCenter.default.addObserver(
@@ -646,6 +674,12 @@ final class DottieMausBot: ObservableObject {
 
     var isSettingUp: Bool { setUpTask != nil }
 
+    /// Set up has something to do: nothing runs helpers yet, Claude Code is
+    /// missing, or the MausBot app didn't install and can be tried again.
+    var needsSetUp: Bool {
+        !isSetUp || claudeState == .notInstalled || (didDesktopAppInstallFail && launcherSource != .desktopApp)
+    }
+
     // MARK: Engine choice
 
     func setPreference(_ newPreference: DottieHelperEngine) {
@@ -653,6 +687,7 @@ final class DottieMausBot: ObservableObject {
         preference = newPreference
         if newPreference == .claudeWithBackup {
             refreshStatus(startWorkspace: true)
+            Task { await self.installDesktopAppAutomaticallyIfNeeded() }
         }
     }
 
@@ -696,7 +731,9 @@ final class DottieMausBot: ObservableObject {
         guard await ensureWorkspaceReady(launcher: launcher) else {
             return .fallback(.notReachable)
         }
-        return .ready(launcher)
+        lastClaudeTurnHandedOutAt = Date()
+        // The workspace may have moved to the MausBot app while this waited.
+        return .ready(self.launcher ?? launcher)
     }
 
     /// The launcher, looked up once (the login shell lookup is slow).
@@ -754,8 +791,12 @@ final class DottieMausBot: ObservableObject {
         }
         if let desktopAppURL = DottieMausBotLocator.desktopAppURL() {
             // Two workspaces can't share MausBot's data folder, so with the
-            // app installed the app runs it.
-            if !DottieMausBotLocator.isDesktopAppRunning {
+            // app installed the app runs it, once a `serve` of Dottie's that
+            // isn't answering has let go of the folder.
+            if ownedWorkspaceProcess != nil && activeClaudeTurnCount == 0 {
+                await stopOwnedWorkspaceAndWaitForExit()
+            }
+            if ownedWorkspaceProcess == nil && !DottieMausBotLocator.isDesktopAppRunning {
                 let configuration = NSWorkspace.OpenConfiguration()
                 configuration.activates = false
                 configuration.addsToRecentItems = false
@@ -847,17 +888,162 @@ final class DottieMausBot: ObservableObject {
         workspaceConfirmedAt = nil
     }
 
+    /// Stops the workspace Dottie started and waits until it has exited.
+    /// `serve` holds a lease on MausBot's data folder (~/.openmausbot) while
+    /// it runs, and the MausBot app refuses to start while someone else does.
+    private func stopOwnedWorkspaceAndWaitForExit() async {
+        guard let workspaceProcess = ownedWorkspaceProcess else { return }
+        stopOwnedWorkspace()
+        for _ in 0..<60 {
+            if !workspaceProcess.isRunning { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        // One that won't stop: the app clears the lease of a process that's gone.
+        if workspaceProcess.isRunning {
+            kill(workspaceProcess.processIdentifier, SIGKILL)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+    }
+
+    // MARK: The MausBot app
+
+    /// Downloads and installs the MausBot app unless it's already on this
+    /// Mac, and hands the workspace over to it. True when the app is there
+    /// afterwards. Never replaces or quits a copy the user already has.
+    func installDesktopAppIfNeeded() async -> Bool {
+        if let desktopAppInstallTask {
+            return await desktopAppInstallTask.value
+        }
+        if DottieMausBotLocator.desktopAppURL() != nil || DottieMausBotLocator.isDesktopAppRunning {
+            return DottieMausBotLocator.desktopAppURL() != nil
+        }
+        let installTask = Task { await self.performDesktopAppInstall() }
+        desktopAppInstallTask = installTask
+        isInstallingDesktopApp = true
+        let isInstalled = await installTask.value
+        desktopAppInstallTask = nil
+        isInstallingDesktopApp = false
+        return isInstalled
+    }
+
+    private func performDesktopAppInstall() async -> Bool {
+        busyText = DottieMausBotAppInstaller.Stage.downloading(percentDone: nil).statusText
+        do {
+            let installedAppURL = try await DottieMausBotAppInstaller.install { [weak self] stage in
+                self?.busyText = stage.statusText
+            }
+            print("✅ MausBot app installed at \(installedAppURL.path)")
+        } catch {
+            print("⚠️ MausBot app install failed: \(error.localizedDescription)")
+            UserDefaults.standard.set(Date(), forKey: Self.desktopAppInstallFailedAtDefaultsKey)
+            didDesktopAppInstallFail = true
+            // Set up goes on to the npm fallback; this stays as the reason
+            // Set up is still offered.
+            problemText = "Couldn't install the MausBot app (\(error.localizedDescription)). Tap Set up to try again, or Dottie tries by itself the next time it starts."
+            if setUpTask == nil {
+                busyText = nil
+            }
+            return false
+        }
+        UserDefaults.standard.removeObject(forKey: Self.desktopAppInstallFailedAtDefaultsKey)
+        UserDefaults.standard.set(true, forKey: Self.desktopAppInstalledByDottieDefaultsKey)
+        didDesktopAppInstallFail = false
+        if setUpTask == nil {
+            busyText = nil
+            problemText = nil
+        }
+        if ownedWorkspaceProcess != nil {
+            if desktopAppSwitchTask == nil {
+                desktopAppSwitchTask = Task {
+                    await self.switchToDesktopApp()
+                    self.desktopAppSwitchTask = nil
+                }
+            }
+        } else {
+            launcher = nil
+            _ = await currentLauncher()
+        }
+        return true
+    }
+
+    /// Installs the MausBot app in the background when helpers run on
+    /// Claude and it isn't on this Mac, at most once per launch. After a
+    /// failure the next try is on a later launch (an hour on at the
+    /// earliest) or when the user taps Set up.
+    private func installDesktopAppAutomaticallyIfNeeded() async {
+        guard !hasTriedAutomaticDesktopAppInstall,
+              preference == .claudeWithBackup,
+              desktopAppInstallTask == nil,
+              DottieMausBotLocator.desktopAppURL() == nil,
+              !DottieMausBotLocator.isDesktopAppRunning else { return }
+        // Dottie put it there once and it's gone: the user removed it.
+        if UserDefaults.standard.bool(forKey: Self.desktopAppInstalledByDottieDefaultsKey) { return }
+        if let failedAt = UserDefaults.standard.object(forKey: Self.desktopAppInstallFailedAtDefaultsKey) as? Date,
+           Date().timeIntervalSince(failedAt) < Self.desktopAppAutomaticRetryDelay {
+            return
+        }
+        hasTriedAutomaticDesktopAppInstall = true
+        guard await installDesktopAppIfNeeded() else { return }
+        // Start the app's workspace and show the new status in Settings.
+        if setUpTask == nil && desktopAppSwitchTask == nil {
+            await performStatusRefresh(startWorkspace: preference == .claudeWithBackup)
+        }
+    }
+
+    /// Once the MausBot app is installed: stops the `openmausbot serve`
+    /// Dottie started and lets the app run the workspace instead. Both keep
+    /// their data in ~/.openmausbot (OMB_DATA_DIR, which Dottie leaves
+    /// unset), so helper bots, chats and settings carry over, but only one
+    /// may run on it at a time. Waits until no Claude turn is using `serve`.
+    private func switchToDesktopApp() async {
+        while ownedWorkspaceProcess != nil {
+            if let runningStartTask = workspaceStartTask {
+                _ = await runningStartTask.value
+                continue
+            }
+            let isTurnPreparing = lastClaudeTurnHandedOutAt.map {
+                Date().timeIntervalSince($0) < Self.claudeTurnPreparationAllowance
+            } ?? false
+            if activeClaudeTurnCount == 0 && !isTurnPreparing {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+        guard ownedWorkspaceProcess != nil else {
+            // It stopped by itself; the app starts when a helper needs it.
+            launcher = nil
+            _ = await currentLauncher()
+            return
+        }
+        // Helper turns that ask for the workspace now wait for this.
+        let switchTask = Task { () -> Bool in
+            await self.stopOwnedWorkspaceAndWaitForExit()
+            self.launcher = nil
+            self.cachedHelperModelSelection = nil
+            guard let desktopAppLauncher = await self.currentLauncher() else { return false }
+            return await self.startWorkspaceIfNeeded(launcher: desktopAppLauncher)
+        }
+        workspaceStartTask = switchTask
+        _ = await switchTask.value
+        if workspaceStartTask == switchTask {
+            workspaceStartTask = nil
+        }
+        await refreshClaudeState()
+    }
+
     // MARK: Status
 
     /// Looks for MausBot when Dottie starts and, when helpers run on Claude
     /// and it's set up, starts its workspace so the first task is quick.
-    /// Installs nothing.
+    /// Then, when helpers run on Claude and the MausBot app isn't here,
+    /// installs it in the background (Claude Code still comes from Set up).
     func warmUpAfterLaunch() {
         guard !hasScheduledWarmUp else { return }
         hasScheduledWarmUp = true
         Task {
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             await self.performStatusRefresh(startWorkspace: self.preference == .claudeWithBackup)
+            await self.installDesktopAppAutomaticallyIfNeeded()
         }
     }
 
@@ -917,9 +1103,11 @@ final class DottieMausBot: ObservableObject {
 
     // MARK: One-tap setup
 
-    /// Installs what's missing (MausBot, Claude Code) into Dottie's own
-    /// folder with Dottie's own Node.js (no admin password), starts the
-    /// workspace and opens the Claude sign-in if it's needed.
+    /// Installs what's missing and gets helpers ready: the MausBot app
+    /// first (DottieMausBotAppInstaller), the openmausbot npm package only
+    /// if the app won't download or install, and Claude Code, both into
+    /// Dottie's own folder with Dottie's own Node.js (no admin password).
+    /// Then starts the workspace and opens the Claude sign-in if it's needed.
     func setUp() {
         guard setUpTask == nil else { return }
         setUpTask = Task {
@@ -931,10 +1119,16 @@ final class DottieMausBot: ObservableObject {
 
     private func performSetUp() async {
         problemText = nil
+        // Tapping Set up always tries the app again, whatever failed before.
+        let hasDesktopApp = await installDesktopAppIfNeeded()
         launcher = nil
         var foundLauncher = await currentLauncher()
 
         if foundLauncher == nil {
+            // The fallback: the npm package, run with Dottie's own Node.js.
+            if !hasDesktopApp {
+                print("⚠️ MausBot app unavailable, installing the openmausbot npm package instead")
+            }
             busyText = "Getting Node.js ready…"
             do {
                 try await DotsRuntimeInstaller.shared.installIfNeeded()
@@ -1121,13 +1315,20 @@ final class DottieMausBot: ObservableObject {
     /// DottieMausBotOpener.
     func openMausBot() {
         if let desktopAppURL = DottieMausBotLocator.desktopAppURL() {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
             if ownedWorkspaceProcess != nil && activeClaudeTurnCount == 0 {
-                // The app runs its own workspace on the same data.
-                stopOwnedWorkspace()
+                // The app runs its own workspace on the same data, and only
+                // starts once Dottie's `serve` has let go of it.
+                Task {
+                    await self.stopOwnedWorkspaceAndWaitForExit()
+                    self.launcher = nil
+                    _ = await self.currentLauncher()
+                    _ = try? await NSWorkspace.shared.openApplication(at: desktopAppURL, configuration: configuration)
+                }
+                return
             }
             if ownedWorkspaceProcess == nil {
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = true
                 NSWorkspace.shared.openApplication(at: desktopAppURL, configuration: configuration)
                 return
             }

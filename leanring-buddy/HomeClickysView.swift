@@ -136,7 +136,7 @@ private struct HelperBotsGrid: View {
         } else if mausBot.preference == .claudeWithBackup && mausBot.hasLookedForMausBot && !mausBot.isSetUp {
             bannerRow(
                 text: mausBot.busyText ?? "Helpers are on the free Gemini backup. Set up Claude (through the free MausBot app) to use your Claude plan instead: faster, and they can do a lot more.",
-                buttonTitle: mausBot.isSettingUp ? nil : "Set up Claude",
+                buttonTitle: mausBot.isSettingUp || mausBot.isInstallingDesktopApp ? nil : "Set up Claude",
                 action: { mausBot.setUp() }
             )
         } else if mausBot.preference == .claudeWithBackup && mausBot.isSetUp && mausBot.claudeState == .notSignedIn {
