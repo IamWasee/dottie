@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<defs>
+  <radialGradient id="haze" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#C084FC" stop-opacity="0.75"/><stop offset="1" stop-color="#4C1D95" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.4" stop-color="#FDE68A"/><stop offset="1" stop-color="#F472B6" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="arm" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#93C5FD"/><stop offset="0.5" stop-color="#C084FC"/><stop offset="1" stop-color="#F472B6"/>
+  </linearGradient>
+  <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+</defs>
+<ellipse cx="32" cy="32" rx="29" ry="22" transform="rotate(-25 32 32)" fill="url(#haze)"/>
+<g transform="rotate(-25 32 32)">
+  <g fill="none" stroke="url(#arm)" stroke-linecap="round">
+    <path d="M32 32 C 38 22, 54 24, 55 33 C 56 43, 44 49, 34 47" stroke-width="7" opacity="0.6" filter="url(#blur)"/>
+    <path d="M32 32 C 26 42, 10 40, 9 31 C 8 21, 20 15, 30 17" stroke-width="7" opacity="0.6" filter="url(#blur)"/>
+    <path d="M32 32 C 38 22, 54 24, 55 33 C 56 43, 44 49, 34 47" stroke-width="2.6"/>
+    <path d="M32 32 C 26 42, 10 40, 9 31 C 8 21, 20 15, 30 17" stroke-width="2.6"/>
+  </g>
+</g>
+<circle cx="32" cy="32" r="11" fill="url(#core)"/>
+<circle cx="32" cy="32" r="3.6" fill="#FFFFFF"/>
+<circle cx="52" cy="10" r="1.6" fill="#FFFFFF"/><circle cx="9" cy="52" r="1.4" fill="#FFFFFF"/>
+<circle cx="56" cy="50" r="1.1" fill="#C4B5FD"/><circle cx="12" cy="9" r="1.1" fill="#93C5FD"/>
+</svg>

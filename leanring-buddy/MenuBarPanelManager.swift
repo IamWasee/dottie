@@ -71,20 +71,21 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
-    /// Draws Dottie's cursor with her little dot beside it, the same marks as
-    /// the app icon, as a template image so macOS tints it for the menu bar.
+    /// Draws the outline of Dottie's cursor artwork (DottieCursorArrow), the
+    /// same cursor as the app icon, as a template image so macOS tints it for
+    /// the menu bar.
     private func makeClickyMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize), flipped: true) { _ in
-            // The cursor outline lives in a 52 x 72 artwork space (the size of
-            // the cursor art), so it's scaled down to about 14.5pt tall here.
-            let artworkScale: CGFloat = 14.5 / 72
-            let artworkOffset = CGPoint(x: 2.87, y: 1.85)
+            // The outline is traced in the cursor art's own 52 x 72 space and
+            // scaled down to 15pt tall here.
+            let artworkScale: CGFloat = 15 / 72
+            let artworkOffset = CGPoint(x: 3.1, y: 1.5)
             func iconPoint(_ artworkX: CGFloat, _ artworkY: CGFloat) -> CGPoint {
                 CGPoint(x: artworkOffset.x + artworkX * artworkScale, y: artworkOffset.y + artworkY * artworkScale)
             }
 
-            // The outline's corners are quadratic curves; NSBezierPath only
+            // The rounded corners are quadratic curves; NSBezierPath only
             // takes cubic ones, so each is converted with the 2/3 rule.
             let cursorPath = NSBezierPath()
             func addQuadraticCurve(to endPoint: CGPoint, controlPoint: CGPoint) {
@@ -100,24 +101,21 @@ final class MenuBarPanelManager: NSObject {
                 cursorPath.curve(to: endPoint, controlPoint1: firstCubicControlPoint, controlPoint2: secondCubicControlPoint)
             }
 
-            cursorPath.move(to: iconPoint(4.56, 3.18))
-            cursorPath.line(to: iconPoint(46.59, 47.46))
-            addQuadraticCurve(to: iconPoint(45.52, 49.64), controlPoint: iconPoint(49, 50))
-            // The cursor's curved underside.
-            addQuadraticCurve(to: iconPoint(3.33, 68.63), controlPoint: iconPoint(20, 47))
-            addQuadraticCurve(to: iconPoint(1.54, 68), controlPoint: iconPoint(1.5, 71))
-            cursorPath.line(to: iconPoint(2.46, 4))
-            addQuadraticCurve(to: iconPoint(4.56, 3.18), controlPoint: iconPoint(2.5, 1))
+            // Tip at the top left, wing on the right, the notch underneath,
+            // and the bottom of the left edge.
+            cursorPath.move(to: iconPoint(3.3, 2.2))
+            cursorPath.line(to: iconPoint(49.3, 45.9))
+            addQuadraticCurve(to: iconPoint(48.6, 48.74), controlPoint: iconPoint(51.5, 48))
+            cursorPath.line(to: iconPoint(25.94, 54.51))
+            addQuadraticCurve(to: iconPoint(22.37, 56.17), controlPoint: iconPoint(24, 55))
+            cursorPath.line(to: iconPoint(3.03, 70.04))
+            addQuadraticCurve(to: iconPoint(1.02, 69), controlPoint: iconPoint(1, 71.5))
+            cursorPath.line(to: iconPoint(1.48, 3))
+            addQuadraticCurve(to: iconPoint(3.3, 2.2), controlPoint: iconPoint(1.5, 0.5))
             cursorPath.close()
-
-            let dotRadius: CGFloat = 1.75
-            let dotPath = NSBezierPath(ovalIn: NSRect(
-                x: 14.6 - dotRadius, y: 14.4 - dotRadius, width: dotRadius * 2, height: dotRadius * 2
-            ))
 
             NSColor.black.setFill()
             cursorPath.fill()
-            dotPath.fill()
             return true
         }
         return image

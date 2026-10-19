@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<defs>
+  <radialGradient id="planet" cx="0.35" cy="0.3" r="0.8">
+    <stop offset="0" stop-color="#FFE4C7"/><stop offset="0.4" stop-color="#FB923C"/>
+    <stop offset="0.75" stop-color="#DB2777"/><stop offset="1" stop-color="#581C87"/>
+  </radialGradient>
+  <linearGradient id="ring" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#C4B5FD"/><stop offset="0.5" stop-color="#FEF3C7"/><stop offset="1" stop-color="#A78BFA"/>
+  </linearGradient>
+  <clipPath id="front"><rect x="-10" y="32" width="84" height="40" transform="rotate(-20 32 32)"/></clipPath>
+  <clipPath id="planetClip"><circle cx="32" cy="32" r="16"/></clipPath>
+</defs>
+<ellipse cx="32" cy="32" rx="29" ry="8.5" transform="rotate(-20 32 32)" fill="none" stroke="url(#ring)" stroke-width="3.6" opacity="0.9"/>
+<circle cx="32" cy="32" r="16" fill="url(#planet)"/>
+<g clip-path="url(#planetClip)" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2.2">
+  <path d="M14 26 C 24 22 40 20 50 22"/><path d="M14 36 C 26 32 40 30 52 31"/>
+</g>
+<g clip-path="url(#front)">
+  <ellipse cx="32" cy="32" rx="29" ry="8.5" transform="rotate(-20 32 32)" fill="none" stroke="url(#ring)" stroke-width="3.6"/>
+</g>
+<circle cx="54" cy="10" r="3.2" fill="#E0E7FF"/>
+</svg>
