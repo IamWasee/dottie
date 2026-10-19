@@ -23,9 +23,11 @@
 //  so what URLSession downloads isn't flagged, and nothing here adds or
 //  strips the flag. The app is notarized either way.
 //
-//  The app and `openmausbot serve` keep their data in the same folder
-//  (~/.openmausbot: bots, chats, settings), so the helper bots Dottie made
-//  with its npm copy are in the app too. See DottieMausBot.switchToDesktopApp.
+//  Dottie doesn't run the app itself: it runs `openmausbot serve` with the
+//  app's bundled copy of MausBot, because the app's own workspace refuses
+//  changes from other programs (see DottieMausBot.startWorkspaceIfNeeded).
+//  Both keep their data in ~/.openmausbot, so the helper bots show up in
+//  the app too whenever the user opens it.
 //
 
 import Foundation

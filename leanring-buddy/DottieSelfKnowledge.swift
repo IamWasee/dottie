@@ -1052,6 +1052,9 @@ extension DottieSelfKnowledge {
             return "Helper engine: Gemini only (free tier)."
         }
         var description = "Helper engine: Claude through MausBot, Gemini as backup. MausBot: \(mausBot.mausBotStatusLine). Claude: \(mausBot.claudeStatusLine)."
+        if mausBot.isDesktopAppHoldingWorkspace {
+            description += " The MausBot app is open; its workspace refuses Dottie's changes, so helpers use Gemini until it's quit."
+        }
         if mausBot.isInstallingDesktopApp {
             description += " Dottie is installing the MausBot app in the background right now (\(mausBot.busyText ?? "downloading"))."
         }
@@ -1281,7 +1284,14 @@ extension DottieSelfKnowledge {
 
         let mausBot = DottieMausBot.shared
         if mausBot.preference == .claudeWithBackup {
-            if let pausedUntil = mausBot.claudePausedUntil {
+            if mausBot.isDesktopAppHoldingWorkspace {
+                problems.append(Problem(
+                    text: "The MausBot app is open, and its workspace doesn't take changes from me, so helpers use the free Gemini backup.",
+                    fix: "Quit the MausBot app; I run MausBot myself when a helper needs it.",
+                    keywords: ["helper", "helpers", "dots", "claude", "mausbot", "answering", "responding"],
+                    isMajor: false
+                ))
+            } else if let pausedUntil = mausBot.claudePausedUntil {
                 problems.append(Problem(
                     text: "\(mausBot.claudePauseReason ?? "Claude is paused"), so helpers use the free Gemini backup until \(pausedUntil.formatted(date: .omitted, time: .shortened)).",
                     fix: "Settings → Helpers: Claude via MausBot → Try Claude now (about_me guide 'mausbot').",
