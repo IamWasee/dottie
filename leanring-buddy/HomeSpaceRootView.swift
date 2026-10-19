@@ -983,7 +983,7 @@ private struct HomeCursorShapeSettings: View {
                 .font(.system(size: 13))
                 .foregroundColor(DS.Colors.textPrimary)
             Spacer()
-            Menu(cursorPet.costume.map { "\($0.emoji ?? "") \($0.name)" } ?? "Arrow") {
+            Menu(cursorPet.costume.map { costume in costume.emoji.map { "\($0) \(costume.name)" } ?? costume.name } ?? "Arrow") {
                 Button("Arrow") { cursorPet.setCostume(nil) }
                 Divider()
                 ForEach(DottieCursorPet.library, id: \.name) { shape in

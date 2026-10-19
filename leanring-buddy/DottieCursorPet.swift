@@ -29,6 +29,9 @@ final class DottieCursorPet: ObservableObject {
         var emoji: String?
         var symbol: String?
         var roams: Bool
+        /// An asset-catalog image (the shapes unlocked by levelling up),
+        /// drawn instead of an emoji or symbol.
+        var artwork: String? = nil
     }
 
     /// The shape the cursor has, or nil for the normal arrow.
@@ -184,13 +187,13 @@ final class DottieCursorPet: ObservableObject {
             return "back to the normal arrow."
         }
         // Special shapes unlock as Dottie levels up (DottieLevels).
-        if let specialShape = DottieLevels.unlockableShape(named: shapeName), case .shape(let specialEmoji) = specialShape.kind {
+        if let specialShape = DottieLevels.unlockableShape(named: shapeName), case .shape(let specialArtworkName) = specialShape.kind {
             let levels = DottieLevels.shared
             guard levels.isUnlocked(specialShape) else {
                 return "\(shapeName) is a special shape that unlocks at level \(specialShape.level); you're level \(levels.level). tease them that you have to earn it together."
             }
             let roams = (arguments["roam"] as? Bool) ?? false
-            setCostume(Costume(name: shapeName, emoji: specialEmoji, symbol: nil, roams: roams))
+            setCostume(Costume(name: shapeName, emoji: nil, symbol: nil, roams: roams, artwork: specialArtworkName))
             return "you're the \(shapeName) now, a special shape you unlocked. show off a little."
         }
         var emoji = (arguments["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)

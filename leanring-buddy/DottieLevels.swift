@@ -48,7 +48,8 @@ final class DottieLevels: ObservableObject {
     /// Something a level unlocks.
     struct Unlockable: Identifiable, Hashable {
         enum Kind: Hashable {
-            case shape(emoji: String)
+            /// A cursor shape, drawn from this asset-catalog image.
+            case shape(artworkName: String)
             case notchEffect(DottieNotchEffect)
         }
 
@@ -58,10 +59,11 @@ final class DottieLevels: ObservableObject {
 
         var id: String { name }
 
-        var icon: String {
+        /// The asset-catalog image shown for it in Home → Profile.
+        var artworkName: String {
             switch kind {
-            case .shape(let emoji): return emoji
-            case .notchEffect(let effect): return effect.icon
+            case .shape(let artworkName): return artworkName
+            case .notchEffect(let effect): return effect.artworkName
             }
         }
 
@@ -123,17 +125,17 @@ final class DottieLevels: ObservableObject {
     // MARK: - Levels
 
     static let unlockables: [Unlockable] = [
-        Unlockable(name: "sparkle dot", level: 2, kind: .shape(emoji: "✨")),
-        Unlockable(name: "disco ball", level: 3, kind: .shape(emoji: "🪩")),
+        Unlockable(name: "sparkle dot", level: 2, kind: .shape(artworkName: "UnlockSparkleDot")),
+        Unlockable(name: "disco ball", level: 3, kind: .shape(artworkName: "UnlockDiscoBall")),
         Unlockable(name: "sparkles", level: 3, kind: .notchEffect(.sparkles)),
-        Unlockable(name: "comet", level: 4, kind: .shape(emoji: "☄️")),
+        Unlockable(name: "comet", level: 4, kind: .shape(artworkName: "UnlockComet")),
         Unlockable(name: "rainbow glow", level: 5, kind: .notchEffect(.rainbow)),
-        Unlockable(name: "galaxy", level: 6, kind: .shape(emoji: "🌌")),
-        Unlockable(name: "trophy", level: 7, kind: .shape(emoji: "🏆")),
-        Unlockable(name: "dragon king", level: 8, kind: .shape(emoji: "🐲")),
-        Unlockable(name: "shooting star", level: 9, kind: .shape(emoji: "🌠")),
+        Unlockable(name: "galaxy", level: 6, kind: .shape(artworkName: "UnlockGalaxy")),
+        Unlockable(name: "trophy", level: 7, kind: .shape(artworkName: "UnlockTrophy")),
+        Unlockable(name: "dragon king", level: 8, kind: .shape(artworkName: "UnlockDragonKing")),
+        Unlockable(name: "shooting star", level: 9, kind: .shape(artworkName: "UnlockShootingStar")),
         Unlockable(name: "aurora", level: 9, kind: .notchEffect(.aurora)),
-        Unlockable(name: "ringed planet", level: 10, kind: .shape(emoji: "🪐"))
+        Unlockable(name: "ringed planet", level: 10, kind: .shape(artworkName: "UnlockRingedPlanet"))
     ]
 
     private static let levelNames = [
@@ -224,7 +226,7 @@ final class DottieLevels: ObservableObject {
             level: levelAfter,
             title: "Level \(levelAfter) · \(Self.name(forLevel: levelAfter))",
             line: Self.levelUpLines.randomElement() ?? "Level up!",
-            unlocked: unlocked.map { "\($0.icon) \($0.name)" }
+            unlocked: unlocked.map(\.name)
         )
     }
 
@@ -271,8 +273,8 @@ final class DottieLevels: ObservableObject {
             return "\(unlockable.name) unlocks at level \(unlockable.level); you're level \(level). tease them that they'll have to earn it."
         }
         switch unlockable.kind {
-        case .shape(let emoji):
-            cursorPet.setCostume(DottieCursorPet.Costume(name: unlockable.name, emoji: emoji, symbol: nil, roams: false))
+        case .shape(let artworkName):
+            cursorPet.setCostume(DottieCursorPet.Costume(name: unlockable.name, emoji: nil, symbol: nil, roams: false, artwork: artworkName))
             return "you're wearing \(unlockable.name) now. show it off in a few words."
         case .notchEffect(let effect):
             setNotchEffect(effect)
@@ -362,12 +364,13 @@ enum DottieLevelTools: DottieToolModule {
 enum DottieNotchEffect: String, CaseIterable, Codable {
     case off, sparkles, rainbow, aurora
 
-    var icon: String {
+    /// The asset-catalog image for the effect's button in Home → Profile.
+    var artworkName: String {
         switch self {
-        case .off: return "⚫️"
-        case .sparkles: return "✨"
-        case .rainbow: return "🌈"
-        case .aurora: return "🌌"
+        case .off: return "NotchEffectNone"
+        case .sparkles: return "NotchEffectSparkles"
+        case .rainbow: return "NotchEffectRainbow"
+        case .aurora: return "NotchEffectAurora"
         }
     }
 

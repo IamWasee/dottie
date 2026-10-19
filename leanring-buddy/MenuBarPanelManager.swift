@@ -71,39 +71,55 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
-    /// Draws the clicky triangle as a menu bar icon. Uses the same shape
-    /// and rotation as the in-app cursor so the menu bar icon matches.
+    /// Draws Dottie's cursor with her little dot beside it, the same marks as
+    /// the app icon, as a template image so macOS tints it for the menu bar.
     private func makeClickyMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
-        let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
-        image.lockFocus()
+        let image = NSImage(size: NSSize(width: iconSize, height: iconSize), flipped: true) { _ in
+            // The cursor outline lives in a 52 x 72 artwork space (the size of
+            // the cursor art), so it's scaled down to about 14.5pt tall here.
+            let artworkScale: CGFloat = 14.5 / 72
+            let artworkOffset = CGPoint(x: 2.87, y: 1.85)
+            func iconPoint(_ artworkX: CGFloat, _ artworkY: CGFloat) -> CGPoint {
+                CGPoint(x: artworkOffset.x + artworkX * artworkScale, y: artworkOffset.y + artworkY * artworkScale)
+            }
 
-        let triangleSize = iconSize * 0.7
-        let cx = iconSize * 0.50
-        let cy = iconSize * 0.50
-        let height = triangleSize * sqrt(3.0) / 2.0
+            // The outline's corners are quadratic curves; NSBezierPath only
+            // takes cubic ones, so each is converted with the 2/3 rule.
+            let cursorPath = NSBezierPath()
+            func addQuadraticCurve(to endPoint: CGPoint, controlPoint: CGPoint) {
+                let startPoint = cursorPath.currentPoint
+                let firstCubicControlPoint = CGPoint(
+                    x: startPoint.x + 2.0 / 3.0 * (controlPoint.x - startPoint.x),
+                    y: startPoint.y + 2.0 / 3.0 * (controlPoint.y - startPoint.y)
+                )
+                let secondCubicControlPoint = CGPoint(
+                    x: endPoint.x + 2.0 / 3.0 * (controlPoint.x - endPoint.x),
+                    y: endPoint.y + 2.0 / 3.0 * (controlPoint.y - endPoint.y)
+                )
+                cursorPath.curve(to: endPoint, controlPoint1: firstCubicControlPoint, controlPoint2: secondCubicControlPoint)
+            }
 
-        let top = CGPoint(x: cx, y: cy + height / 1.5)
-        let bottomLeft = CGPoint(x: cx - triangleSize / 2, y: cy - height / 3)
-        let bottomRight = CGPoint(x: cx + triangleSize / 2, y: cy - height / 3)
+            cursorPath.move(to: iconPoint(4.56, 3.18))
+            cursorPath.line(to: iconPoint(46.59, 47.46))
+            addQuadraticCurve(to: iconPoint(45.52, 49.64), controlPoint: iconPoint(49, 50))
+            // The cursor's curved underside.
+            addQuadraticCurve(to: iconPoint(3.33, 68.63), controlPoint: iconPoint(20, 47))
+            addQuadraticCurve(to: iconPoint(1.54, 68), controlPoint: iconPoint(1.5, 71))
+            cursorPath.line(to: iconPoint(2.46, 4))
+            addQuadraticCurve(to: iconPoint(4.56, 3.18), controlPoint: iconPoint(2.5, 1))
+            cursorPath.close()
 
-        let angle = 35.0 * .pi / 180.0
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let dx = point.x - cx, dy = point.y - cy
-            let cosA = CGFloat(cos(angle)), sinA = CGFloat(sin(angle))
-            return CGPoint(x: cx + cosA * dx - sinA * dy, y: cy + sinA * dx + cosA * dy)
+            let dotRadius: CGFloat = 1.75
+            let dotPath = NSBezierPath(ovalIn: NSRect(
+                x: 14.6 - dotRadius, y: 14.4 - dotRadius, width: dotRadius * 2, height: dotRadius * 2
+            ))
+
+            NSColor.black.setFill()
+            cursorPath.fill()
+            dotPath.fill()
+            return true
         }
-
-        let path = NSBezierPath()
-        path.move(to: rotate(top))
-        path.line(to: rotate(bottomLeft))
-        path.line(to: rotate(bottomRight))
-        path.close()
-
-        NSColor.black.setFill()
-        path.fill()
-
-        image.unlockFocus()
         return image
     }
 

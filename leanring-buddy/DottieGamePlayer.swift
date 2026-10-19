@@ -156,7 +156,7 @@ final class DottieGamePlayer {
                 recentHistory.append("You thought: \(thought.prefix(200))")
             }
             if !plan.goal.isEmpty {
-                onProgress?("🎮 \(plan.goal)")
+                onProgress?(plan.goal)
             }
             thinkAloudIfItsBeenAWhile(plan.say)
 
@@ -241,7 +241,7 @@ final class DottieGamePlayer {
     /// Records the user's keys and a few frames for a minute, then has the
     /// brain write down what they did and why as lessons.
     private func watchUserPlay(taskText: String, notebook: DottieGameNotebook, reflexes: DottieGameReflexes, brain gameBrain: DottieGameBrain) async -> DottieScreenTaskRunner.Outcome {
-        onProgress?("🎮 Watching you play")
+        onProgress?("Watching you play")
         let watchStartedAt = Date()
         var keyLog: [String] = []
         var keyDownTimes: [String: Date] = [:]

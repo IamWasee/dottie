@@ -150,9 +150,13 @@ struct HomeProfileView: View {
             _ = levels.wear(unlockable.name, cursorPet: companionManager.cursorPet)
         } label: {
             HStack(spacing: 8) {
-                Text(unlockable.icon)
-                    .font(.system(size: 20))
-                    .opacity(isUnlocked ? 1 : 0.3)
+                Image(unlockable.artworkName)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 28, height: 28)
+                    // Locked ones are shown greyed out until their level.
+                    .saturation(isUnlocked ? 1 : 0)
+                    .opacity(isUnlocked ? 1 : 0.35)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(unlockable.name)
                         .font(.system(size: 12, weight: .medium))
@@ -186,7 +190,13 @@ struct HomeProfileView: View {
             levels.setNotchEffect(effect)
         } label: {
             HStack(spacing: 4) {
-                Text(effect.icon)
+                Image(effect.artworkName)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 24, height: 24)
+                    .padding(.vertical, -4)
+                    .saturation(isAvailable ? 1 : 0)
+                    .opacity(isAvailable ? 1 : 0.5)
                 Text(effect.displayName)
                     .font(.system(size: 12))
                 if !isAvailable {

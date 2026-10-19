@@ -132,7 +132,7 @@ final class DottieFocus: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.sessionDefaultsKey)
         onChange?()
         DottieEveryday.shared.tell(
-            title: reason == .timeUp ? "Focus done 🎉" : "Focus stopped",
+            title: reason == .timeUp ? "Focus done" : "Focus stopped",
             text: summary,
             sound: reason == .timeUp ? NSSound.Name("Hero") : nil,
             notification: reason == .timeUp
