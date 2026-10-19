@@ -13,6 +13,7 @@ import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
+    @ObservedObject private var gameplayRecorder = DottieGameplayRecorder.shared
     @State private var emailInput: String = ""
 
     var body: some View {
@@ -31,6 +32,12 @@ struct CompanionPanelView: View {
                     .frame(height: 12)
 
                 modelPickerRow
+                    .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
+                gameplayRecordingRow
                     .padding(.horizontal, 16)
             }
 
@@ -656,6 +663,81 @@ struct CompanionPanelView: View {
         .buttonStyle(.plain)
         .pointerCursor()
         .help(DottieVoicePreview.sound(of: voiceName))
+    }
+
+    // MARK: - Gameplay Recording
+
+    /// Records the user's own play (every new frame plus keys and mouse) as
+    /// training data for Dottie's game reflexes.
+    private var gameplayRecordingRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button(action: {
+                    gameplayRecorder.toggleRecording()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: gameplayRecorder.isRecording ? "stop.circle.fill" : "record.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(gameplayRecorder.isRecording ? DS.Colors.destructive : DS.Colors.textSecondary)
+                        Text(gameplayRecorder.isRecording ? "Stop recording" : "Record gameplay")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(DS.Colors.textPrimary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(DS.Colors.surface2)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(gameplayRecorder.isRecording ? DS.Colors.destructive.opacity(0.6) : DS.Colors.borderSubtle, lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .disabled(gameplayRecorder.isStarting)
+                .help("Save every frame of the screen with your keys and mouse, to train Dottie's game reflexes")
+
+                Spacer()
+
+                Button(action: {
+                    gameplayRecorder.openGameDataFolder()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Open folder")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Show the recorded gameplay in Finder")
+            }
+
+            // Always one line under the buttons, so the panel (sized when it
+            // opens) doesn't clip it when recording starts.
+            if gameplayRecorder.isRecording {
+                Text("\(gameplayRecorder.savedFrameCount.formatted()) frames · \(ByteCountFormatter.string(fromByteCount: gameplayRecorder.savedByteCount, countStyle: .file))")
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textTertiary)
+            } else if let problemMessage = gameplayRecorder.problemMessage {
+                Text(problemMessage)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.warningText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(problemMessage)
+            } else {
+                Text("Saves every frame with your keys and mouse, on this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Footer

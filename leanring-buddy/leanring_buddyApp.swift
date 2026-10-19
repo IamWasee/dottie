@@ -56,6 +56,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         companionManager.stop()
+        DottieGameplayRecorder.shared.stopRecording()
     }
 
     /// Registers the app as a login item so it launches automatically on
