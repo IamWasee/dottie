@@ -622,7 +622,7 @@ extension DottieSelfKnowledge {
                 id: "tools",
                 title: "Connected apps and tools",
                 keywords: ["tools", "apps", "connect", "connected apps", "mcp", "notion", "linear", "github", "integration", "command line", "cli", "homebrew", "install"],
-                summary: "Connect your apps (MCP servers, like Notion or Linear) so I and the helpers can use them (\"add a page to my Notion\"), and install handy command-line tools.",
+                summary: "Connect your apps (MCP servers, like Notion or Linear) so I and the helpers can use them (\"add a page to my Notion\"), and install any command-line tool: type its name there, or just ask me (\"install ffmpeg\").",
                 whereToFind: "Home → Tools.",
                 place: Place(section: .tools),
                 steps: [

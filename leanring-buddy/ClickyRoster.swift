@@ -536,6 +536,7 @@ final class ClickyRoster: ObservableObject {
         }
 
         let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
+        passInstallToolRequestFromLastReply(agentID: agentID)
         // Home clears this right away if the chat is on screen.
         if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
             agents[agentIndex].hasUnreadReply = true
@@ -614,6 +615,28 @@ final class ClickyRoster: ObservableObject {
         transcriptsByAgentID[agentID] = transcript
         appendTranscriptItem(.computerUseRequest, text: requestDescription, to: agentID)
         return requestDescription
+    }
+
+    /// If the agent's last reply ends with an <INSTALL_TOOL> block, strips
+    /// it and hands it to DottieToolInstaller, which asks the user and
+    /// messages the agent once the tool is installed (or not).
+    private func passInstallToolRequestFromLastReply(agentID: UUID) {
+        guard var transcript = transcriptsByAgentID[agentID],
+              let lastReplyIndex = transcript.lastIndex(where: { $0.kind == .assistant }),
+              let requestingAgent = agent(withID: agentID) else { return }
+        let (replyWithoutRequest, requestedTool) = DottieToolInstaller.extractInstallRequest(from: transcript[lastReplyIndex].text)
+        guard let requestedTool else { return }
+        if replyWithoutRequest.isEmpty {
+            transcript.remove(at: lastReplyIndex)
+        } else {
+            transcript[lastReplyIndex].text = replyWithoutRequest
+        }
+        transcriptsByAgentID[agentID] = transcript
+        appendTranscriptItem(.status, text: "Asked you to install \(requestedTool)", to: agentID)
+        DottieToolInstaller.shared.handleHelperRequest(requestedTool, helperName: requestingAgent.name) { [weak self] followUpMessage in
+            guard let self, let agentToMessage = self.agent(withID: agentID) else { return }
+            self.sendOrQueueMessage(followUpMessage, to: agentToMessage)
+        }
     }
 
     // MARK: - Computer use permission
@@ -1028,6 +1051,7 @@ extension ClickyRoster {
         }
         applyRoutineBlocksInLastReply(agentID: agentID)
         let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
+        passInstallToolRequestFromLastReply(agentID: agentID)
         if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
             agents[agentIndex].hasUnreadReply = true
             agents[agentIndex].lastActivityAt = Date()

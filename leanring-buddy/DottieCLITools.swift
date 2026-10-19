@@ -215,12 +215,21 @@ final class DottieCLIToolsManager: ObservableObject {
 
     // MARK: For helpers
 
-    /// One short paragraph naming the handy tools on this Mac, for helpers.
+    /// The handy tools on this Mac, the ones Dottie installed on request,
+    /// and how to ask for more, for helpers.
     nonisolated static var helperInstructions: String {
         let installedIDs = Set(UserDefaults.standard.stringArray(forKey: installedDefaultsKey) ?? [])
         let installedCommands = DottieCLICatalog.all.filter { installedIDs.contains($0.id) }.map(\.command)
-        guard !installedCommands.isEmpty else { return "" }
-        return "Command-line tools on this Mac you can use in the shell: \(installedCommands.joined(separator: ", ")). Prefer them to writing your own code (for example ffmpeg for video, pandoc for documents, jq for JSON)."
+        var paragraphs: [String] = []
+        if !installedCommands.isEmpty {
+            paragraphs.append("Command-line tools on this Mac you can use in the shell: \(installedCommands.joined(separator: ", ")). Prefer them to writing your own code (for example ffmpeg for video, pandoc for documents, jq for JSON).")
+        }
+        let requestedToolLines = DottieToolInstaller.helperToolLines
+        if !requestedToolLines.isEmpty {
+            paragraphs.append("Tools Dottie installed for the user, ready to use (use the full path if the name isn't found):\n" + requestedToolLines)
+        }
+        paragraphs.append(DottieToolInstaller.helperInstallPolicy)
+        return paragraphs.joined(separator: "\n\n")
     }
 }
 
@@ -246,11 +255,13 @@ enum DottieProcessRunner {
     }
 
     /// Runs a program, calling `onLine` with each line it prints.
+    /// `shouldStop` is checked a few times a second; true stops the program.
     static func run(
         _ executablePath: String,
         arguments: [String],
         environment: [String: String]? = nil,
         timeout: TimeInterval,
+        shouldStop: (@Sendable () -> Bool)? = nil,
         onLine: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result {
         await withCheckedContinuation { (continuation: CheckedContinuation<Result, Never>) in
@@ -284,7 +295,7 @@ enum DottieProcessRunner {
                 }
                 let deadline = Date().addingTimeInterval(timeout)
                 while process.isRunning {
-                    if Date() > deadline {
+                    if Date() > deadline || shouldStop?() == true {
                         process.terminate()
                         break
                     }
