@@ -529,6 +529,8 @@ private struct HomeSettingsView: View {
     @State private var serverCheckMessage: String?
     @State private var learnedTipCount = DottieScreenLessons.shared.count
     @State private var isCheckingServer = false
+    /// What's typed in the search field at the top of Settings. Empty shows every section.
+    @State private var settingsSearchText = ""
     @AppStorage(DictationDictionary.learnsCorrectionsDefaultsKey) private var learnsDictationCorrections = true
     @AppStorage(DictationLanguageCatalog.autoDetectDefaultsKey) private var isDictationLanguageAutoDetected = true
     @AppStorage(DictationLiveTranscriber.enabledDefaultsKey) private var showsDictationLiveText = true
@@ -542,6 +544,14 @@ private struct HomeSettingsView: View {
                 Text("Settings")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
+
+                settingsSearchField
+
+                if !settingsSearchText.isEmpty && !hasAnySettingsGroupMatchingSearch {
+                    Text("No settings match \"\(settingsSearchText)\".")
+                        .font(.system(size: 13))
+                        .foregroundColor(DS.Colors.textSecondary)
+                }
 
                 settingsGroup(title: "Permissions") {
                     HomePermissionsSettings()
@@ -725,6 +735,8 @@ private struct HomeSettingsView: View {
             // Dottie opened a section herself: scroll to it once laid out.
             guard let requestedGroup else { return }
             DottieHomeNavigator.shared.requestedSettingsGroup = nil
+            // A search could be hiding the section Dottie wants to show.
+            settingsSearchText = ""
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 withAnimation { scrollProxy.scrollTo(requestedGroup, anchor: .top) }
             }
@@ -732,7 +744,81 @@ private struct HomeSettingsView: View {
         }
     }
 
+    private var settingsSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundColor(DS.Colors.textTertiary)
+            TextField("Search settings", text: $settingsSearchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+            if !settingsSearchText.isEmpty {
+                Button {
+                    settingsSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
+    }
+
+    /// Words for what each section holds, so searching "hotkey" or "update"
+    /// finds the right section even when the word isn't in its title. Keyed
+    /// by the section title passed to `settingsGroup`.
+    private static let settingsSearchKeywordsByGroupTitle: [String: String] = [
+        "Permissions": "accessibility screen recording microphone mic speech notifications allow access privacy",
+        "Updates": "update version download new release check latest",
+        "Helpers: Claude via MausBot": "claude mausbot helper anthropic model subscription bot",
+        "Usage": "usage tokens cost gemini claude count speed",
+        "Check everything": "check test diagnose self-check problems broken working",
+        "Instant replays": "replay record recording clip video save",
+        "Voice": "voice personality speak sound live classic mode tone talk",
+        "Shortcuts": "shortcut hotkey keyboard key talk dictate circle annotate cursor ctrl option",
+        "Everyday": "everyday focus shortcuts habits",
+        "Appearance": "appearance notch cursor shape pet look show hide notifications dots",
+        "Dictation": "dictation dictate type words spelling language dictionary corrections live text",
+        "Using your Mac": "computer use mac driver cua click type allow tips lessons",
+        "Connection": "connection server worker url secret network",
+        "History": "history conversation clear forget saved exchanges",
+    ]
+
+    private func settingsGroupMatchesSearch(title: String) -> Bool {
+        let searchWords = settingsSearchText
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !searchWords.isEmpty else { return true }
+        let searchableGroupText = (title + " " + (Self.settingsSearchKeywordsByGroupTitle[title] ?? "")).lowercased()
+        return searchWords.allSatisfy { searchableGroupText.contains($0) }
+    }
+
+    private var hasAnySettingsGroupMatchingSearch: Bool {
+        Self.settingsSearchKeywordsByGroupTitle.keys.contains { settingsGroupMatchesSearch(title: $0) }
+    }
+
+    @ViewBuilder
     private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        if settingsGroupMatchesSearch(title: title) {
+            settingsGroupCard(title: title, content: content)
+        }
+    }
+
+    private func settingsGroupCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
