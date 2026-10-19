@@ -107,15 +107,32 @@ final class DottieUpdater: ObservableObject {
     }
 
     private static func fetchLatestRelease() async throws -> Release {
+        do {
+            return try await fetchLatestReleaseFromAPI()
+        } catch {
+            // GitHub's API allows only 60 requests an hour per network
+            // without sign-in and answers 403 after that, which also counts
+            // anything else on the same Wi-Fi. The release page and its
+            // downloads have no such limit, so read the newest version from
+            // where /releases/latest redirects instead.
+            if let releaseFromPage = try? await fetchLatestReleaseFromReleasePage() {
+                return releaseFromPage
+            }
+            throw error
+        }
+    }
+
+    private static func fetchLatestReleaseFromAPI() async throws -> Release {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Dottie/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard statusCode == 200,
               let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tagName = payload["tag_name"] as? String else {
-            throw updateError("GitHub didn't answer")
+            throw updateError("GitHub didn't answer, status \(statusCode)")
         }
         let assets = payload["assets"] as? [[String: Any]] ?? []
         func assetURL(named name: String) -> URL? {
@@ -132,6 +149,31 @@ final class DottieUpdater: ObservableObject {
             dmgURL: dmgURL,
             checksumURL: assetURL(named: "Dottie.dmg.sha256"),
             notes: (payload["body"] as? String) ?? ""
+        )
+    }
+
+    /// github.com/<repository>/releases/latest redirects to
+    /// /releases/tag/<tag>, and each asset is at /releases/download/<tag>/<name>.
+    /// The page carries no release notes, so those stay empty.
+    private static func fetchLatestReleaseFromReleasePage() async throws -> Release {
+        var request = URLRequest(url: URL(string: "https://github.com/\(repository)/releases/latest")!)
+        request.httpMethod = "HEAD"
+        request.setValue("Dottie/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 20
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let finalURL = (response as? HTTPURLResponse)?.url,
+              finalURL.pathComponents.dropLast().last == "tag" else {
+            throw updateError("GitHub didn't answer")
+        }
+        let tagName = finalURL.lastPathComponent
+        let downloadFolderURL = URL(string: "https://github.com/\(repository)/releases/download/")!
+            .appendingPathComponent(tagName, isDirectory: true)
+        let version = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+        return Release(
+            version: version,
+            dmgURL: downloadFolderURL.appendingPathComponent("Dottie.dmg"),
+            checksumURL: downloadFolderURL.appendingPathComponent("Dottie.dmg.sha256"),
+            notes: ""
         )
     }
 
