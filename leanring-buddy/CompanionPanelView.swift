@@ -595,18 +595,25 @@ struct CompanionPanelView: View {
     /// v0 picked between Claude models here. The clone picks the Gemini Live
     /// voice instead; the model itself is set on the Worker.
     private var modelPickerRow: some View {
-        HStack {
-            Text("Voice")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Voice")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
 
-            Spacer()
+                Spacer()
 
+                VoicePreviewButton(voiceName: companionManager.selectedVoiceName)
+            }
+
+            // Five voices don't fit beside the label in the 320pt panel,
+            // so they get a row of their own.
             HStack(spacing: 0) {
                 voiceOptionButton(voiceName: "Kore")
                 voiceOptionButton(voiceName: "Puck")
                 voiceOptionButton(voiceName: "Aoede")
                 voiceOptionButton(voiceName: "Charon")
+                voiceOptionButton(voiceName: DottieVoicePreview.butlerVoiceName)
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -616,8 +623,6 @@ struct CompanionPanelView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
             )
-
-            VoicePreviewButton(voiceName: companionManager.selectedVoiceName)
         }
         .padding(.vertical, 4)
     }
@@ -633,6 +638,7 @@ struct CompanionPanelView: View {
                 .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
+                .frame(maxWidth: .infinity)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
@@ -640,6 +646,7 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+        .help(DottieVoicePreview.sound(of: voiceName))
     }
 
     // MARK: - Footer

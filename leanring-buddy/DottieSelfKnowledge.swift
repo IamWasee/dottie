@@ -379,6 +379,7 @@ extension DottieSelfKnowledge {
         let talkKeys = companionManager?.globalPushToTalkShortcutMonitor.talkHotkey.displayText ?? ClickyHotkey.defaultTalk.displayText
         let dictateKeys = companionManager?.globalPushToTalkShortcutMonitor.dictationHotkey.displayText ?? ClickyHotkey.defaultDictation.displayText
         let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
+        let voiceNames = DottieVoicePreview.voices.map(\.name).joined(separator: ", ")
         let askBarKeys = DottieEveryday.shared.shortcuts.hotkey(for: .askBar)?.displayText
         let askBarText = askBarKeys.map { "Press \($0)" } ?? "Set a shortcut in Settings → Shortcuts, then press it"
         let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
@@ -804,8 +805,8 @@ extension DottieSelfKnowledge {
             Feature(
                 id: "voice",
                 title: "My voice and personality",
-                keywords: ["voice", "sound", "accent", "personality", "tone", "sarcastic", "funny", "calm", "tutor", "hype"],
-                summary: "Pick how I sound (tap play to hear each voice) and my personality: \(personalityNames), or make your own (\"a grumpy pirate who loves cats\").",
+                keywords: ["voice", "sound", "accent", "personality", "tone", "sarcastic", "funny", "calm", "tutor", "hype", "butler", "british"],
+                summary: "Pick how I sound (tap play to hear each voice: \(voiceNames)) and my personality: \(personalityNames), or make your own (\"a grumpy pirate who loves cats\"). Butler is a calm, refined British voice (\(DottieVoicePreview.sound(of: DottieVoicePreview.butlerVoiceName))); it pairs well with the Butler personality.",
                 whereToFind: "Settings → Voice.",
                 place: .settings("Voice"),
                 steps: [
