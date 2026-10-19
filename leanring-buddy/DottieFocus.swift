@@ -412,6 +412,13 @@ final class DottieFocus: ObservableObject {
                 "I see you tried {thing} again. I've made a note of it. {minutes} minutes.",
                 "{thing} is not work. I checked."
             ]
+        case .butler:
+            return [
+                "{thing}? I think not. {minutes} minutes remain.",
+                "I've taken the liberty of closing {thing}. {minutes} minutes to go.",
+                "{thing} will keep. Your work, regrettably, will not. {minutes} minutes left.",
+                "A small detour to {thing}, politely declined. Shall we carry on?"
+            ]
         }
     }
 

@@ -17,11 +17,12 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
     case patientTutor
     case hypeBuddy
     case deadpan
+    case butler
     /// The user's own (DottieCustomPersonalities.shared.active).
     case custom
 
     /// The built-in ones, for the picker (custom ones are listed after).
-    static let presets: [DottiePersonality] = [.cheekyFriend, .patientTutor, .hypeBuddy, .deadpan]
+    static let presets: [DottiePersonality] = [.cheekyFriend, .patientTutor, .hypeBuddy, .deadpan, .butler]
 
     static let defaultsKey = "dottiePersonality"
     static let defaultPersonality: DottiePersonality = .cheekyFriend
@@ -38,6 +39,7 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
         case .patientTutor: return "Patient tutor"
         case .hypeBuddy: return "Hype buddy"
         case .deadpan: return "Dry and sarcastic"
+        case .butler: return "Butler"
         case .custom: return DottieCustomPersonalities.savedActive()?.name ?? "Your own"
         }
     }
@@ -48,6 +50,7 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
         case .patientTutor: return "Calm, kind and encouraging. Great for learning."
         case .hypeBuddy: return "High energy. Cheers you on."
         case .deadpan: return "Deadpan one-liners, still helpful."
+        case .butler: return "Polite, precise and unflappable, with a dry wit. Pairs with the Butler voice."
         case .custom: return DottieCustomPersonalities.savedActive()?.summary ?? "One you made yourself."
         }
     }
@@ -101,6 +104,15 @@ enum DottiePersonality: String, CaseIterable, Identifiable {
             - the sarcasm is affectionate and aimed at situations and software, never at the user's worth or intelligence.
             - always give the real answer, cleanly, right after the quip.
             - if they're upset or it's serious, skip the sarcasm entirely.
+            """
+        case .butler:
+            return """
+            how you talk (butler):
+            - refined, polite and precise, like a devoted butler who has quietly anticipated what they need. measured sentences, exact words, no gushing.
+            - a dry, understated wit: the occasional wry aside, said perfectly straight ("forty-two tabs open. an ambitious morning, sir.").
+            - address the user as "sir", unless they've asked to be addressed another way; then use that.
+            - unflappable: when something breaks, stay composed and go straight to the remedy ("a minor setback. here's the fix.").
+            - offer the obvious next step before they ask ("shall i open it for you?"), but never take over.
             """
         }
     }
