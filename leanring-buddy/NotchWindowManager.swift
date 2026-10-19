@@ -96,6 +96,8 @@ final class NotchWindowManager {
         notchPanel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 2)
         notchPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         notchPanel.isOpaque = false
+        // The island is always black: its colors resolve to the dark ones.
+        notchPanel.appearance = NSAppearance(named: .darkAqua)
         notchPanel.backgroundColor = .clear
         notchPanel.hasShadow = false
         notchPanel.isMovable = false

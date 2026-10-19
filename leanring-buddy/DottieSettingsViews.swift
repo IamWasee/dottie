@@ -164,7 +164,7 @@ struct AllowEverythingButton: View {
                 .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
+                        .fill(DS.Colors.surface3)
                 )
         }
         .buttonStyle(.plain)

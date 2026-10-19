@@ -2,8 +2,8 @@
 //  DesignSystem.swift
 //  leanring-buddy
 //
-//  Centralized design system using a blue accent palette on dark surfaces,
-//  with a unified button style system. All colors, button styles, and
+//  Centralized design system: native macOS colors that follow light and
+//  dark mode, a Mac-blue accent, and a unified button style system. All colors, button styles, and
 //  interaction states are defined here as the single source of truth.
 //
 
@@ -20,61 +20,57 @@ enum DS {
 
     enum Colors {
 
+        // Every in-app color follows the Mac's light or dark appearance,
+        // with values close to macOS's own system colors, so Home, Settings
+        // and the menu bar panel feel like a built-in Mac app. Surfaces that
+        // are always dark (the notch island, the cursor overlay) force the
+        // dark appearance, so these tokens resolve to their dark values
+        // there.
+
         // ── Backgrounds ──────────────────────────────────────────────
         // Layered surfaces from deepest to most elevated.
-        // Higher surfaces are lighter, creating a sense of depth.
 
-        /// The deepest background — used for the main app window fill.
-        static let background = Color(hex: "#101211")
+        /// The window's content background.
+        static let background = Color(lightHex: "#FFFFFF", darkHex: "#1E1E1E")
 
-        /// First elevation layer — used for cards, sidebar, top bar backgrounds.
-        static let surface1 = Color(hex: "#171918")
+        /// First elevation layer — cards, grouped rows, the top bar.
+        static let surface1 = Color(lightHex: "#F5F5F7", darkHex: "#262628")
 
-        /// Second elevation layer — used for input fields, elevated cards, chat bubbles.
-        static let surface2 = Color(hex: "#202221")
+        /// Second elevation layer — input fields, elevated cards, chat bubbles.
+        static let surface2 = Color(lightHex: "#EDEDF0", darkHex: "#2F2F32")
 
-        /// Third elevation layer — used for hover backgrounds on interactive elements.
-        static let surface3 = Color(hex: "#272A29")
+        /// Third elevation layer — hover backgrounds on interactive elements.
+        static let surface3 = Color(lightHex: "#E3E3E8", darkHex: "#39393C")
 
-        /// Fourth elevation layer — used for active/pressed states on interactive elements.
-        static let surface4 = Color(hex: "#2E3130")
+        /// Fourth elevation layer — active/pressed states on interactive elements.
+        static let surface4 = Color(lightHex: "#D8D8DE", darkHex: "#434347")
 
         // ── Borders ──────────────────────────────────────────────────
 
-        /// Subtle border — used for card outlines, dividers, input field borders.
-        static let borderSubtle = Color(hex: "#373B39")
+        /// Subtle border — card outlines, dividers, input field borders.
+        static let borderSubtle = Color(lightHex: "#E0E0E5", darkHex: "#3A3A3D")
 
-        /// Strong border — used for focused inputs, hovered card outlines.
-        static let borderStrong = Color(hex: "#444947")
+        /// Strong border — focused inputs, hovered card outlines.
+        static let borderStrong = Color(lightHex: "#C7C7CC", darkHex: "#505055")
 
         // ── Text ─────────────────────────────────────────────────────
 
         /// Primary text — main body text, titles, headings.
-        static let textPrimary = Color(hex: "#ECEEED")
+        static let textPrimary = Color(lightHex: "#1D1D1F", darkHex: "#F5F5F7")
 
         /// Secondary text — descriptions, hints, muted labels.
-        static let textSecondary = Color(hex: "#ADB5B2")
+        static let textSecondary = Color(lightHex: "#48484D", darkHex: "#C7C7CC")
 
-        /// Tertiary text — very muted, used for section labels, timestamps, disabled text.
-        static let textTertiary = Color(hex: "#6B736F")
+        /// Tertiary text — section labels, timestamps. Still 4.5:1 on the
+        /// surfaces it sits on, in both appearances.
+        static let textTertiary = Color(lightHex: "#6E6E73", darkHex: "#98989D")
 
-        /// Text used on top of the accent fill (#2563eb blue), like the primary button label.
-        /// White on #2563eb achieves ~5.1:1 contrast — WCAG AA compliant.
-        /// White on #1d4ed8 hover achieves ~6.5:1 — also WCAG AA compliant.
+        /// Text on the accent fill, like the primary button label.
         static let textOnAccent: Color = .white
 
-        // ── Tailwind Blue Scale ─────────────────────────────────────
-        // Full Tailwind CSS v4 blue palette for consistent blue usage.
-        //
-        // Usage guide:
-        //   50–100  → Very subtle tinted backgrounds (selected rows, hover fills on dark surfaces)
-        //   200–300 → Light text/icons on dark backgrounds, disabled states
-        //   400     → Bright accent text, links, icons, chat user bubbles
-        //   500     → Mid-tone fills, badges, secondary buttons
-        //   600     → Primary action fills (buttons, toggles) — main accent
-        //   700     → Hover/pressed state for primary actions
-        //   800–900 → Deep backgrounds, dark overlays, header bars
-        //   950     → Deepest blue — near-black tinted backgrounds
+        // ── Blue Scale ──────────────────────────────────────────────
+        // Kept for the few places that want a fixed blue whatever the
+        // appearance.
 
         static let blue50  = Color(hex: "#eff6ff")
         static let blue100 = Color(hex: "#dbeafe")
@@ -88,96 +84,79 @@ enum DS {
         static let blue900 = Color(hex: "#1e3a8a")
         static let blue950 = Color(hex: "#172554")
 
-        // ── Accent (derived from blue scale) ───────────────────────
-        // The primary fill is Blue 600; hover darkens to Blue 700.
+        // ── Accent ───────────────────────────────────────────────────
+        // A Mac blue, a shade deeper than the system's so white text on it
+        // stays readable (4.5:1 or better).
 
-        /// Accent fill — used for solid button backgrounds.
-        /// #2563eb → ~5.1:1 contrast with white text (WCAG AA).
-        static let accent = blue600
+        /// Accent fill — solid button backgrounds, the selected sidebar row.
+        static let accent = Color(lightHex: "#0066CC", darkHex: "#0A6CDB")
 
-        /// Accent hover — slightly darker blue for hover state.
-        /// #1d4ed8 → ~6.5:1 contrast with white text (WCAG AA+).
-        static let accentHover = blue700
+        /// Accent hover — a little darker.
+        static let accentHover = Color(lightHex: "#0058B0", darkHex: "#095FC2")
 
-        /// Accent text — bright blue used for accent-colored text and icons
-        /// on dark backgrounds (links, active nav items, highlighted labels).
-        static let accentText = blue400
+        /// Accent used for text and icons (links, active items).
+        static let accentText = Color(lightHex: "#0066CC", darkHex: "#4DA3FF")
 
-        /// Very subtle accent tint — used for selected item backgrounds (e.g. current step
-        /// in the sidebar). Low opacity so it doesn't overpower.
-        static let accentSubtle = blue500.opacity(0.10)
+        /// Very subtle accent tint — selected item backgrounds.
+        static let accentSubtle = Color(lightHex: "#0066CC", darkHex: "#0A84FF").opacity(0.12)
 
         // ── Semantic Colors ──────────────────────────────────────────
 
-        /// Destructive/error actions — delete buttons, error messages, close button hover.
-        static let destructive = Color(hex: "#E5484D")        // Radix Red 9
+        /// Destructive/error actions — delete buttons, error messages.
+        static let destructive = Color(lightHex: "#D70015", darkHex: "#FF453A")
 
         /// Destructive hover state.
-        static let destructiveHover = Color(hex: "#F2555A")   // Radix Red 10
+        static let destructiveHover = Color(lightHex: "#B80012", darkHex: "#FF6961")
 
-        /// Destructive used for text on dark backgrounds (brighter for readability).
-        static let destructiveText = Color(hex: "#FF6369")    // Radix Red 11
+        /// Destructive used for text.
+        static let destructiveText = Color(lightHex: "#C4000F", darkHex: "#FF6961")
 
         /// Success — checkmarks, granted status, completion indicators.
-        /// Independent green so success states are visually distinct from the blue accent.
-        static let success = Color(hex: "#34D399")      // Tailwind Emerald 400
+        static let success = Color(lightHex: "#248A3D", darkHex: "#30D158")
 
-        /// Warning — caution messages, manual verification failure explanations.
-        static let warning = Color(hex: "#FFB224")            // Radix Amber 9
+        /// Warning — caution fills and icons.
+        static let warning = Color(lightHex: "#C26A00", darkHex: "#FF9F0A")
 
-        /// Warning text — brighter variant for text on dark backgrounds.
-        static let warningText = Color(hex: "#F1A10D")        // Radix Amber 11
+        /// Warning text.
+        static let warningText = Color(lightHex: "#A35200", darkHex: "#FFB340")
 
-        /// Info/feature highlight — used for prompt card headers, code highlights.
-        /// Lighter than accentText so informational elements are visually distinct
-        /// from interactive accent-colored elements.
-        static let info = Color(hex: "#70B8FF")               // Radix Blue 9
+        /// Info/feature highlight — prompt card headers, code highlights.
+        static let info = Color(lightHex: "#0071A4", darkHex: "#64D2FF")
 
-        /// Inline code text color — slightly brighter blue for monospace code snippets.
-        static let codeText = Color(hex: "#9DC2FF")           // Radix Blue 11 variant
+        /// Inline code text color.
+        static let codeText = Color(lightHex: "#3A5BC7", darkHex: "#9DC2FF")
 
         // ── Overlay Cursor ───────────────────────────────────────────
 
-        /// The blue cursor/bubble color used in OverlayWindow.
-        /// Kept distinct from the accent since it serves a different purpose
-        /// (screen overlay vs in-app UI).
+        /// The blue cursor/bubble color used in OverlayWindow and the notch.
+        /// Fixed: it's Dottie's own color, the same on every wallpaper.
         static let overlayCursorBlue = Color(hex: "#3380FF")
 
         // ── Floating Button Gradient ─────────────────────────────────
 
-        /// The floating session button gradient colors (unchanged from original —
-        /// this gradient is intentionally distinct from the rest of the palette
-        /// to make the floating button stand out as a "jewel" on the desktop).
         static let floatingGradientPurple = Color(hex: "#8F46EB")
         static let floatingGradientPink = Color(hex: "#E84D9E")
         static let floatingGradientOrange = Color(hex: "#FF8C33")
 
         // ── Help Chat ──────────────────────────────────────────────
 
-        /// User message bubble background in the help chat.
-        /// Blue 800 — deep blue that's clearly distinct from the dark surface
-        /// while keeping white text highly readable (~9:1 contrast).
-        static let helpChatUserBubble = blue800
+        /// User message bubble background (white text on it).
+        static let helpChatUserBubble = accent
 
-        /// Slightly lighter variant for hover/pressed states on user bubbles.
-        static let helpChatUserBubbleHover = blue700
+        /// Hover/pressed state on user bubbles.
+        static let helpChatUserBubbleHover = accentHover
 
         /// Footer/backdrop behind the floating help chat.
-        /// Slightly lighter than the main window background so the chat zone reads
-        /// as a distinct docked surface even before the pill input is visible.
-        static let helpChatBackdrop = Color(hex: "#212121")
+        static let helpChatBackdrop = Color(lightHex: "#F5F5F7", darkHex: "#212121")
 
         // ── Disabled State ───────────────────────────────────────────
-        // Following Material Design 3's disabled pattern:
-        // Container: onSurface at 12% opacity
-        // Content: onSurface at 38% opacity
 
         /// Disabled button/container background.
         static var disabledBackground: Color {
             textPrimary.opacity(0.12)
         }
 
-        /// Disabled text/icon color.
+        /// Disabled content.
         static var disabledText: Color {
             textPrimary.opacity(0.38)
         }
@@ -247,81 +226,33 @@ struct DSPrimaryButtonStyle: ButtonStyle {
 
     @State private var isHovered = false
 
-    // Separate state for the scale expansion so it animates on a slower,
-    // more gradual timeline (0.6s) than the background color snap (0.15s).
-    @State private var isHoverScaleExpanded = false
-
-    // Whether the hover glow shadow is active. Builds up gradually (0.6s)
-    // on hover entry, fades out faster (0.3s) on exit.
-    @State private var isHoverGlowActive = false
-
-    // Continuously toggles while hovered to drive a gentle breathing pulse
-    // in the glow shadow. Creates a living, organic feel — like the button
-    // is softly glowing, not just statically lit.
-    @State private var isGlowBreathingIn = false
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: 13, weight: .semibold))
             .foregroundColor(DS.Colors.textOnAccent)
             .frame(maxWidth: isFullWidth ? .infinity : nil)
-            .padding(.vertical, 14)
-            .padding(.horizontal, isFullWidth ? 0 : 20)
+            .padding(.vertical, 8)
+            .padding(.horizontal, isFullWidth ? 0 : 16)
             .background(
                 Capsule()
                     .fill(buttonBackgroundColor(isPressed: configuration.isPressed))
             )
-            // Hover glow — builds up gradually, then gently breathes while hovered.
-            // The breathing oscillates opacity and radius on a slow 2.5s loop,
-            // creating a candle-flame-like "alive" quality rather than a static highlight.
-            .shadow(
-                color: DS.Colors.accent.opacity(
-                    isHoverGlowActive ? (isGlowBreathingIn ? 0.32 : 0.18) : 0
-                ),
-                radius: isHoverGlowActive ? (isGlowBreathingIn ? 16 : 10) : 0
-            )
-            // Hover: gradually expand to 1.03. Press: snap down to 0.97.
-            .scaleEffect(configuration.isPressed ? 0.97 : (isHoverScaleExpanded ? 1.03 : 1.0))
+            .shadow(color: Color.black.opacity(0.12), radius: 1, x: 0, y: 0.5)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
+            .contentShape(Capsule())
             .onHover { hovering in
-                // Background color — fast snap so the button feels responsive
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isHovered = hovering
-                }
-
-                // Scale — slow, gradual expansion (like the button is swelling)
-                withAnimation(.easeInOut(duration: hovering ? 0.6 : 0.3)) {
-                    isHoverScaleExpanded = hovering
-                }
-
-                // Glow — builds up gradually on entry, fades faster on exit
-                withAnimation(.easeInOut(duration: hovering ? 0.6 : 0.3)) {
-                    isHoverGlowActive = hovering
-                }
-
-                // Breathing glow loop — gentle pulse while hovered.
-                // The 2.5s cycle keeps it feeling organic, not mechanical.
-                if hovering {
-                    withAnimation(
-                        .easeInOut(duration: 2.5)
-                        .repeatForever(autoreverses: true)
-                    ) {
-                        isGlowBreathingIn = true
-                    }
-                } else {
-                    // Override the repeating animation with a finite one to stop cleanly
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        isGlowBreathingIn = false
-                    }
-                }
-
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                isHovered = hovering
             }
+            // Cursor rects instead of NSCursor.push/pop: a push whose pop
+            // never came (the button went away while hovered) left the
+            // pointing hand stuck everywhere.
+            .pointerCursor()
     }
 
     private func buttonBackgroundColor(isPressed: Bool) -> Color {
         if isPressed {
-            // Pressed: brighten slightly beyond hover
             return DS.Colors.accentHover.blendedWithWhite(fraction: DS.StateLayer.pressed)
         } else if isHovered {
             return DS.Colors.accentHover
@@ -331,9 +262,6 @@ struct DSPrimaryButtonStyle: ButtonStyle {
     }
 }
 
-/// Secondary button — supporting actions, less visual weight than primary.
-/// Surface-colored background with primary text. Used for: action buttons
-/// (download, open link), embedded element buttons.
 struct DSSecondaryButtonStyle: ButtonStyle {
     var isFullWidth: Bool = true
 
@@ -341,11 +269,11 @@ struct DSSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundColor(DS.Colors.textPrimary)
             .frame(maxWidth: isFullWidth ? .infinity : nil)
-            .padding(.vertical, 12)
-            .padding(.horizontal, isFullWidth ? 0 : 16)
+            .padding(.vertical, 7)
+            .padding(.horizontal, isFullWidth ? 0 : 14)
             .background(
                 Capsule()
                     .fill(buttonBackgroundColor(isPressed: configuration.isPressed))
@@ -355,8 +283,8 @@ struct DSSecondaryButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+            .pointerCursor()
     }
 
     private func buttonBackgroundColor(isPressed: Bool) -> Color {
@@ -378,7 +306,7 @@ struct DSTertiaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundColor(
                 configuration.isPressed
                     ? DS.Colors.accentHover
@@ -386,8 +314,8 @@ struct DSTertiaryButtonStyle: ButtonStyle {
                         ? DS.Colors.accentText
                         : DS.Colors.textSecondary
             )
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
             .background(
                 Capsule()
                     .fill(buttonBackgroundColor(isPressed: configuration.isPressed))
@@ -397,8 +325,8 @@ struct DSTertiaryButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+            .pointerCursor()
     }
 
     private func buttonBackgroundColor(isPressed: Bool) -> Color {
@@ -435,8 +363,8 @@ struct DSTextButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+            .pointerCursor()
     }
 }
 
@@ -449,11 +377,11 @@ struct DSOutlinedButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundColor(DS.Colors.textPrimary)
             .frame(maxWidth: isFullWidth ? .infinity : nil)
-            .padding(.vertical, 12)
-            .padding(.horizontal, isFullWidth ? 0 : 16)
+            .padding(.vertical, 7)
+            .padding(.horizontal, isFullWidth ? 0 : 14)
             .background(
                 Capsule()
                     .fill(buttonBackgroundColor(isPressed: configuration.isPressed))
@@ -470,8 +398,8 @@ struct DSOutlinedButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+            .pointerCursor()
     }
 
     private func buttonBackgroundColor(isPressed: Bool) -> Color {
@@ -500,14 +428,14 @@ struct DSDestructiveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundColor(
                 isHovered || configuration.isPressed
                     ? .white
                     : DS.Colors.destructiveText
             )
-            .padding(.vertical, 10)
-            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 14)
             .background(
                 Capsule()
                     .fill(buttonBackgroundColor(isPressed: configuration.isPressed))
@@ -524,8 +452,8 @@ struct DSDestructiveButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: DS.Animation.fast), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+            .pointerCursor()
     }
 
     private func buttonBackgroundColor(isPressed: Bool) -> Color {
@@ -867,6 +795,17 @@ extension Color {
 
     /// Returns a lighter version of this color by blending toward white.
     /// `fraction` is 0.0 (no change) to 1.0 (pure white).
+    /// A color that follows the Mac's light or dark appearance, resolved
+    /// by AppKit wherever it's drawn.
+    init(lightHex: String, darkHex: String) {
+        let lightColor = NSColor(Color(hex: lightHex))
+        let darkColor = NSColor(Color(hex: darkHex))
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            let isDarkAppearance = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return isDarkAppearance ? darkColor : lightColor
+        })
+    }
+
     func blendedWithWhite(fraction: Double) -> Color {
         // Convert to NSColor to access RGB components for blending
         guard let nsColor = NSColor(self).usingColorSpace(.sRGB) else { return self }
@@ -876,5 +815,31 @@ extension Color {
         let blue = nsColor.blueComponent + (1.0 - nsColor.blueComponent) * fraction
 
         return Color(red: red, green: green, blue: blue)
+    }
+}
+
+// MARK: - Native Materials
+
+/// A native translucent material (sidebar, popover, menu) behind SwiftUI
+/// content, so Dottie's windows look like the Mac's own.
+struct DSVisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    /// Panels that never become key would otherwise draw the dull inactive
+    /// material; they pass `.active`.
+    var state: NSVisualEffectView.State = .followsWindowActiveState
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let visualEffectView = NSVisualEffectView()
+        visualEffectView.material = material
+        visualEffectView.blendingMode = blendingMode
+        visualEffectView.state = state
+        return visualEffectView
+    }
+
+    func updateNSView(_ visualEffectView: NSVisualEffectView, context: Context) {
+        visualEffectView.material = material
+        visualEffectView.blendingMode = blendingMode
+        visualEffectView.state = state
     }
 }

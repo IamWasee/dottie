@@ -23,6 +23,9 @@ class OverlayWindow: NSWindow {
 
         // Make window transparent and non-interactive
         self.isOpaque = false
+        // The cursor, its bubble and waveform are drawn for a dark look on
+        // any wallpaper; keep Dottie's colors in their dark variants.
+        self.appearance = NSAppearance(named: .darkAqua)
         self.backgroundColor = .clear
         self.level = .screenSaver  // Always on top, above submenus and popups
         self.ignoresMouseEvents = true  // Click-through

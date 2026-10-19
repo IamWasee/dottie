@@ -86,6 +86,8 @@ final class CompanionResponseOverlayManager {
 
         responseOverlayPanel.level = .statusBar
         responseOverlayPanel.isOpaque = false
+        // The response bubble is always dark, so its text stays light.
+        responseOverlayPanel.appearance = NSAppearance(named: .darkAqua)
         responseOverlayPanel.backgroundColor = .clear
         responseOverlayPanel.hasShadow = false
         responseOverlayPanel.ignoresMouseEvents = true

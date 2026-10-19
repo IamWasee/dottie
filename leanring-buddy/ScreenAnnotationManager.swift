@@ -312,6 +312,8 @@ final class ScreenAnnotationOverlayWindow: NSWindow {
     init(screen: NSScreen) {
         super.init(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         isOpaque = false
+        // Drawn over any wallpaper in Dottie's dark colors.
+        appearance = NSAppearance(named: .darkAqua)
         backgroundColor = .clear
         level = .screenSaver
         ignoresMouseEvents = true

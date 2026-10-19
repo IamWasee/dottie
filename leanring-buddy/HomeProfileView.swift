@@ -210,7 +210,7 @@ struct HomeProfileView: View {
     private func keepWorkingRow(_ job: ClickyRoutine) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "moon.stars.fill")
-                .foregroundColor(Color(red: 1, green: 0.84, blue: 0.4))
+                .foregroundColor(DS.Colors.warning)
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title)
                     .font(.system(size: 13, weight: .medium))

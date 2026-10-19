@@ -3,8 +3,9 @@
 //  leanring-buddy
 //
 //  The SwiftUI content hosted inside the menu bar panel. Shows the companion
-//  voice status, push-to-talk shortcut, and quick settings. Designed to feel
-//  like Loom's recording panel — dark, rounded, minimal, and special.
+//  voice status, push-to-talk shortcut, and quick settings. Drawn on the
+//  Mac's own popover material so it follows light and dark mode like the
+//  system's menu bar extras.
 //
 
 import AVFoundation
@@ -77,23 +78,29 @@ struct CompanionPanelView: View {
 
     private var panelHeader: some View {
         HStack {
-            HStack(spacing: 8) {
-                // Animated status dot
-                Circle()
-                    .fill(statusDotColor)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: statusDotColor.opacity(0.6), radius: 4)
+            HStack(spacing: 10) {
+                // Dottie's face, as she looks in the notch.
+                NotchEyeView(mood: .idle)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(Capsule().fill(Color.black))
 
-                Text("Dottie")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(DS.Colors.textPrimary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Dottie")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(DS.Colors.textPrimary)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(statusDotColor)
+                            .frame(width: 6, height: 6)
+                        Text(statusText)
+                            .font(.system(size: 11))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    }
+                }
             }
 
             Spacer()
-
-            Text(statusText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
 
             Button(action: {
                 NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -104,7 +111,7 @@ struct CompanionPanelView: View {
                     .frame(width: 20, height: 20)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.08))
+                            .fill(DS.Colors.surface2)
                     )
             }
             .buttonStyle(.plain)
@@ -186,7 +193,7 @@ struct CompanionPanelView: View {
                         .padding(.vertical, 8)
                         .background(
                             RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                                .fill(Color.white.opacity(0.08))
+                                .fill(DS.Colors.background)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
@@ -197,7 +204,7 @@ struct CompanionPanelView: View {
                         companionManager.submitEmail(emailInput)
                     }) {
                         Text("Submit")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundColor(DS.Colors.textOnAccent)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
@@ -617,7 +624,7 @@ struct CompanionPanelView: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(DS.Colors.surface2)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -641,8 +648,10 @@ struct CompanionPanelView: View {
                 .frame(maxWidth: .infinity)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+                        .fill(isSelected ? DS.Colors.background : Color.clear)
+                        .shadow(color: Color.black.opacity(isSelected ? 0.12 : 0), radius: 1, x: 0, y: 0.5)
                 )
+                .padding(2)
         }
         .buttonStyle(.plain)
         .pointerCursor()
@@ -705,11 +714,13 @@ struct CompanionPanelView: View {
 
     // MARK: - Visual Helpers
 
+    /// The system popover material, rounded and outlined like a menu bar
+    /// extra's panel.
     private var panelBackground: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(DS.Colors.background)
-            .shadow(color: Color.black.opacity(0.5), radius: 20, x: 0, y: 10)
-            .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
+        let panelOutline = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return DSVisualEffectBackground(material: .popover, state: .active)
+            .clipShape(panelOutline)
+            .overlay(panelOutline.stroke(DS.Colors.borderSubtle, lineWidth: 0.5))
     }
 
     private var statusDotColor: Color {
