@@ -58,7 +58,7 @@ enum DottieConnectedTools: DottieToolModule {
         let connectedNames = store.serverNames.filter { store.isEnabled($0) }
         guard !connectedNames.isEmpty else { return "" }
         return """
-        the user connected these apps: \(connectedNames.joined(separator: ", ")). you can use them with use_app_tool; check apps_and_tools first to see each app's tools. say what you're doing in a few words while it runs.
+        the user connected these apps: \(connectedNames.joined(separator: ", ")). to use one, use_tool apps_and_tools {"app": name} shows its tools, then use_tool use_app_tool runs one. say what you're doing in a few words while it runs.
         """
     }
 

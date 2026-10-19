@@ -331,7 +331,7 @@ enum DottieLevelTools: DottieToolModule {
         [
             DottieTool(
                 name: "dottie_level",
-                description: "Your level, XP, day streak and unlocks (you earn XP for finished jobs, helper tasks, guides, games and streaks). action status tells them; action wear puts on an unlocked cursor shape or notch effect by name.",
+                description: "Your level, XP, day streak and unlocks (you earn XP for finished jobs, helper tasks, guides, games and streaks). action status tells them; action wear puts on an unlocked cursor shape or notch effect by name. Brag a little when asked.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -354,10 +354,6 @@ enum DottieLevelTools: DottieToolModule {
                 }
             }
         ]
-    }
-
-    static var voicePromptSection: String {
-        "levels: you level up as you help (jobs, helpers, guides, games, daily streaks). dottie_level tells the level or wears an unlocked shape or notch effect. brag a little when asked."
     }
 }
 

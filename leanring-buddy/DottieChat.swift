@@ -11,7 +11,7 @@ import Foundation
 enum DottieChat {
     /// Sends a Gemini generateContent body and returns the answer text, or
     /// nil when the request failed.
-    static func send(_ requestBody: [String: Any], timeout: TimeInterval = 90) async -> String? {
+    static func send(_ requestBody: [String: Any], timeout: TimeInterval = 90, callerFile: String = #fileID) async -> String? {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
@@ -26,12 +26,12 @@ enum DottieChat {
             return nil
         }
         // /chat streams server-sent events.
-        let answerText = GeminiServerSentEvents.text(from: responseData)
+        let answerText = GeminiServerSentEvents.text(from: responseData, callerFile: callerFile)
         return answerText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// A text-only request with an optional system prompt.
-    static func ask(_ prompt: String, system: String? = nil, model: String, thinkingLevel: String? = nil) async -> String? {
+    static func ask(_ prompt: String, system: String? = nil, model: String, thinkingLevel: String? = nil, callerFile: String = #fileID) async -> String? {
         var requestBody: [String: Any] = [
             "model": model,
             "contents": [["role": "user", "parts": [["text": prompt]]]]
@@ -42,6 +42,6 @@ enum DottieChat {
         if let thinkingLevel {
             requestBody["generationConfig"] = ["thinkingConfig": ["thinkingLevel": thinkingLevel]]
         }
-        return await send(requestBody)
+        return await send(requestBody, callerFile: callerFile)
     }
 }

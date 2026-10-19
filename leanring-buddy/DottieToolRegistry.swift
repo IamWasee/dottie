@@ -7,6 +7,12 @@
 //  lists it in DottieToolModules.all, and its tools show up for Dottie's
 //  voice, her helpers, or both. Its prompt lines join the voice prompt.
 //
+//  Voice tools are not declared to Gemini Live up front unless they're in
+//  GeminiLiveToolCatalog.directFunctionNames: Live finds them with find_tool
+//  and runs them with use_tool. So put the how-and-when of a rarely used
+//  tool in its description (find_tool returns it), not in
+//  voicePromptSection, which every session reads.
+//
 //  Parameters use Gemini's schema (OBJECT, STRING, …). Helpers that run on
 //  OpenAI-style models get them through `jsonSchema(_:)`, which lowercases
 //  the types.

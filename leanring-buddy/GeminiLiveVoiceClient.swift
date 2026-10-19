@@ -146,6 +146,21 @@ final class GeminiLiveVoiceClient {
     private var lastServerMessageReceivedAt = Date.distantPast
     private static let responseTimeoutSeconds: TimeInterval = 20
     private var sessionResumptionHandle: String?
+    /// When the socket was last closed for being idle. A handle kept across
+    /// an idle close lets the next press pick the conversation up without
+    /// the whole setup being processed again, but only for a while: after
+    /// this long a fresh session also picks up new memories and the date.
+    private var sessionResumptionHandleKeptAt: Date?
+    /// When the user let go of the talk shortcut, to time how long the
+    /// answer takes to start (Settings → Usage).
+    private var userTurnEndedAt: Date?
+    private var openedSessionCount = 0
+    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8])?
+    /// This turn's frame when it wasn't sent because the session already had
+    /// it. A replay on a new session has no earlier picture, so it gets this.
+    private var currentTurnSkippedScreenFrameJPEGData: Data?
+
+    private static let idleResumptionWindowSeconds: TimeInterval = 30 * 60
 
     /// Messages sent before setupComplete arrives are queued here so the user
     /// can start talking immediately on the first press, while the socket is
@@ -186,6 +201,9 @@ final class GeminiLiveVoiceClient {
     /// Tool calls still being worked on (e.g. a higher-model request). The
     /// response watchdog stays quiet while any are pending.
     private var pendingFunctionCallTasks: [String: Task<Void, Never>] = [:]
+    /// Calls made through use_tool that haven't been answered yet. Their
+    /// response must carry use_tool's name, not the hidden tool's.
+    private var useToolResponseNamesByFunctionCallID: [String: String] = [:]
 
     init() {
         let configuration = URLSessionConfiguration.default
@@ -197,7 +215,7 @@ final class GeminiLiveVoiceClient {
 
     /// Opens a user turn: connects if needed, interrupts any answer still
     /// playing, and sends the screenshot frame for this turn.
-    func beginUserTurn(screenFrameJPEGData: Data?) {
+    func beginUserTurn(screenFrameJPEGData: Data?, screenFrameFingerprint: [UInt8]? = nil) {
         cancelIdleDisconnect()
         audioPlayer.stopImmediately()
 
@@ -227,8 +245,23 @@ final class GeminiLiveVoiceClient {
 
         connectIfNeeded()
 
+        currentTurnSkippedScreenFrameJPEGData = nil
         if let screenFrameJPEGData {
-            sendScreenFrame(jpegData: screenFrameJPEGData)
+            // Each picture costs hundreds of tokens and stays in the
+            // session's context. When this session already has a picture of
+            // the same screen, say so instead of sending it again.
+            if let screenFrameFingerprint,
+               let lastSentScreenFrame,
+               lastSentScreenFrame.sessionNumber == openedSessionCount,
+               ScreenFrameFingerprint.showSameScreen(screenFrameFingerprint, lastSentScreenFrame.fingerprint) {
+                pendingTurnContextTexts.append("[note] the screen hasn't changed since the last picture you got in this conversation; use that one.")
+                currentTurnSkippedScreenFrameJPEGData = screenFrameJPEGData
+            } else {
+                sendScreenFrame(jpegData: screenFrameJPEGData)
+                if let screenFrameFingerprint {
+                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint)
+                }
+            }
         }
     }
 
@@ -274,6 +307,7 @@ final class GeminiLiveVoiceClient {
     func endUserTurn() {
         guard isUserTurnOpen else { return }
         isUserTurnOpen = false
+        userTurnEndedAt = Date()
         if !pendingTurnContextTexts.isEmpty {
             enqueueOrSend(message: ["realtimeInput": ["text": pendingTurnContextTexts.joined(separator: "\n\n")]])
             pendingTurnContextTexts = []
@@ -352,6 +386,7 @@ final class GeminiLiveVoiceClient {
     private func connectIfNeeded() {
         guard connectionState == .disconnected else { return }
         connectionState = .connecting
+        openedSessionCount += 1
 
         connectionTask = Task { [weak self] in
             guard let self else { return }
@@ -421,7 +456,7 @@ final class GeminiLiveVoiceClient {
             // session with "You exceeded your current quota" when it's set.
             // search_web goes through the Worker instead (DottieWebSearch).
             "tools": [
-                ["functionDeclarations": Self.allFunctionDeclarations]
+                ["functionDeclarations": Self.directFunctionDeclarations]
             ],
             // Voice detection stays on (Gemini rejects turning it off). A
             // low end sensitivity and a long silence window keep it from
@@ -441,6 +476,11 @@ final class GeminiLiveVoiceClient {
         ]
 
         var sessionResumptionConfig: [String: Any] = [:]
+        if let sessionResumptionHandleKeptAt,
+           Date().timeIntervalSince(sessionResumptionHandleKeptAt) > Self.idleResumptionWindowSeconds {
+            sessionResumptionHandle = nil
+        }
+        sessionResumptionHandleKeptAt = nil
         if let sessionResumptionHandle {
             sessionResumptionConfig["handle"] = sessionResumptionHandle
         }
@@ -463,8 +503,16 @@ final class GeminiLiveVoiceClient {
         baseSystemInstruction += "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
-        let historyLines = recentConversationHistory.map { exchange in
-            "user: \(exchange.userTranscript)\nyou: \(exchange.modelTranscript)"
+        // Only the last few exchanges, trimmed: older facts about the user
+        // live in the profile and memories already in the instruction, and
+        // every character here is read again by each new session.
+        let carriedExchanges = Array(recentConversationHistory.suffix(Self.carriedHistoryExchangeCount))
+        let historyLines = carriedExchanges.enumerated().map { exchangeIndex, exchange in
+            let isOneOfTheLatest = exchangeIndex >= carriedExchanges.count - 2
+            let maximumCharacters = isOneOfTheLatest ? 800 : 300
+            let userText = Self.trimmedForHistory(exchange.userTranscript, maximumCharacters: maximumCharacters)
+            let modelText = Self.trimmedForHistory(exchange.modelTranscript, maximumCharacters: maximumCharacters)
+            return "user: \(userText)\nyou: \(modelText)"
         }.joined(separator: "\n")
 
         return baseSystemInstruction + """
@@ -473,6 +521,14 @@ final class GeminiLiveVoiceClient {
         recent conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
         \(historyLines)
         """
+    }
+
+    private static let carriedHistoryExchangeCount = 8
+
+    private static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedText.count > maximumCharacters else { return trimmedText }
+        return String(trimmedText.prefix(maximumCharacters)) + "…"
     }
 
     /// Tool the model calls to make the blue cursor fly to a UI element.
@@ -619,32 +675,48 @@ final class GeminiLiveVoiceClient {
         )
     ]
 
-    /// Every tool Live gets: its own, screen actions, Mac tools, work tools,
-
-    /// the cursor's shape and the smart home.
-
-    private static var allFunctionDeclarations: [[String: Any]] {
-
+    /// Every tool voice Dottie can use: her own, screen actions, Mac tools,
+    /// work tools, the cursor's shape, teaching, the smart home and the
+    /// registry's voice tools. Only the everyday ones are declared to Live
+    /// (see directFunctionDeclarations); the rest are found with find_tool
+    /// and run with use_tool, through the same dispatch.
+    private static var everyFunctionDeclaration: [[String: Any]] {
         var declarations: [[String: Any]] = coreFunctionDeclarations
-
         declarations += DottieScreenAction.functionDeclarations
-
         declarations += DottieMacTools.functionDeclarations
-
         declarations += DottieWorkTools.functionDeclarations
-
         declarations.append(DottieCursorPet.functionDeclaration)
-
         declarations.append(DottieTeaching.functionDeclaration)
-
         declarations += DottieSmartHome.functionDeclarations
-
         declarations += DottieToolRegistry.functionDeclarations(for: .voice)
-
         return declarations
-
     }
 
+    /// What the session's setup declares: the everyday tools, plus find_tool
+    /// and use_tool for the rest. Every declaration is read again at the
+    /// start of each session, so the rarely used ones stay out of it.
+    private static var directFunctionDeclarations: [[String: Any]] {
+        let everydayDeclarations = everyFunctionDeclaration.filter { declaration in
+            guard let toolName = declaration["name"] as? String else { return false }
+            return GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
+        }
+        return everydayDeclarations + [
+            GeminiLiveToolCatalog.findToolFunctionDeclaration,
+            GeminiLiveToolCatalog.useToolFunctionDeclaration
+        ]
+    }
+
+    /// The tools Live doesn't get declared, which find_tool searches.
+    private static var hiddenFunctionDeclarations: [[String: Any]] {
+        everyFunctionDeclaration.filter { declaration in
+            guard let toolName = declaration["name"] as? String else { return false }
+            return !GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
+        }
+    }
+
+    private static var everyFunctionName: Set<String> {
+        Set(everyFunctionDeclaration.compactMap { $0["name"] as? String })
+    }
 
     private static var coreFunctionDeclarations: [[String: Any]] {
         [
@@ -711,7 +783,7 @@ final class GeminiLiveVoiceClient {
                 "reference_images": [
                     "type": "ARRAY",
                     "items": ["type": "STRING"],
-                    "description": "Names of saved pictures the user showed you that this job is about, exactly as listed under 'pictures the user showed you', like ['golden sword']. The job gets the pictures to match on screen."
+                    "description": "Names of saved pictures the user showed you that this job is about, exactly as find_pictures names them, like ['golden sword']. The job gets the pictures to match on screen."
                 ],
                 "restart": [
                     "type": "BOOLEAN",
@@ -849,6 +921,12 @@ final class GeminiLiveVoiceClient {
             handleServerContent(serverContent)
         }
 
+        // Live reports each answer's usage once, with the prompt tokens of
+        // the whole context it read for that answer.
+        if let usageMetadata = serverMessage["usageMetadata"] as? [String: Any] {
+            DottieUsage.shared.record(area: .voice, usageMetadata: usageMetadata)
+        }
+
         if let toolCall = serverMessage["toolCall"] as? [String: Any] {
             handleToolCall(toolCall)
         }
@@ -857,6 +935,7 @@ final class GeminiLiveVoiceClient {
            let cancelledFunctionCallIDs = toolCallCancellation["ids"] as? [String] {
             for cancelledFunctionCallID in cancelledFunctionCallIDs {
                 pendingFunctionCallTasks.removeValue(forKey: cancelledFunctionCallID)?.cancel()
+                useToolResponseNamesByFunctionCallID.removeValue(forKey: cancelledFunctionCallID)
             }
         }
 
@@ -907,6 +986,10 @@ final class GeminiLiveVoiceClient {
                 guard !isDiscardingModelAudioForCurrentTurn else { continue }
                 if !hasModelStartedSpeakingThisTurn {
                     hasModelStartedSpeakingThisTurn = true
+                    if let userTurnEndedAt {
+                        DottieUsage.shared.recordVoiceAnswerStart(seconds: Date().timeIntervalSince(userTurnEndedAt))
+                        self.userTurnEndedAt = nil
+                    }
                     onModelSpeechStarted?()
                 }
                 if !isAudioOutputMuted {
@@ -945,62 +1028,114 @@ final class GeminiLiveVoiceClient {
             let functionArguments = functionCall["args"] as? [String: Any] ?? [:]
 
             switch functionName {
-            case "point_at_element":
-                handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "send_to_higher_model":
-                handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "start_helper":
-                handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "recall_memory", "remember", "ask_brain":
-                let argumentName = functionName == "recall_memory" ? "query" : (functionName == "remember" ? "fact" : "question")
-                let argumentText = (functionArguments[argumentName] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let brainResult: String
-                if argumentText.isEmpty && functionName != "recall_memory" {
-                    brainResult = "nothing to \(functionName == "remember" ? "remember" : "ask")."
-                } else {
-                    brainResult = onBrainTool?(functionName, argumentText) ?? "the brain isn't available right now."
-                }
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": brainResult])
-            case "list_helpers", "check_helper", "stop_helper", "open_helper_result":
-                let helperName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let helperResult = onHelperTool?(functionName, helperName?.isEmpty == true ? nil : helperName)
-                    ?? "helpers aren't available right now."
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": helperResult])
-            case "search_web":
-                handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "do_task_on_screen":
-                handleDoTaskOnScreenCall(functionCallID: functionCallID, functionArguments: functionArguments)
-            case "guide_user":
-                let goal = (functionArguments["goal"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let mode = (functionArguments["mode"] as? String) ?? "steps"
-                if !goal.isEmpty, !isDiscardingModelAudioForCurrentTurn, let guideStatus = onStartGuide?(goal, mode) {
-                    sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": guideStatus])
-                } else {
-                    sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
-                                         response: ["error": "couldn't start a guide right now."])
-                }
-            case "guide_next":
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
-                                     response: ["result": onGuideNext?() ?? "no guide is running."])
-            case "stop_guide":
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
-                                     response: ["result": onStopGuide?() ?? "no guide is running."])
-            case "stop_screen_task":
-                let scope = (functionArguments["scope"] as? String)?.lowercased() ?? "all"
-                let stopStatus = onStopScreenTask?(scope) ?? "nothing is running."
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
-            case _ where DottieScreenAction.functionNames.contains(functionName):
-                handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
-            case _ where DottieMacTools.functionNames.contains(functionName) || DottieWorkTools.functionNames.contains(functionName)
-                || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName)
-                || functionName == DottieTeaching.functionName:
-                handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
-            case _ where DottieToolRegistry.handles(functionName, for: .voice):
-                handleRegisteredToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+            case GeminiLiveToolCatalog.findToolFunctionName:
+                handleFindToolCall(functionCallID: functionCallID, functionArguments: functionArguments)
+            case GeminiLiveToolCatalog.useToolFunctionName:
+                handleUseToolCall(functionCallID: functionCallID, functionArguments: functionArguments)
             default:
-                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
-                                     response: ["error": "unknown function"])
+                dispatchFunctionCall(functionName: functionName, functionCallID: functionCallID, functionArguments: functionArguments)
             }
+        }
+    }
+
+    /// find_tool: the hidden tools that best match what the user wants,
+    /// with their descriptions and argument schemas, for use_tool.
+    private func handleFindToolCall(functionCallID: String, functionArguments: [String: Any]) {
+        let whatTheUserWants = (functionArguments["what"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let matchingToolsText = GeminiLiveToolCatalog.matchingToolsText(
+            for: whatTheUserWants,
+            amongHiddenDeclarations: Self.hiddenFunctionDeclarations
+        )
+        sendFunctionResponse(functionCallID: functionCallID, functionName: GeminiLiveToolCatalog.findToolFunctionName,
+                             response: ["result": matchingToolsText])
+    }
+
+    /// use_tool: runs a hidden tool through exactly the dispatch it would
+    /// get if Live had called it by name. Its response goes back under
+    /// use_tool's name, since that's the call Live is waiting on.
+    private func handleUseToolCall(functionCallID: String, functionArguments: [String: Any]) {
+        let useToolFunctionName = GeminiLiveToolCatalog.useToolFunctionName
+        let requestedToolName = (functionArguments["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !requestedToolName.isEmpty else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: useToolFunctionName,
+                                 response: ["error": "name was empty. call find_tool with what the user wants to get a tool's name."])
+            return
+        }
+        guard requestedToolName != GeminiLiveToolCatalog.findToolFunctionName,
+              requestedToolName != useToolFunctionName,
+              Self.everyFunctionName.contains(requestedToolName) else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: useToolFunctionName,
+                                 response: ["error": "there's no tool named \(requestedToolName). call find_tool with what the user wants to get the right name."])
+            return
+        }
+        guard let requestedToolArguments = GeminiLiveToolCatalog.parsedToolArguments(from: functionArguments["arguments_json"]) else {
+            sendFunctionResponse(functionCallID: functionCallID, functionName: useToolFunctionName,
+                                 response: ["error": "arguments_json must be a JSON object like {\"action\": \"start\"}, or {} for none. call use_tool again with valid JSON."])
+            return
+        }
+        useToolResponseNamesByFunctionCallID[functionCallID] = useToolFunctionName
+        dispatchFunctionCall(functionName: requestedToolName, functionCallID: functionCallID, functionArguments: requestedToolArguments)
+    }
+
+    /// Runs one tool call by name. Live's own calls and use_tool's both go
+    /// through here, so a tool behaves the same whichever way it's called.
+    private func dispatchFunctionCall(functionName: String, functionCallID: String, functionArguments: [String: Any]) {
+        switch functionName {
+        case "point_at_element":
+            handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
+        case "send_to_higher_model":
+            handleSendToHigherModelCall(functionCallID: functionCallID, functionArguments: functionArguments)
+        case "start_helper":
+            handleStartClickyTaskCall(functionCallID: functionCallID, functionArguments: functionArguments)
+        case "recall_memory", "remember", "ask_brain":
+            let argumentName = functionName == "recall_memory" ? "query" : (functionName == "remember" ? "fact" : "question")
+            let argumentText = (functionArguments[argumentName] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let brainResult: String
+            if argumentText.isEmpty && functionName != "recall_memory" {
+                brainResult = "nothing to \(functionName == "remember" ? "remember" : "ask")."
+            } else {
+                brainResult = onBrainTool?(functionName, argumentText) ?? "the brain isn't available right now."
+            }
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": brainResult])
+        case "list_helpers", "check_helper", "stop_helper", "open_helper_result":
+            let helperName = (functionArguments["helper_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let helperResult = onHelperTool?(functionName, helperName?.isEmpty == true ? nil : helperName)
+                ?? "helpers aren't available right now."
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": helperResult])
+        case "search_web":
+            handleSearchWebCall(functionCallID: functionCallID, functionArguments: functionArguments)
+        case "do_task_on_screen":
+            handleDoTaskOnScreenCall(functionCallID: functionCallID, functionArguments: functionArguments)
+        case "guide_user":
+            let goal = (functionArguments["goal"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let mode = (functionArguments["mode"] as? String) ?? "steps"
+            if !goal.isEmpty, !isDiscardingModelAudioForCurrentTurn, let guideStatus = onStartGuide?(goal, mode) {
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": guideStatus])
+            } else {
+                sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                     response: ["error": "couldn't start a guide right now."])
+            }
+        case "guide_next":
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["result": onGuideNext?() ?? "no guide is running."])
+        case "stop_guide":
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["result": onStopGuide?() ?? "no guide is running."])
+        case "stop_screen_task":
+            let scope = (functionArguments["scope"] as? String)?.lowercased() ?? "all"
+            let stopStatus = onStopScreenTask?(scope) ?? "nothing is running."
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName, response: ["result": stopStatus])
+        case _ where DottieScreenAction.functionNames.contains(functionName):
+            handleScreenActionCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+        case _ where DottieMacTools.functionNames.contains(functionName) || DottieWorkTools.functionNames.contains(functionName)
+            || functionName == DottieCursorPet.functionName || DottieSmartHome.functionNames.contains(functionName)
+            || functionName == DottieTeaching.functionName:
+            handleMacToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+        case _ where DottieToolRegistry.handles(functionName, for: .voice):
+            handleRegisteredToolCall(functionCallID: functionCallID, functionName: functionName, functionArguments: functionArguments)
+        default:
+            sendFunctionResponse(functionCallID: functionCallID, functionName: functionName,
+                                 response: ["error": "unknown function"])
         }
     }
 
@@ -1158,11 +1293,14 @@ final class GeminiLiveVoiceClient {
         // Counts as activity for the watchdog: the model may take a moment to
         // start speaking after a slow tool result.
         lastServerMessageReceivedAt = Date()
+        // A hidden tool run through use_tool answers as use_tool, the call
+        // Live actually made, even though its handler names itself.
+        let respondingFunctionName = useToolResponseNamesByFunctionCallID.removeValue(forKey: functionCallID) ?? functionName
         enqueueOrSend(message: [
             "toolResponse": [
                 "functionResponses": [[
                     "id": functionCallID,
-                    "name": functionName,
+                    "name": respondingFunctionName,
                     "response": response
                 ]]
             ]
@@ -1174,6 +1312,7 @@ final class GeminiLiveVoiceClient {
             pendingFunctionCallTask.cancel()
         }
         pendingFunctionCallTasks.removeAll()
+        useToolResponseNamesByFunctionCallID.removeAll()
     }
 
     /// The model has started answering, so this turn can't be replayed any more.
@@ -1200,7 +1339,14 @@ final class GeminiLiveVoiceClient {
         outgoingMessageLock.lock()
         let messagesToReplay = isRecordingCurrentTurnMessages ? currentTurnSentMessages : nil
         outgoingMessageLock.unlock()
-        guard let messagesToReplay else { return false }
+        guard var messagesToReplay else { return false }
+        if let currentTurnSkippedScreenFrameJPEGData,
+           let frameMessageData = try? JSONSerialization.data(withJSONObject: [
+               "realtimeInput": ["video": ["mimeType": "image/jpeg", "data": currentTurnSkippedScreenFrameJPEGData.base64EncodedString()]]
+           ]) {
+            messagesToReplay.insert(String(decoding: frameMessageData, as: UTF8.self), at: 0)
+            self.currentTurnSkippedScreenFrameJPEGData = nil
+        }
 
         turnReplayCount += 1
         shouldUseBackupLiveModel = true
@@ -1277,8 +1423,8 @@ final class GeminiLiveVoiceClient {
             try? await Task.sleep(nanoseconds: UInt64(Self.idleDisconnectDelaySeconds * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             guard !self.isModelTurnInProgress, !self.isUserTurnOpen else { return }
-            print("🔌 Gemini Live: idle, closing socket")
-            self.sessionResumptionHandle = nil
+            print("🔌 Gemini Live: idle, closing socket (keeping the session to resume)")
+            self.sessionResumptionHandleKeptAt = Date()
             self.disconnect()
         }
     }
@@ -1371,5 +1517,211 @@ final class GeminiLivePCMPlayer {
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playbackFormat)
         audioEngine.prepare()
         isEngineConfigured = true
+    }
+}
+
+// MARK: - Tool catalog (find_tool and use_tool)
+
+/// Which tools Live gets declared up front and how it reaches the rest.
+/// Every declaration (name, description, schema) is read again at the start
+/// of each voice session, so only the everyday tools are declared directly.
+/// The others are found with find_tool, which returns their description and
+/// schema as text, and run with use_tool, which goes through the same
+/// dispatch as a direct call (GeminiLiveVoiceClient.dispatchFunctionCall).
+@MainActor
+enum GeminiLiveToolCatalog {
+    static let findToolFunctionName = "find_tool"
+    static let useToolFunctionName = "use_tool"
+
+    /// Tools a user reaches for in a normal day, kept direct so they never
+    /// cost an extra round trip through find_tool.
+    static let directFunctionNames: Set<String> = [
+        "point_at_element", "send_to_higher_model", "search_web",
+        "do_task_on_screen", "stop_screen_task", "answer_screen_job",
+        "guide_user", "guide_next", "stop_guide",
+        "start_helper", "list_helpers", "check_helper",
+        "recall_memory", "remember", "ask_brain",
+        "control_device",
+        "click_on_screen", "press_keys", "open_url",
+        "run_applescript", "get_schedule", "add_reminder",
+        // Co-op mid-game needs to be instant.
+        "game_command"
+    ]
+
+    /// One line for the voice prompt naming what the hidden tools cover, so
+    /// the model knows to look for them. Keep it in step with what isn't in
+    /// directFunctionNames.
+    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, self-check, about yourself and your settings (about_me), installing command-line tools, and the user's connected apps"
+
+    /// Extra words find_tool matches on, for asks that don't share words
+    /// with the tool's description ("turn into a cat" → change_cursor).
+    private static let extraSearchWordsByToolName: [String: String] = [
+        "stop_helper": "stop cancel helper dot",
+        "open_helper_result": "open show result website file folder helper made",
+        "type_text": "type write enter text field",
+        "scroll_screen": "scroll page down up",
+        "draw_on_screen": "draw circle mark highlight arrow box underline annotate",
+        "clear_drawings": "clear erase drawings remove marks",
+        "run_shortcut": "shortcut shortcuts apple homekit scene run",
+        "list_shortcuts": "shortcuts list apple",
+        "add_calendar_event": "calendar event meeting appointment add book schedule",
+        "get_reminders": "reminders todo list tasks",
+        "complete_reminder": "reminder done tick complete check off",
+        "find_contact": "contact phone number email birthday address person",
+        "browser": "browser tab tabs web page website form fill read safari chrome",
+        "meeting_notes": "meeting notes call record transcribe minutes",
+        "take_screenshot": "screenshot screen grab capture",
+        "list_projects": "projects project folder list",
+        "start_team": "team helpers parallel split big job",
+        "save_picture": "save picture remember look image",
+        "find_pictures": "pictures picture image saved find showed",
+        "change_cursor": "cursor pet shape costume turn into cat dog animal emoji walk roam look",
+        "explain_on_screen": "explain draw teach math geometry graph equation diagram board plot tutor",
+        "home_devices": "smart home devices lights tv list connected",
+        "tv_task": "tv television episode youtube netflix show",
+        "memories": "memories episodes forget recent yesterday history past happened",
+        "game": "game play trivia twenty questions drawing word chain fun",
+        "dottie_level": "level xp streak unlock unlocks wear",
+        "keep_working": "nonstop night keep working repeat every minutes background",
+        "apps_and_tools": "connected apps notion github slack tools integrations",
+        "use_app_tool": "connected app run tool notion github slack",
+        "fix_text": "fix rewrite selected text grammar spelling translate shorten formal",
+        "watch": "watch alert notify tell when download finishes loads",
+        "focus": "focus block distractions pomodoro concentrate",
+        "clean_folder": "clean tidy organize folder downloads desktop duplicates",
+        "replays": "replay replays redo again saved jobs",
+        "self_check": "broken working diagnose check test sound microphone problem",
+        "about_me": "dottie yourself settings version features permission help how tour update account",
+        "install_tool": "install command line cli homebrew brew npm pip uninstall"
+    ]
+
+    private static let maximumToolsPerSearch = 3
+
+    /// Words too common to tell tools apart.
+    private static let ignoredSearchWords: Set<String> = [
+        "the", "and", "for", "with", "this", "that", "what", "want", "wants", "user", "can", "you", "your",
+        "my", "me", "to", "a", "an", "of", "in", "on", "it", "is", "do", "be", "at", "or", "some", "something", "please"
+    ]
+
+    static let findToolFunctionDeclaration: [String: Any] = [
+        "name": findToolFunctionName,
+        "description": "Find one of your other tools (listed by area in your instructions) for what the user wants. Returns the best matches with their description and arguments; then run one with use_tool. Skip it when you already know the tool's name and arguments.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "what": [
+                    "type": "STRING",
+                    "description": "What the user wants, in a few words, like 'take a screenshot' or 'turn into a cat'."
+                ]
+            ],
+            "required": ["what"]
+        ]
+    ]
+
+    static let useToolFunctionDeclaration: [String: Any] = [
+        "name": useToolFunctionName,
+        "description": "Run one of your other tools by name (from find_tool or your instructions). Its result comes back like any tool's.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "name": [
+                    "type": "STRING",
+                    "description": "The tool's exact name, like take_screenshot."
+                ],
+                "arguments_json": [
+                    "type": "STRING",
+                    "description": "The tool's arguments as a JSON object, like {\"what\": \"window\"}. {} for none."
+                ]
+            ],
+            "required": ["name", "arguments_json"]
+        ]
+    ]
+
+    /// use_tool's arguments_json as a dictionary. Empty or missing means no
+    /// arguments; nil means it wasn't a JSON object, so use_tool reports it.
+    static func parsedToolArguments(from argumentsJSONValue: Any?) -> [String: Any]? {
+        // The schema says string, but take an object too if the model sent one.
+        if let argumentsDictionary = argumentsJSONValue as? [String: Any] {
+            return argumentsDictionary
+        }
+        let argumentsJSONText = (argumentsJSONValue as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if argumentsJSONText.isEmpty {
+            return [:]
+        }
+        guard let parsedArguments = try? JSONSerialization.jsonObject(with: Data(argumentsJSONText.utf8)) as? [String: Any] else {
+            return nil
+        }
+        return parsedArguments
+    }
+
+    /// find_tool's answer: the best few hidden tools for the ask, each with
+    /// its name, description and argument schema. When nothing matches, the
+    /// names of every hidden tool, so the model can try again.
+    static func matchingToolsText(for whatTheUserWants: String, amongHiddenDeclarations hiddenDeclarations: [[String: Any]]) -> String {
+        let queryWords = searchWords(in: whatTheUserWants)
+        let normalizedQuery = whatTheUserWants.lowercased().replacingOccurrences(of: " ", with: "_")
+
+        var scoredDeclarations: [(declaration: [String: Any], score: Int)] = []
+        for declaration in hiddenDeclarations {
+            guard let toolName = declaration["name"] as? String else { continue }
+            let toolDescription = declaration["description"] as? String ?? ""
+            let nameAndExtraWords = searchWords(in: toolName.replacingOccurrences(of: "_", with: " ") + " " + (extraSearchWordsByToolName[toolName] ?? ""))
+            let descriptionWords = searchWords(in: toolDescription)
+
+            var score = 0
+            // The model often already knows the name it wants.
+            if normalizedQuery.contains(toolName) {
+                score += 100
+            }
+            for queryWord in queryWords {
+                if nameAndExtraWords.contains(queryWord) {
+                    score += 3
+                } else if descriptionWords.contains(queryWord) {
+                    score += 1
+                }
+            }
+            if score > 0 {
+                scoredDeclarations.append((declaration: declaration, score: score))
+            }
+        }
+
+        let bestDeclarations = scoredDeclarations
+            .sorted { $0.score > $1.score }
+            .prefix(maximumToolsPerSearch)
+            .map { scoredDeclaration in scoredDeclaration.declaration }
+
+        guard !bestDeclarations.isEmpty else {
+            let hiddenToolNames = hiddenDeclarations.compactMap { $0["name"] as? String }.sorted()
+            return "no tool matched \"\(whatTheUserWants)\". the tools you can find are: \(hiddenToolNames.joined(separator: ", ")). call find_tool again with other words or one of these names."
+        }
+
+        let toolTexts = bestDeclarations.map { declaration -> String in
+            let toolName = declaration["name"] as? String ?? ""
+            let toolDescription = declaration["description"] as? String ?? ""
+            var toolText = "name: \(toolName)\ndescription: \(toolDescription)"
+            if let parameters = declaration["parameters"],
+               JSONSerialization.isValidJSONObject(parameters),
+               let parametersData = try? JSONSerialization.data(withJSONObject: parameters, options: [.sortedKeys, .withoutEscapingSlashes]) {
+                toolText += "\narguments schema: " + String(decoding: parametersData, as: UTF8.self)
+            }
+            return toolText
+        }
+        return toolTexts.joined(separator: "\n\n")
+            + "\n\nrun one with use_tool: name, and arguments_json as a JSON object string ({} for none). don't tell the user about this lookup."
+    }
+
+    /// Lowercased words of two or more letters (so "tv" counts), without a
+    /// plural s, so "reminders" finds "reminder".
+    private static func searchWords(in text: String) -> Set<String> {
+        let rawWords = text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+        var words: Set<String> = []
+        for rawWord in rawWords where rawWord.count >= 2 && !ignoredSearchWords.contains(rawWord) {
+            if rawWord.count > 3 && rawWord.hasSuffix("s") && !rawWord.hasSuffix("ss") {
+                words.insert(String(rawWord.dropLast()))
+            } else {
+                words.insert(rawWord)
+            }
+        }
+        return words
     }
 }

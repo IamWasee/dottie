@@ -260,20 +260,10 @@ enum EverydayTools: DottieToolModule {
         [fixTextTool, watchTool, focusTool, cleanFolderTool]
     }
 
-    static var voicePromptSection: String {
-        """
-        everyday tools:
-        - fix_text: "fix / shorten / translate / make this more formal…" about text the user selected. it rewrites the selection in place; afterwards just say a quick "done", don't read the text out.
-        - watch: "tell me when…" something happens on screen (a download finishes, a page changes, it says Done, a game loads). it keeps watching after you stop talking and alerts them.
-        - focus: focus sessions that block distracting apps and sites for some minutes.
-        - clean_folder: tidy Downloads, Desktop or a folder they name. it shows a plan they approve; nothing happens until they tap Clean up. action undo puts the last cleanup back.
-        """
-    }
-
     private static var fixTextTool: DottieTool {
         DottieTool(
             name: "fix_text",
-            description: "Rewrites the text the user has selected in the app in front, and puts the new text in its place (never in password fields). Use for fix spelling and grammar, shorter, longer, more formal, more casual, translate, or any custom rewrite of 'this'.",
+            description: "Rewrites the text the user has selected in the app in front, and puts the new text in its place (never in password fields). Use for fix spelling and grammar, shorter, longer, more formal, more casual, translate, or any custom rewrite of 'this'. Afterwards say a quick \"done\"; don't read the text out.",
             parameters: [
                 "type": "OBJECT",
                 "properties": [
@@ -302,7 +292,7 @@ enum EverydayTools: DottieToolModule {
     private static var watchTool: DottieTool {
         DottieTool(
             name: "watch",
-            description: "Watches the screen in the background and alerts the user (notch, sound, notification, phone) when something happens. Pick the cheapest kind: download_finishes for downloads, text_appears / text_disappears when they name words on screen, changes for 'when this page changes', stops_changing for 'when it's done loading', looks_like only for visual things words can't catch.",
+            description: "For \"tell me when…\" (a download finishes, a page changes, it says Done, a game loads): watches the screen in the background, even after you stop talking, and alerts the user (notch, sound, notification, phone) when it happens. Pick the cheapest kind: download_finishes for downloads, text_appears / text_disappears when they name words on screen, changes for 'when this page changes', stops_changing for 'when it's done loading', looks_like only for visual things words can't catch.",
             parameters: [
                 "type": "OBJECT",
                 "properties": [
@@ -381,7 +371,7 @@ enum EverydayTools: DottieToolModule {
     private static var cleanFolderTool: DottieTool {
         DottieTool(
             name: "clean_folder",
-            description: "Tidies a folder: sorts files into folders by type (or month), finds duplicates and big old files, gives screenshots readable names. Shows the plan with checkboxes; nothing changes until the user taps Clean up. Removed files go to the Trash. action undo puts the last cleanup back.",
+            description: "Tidies Downloads, Desktop or a folder the user names: sorts files into folders by type (or month), finds duplicates and big old files, gives screenshots readable names. Shows the plan with checkboxes; nothing changes until the user taps Clean up. Removed files go to the Trash. action undo puts the last cleanup back.",
             parameters: [
                 "type": "OBJECT",
                 "properties": [

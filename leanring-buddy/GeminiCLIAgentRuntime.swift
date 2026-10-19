@@ -170,6 +170,7 @@ final class GeminiCLIAgentRuntime {
           + (isFirstTurn
             ? ["--session-id", sessionID.uuidString.lowercased()]
             : ["--resume", sessionID.uuidString.lowercased()])
+          + Self.allowedMCPServerArguments(cliHomeURL: cliHomeURL, isComputerUseApproved: isComputerUseApproved)
 
         var processEnvironment = ProcessInfo.processInfo.environment
         if let loginShellPATH = Self.loginShellPATH {
@@ -245,6 +246,21 @@ final class GeminiCLIAgentRuntime {
         }
     }
 
+    /// Every MCP server in the settings, minus the computer-use variant this
+    /// turn shouldn't have (look-only, or look-and-act when allowed).
+    private static func allowedMCPServerArguments(cliHomeURL: URL, isComputerUseApproved: Bool) -> [String] {
+        let settingsFileURL = cliHomeURL.appendingPathComponent(".gemini/settings.json")
+        guard let settingsData = try? Data(contentsOf: settingsFileURL),
+              let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
+              let mcpServers = settings["mcpServers"] as? [String: Any] else { return [] }
+        let unwantedServerName = isComputerUseApproved
+            ? ClickyComputerUse.mcpServerName
+            : ClickyComputerUse.actingMCPServerName
+        let allowedServerNames = mcpServers.keys.filter { $0 != unwantedServerName }.sorted()
+        guard !allowedServerNames.isEmpty, allowedServerNames.count < mcpServers.count else { return [] }
+        return allowedServerNames.flatMap { ["--allowed-mcp-server-names", $0] }
+    }
+
     /// Writes the CLI's user settings into the clone's own CLI home: API-key
     /// auth (the worker supplies the real key), AGENTS.md as the context
     /// file, and cua-driver as the computer-use MCP server when it's
@@ -262,7 +278,14 @@ final class GeminiCLIAgentRuntime {
             "skills": ["disabled": ClickySkillLibrary.hiddenBuiltInSkillNames],
             // Google Search grounding answers "You exceeded your current
             // quota" on a free-tier key; Dots search through the Worker instead.
-            "tools": ["exclude": ["google_web_search"]]
+            "tools": [
+                "exclude": ["google_web_search"],
+                // A long command or page output is cut to this many
+                // characters (the CLI keeps the full text in a file the
+                // helper can read), so one big result isn't re-sent with
+                // every later request of the turn.
+                "truncateToolOutputThreshold": 20_000
+            ]
         ]
         // MCP servers the user added in Home → Brain, for the Brain and
         // every Dot.
@@ -274,7 +297,8 @@ final class GeminiCLIAgentRuntime {
         }
         if let cuaDriverURL {
             ClickyComputerUse.writePolicyFiles(inCLIHome: cliHomeURL)
-            mcpServers[ClickyComputerUse.mcpServerName] = ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL)
+            mcpServers[ClickyComputerUse.mcpServerName] = ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL, canAct: false)
+            mcpServers[ClickyComputerUse.actingMCPServerName] = ClickyComputerUse.mcpServerSettings(cuaDriverURL: cuaDriverURL, canAct: true)
         }
         if !mcpServers.isEmpty {
             cliSettings["mcpServers"] = mcpServers
@@ -286,8 +310,6 @@ final class GeminiCLIAgentRuntime {
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,
-            buildingAgentInstructions,
-            macAppsAgentInstructions,
             DottieBrowser.agentInstructions,
             DottieCLIToolsManager.helperInstructions.isEmpty
                 ? ""
@@ -295,6 +317,11 @@ final class GeminiCLIAgentRuntime {
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+        // Building, Mac apps and app-operating steps, read only when needed.
+        DottieBuiltInSkills.write(
+            DottieBuiltInSkills.skills(includesComputerUse: cuaDriverURL != nil),
+            into: settingsFolderURL.appendingPathComponent("skills", isDirectory: true)
+        )
 
         if let settingsData = try? JSONSerialization.data(withJSONObject: cliSettings, options: [.prettyPrinted, .sortedKeys]) {
             try? settingsData.write(to: settingsFolderURL.appendingPathComponent("settings.json"), options: .atomic)

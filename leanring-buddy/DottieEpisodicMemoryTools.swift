@@ -15,7 +15,7 @@ enum DottieEpisodicMemoryTools: DottieToolModule {
         [
             DottieTool(
                 name: "memories",
-                description: "Dottie's memory of what happened: conversations with the user, what helpers and screen jobs did, and (if the user turned it on) what was on their screen. Each episode has when, where (app, window, web page), who or what was involved, and how it ended. action recall finds episodes for a question (\"that recipe site\", \"what we decided about the logo\"); recent lists the latest; forget deletes one (by id from a result), the best matches for some words, or everything in a time.",
+                description: "Dottie's memory of what happened: conversations with the user, what helpers and screen jobs did, and (if the user turned it on) what was on their screen. Each episode has when, where (app, window, web page), who or what was involved, and how it ended. action recall finds episodes for a question (\"that recipe site\", \"what we decided about the logo\"); recent lists the latest; forget deletes one (by id from a result), the best matches for some words, or everything in a time. Use recall when the user refers to something from before (\"that site i was on\", \"what was i doing this morning\"), with times like yesterday in when, and answer from it in a sentence; use forget when they ask you to forget something.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -68,13 +68,9 @@ enum DottieEpisodicMemoryTools: DottieToolModule {
         ]
     }
 
-    static var voicePromptSection: String {
-        """
-        memories: when the user refers to something from before ("that site i was on", "what did we talk about yesterday", "what was i doing this morning"), call memories with action recall first (put times like yesterday in when) and answer from it in a sentence. if they ask you to forget something, use action forget.
-        """
-    }
-
     static var helperPromptSection: String {
-        "Dottie's episodic memory (what happened in past conversations, helper tasks, screen jobs and on screen, with when and where) is searchable with the memories tool; its files are in \(DottieEpisodicMemory.shared.folderURL.path) (episodes.jsonl, and index.json by day). Check it when a task refers to something from before."
+        // Helpers don't get the memories tool (it's voice-only), so point
+        // them at the files they can search themselves.
+        "Dottie's episodic memory (what happened in past conversations, helper tasks, screen jobs and on screen, with when and where) is in \(DottieEpisodicMemory.shared.folderURL.path): episodes.jsonl, and index.json by day. Search those files when a task refers to something from before."
     }
 }

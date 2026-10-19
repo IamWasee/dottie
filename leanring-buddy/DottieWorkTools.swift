@@ -25,7 +25,7 @@ enum DottieWorkTools {
                 "Split one big job between several helpers working at the same time in the same project folder, each doing its own part. Use it when the user asks for a team, or for a big job with clearly separate parts (a website: research, design and css, html, javascript; a launch: product page, marketing copy, social posts). Each part goes to its own helper; the helpers see each other's tasks and share the folder. For a normal-sized job, use start_helper instead. After calling, say in a few words who's doing what.",
                 [
                     "goal": string("The whole job in one sentence, with the details the user gave."),
-                    "project": string("The project's name: an existing one from 'projects' to keep working on it, or a short new name (2-4 words) for something new."),
+                    "project": string("The project's name: an existing one from list_projects to keep working on it, or a short new name (2-4 words) for something new."),
                     "parts": [
                         "type": "ARRAY",
                         "description": "2 to 5 parts, each for one helper.",

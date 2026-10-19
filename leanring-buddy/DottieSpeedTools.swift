@@ -19,7 +19,7 @@ enum DottieSpeedTools: DottieToolModule {
         [
             DottieTool(
                 name: "replays",
-                description: "Screen jobs Dottie remembers and can redo instantly. list shows them, run starts one by name, forget deletes one.",
+                description: "Screen jobs that worked are remembered and redone instantly next time (no need to mention it unless asked). list shows them, run starts one by name, forget deletes one.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -33,18 +33,11 @@ enum DottieSpeedTools: DottieToolModule {
             ),
             DottieTool(
                 name: "self_check",
-                description: "Tests everything Dottie needs (permissions, server, Gemini, voice, microphone, screen, helpers, phone) and returns what's wrong. Use when something seems broken.",
+                description: "Tests everything Dottie needs (permissions, server, Gemini, voice, microphone, screen, helpers, phone) and returns what's wrong. Use when something seems broken (no sound, can't see the screen, slow answers), then tell the user the gist in a sentence or two.",
                 audiences: [.voice],
                 run: { _ in await DottieSelfCheck.shared.run() }
             )
         ]
-    }
-
-    static var voicePromptSection: String {
-        """
-        screen jobs that worked are remembered and redone instantly next time (no need to mention it unless asked). replays lists, runs or forgets them.
-        if something seems broken (no sound, can't see the screen, slow answers), call self_check and tell the user the gist in a sentence or two.
-        """
     }
 
     private static func replays(_ arguments: [String: Any]) -> String {

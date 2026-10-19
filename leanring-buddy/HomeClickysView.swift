@@ -713,6 +713,12 @@ private struct ClickyAgentChatView: View {
                         Button(routine.isPaused ? "Resume routine" : "Pause routine") {
                             routineStore.setPaused(!routine.isPaused, routineID: routine.id)
                         }
+                        // Quiet routines wait longer between runs to save
+                        // tokens; this keeps one at its set pace.
+                        Toggle("Always check at set pace", isOn: Binding(
+                            get: { routine.alwaysRunsAtSetPace == true },
+                            set: { routineStore.setAlwaysRunsAtSetPace($0, routineID: routine.id) }
+                        ))
                         Divider()
                         Button("Delete routine", role: .destructive) {
                             routineStore.deleteRoutine(routineID: routine.id)
@@ -741,7 +747,8 @@ private struct ClickyAgentChatView: View {
         if routine.nextRunAt <= Date() {
             return "\(routine.cadenceDescription) · next run soon"
         }
-        return "\(routine.cadenceDescription) · next \(routine.nextRunAt.formatted(.relative(presentation: .named)))"
+        let quietText = routine.isWaitingLonger ? " · quiet, waiting longer" : ""
+        return "\(routine.cadenceDescription)\(quietText) · next \(routine.nextRunAt.formatted(.relative(presentation: .named)))"
     }
 
     private var composer: some View {

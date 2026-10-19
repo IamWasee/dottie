@@ -711,7 +711,7 @@ enum DottieToolInstallTools: DottieToolModule {
         [
             DottieTool(
                 name: "install_tool",
-                description: "Finds, installs, removes or lists command-line tools on the Mac (from Homebrew, npm, PyPI or crates.io). Always find first, tell the user in one line what you'll install and from where, and install only after they say yes.",
+                description: "Finds, installs, removes or lists command-line tools on the Mac (from Homebrew, npm, PyPI or crates.io). Use it for asks like \"install ffmpeg\" or \"get me something to download youtube videos\". Always find first, tell the user in one line what you'll install and from where, and install only after they say yes. It installs in the background; the notch shows progress.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -742,12 +742,6 @@ enum DottieToolInstallTools: DottieToolModule {
                 }
             )
         ]
-    }
-
-    static var voicePromptSection: String {
-        """
-        to get a command-line tool ("install ffmpeg", "get me something to download youtube videos"): install_tool find, say in one line what you'll install and from where, and install only after a yes. it installs in the background; the notch shows progress.
-        """
     }
 
     private static func handle(_ arguments: [String: Any]) async -> String {

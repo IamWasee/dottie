@@ -39,6 +39,9 @@ struct DottieMausBotSpec {
     let knownBotID: String?
     let knownBotName: String?
     let knownSpecHash: String?
+    /// "claude/<model>" for this bot instead of the helpers' default (the
+    /// game player uses a quick model).
+    var model: String? = nil
 }
 
 /// The bot a helper runs as.
@@ -88,7 +91,8 @@ final class DottieMausBotRuntime {
     /// Makes the helper's bot, or updates it when its instructions changed.
     /// Cheap when nothing changed: no command runs at all.
     func ensureBot(for spec: DottieMausBotSpec, launcher: DottieMausBotLauncher) async -> Result<DottieMausBotIdentity, DottieClaudeFallbackReason> {
-        let modelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
+        let helperModelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
+        let modelSelection = spec.model ?? helperModelSelection
         let instructions = Self.trimmedToByteLimit(spec.instructions, maximumBytes: Self.maximumInstructionBytes)
         let specHash = Self.fingerprint([
             spec.helperName, spec.title, instructions, spec.workspacePath, modelSelection ?? "", spec.effort ?? "", "computer=off",
@@ -195,11 +199,17 @@ final class DottieMausBotRuntime {
 
     /// Runs one turn and streams its messages to `onEvent` (on the main
     /// actor, in order). Returns how it ended.
+    ///
+    /// `conversation` is MausBot's `--task`: "current" (the bot's open
+    /// thread), "new", or a thread ID to continue. `onConversationStarted`
+    /// gets the thread the turn ran in, so the caller can continue it later.
     func runTurn(
         agentID: UUID,
         botID: String,
         message: String,
+        conversation: String = "current",
         launcher: DottieMausBotLauncher,
+        onConversationStarted: (@MainActor @Sendable (String) -> Void)? = nil,
         onEvent: @escaping @MainActor (GeminiCLIAgentEvent) -> Void
     ) async -> DottieMausBotTurnOutcome {
         cancelFollowUp(agentID: agentID)
@@ -224,7 +234,7 @@ final class DottieMausBotRuntime {
         let result = await DottieMausBotCLI.run(
             [
                 "run", "--bot", botID,
-                "--task", "current",
+                "--task", conversation,
                 "--message-file", messageFileURL.path,
                 "--wait", "job",
                 "--on-input", "exit",
@@ -243,6 +253,7 @@ final class DottieMausBotRuntime {
                     MainActor.assumeIsolated {
                         translator.since = since
                         eventStream.setThread(threadID, forAgentID: agentID)
+                        onConversationStarted?(threadID)
                     }
                 }
             },
@@ -290,7 +301,25 @@ final class DottieMausBotRuntime {
         case DottieMausBotCLI.exitUnreachable, DottieMausBotCLI.exitCouldNotLaunch:
             return .fallback(.notReachable)
         case DottieMausBotCLI.exitBadArguments:
-            return result.errorText.lowercased().contains("no such bot") ? .botMissing : .fallback(.engineProblem(result.errorText))
+            let lowercasedErrorText = result.errorText.lowercased()
+            if lowercasedErrorText.contains("no such bot") {
+                return .botMissing
+            }
+            // A saved thread was deleted in MausBot: start a new one with
+            // the same message (nothing ran in the missing thread).
+            let wasSavedThread = conversation != "current" && conversation != "new"
+            if wasSavedThread && (lowercasedErrorText.contains("thread") || lowercasedErrorText.contains("task")) {
+                return await runTurn(
+                    agentID: agentID,
+                    botID: botID,
+                    message: message,
+                    conversation: "new",
+                    launcher: launcher,
+                    onConversationStarted: onConversationStarted,
+                    onEvent: onEvent
+                )
+            }
+            return .fallback(.engineProblem(result.errorText))
         default:
             let failureText = Self.failureText(resultObject: resultObject, jobObject: jobObject, translator: translator, result: result)
             if let fallbackReason = DottieClaudeFallbackReason.classify(failureText) {

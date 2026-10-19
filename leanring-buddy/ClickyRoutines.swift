@@ -25,6 +25,7 @@
 //
 
 import Combine
+import CryptoKit
 import Foundation
 
 struct ClickyRoutine: Codable, Identifiable, Equatable {
@@ -46,14 +47,64 @@ struct ClickyRoutine: Codable, Identifiable, Equatable {
     /// When the latest run ended, for nonstop jobs.
     var lastRunFinishedAt: Date?
 
+    // Saving tokens. All optional so routines saved before these existed
+    // still load.
+
+    /// Runs in a row that found nothing new. Frequent routines wait longer
+    /// between runs while this grows (see nextRunAt), and go back to their
+    /// own pace on the next real change.
+    var unchangedRunsInARow: Int?
+    /// The user turned off waiting longer: always run at the set pace.
+    var alwaysRunsAtSetPace: Bool?
+    /// A page whose text decides whether a run is needed at all. When its
+    /// text hasn't changed since the last run, the run is skipped without
+    /// asking any model.
+    var watchURL: String?
+    var lastWatchedTextHash: String?
+    /// The routine's own conversation, so runs don't replay (or bloat) the
+    /// helper's chat with the user. Started again every few runs, carrying
+    /// over only the last report.
+    var geminiSessionID: UUID?
+    var hasStartedGeminiSession: Bool?
+    var claudeThreadID: String?
+    var runsInCurrentSession: Int?
+    /// The previous run's answer, trimmed, handed to a fresh session.
+    var lastRunReport: String?
+
+    /// Waiting longer applies to routines that run more often than this.
+    static let slowestBackedOffMinutes = 60
+
+    /// The pace the routine was set up with: its interval, or a nonstop
+    /// job's break.
+    var setPaceMinutes: Int {
+        if let keepWorking, keepWorking.isNonstop {
+            return keepWorking.restMinutes
+        }
+        return everyMinutes
+    }
+
+    /// Quiet runs have stretched the wait past the set pace.
+    var isWaitingLonger: Bool {
+        currentPaceMinutes > setPaceMinutes
+    }
+
+    /// How long to wait between runs right now: the set pace, doubled for
+    /// each run in a row that found nothing new, up to an hour.
+    var currentPaceMinutes: Int {
+        let unchangedRuns = min(unchangedRunsInARow ?? 0, 6)
+        guard alwaysRunsAtSetPace != true, unchangedRuns > 0,
+              setPaceMinutes < Self.slowestBackedOffMinutes else { return setPaceMinutes }
+        return min(setPaceMinutes * (1 << unchangedRuns), Self.slowestBackedOffMinutes)
+    }
+
     var nextRunAt: Date {
         if let keepWorking, keepWorking.isNonstop {
             // The next run starts a short break after the last one ended
             // (the roster skips it while the helper is still busy).
             let lastActivityAt = max(lastRunStartedAt, lastRunFinishedAt ?? .distantPast)
-            return lastActivityAt.addingTimeInterval(TimeInterval(keepWorking.restMinutes * 60))
+            return lastActivityAt.addingTimeInterval(TimeInterval(currentPaceMinutes * 60))
         }
-        return lastRunStartedAt.addingTimeInterval(TimeInterval(everyMinutes * 60))
+        return lastRunStartedAt.addingTimeInterval(TimeInterval(currentPaceMinutes * 60))
     }
 
     /// A 24/7 job whose end time has passed.
@@ -116,11 +167,13 @@ struct ClickyRoutineAction: Decodable {
     let task: String?
     let everyMinutes: Int?
     let newTitle: String?
+    let watchURL: String?
 
     private enum CodingKeys: String, CodingKey {
         case action, title, task
         case everyMinutes = "every_minutes"
         case newTitle = "new_title"
+        case watchURL = "watch_url"
     }
 }
 
@@ -232,6 +285,8 @@ final class ClickyRoutineStore: ObservableObject {
                 // rather than running two copies side by side.
                 routines[existingRoutineIndex].task = task
                 routines[existingRoutineIndex].everyMinutes = everyMinutes
+                routines[existingRoutineIndex].watchURL = Self.validatedWatchURL(routineAction.watchURL)
+                routines[existingRoutineIndex].lastWatchedTextHash = nil
                 return "Updated routine “\(routines[existingRoutineIndex].title)”, \(routines[existingRoutineIndex].cadenceDescription)"
             }
             let newRoutine = ClickyRoutine(
@@ -246,7 +301,8 @@ final class ClickyRoutineStore: ObservableObject {
                 runCount: 1,
                 failedRunsInARow: 0,
                 keepWorking: nil,
-                lastRunFinishedAt: nil
+                lastRunFinishedAt: nil,
+                watchURL: Self.validatedWatchURL(routineAction.watchURL)
             )
             routines.append(newRoutine)
             ClickyAnalytics.trackRoutineChanged(action: "created")
@@ -263,6 +319,10 @@ final class ClickyRoutineStore: ObservableObject {
             if let newTitle = routineAction.newTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !newTitle.isEmpty {
                 routines[existingRoutineIndex].title = newTitle
             }
+            if let newWatchURL = routineAction.watchURL {
+                routines[existingRoutineIndex].watchURL = Self.validatedWatchURL(newWatchURL)
+                routines[existingRoutineIndex].lastWatchedTextHash = nil
+            }
             ClickyAnalytics.trackRoutineChanged(action: "updated")
             return "Updated routine “\(routines[existingRoutineIndex].title)”, \(routines[existingRoutineIndex].cadenceDescription)"
 
@@ -278,6 +338,94 @@ final class ClickyRoutineStore: ObservableObject {
             setPaused(isPausing, routineIndex: existingRoutineIndex)
             return "\(isPausing ? "Paused" : "Resumed") routine “\(routines[existingRoutineIndex].title)”"
         }
+    }
+
+    /// An http(s) address, or nil.
+    private static func validatedWatchURL(_ requestedWatchURL: String?) -> String? {
+        guard let trimmedWatchURL = requestedWatchURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let watchURL = URL(string: trimmedWatchURL),
+              let scheme = watchURL.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              watchURL.host != nil else { return nil }
+        return trimmedWatchURL
+    }
+
+    // MARK: - Saving tokens
+
+    /// A routine starts its own conversation again after this many runs,
+    /// carrying over only the last report.
+    static let runsPerRoutineSession = 8
+
+    /// Whether this run should start a fresh conversation for the routine.
+    func startsFreshSession(routineID: UUID) -> Bool {
+        guard let routine = routine(withID: routineID) else { return true }
+        let hasConversation = routine.hasStartedGeminiSession == true || routine.claudeThreadID != nil
+        return !hasConversation || (routine.runsInCurrentSession ?? 0) >= Self.runsPerRoutineSession
+    }
+
+    /// Forgets the routine's conversation so the next run starts a new one,
+    /// and returns the Gemini session id to use for it.
+    func beginFreshSession(routineID: UUID) -> UUID {
+        let freshSessionID = UUID()
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return freshSessionID }
+        routines[routineIndex].geminiSessionID = freshSessionID
+        routines[routineIndex].hasStartedGeminiSession = false
+        routines[routineIndex].claudeThreadID = nil
+        routines[routineIndex].runsInCurrentSession = 0
+        save()
+        return freshSessionID
+    }
+
+    func recordGeminiSessionStarted(routineID: UUID) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[routineIndex].hasStartedGeminiSession = true
+        save()
+    }
+
+    func recordClaudeThread(_ threadID: String, routineID: UUID) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }),
+              routines[routineIndex].claudeThreadID != threadID else { return }
+        routines[routineIndex].claudeThreadID = threadID
+        save()
+    }
+
+    /// After a run that answered: whether it found anything new, and what it
+    /// reported, for the next fresh session.
+    func recordRunReport(routineID: UUID, reportText: String, foundNothingNew: Bool) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[routineIndex].runsInCurrentSession = (routines[routineIndex].runsInCurrentSession ?? 0) + 1
+        routines[routineIndex].unchangedRunsInARow = foundNothingNew ? (routines[routineIndex].unchangedRunsInARow ?? 0) + 1 : 0
+        // A "nothing new" line says nothing a fresh session needs; keep the
+        // last real report.
+        if !foundNothingNew {
+            routines[routineIndex].lastRunReport = String(reportText.prefix(1200))
+        }
+        save()
+    }
+
+    /// A run skipped because its watched page hadn't changed, without
+    /// asking any model. The page check is free, so it stays at the set
+    /// pace and a change is caught as soon as it happens.
+    func recordSkippedUnchangedRun(routineID: UUID) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[routineIndex].lastRunStartedAt = Date()
+        routines[routineIndex].lastRunFinishedAt = Date()
+        save()
+    }
+
+    func recordWatchedTextHash(_ watchedTextHash: String, routineID: UUID) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[routineIndex].lastWatchedTextHash = watchedTextHash
+        save()
+    }
+
+    func setAlwaysRunsAtSetPace(_ alwaysRunsAtSetPace: Bool, routineID: UUID) {
+        guard let routineIndex = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[routineIndex].alwaysRunsAtSetPace = alwaysRunsAtSetPace
+        if alwaysRunsAtSetPace {
+            routines[routineIndex].unchangedRunsInARow = 0
+        }
+        save()
     }
 
     // MARK: - User actions
@@ -386,6 +534,8 @@ enum ClickyRoutinePrompts {
 
     <ROUTINE>{"action":"create","every_minutes":60,"title":"Repo Issues","task":"Check the user's GitHub repos for new issues and summarize who opened them and why they matter"}</ROUTINE>
 
+    When the task only matters if a web page changes (a price, a status page, a release list), add `"watch_url":"https://…"` to the block: Dottie reads that page first for free and skips the run while its text is unchanged. Leave it out otherwise.
+
     `every_minutes` is a whole number of at least \(ClickyRoutineStore.minimumEveryMinutes) (hourly = 60, daily = 1440). `title` is two to four words. `task` is the self-contained instruction for every later run and never repeats the cadence, since Dottie shows the schedule beside it. Confirm the cadence in one sentence of your answer ("I'll check this every hour."), never mention the block, and never promise runs while the Mac is asleep or off.
 
     To change one of your routines, emit `"action":"update"` with its exact `title` and only what changes: `every_minutes`, `new_title`, or the complete replacement `task`. A second `create` for a routine you already have replaces it. To stop, pause or resume one, emit `"action":"delete"`, `"pause"` or `"resume"` with its `title`. Say in your answer what you changed. Each message tells you which routines you have right now; that list is complete, whatever earlier messages say.
@@ -403,14 +553,36 @@ enum ClickyRoutinePrompts {
         return "[Your current routines (the title is the handle you use to change one):\n" + routineLines.joined(separator: "\n") + "]"
     }
 
+    /// A run's whole reply when it found nothing worth telling the user.
+    /// Such runs stay quiet (no notch card or notification) and let the
+    /// routine wait longer before the next one.
+    static let nothingNewMarker = "NOTHING NEW"
+
+    static func isNothingNewReply(_ replyText: String) -> Bool {
+        let trimmedReply = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedReply.uppercased().hasPrefix(nothingNewMarker) && trimmedReply.count <= 200
+    }
+
+    /// For a run in a fresh conversation: what the last run reported.
+    static func lastReportHandover(for routine: ClickyRoutine) -> String {
+        guard let lastRunReport = routine.lastRunReport, !lastRunReport.isEmpty else {
+            return "Earlier runs of this routine aren't in this conversation, and there's no earlier report."
+        }
+        return "Earlier runs of this routine aren't in this conversation. The last run that found something reported:\n\"\"\"\n\(lastRunReport)\n\"\"\""
+    }
+
     /// The message for a scheduled run. Adapted from shipped Clicky's run
-    /// prompts.
-    static func runMessage(for routine: ClickyRoutine, runNumber: Int, previousRunStartedAt: Date, previousRunFailed: Bool) -> String {
+    /// prompts. Runs keep their own conversation, separate from the chat
+    /// with the user; `isFreshSession` means this run starts a new one.
+    static func runMessage(for routine: ClickyRoutine, runNumber: Int, previousRunStartedAt: Date, previousRunFailed: Bool, isFreshSession: Bool) -> String {
+        let earlierRunsLine = isFreshSession
+            ? lastReportHandover(for: routine)
+            : "Earlier runs of this routine are in this conversation above."
         var briefLines = [
             "[Routine \"\(routine.title)\" · run \(runNumber)]",
             "",
             "This turn is run #\(runNumber) of the routine \"\(routine.title)\" (\(routine.cadenceDescription)) that the user set up, so Dottie is launching it automatically. The user isn't watching; don't ask them anything unless the routine can't do its job without an answer, and if so say plainly that it's stuck until they reply.",
-            "Earlier runs of this routine are in this conversation above. The previous run started \(previousRunStartedAt.formatted(date: .abbreviated, time: .shortened)). Report what is NEW or changed since then, keep it short, and say so in one line if nothing changed.",
+            "\(earlierRunsLine) The previous run started \(previousRunStartedAt.formatted(date: .abbreviated, time: .shortened)). Report what is NEW or changed since then and keep it short. If nothing is new or changed, reply with exactly \"\(nothingNewMarker)\" and nothing else.",
             "Post the answer as your reply. Don't create files unless the task itself asks for one. Don't emit a <ROUTINE> block to set up this repeat; it already exists."
         ]
         if previousRunFailed {
@@ -444,5 +616,32 @@ enum ClickyRoutinePrompts {
 
         Task: \(task)
         """
+    }
+}
+
+// MARK: - Watched pages
+
+/// Reads a routine's watch_url so a run can be skipped, without asking any
+/// model, while the page's text hasn't changed.
+enum ClickyRoutineWatchedPage {
+    /// A fingerprint of the page's visible text, or nil when it can't be
+    /// read (the run then goes ahead as usual).
+    static func textHash(of watchURL: URL) async -> String? {
+        var request = URLRequest(url: watchURL)
+        request.timeoutInterval = 20
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Dottie", forHTTPHeaderField: "User-Agent")
+        guard let (pageData, response) = try? await URLSession.shared.data(for: request),
+              let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else { return nil }
+        // Scripts, styles and markup change on every load (nonces, build
+        // ids) without anything the user would see changing.
+        let visibleText = String(decoding: pageData, as: UTF8.self)
+            .replacingOccurrences(of: "<script[\\s\\S]*?</script>", with: " ", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "<style[\\s\\S]*?</style>", with: " ", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return SHA256.hash(data: Data(visibleText.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

@@ -28,6 +28,10 @@ enum ClickyComputerUse {
     /// Name of the MCP server in Gemini CLI's settings; its tools show up
     /// to the agent as `mcp_computer-use_<tool>`.
     static let mcpServerName = "computer-use"
+    /// The same driver with its clicking and typing tools, given only to
+    /// turns the user allowed. Look-only turns don't get those tools at
+    /// all, so their descriptions aren't re-sent with every request.
+    static let actingMCPServerName = "computer-use-act"
 
     /// First line of a turn the user approved. The agent instructions tell
     /// it what this means.
@@ -134,8 +138,9 @@ enum ClickyComputerUse {
 
     /// The MCP server entry for Gemini CLI's settings. `${CLICKY_CUA_POLICY_FILE}`
     /// is expanded by Gemini CLI from the turn's environment.
-    static func mcpServerSettings(cuaDriverURL: URL) -> [String: Any] {
+    static func mcpServerSettings(cuaDriverURL: URL, canAct: Bool) -> [String: Any] {
         [
+            "includeTools": canAct ? observationToolNames + inputToolNames : observationToolNames,
             "command": cuaDriverURL.path,
             "args": [
                 "mcp", "--direct", "--embedded",
@@ -183,7 +188,7 @@ enum ClickyComputerUse {
         return """
         # Using the Mac
 
-        You have tools from the `\(mcpServerName)` server that operate apps on the user's Mac without taking over their screen. Use them when the task needs an app or website rather than files, for example adding a reminder, filling in a form or checking something in a signed-in site. Don't use AppleScript, `open`, or other shell tricks to drive apps.
+        You have tools from the `\(mcpServerName)` server (`\(actingMCPServerName)` in a turn you may act in) that operate apps on the user's Mac without taking over their screen. Use them when the task needs an app or website rather than files, for example adding a reminder, filling in a form or checking something in a signed-in site. Don't use AppleScript, `open`, or other shell tricks to drive apps.
 
         ## Asking first
 
@@ -193,15 +198,22 @@ enum ClickyComputerUse {
 
         Dottie shows the user Allow and Not now buttons. If they allow it, your next turn starts with "\(approvedTurnPrefix)". Never tell the user you can't use their Mac; ask with the block instead.
 
-        ## How to operate an app
-
-        1. Find the app's process and window with `list_windows`, or start it with `launch_app` (pass `urls` to open a page in a browser).
-        2. Call `get_window_state` for that window to get a fresh snapshot with element tokens. Snapshots go stale; take a new one in the same turn before acting.
-        3. Act on elements by token (`click`, `set_value`, `type_text`, `press_key`), keeping actions in the background so the user can keep working.
-        4. Check that it worked: read the action's result, then snapshot again. Don't say something is done until a snapshot shows it.
-
-        For browser work, open your own new window in the user's default browser rather than using a tab they have open. Don't buy anything, send messages, post publicly or change account settings unless the user clearly asked for exactly that.
+        Before operating an app, activate the `dottie-operating-apps` skill for the steps.
 
         """
     }
+
+    /// How to operate an app with the computer-use tools. A skill (see
+    /// DottieBuiltInSkills), read only by turns that operate apps.
+    static let operatingAppsInstructions = """
+    # Operating an app
+
+    1. Find the app's process and window with `list_windows`, or start it with `launch_app` (pass `urls` to open a page in a browser).
+    2. Call `get_window_state` for that window to get a fresh snapshot with element tokens. Snapshots go stale; take a new one in the same turn before acting.
+    3. Act on elements by token (`click`, `set_value`, `type_text`, `press_key`), keeping actions in the background so the user can keep working.
+    4. Check that it worked: read the action's result, then snapshot again. Don't say something is done until a snapshot shows it.
+
+    For browser work, open your own new window in the user's default browser rather than using a tab they have open. Don't buy anything, send messages, post publicly or change account settings unless the user clearly asked for exactly that.
+
+    """
 }
