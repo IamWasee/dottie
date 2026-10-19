@@ -11,6 +11,7 @@ import Foundation
 @MainActor
 enum DottieToolModules {
     static let all: [any DottieToolModule.Type] = [
+        DottieScreenGoalTools.self,
         DottieEpisodicMemoryTools.self,
         DottieGameTools.self, DottieLevelTools.self, DottieKeepWorkingTools.self,
         DottieConnectedTools.self,

@@ -14,6 +14,10 @@
 //  job that used it and failed counts as a loss. Tips that keep working
 //  come first and say so; tips that keep failing are dropped.
 //
+//  A long job that got done also leaves its plan (goal, "done when" and
+//  steps, see DottieTaskGoal), so the next similar ask starts with a plan
+//  that's known to work and shows it in the notch straight away.
+//
 
 import Foundation
 
@@ -30,6 +34,12 @@ final class DottieScreenLessons {
         var id: UUID?
         var successes: Int?
         var failures: Int?
+        /// Set on a plan that worked for a long job (DottieTaskGoal).
+        var goal: String?
+        var doneWhen: String?
+        var planSteps: [String]?
+
+        var isPlan: Bool { !(planSteps ?? []).isEmpty }
 
         var winCount: Int { successes ?? 0 }
         var lossCount: Int { failures ?? 0 }
@@ -76,10 +86,14 @@ final class DottieScreenLessons {
     func add(_ text: String, task: String, appName: String?, cameFromSuccess: Bool = false) {
         let trimmedText = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))
         guard !trimmedText.isEmpty, !lessons.contains(where: { $0.text == trimmedText }) else { return }
-        lessons.append(Lesson(
+        add(lesson: Lesson(
             text: trimmedText, task: String(task.prefix(200)), appName: appName, createdAt: Date(),
             id: UUID(), successes: cameFromSuccess ? 1 : 0, failures: 0
         ))
+    }
+
+    private func add(lesson: Lesson) {
+        lessons.append(lesson)
         if lessons.count > Self.maximumLessons {
             // Make room by dropping the weakest tips, oldest first.
             let overflowCount = lessons.count - Self.maximumLessons
@@ -112,6 +126,58 @@ final class DottieScreenLessons {
         save()
     }
 
+    // MARK: - Plans that worked
+
+    /// Keeps the plan of a long job that got done, replacing the plan of
+    /// the same job in the same app.
+    func addPlan(_ taskGoal: DottieTaskGoal, task: String, appName: String?) {
+        let steps = taskGoal.steps.map { String($0.prefix(120)) }.filter { !$0.isEmpty }
+        guard !steps.isEmpty else { return }
+        if let existingIndex = lessons.firstIndex(where: { lesson in
+            lesson.isPlan && lesson.appName == appName && DottieReplayStore.wordOverlap(lesson.task, task) >= 0.75
+        }) {
+            lessons[existingIndex].planSteps = steps
+            lessons[existingIndex].goal = taskGoal.goal
+            lessons[existingIndex].doneWhen = taskGoal.doneWhen
+            if taskGoal.learnedLessonID != lessons[existingIndex].id {
+                // Its own win is counted by recordOutcome when it was used.
+                lessons[existingIndex].successes = lessons[existingIndex].winCount + 1
+            }
+            save()
+            return
+        }
+        var planLesson = Lesson(
+            text: "Plan that worked for \"\(task.prefix(80))\": " + steps.joined(separator: "; "),
+            task: String(task.prefix(200)), appName: appName, createdAt: Date(),
+            id: UUID(), successes: 1, failures: 0
+        )
+        planLesson.goal = taskGoal.goal
+        planLesson.doneWhen = taskGoal.doneWhen
+        planLesson.planSteps = steps
+        add(lesson: planLesson)
+    }
+
+    /// The plan that worked for the most similar earlier job, preferring
+    /// the same app, or nil when none is close enough.
+    func learnedPlan(forTask task: String, appName: String?) -> DottieTaskGoal? {
+        let candidates = lessons.compactMap { lesson -> (Lesson, Double)? in
+            guard lesson.isPlan, !lesson.hasProvenUseless else { return nil }
+            if let lessonApp = lesson.appName, let appName, lessonApp != appName { return nil }
+            let overlap = DottieReplayStore.wordOverlap(lesson.task, task)
+            return overlap >= 0.6 ? (lesson, overlap) : nil
+        }
+        guard let best = candidates.max(by: { first, second in
+            first.1 == second.1 ? first.0.score < second.0.score : first.1 < second.1
+        })?.0 else { return nil }
+        return DottieTaskGoal(
+            goal: best.goal ?? best.task,
+            doneWhen: best.doneWhen ?? "",
+            steps: best.planSteps ?? [],
+            source: .learned,
+            learnedLessonID: best.id
+        )
+    }
+
     func forgetAll() {
         lessons = []
         save()
@@ -131,7 +197,7 @@ final class DottieScreenLessons {
         let taskWords = Set(Self.words(in: task + " " + (frontmostAppName ?? "")))
         guard !taskWords.isEmpty else { return Selection(promptText: "", lessonIDs: []) }
         var candidates: [(lesson: Lesson, order: Int)] = []
-        for (order, lesson) in lessons.enumerated() {
+        for (order, lesson) in lessons.enumerated() where !lesson.isPlan {
             let lessonWords = Set(Self.words(in: lesson.task + " " + (lesson.appName ?? "") + " " + lesson.text))
             if !taskWords.isDisjoint(with: lessonWords) { candidates.append((lesson, order)) }
         }
