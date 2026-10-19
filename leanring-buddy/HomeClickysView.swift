@@ -259,9 +259,15 @@ private struct HelperAvatar: View {
         let colorIndex = name.unicodeScalars.reduce(0) { $0 + Int($1.value) } % Self.palette.count
         ZStack {
             Circle().fill(Self.palette[colorIndex].opacity(0.85))
-            Text(isBrain ? "🧠" : String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
-                .font(.system(size: size * 0.45, weight: .semibold))
-                .foregroundColor(DS.Colors.textOnAccent)
+            if isBrain {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: size * 0.45, weight: .semibold))
+                    .foregroundColor(DS.Colors.textOnAccent)
+            } else {
+                Text(String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                    .font(.system(size: size * 0.45, weight: .semibold))
+                    .foregroundColor(DS.Colors.textOnAccent)
+            }
         }
         .frame(width: size, height: size)
     }

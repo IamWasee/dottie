@@ -161,11 +161,21 @@ struct HomeSmartHomeView: View {
         let button: (String, String) -> AnyView = { title, key in
             AnyView(Button(title) { Task { _ = await smartHome.press(key, on: tv) } }.frame(minWidth: 44))
         }
+        // Arrows and play/pause are SF Symbols, with a spoken name for VoiceOver.
+        let symbolButton: (String, String, String) -> AnyView = { symbolName, accessibilityName, key in
+            AnyView(
+                Button { Task { _ = await smartHome.press(key, on: tv) } } label: {
+                    Image(systemName: symbolName)
+                }
+                .frame(minWidth: 44)
+                .accessibilityLabel(accessibilityName)
+            )
+        }
         return VStack(spacing: 6) {
-            HStack(spacing: 6) { button("Home", "home"); button("▲", "up"); button("Back", "back") }
-            HStack(spacing: 6) { button("◀", "left"); button("OK", "ok"); button("▶", "right") }
-            HStack(spacing: 6) { button("Vol −", "volume_down"); button("▼", "down"); button("Vol +", "volume_up") }
-            HStack(spacing: 6) { button("⏯", "play_pause"); button("Mute", "mute"); button("Power", "power") }
+            HStack(spacing: 6) { button("Home", "home"); symbolButton("chevron.up", "Up", "up"); button("Back", "back") }
+            HStack(spacing: 6) { symbolButton("chevron.left", "Left", "left"); button("OK", "ok"); symbolButton("chevron.right", "Right", "right") }
+            HStack(spacing: 6) { button("Vol −", "volume_down"); symbolButton("chevron.down", "Down", "down"); button("Vol +", "volume_up") }
+            HStack(spacing: 6) { symbolButton("playpause.fill", "Play or pause", "play_pause"); button("Mute", "mute"); button("Power", "power") }
         }
         .controlSize(.small)
         .frame(maxWidth: .infinity)

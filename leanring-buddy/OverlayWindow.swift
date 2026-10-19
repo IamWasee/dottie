@@ -944,12 +944,28 @@ struct BlueCursorView: View {
 
 /// A small blue waveform that replaces the triangle cursor while
 /// the user is holding the push-to-talk shortcut and speaking.
-/// The cursor drawn as an emoji or an SF Symbol.
+/// The cursor drawn as an unlocked shape's artwork, an emoji or an SF Symbol.
 private struct DottieCursorCostumeArt: View {
     let costume: DottieCursorPet.Costume
 
+    /// Shapes saved before they had artwork kept only their emoji, so the
+    /// artwork is also looked up by the shape's name.
+    @MainActor private var artworkName: String? {
+        if let artwork = costume.artwork { return artwork }
+        if let unlockedShape = DottieLevels.unlockableShape(named: costume.name),
+           case .shape(let artworkName) = unlockedShape.kind {
+            return artworkName
+        }
+        return nil
+    }
+
     var body: some View {
-        if let symbol = costume.symbol {
+        if let artworkName {
+            Image(artworkName)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        } else if let symbol = costume.symbol {
             Image(systemName: symbol)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundColor(DS.Colors.overlayCursorBlue)
