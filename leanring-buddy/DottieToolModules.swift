@@ -16,5 +16,6 @@ enum DottieToolModules {
         DottieConnectedTools.self,
         EverydayTools.self,
         DottieSpeedTools.self,
+        DottieSelfKnowledge.self,
     ]
 }
