@@ -21,6 +21,11 @@
 //  journal with recall_memory, and hands real work to the Brain agent
 //  (see ClickyRoster.brainAgent()) with ask_brain.
 //
+//  The screen journal switch now drives "Remember what's on my screen" in
+//  the episodic memory (DottieEpisodicMemoryScreen.swift): notes made on
+//  this Mac instead of a screenshot sent to Gemini every two minutes.
+//  recall_memory searches those episodes too.
+//
 
 import AppKit
 import Combine
@@ -49,8 +54,6 @@ final class DottieBrain: ObservableObject {
 
     static let screenJournalDefaultsKey = "brainScreenJournalEnabled"
     private static let profileModel = "gemini-3.6-flash"
-    private static let screenJournalModel = "gemini-3.5-flash-lite"
-    private static let screenJournalInterval: TimeInterval = 120
     private static let maximumProfileLength = 3000
     /// New memories before the profile is brought up to date.
     private static let memoriesPerProfileUpdate = 10
@@ -72,8 +75,6 @@ final class DottieBrain: ObservableObject {
     nonisolated static var mcpFileURL: URL { defaultBrainFolderURL.appendingPathComponent("mcp.json") }
 
     private var memoriesSinceProfileUpdate = 0
-    private var screenJournalTimer: Timer?
-    private var lastScreenJournalLine = ""
 
     nonisolated static var defaultBrainFolderURL: URL {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -92,7 +93,6 @@ final class DottieBrain: ObservableObject {
         folderPaths = (try? JSONDecoder().decode([String].self, from: Data(contentsOf: foldersFileURL))) ?? []
         mcpServersJSON = (try? String(contentsOf: Self.mcpFileURL, encoding: .utf8)) ?? ""
         recentMemories = Array(loadJournal().suffix(200))
-        updateScreenJournalTimer()
     }
 
     // MARK: - Remembering
@@ -119,8 +119,11 @@ final class DottieBrain: ObservableObject {
     func recall(_ query: String) -> String {
         let queryWords = Self.searchWords(in: query)
         let memories = loadJournal()
+        // What happened, from the episodic memory, comes first.
+        let episodicMemory = DottieEpisodicMemory.shared
+        let episodesText = episodicMemory.episodes.isEmpty ? "" : episodicMemory.recallTextNow(query: query) + "\n\n"
         guard !memories.isEmpty else {
-            return profileText.isEmpty ? "nothing remembered yet." : "notes about the user:\n\(profileText)\n\nno other memories yet."
+            return episodesText + (profileText.isEmpty ? "nothing else remembered yet." : "notes about the user:\n\(profileText)\n\nno other memories yet.")
         }
         let scored: [(memory: Memory, score: Int)] = memories.enumerated().compactMap { (index: Int, memory: Memory) -> (memory: Memory, score: Int)? in
             let memoryWords = Self.searchWords(in: memory.text)
@@ -134,7 +137,7 @@ final class DottieBrain: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEE d MMM, HH:mm"
         let lines = bestMatches.map { "[\(dateFormatter.string(from: $0.date)) · \($0.kind.rawValue)] \($0.text.prefix(400))" }
-        var answer = lines.isEmpty ? "no memories match that." : "memories, newest first:\n" + lines.joined(separator: "\n")
+        var answer = episodesText + (lines.isEmpty ? "no journal lines match that." : "journal, newest first:\n" + lines.joined(separator: "\n"))
         if !profileText.isEmpty {
             answer += "\n\nnotes about the user:\n\(profileText)"
         }
@@ -154,6 +157,7 @@ final class DottieBrain: ObservableObject {
 
     func forgetEverything() {
         try? FileManager.default.removeItem(at: journalFileURL)
+        DottieEpisodicMemory.shared.forgetEverything()
         recentMemories = []
         memoriesSinceProfileUpdate = 0
         saveProfile("")
@@ -240,52 +244,11 @@ final class DottieBrain: ObservableObject {
 
     // MARK: - Screen journal
 
+    /// "Remember what's on my screen", kept by the episodic memory. The
+    /// notch's green light follows this.
     func setScreenJournalEnabled(_ isEnabled: Bool) {
         isScreenJournalEnabled = isEnabled
-        UserDefaults.standard.set(isEnabled, forKey: Self.screenJournalDefaultsKey)
-        updateScreenJournalTimer()
-    }
-
-    private func updateScreenJournalTimer() {
-        screenJournalTimer?.invalidate()
-        screenJournalTimer = nil
-        guard isScreenJournalEnabled else { return }
-        screenJournalTimer = Timer.scheduledTimer(withTimeInterval: Self.screenJournalInterval, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    Task { await self.writeScreenJournalLine() }
-                }
-            }
-        }
-    }
-
-    /// One line about what the user is doing. The screenshot isn't kept.
-    private func writeScreenJournalLine() async {
-        // Only while they're at the Mac, and never on the lock screen.
-        let secondsSinceInput = [CGEventType.mouseMoved, .keyDown, .leftMouseDown, .scrollWheel]
-            .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
-            .min() ?? .infinity
-        guard secondsSinceInput < Self.screenJournalInterval, CGPreflightScreenCaptureAccess() else { return }
-        guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1024) else { return }
-        let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
-        let requestBody: [String: Any] = [
-            "model": Self.screenJournalModel,
-            "contents": [[
-                "role": "user",
-                "parts": [
-                    ["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]],
-                    ["text": "This is the user's screen; the frontmost app is \(frontmostApp). In one short line (under 20 words), say what they're doing: the app and the specific thing (file, project, page or topic). Never include passwords, codes, card numbers, or the contents of private messages or emails; say only who or what it's about. Reply with the line only."]
-                ]
-            ]]
-        ]
-        guard let journalLine = await Self.postToChat(requestBody)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " "),
-              !journalLine.isEmpty,
-              journalLine != lastScreenJournalLine else { return }
-        lastScreenJournalLine = journalLine
-        record(.screen, journalLine)
+        DottieEpisodicMemory.shared.screenMemory.setEnabled(isEnabled)
     }
 
     // MARK: - Storage

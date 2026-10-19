@@ -2,9 +2,10 @@
 //  HomeBrainView.swift
 //  leanring-buddy
 //
-//  Home → Brain: what Dottie's second brain knows (editable), the newest
-//  memories, the screen journal switch, the folders the Brain agent may
-//  use, the MCP servers it and the Dots can call, and a way to wipe it all.
+//  Home → Brain: what Dottie's second brain knows (editable), the timeline
+//  of what happened (episodic memory), the "Remember what's on my screen"
+//  switch, the newest memories, the folders the Brain agent may use, the
+//  MCP servers it and the Dots can call, and a way to wipe it all.
 //
 
 import AppKit
@@ -68,17 +69,12 @@ struct HomeBrainView: View {
                     }
                 }
 
-                group(title: "Screen journal") {
-                    Toggle(isOn: Binding(
-                        get: { brain.isScreenJournalEnabled },
-                        set: { brain.setScreenJournalEnabled($0) }
-                    )) {
-                        Text("Note what I'm doing every couple of minutes")
-                            .font(.system(size: 13))
-                            .foregroundColor(DS.Colors.textPrimary)
-                    }
-                    .toggleStyle(.switch)
-                    hint("Takes a quick look at your screen while you're using the Mac and writes one line, like \u{201C}editing the intro in Premiere\u{201D}. The screenshot is thrown away. A small green light shows in the notch while it's on.")
+                group(title: "Timeline") {
+                    DottieEpisodeTimeline(memory: DottieEpisodicMemory.shared)
+                }
+
+                group(title: "What Dottie sees") {
+                    DottieScreenMemorySettings(brain: brain, screenMemory: DottieEpisodicMemory.shared.screenMemory)
                 }
 
                 group(title: "Folders the brain can use") {
@@ -165,7 +161,7 @@ struct HomeBrainView: View {
             Button("Forget", role: .destructive) { brain.forgetEverything() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deletes every memory and the notes about you. Shared folders and tools stay.")
+            Text("Deletes every memory, the timeline and the notes about you. Shared folders and tools stay.")
         }
     }
 

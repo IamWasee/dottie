@@ -15,6 +15,12 @@
 //  (create, update, delete, pause, resume) and run prompts. Routines only
 //  run while the Mac is awake and the app is open.
 //
+//  24/7 jobs ("keep working on this all night") are routines too, with a
+//  `keepWorking` part: they can run nonstop (the next run starts a short
+//  break after the last one ends), stop at a set time, or stop themselves
+//  when the helper says the whole job is done. DottieKeepWorking starts
+//  them from voice and keeps the Mac awake while any is on.
+//
 //  Saved in ~/Library/Application Support/Dottie/Dots/routines.json.
 //
 
@@ -34,14 +40,34 @@ struct ClickyRoutine: Codable, Identifiable, Equatable {
     var lastRunStartedAt: Date
     var runCount: Int
     var failedRunsInARow: Int
+    /// Set for a 24/7 job (see DottieKeepWorking). Optional so routines
+    /// saved before 24/7 jobs existed still load.
+    var keepWorking: ClickyKeepWorking?
+    /// When the latest run ended, for nonstop jobs.
+    var lastRunFinishedAt: Date?
 
     var nextRunAt: Date {
-        lastRunStartedAt.addingTimeInterval(TimeInterval(everyMinutes * 60))
+        if let keepWorking, keepWorking.isNonstop {
+            // The next run starts a short break after the last one ended
+            // (the roster skips it while the helper is still busy).
+            let lastActivityAt = max(lastRunStartedAt, lastRunFinishedAt ?? .distantPast)
+            return lastActivityAt.addingTimeInterval(TimeInterval(keepWorking.restMinutes * 60))
+        }
+        return lastRunStartedAt.addingTimeInterval(TimeInterval(everyMinutes * 60))
     }
 
-    /// "every hour", "every 15 minutes", "every day".
+    /// A 24/7 job whose end time has passed.
+    func hasEnded(at currentDate: Date) -> Bool {
+        guard let endsAt = keepWorking?.endsAt else { return false }
+        return endsAt <= currentDate
+    }
+
+    /// "every hour", "every 15 minutes", "every day", "nonstop".
     var cadenceDescription: String {
-        ClickyRoutine.cadenceDescription(everyMinutes: everyMinutes)
+        if let keepWorking, keepWorking.isNonstop {
+            return "nonstop, with \(keepWorking.restMinutes)-minute breaks"
+        }
+        return ClickyRoutine.cadenceDescription(everyMinutes: everyMinutes)
     }
 
     static func cadenceDescription(everyMinutes: Int) -> String {
@@ -54,6 +80,29 @@ struct ClickyRoutine: Codable, Identifiable, Equatable {
         default: return "every \(everyMinutes) minutes"
         }
     }
+}
+
+/// The 24/7 part of a routine.
+struct ClickyKeepWorking: Codable, Equatable {
+    /// Nonstop: run again a short break after each run ends, instead of on
+    /// a fixed interval.
+    var isNonstop: Bool
+    var restMinutes: Int
+    /// Stops on its own at this time ("all night" ends in the morning).
+    var endsAt: Date?
+    /// Stops on its own when the helper says the whole job is done.
+    var untilDone: Bool
+    let startedAt: Date
+
+    /// The shortest break between nonstop runs. Each helper run makes
+    /// several requests, and the free tier allows about 15 a minute.
+    static let minimumRestMinutes = 3
+
+    /// The line a helper ends its reply with when the whole job is done.
+    static let doneMarker = "ALL DONE"
+    /// How a helper starts its reply when it found something the user
+    /// should hear about right away.
+    static let importantMarker = "IMPORTANT:"
 }
 
 /// One `<ROUTINE>` block from an agent's reply.
@@ -103,8 +152,50 @@ final class ClickyRoutineStore: ObservableObject {
     /// Routines that are due now, oldest-due first.
     func dueRoutines(at currentDate: Date) -> [ClickyRoutine] {
         routines
-            .filter { !$0.isPaused && $0.nextRunAt <= currentDate }
+            .filter { !$0.isPaused && !$0.hasEnded(at: currentDate) && $0.nextRunAt <= currentDate }
             .sorted { $0.nextRunAt < $1.nextRunAt }
+    }
+
+    // MARK: - 24/7 jobs
+
+    /// 24/7 jobs that are on (not paused).
+    var activeKeepWorkingRoutines: [ClickyRoutine] {
+        routines.filter { $0.keepWorking != nil && !$0.isPaused }
+    }
+
+    /// Starts (or replaces) a 24/7 job for a helper. Its first run is the
+    /// turn the caller starts now.
+    @discardableResult
+    func startKeepWorking(agentID: UUID, title: String, task: String, everyMinutes: Int, keepWorking: ClickyKeepWorking) -> ClickyRoutine {
+        routines.removeAll { $0.agentID == agentID && $0.title.caseInsensitiveCompare(title) == .orderedSame }
+        let newRoutine = ClickyRoutine(
+            id: UUID(),
+            agentID: agentID,
+            title: title,
+            task: task,
+            everyMinutes: max(everyMinutes, Self.minimumEveryMinutes),
+            isPaused: false,
+            createdAt: Date(),
+            lastRunStartedAt: Date(),
+            runCount: 1,
+            failedRunsInARow: 0,
+            keepWorking: keepWorking,
+            lastRunFinishedAt: nil
+        )
+        routines.append(newRoutine)
+        ClickyAnalytics.trackRoutineChanged(action: "created")
+        save()
+        return newRoutine
+    }
+
+    /// A helper's turn ended (any turn), so a nonstop job's break starts now.
+    func noteTurnFinished(agentID: UUID) {
+        var changed = false
+        for index in routines.indices where routines[index].agentID == agentID && routines[index].keepWorking != nil {
+            routines[index].lastRunFinishedAt = Date()
+            changed = true
+        }
+        if changed { save() }
     }
 
     // MARK: - Agent actions
@@ -153,7 +244,9 @@ final class ClickyRoutineStore: ObservableObject {
                 createdAt: Date(),
                 lastRunStartedAt: Date(),
                 runCount: 1,
-                failedRunsInARow: 0
+                failedRunsInARow: 0,
+                keepWorking: nil,
+                lastRunFinishedAt: nil
             )
             routines.append(newRoutine)
             ClickyAnalytics.trackRoutineChanged(action: "created")
@@ -323,8 +416,33 @@ enum ClickyRoutinePrompts {
         if previousRunFailed {
             briefLines.append("The previous attempt failed or was interrupted. Check the conversation first and finish only what is still missing. Don't repeat a message, post or other external action that already succeeded.")
         }
+        if let keepWorking = routine.keepWorking {
+            briefLines.append(keepWorkingRules(keepWorking))
+        }
         briefLines.append("")
         briefLines.append("Task: \(routine.task)")
         return briefLines.joined(separator: "\n")
+    }
+
+    /// What a 24/7 job's helper is told on every run, so Dottie can text
+    /// the user about real news and stop when the job is done.
+    static func keepWorkingRules(_ keepWorking: ClickyKeepWorking) -> String {
+        var rules = "This is a 24/7 job the user asked you to keep working on while they're away. Keep each run focused and make real progress. "
+            + "If you find something the user should hear about right away (a real result, a problem, a decision only they can make), start your reply with \"\(ClickyKeepWorking.importantMarker)\" and say it in one or two plain sentences; otherwise don't use that word."
+        if keepWorking.untilDone {
+            rules += " When the whole job is finished and nothing is left to do, end your reply with a line that says exactly \"\(ClickyKeepWorking.doneMarker)\"."
+        }
+        return rules
+    }
+
+    /// The first run of a 24/7 job, sent to the helper right away.
+    static func keepWorkingFirstRunMessage(task: String, cadence: String, keepWorking: ClickyKeepWorking) -> String {
+        """
+        [24/7 job · run 1 · \(cadence)]
+
+        \(keepWorkingRules(keepWorking)) Dottie will run this again (\(cadence)) on her own, so don't set up a <ROUTINE> block for it.
+
+        Task: \(task)
+        """
     }
 }

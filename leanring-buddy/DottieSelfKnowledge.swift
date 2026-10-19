@@ -63,7 +63,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     static var voicePromptSection: String {
         let pageNames = HomeSpaceRootView.HomeSection.allCases.map { $0.rawValue.lowercased() }.joined(separator: ", ")
         var section = """
-        about yourself: you're dottie \(appVersion), a mac companion who lives in the notch and the menu bar, with a home window (\(pageNames)). never guess about yourself, your settings or your state: call about_me. features is what you can do; how_to answers "how do i… in dottie"; status is live facts (version, update, permissions, voice, helpers, phone); troubleshoot when one of your own things fails or seems off; open shows a home page or settings section; guide walks them through it on screen step by step (you point, they click; say next and stop work like any guide); ask_permission starts macOS's permission prompt.
+        about yourself: you're dottie \(appVersion), a mac companion who lives in the notch and the menu bar, with a home window (\(pageNames)). never guess about yourself, your settings or your state: call about_me. features is what you can do; how_to answers "how do i… in dottie"; status is live facts (version, update, permissions, voice, helpers, phone); troubleshoot when one of your own things fails or seems off (it reuses the self-check); open shows a home page or settings section; guide walks them through it on screen step by step (you point, they click; next and stop work like any guide); ask_permission and fix start the fix troubleshoot names.
         helping with dottie: answer a "how do i…" in one sentence, then offer to show them (guide). when one of your own things fails (a missing permission, helpers not ready, phone not paired, an update waiting), say so plainly and offer the fix. asked what you can do: name three or four things in a sentence or two and offer a quick tour (guide with "tour").
         """
         if isNewUser {
@@ -83,7 +83,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     }
 
     private enum Action: String, CaseIterable {
-        case features, status, troubleshoot, how_to, open, guide, ask_permission
+        case features, status, troubleshoot, how_to, open, guide, ask_permission, fix
     }
 
     /// Helpers work in the background, so they don't get the on-screen
@@ -95,7 +95,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     private static func aboutMeTool(for audience: DottieTool.Audience) -> DottieTool {
         let actionNames = actions(for: audience).map(\.rawValue)
         let description = audience == .voice
-            ? "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes. open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt."
+            ? "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes (uses the self-check). open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt. fix: run a fix troubleshoot named (its id)."
             : "What Dottie (the app you run in) can do and where each thing lives in her app (features, how_to), her live state (status), and likely problems with their fixes (troubleshoot)."
         return DottieTool(
             name: "about_me",
@@ -110,7 +110,7 @@ enum DottieSelfKnowledge: DottieToolModule {
                     ],
                     "about": [
                         "type": "STRING",
-                        "description": "open: the place, like 'voice settings', 'phone' or 'meetings'. guide: the topic, like 'phone', 'settings', 'meeting mode' or 'tour'. how_to and troubleshoot: the user's question. ask_permission: the permission, like 'screen recording', or 'all'."
+                        "description": "open: the place, like 'voice settings', 'phone' or 'meetings'. guide: the topic, like 'phone', 'settings', 'meeting mode' or 'tour'. how_to and troubleshoot: the user's question. ask_permission: the permission, like 'screen recording', or 'all'. fix: the id troubleshoot gave, like 'runtime'."
                     ]
                 ],
                 "required": ["action"]
@@ -135,11 +135,12 @@ enum DottieSelfKnowledge: DottieToolModule {
         switch action {
         case .features: return featuresText()
         case .status: return await statusText()
-        case .troubleshoot: return await troubleshootText(question: about)
+        case .troubleshoot: return await troubleshootText(question: about, mayRunSelfCheck: audience == .voice)
         case .how_to: return howToText(question: about)
         case .open: return openPlace(named: about)
         case .guide: return startWalkthrough(topic: about)
         case .ask_permission: return await askPermission(named: about)
+        case .fix: return await applySelfCheckFix(named: about)
         }
     }
 }
@@ -184,10 +185,18 @@ extension DottieSelfKnowledge {
          ["permission", "access", "privacy", "allow"]),
         SettingsSection("Updates", "Check for updates automatically", "Updates: check for a new version and install it right here.",
          ["update", "version", "upgrade"]),
-        SettingsSection("Voice", "Dottie's voice", "Voice: how I sound and my personality.",
-         ["voices", "personality", "sound", "accent"]),
-        SettingsSection("Shortcuts", "Talk to Dottie", "Shortcuts: the keys you hold to talk to me and to dictate.",
-         ["shortcut", "hotkey", "hotkeys", "keys", "keyboard shortcut", "circle"]),
+        SettingsSection("Helpers: Claude via MausBot", "Run helpers on", "Helpers: whether helpers run on your Claude plan through MausBot, with Gemini as the backup.",
+         ["mausbot", "claude", "helper engine", "engine", "backup", "helpers settings"]),
+        SettingsSection("Check everything", "Check everything", "Check everything: one button that tests every part I need and says what's wrong.",
+         ["self check", "check", "test", "diagnose", "health"]),
+        SettingsSection("Instant replays", "Instant replays", "Instant replays: screen jobs I remember and redo straight away.",
+         ["replay", "replays", "remembered jobs"]),
+        SettingsSection("Voice", "Dottie's voice", "Voice: how I sound and my personality, including one you make yourself.",
+         ["voices", "personality", "sound", "accent", "make your own"]),
+        SettingsSection("Shortcuts", "Talk to Dottie", "Shortcuts: the keys to talk, dictate, type to me and fix selected text.",
+         ["shortcut", "hotkey", "hotkeys", "keys", "keyboard shortcut", "circle", "type to ask", "fix text"]),
+        SettingsSection("Everyday", "Focus mode", "Everyday: focus mode, what it blocks, and undoing the last folder cleanup.",
+         ["focus", "focus mode", "block", "blocked", "cleanup", "clean up"]),
         SettingsSection("Appearance", "Show Dottie in the notch", "Appearance: the notch, my blue cursor and its shape, and notifications.",
          ["notch", "cursor", "look", "notifications", "notification"]),
         SettingsSection("Dictation", "Words to spell your way", "Dictation: hold to type with your voice, languages, and words to spell your way.",
@@ -209,9 +218,11 @@ extension DottieSelfKnowledge {
         .pictures: "Pictures: things I remember by how they look.",
         .smartHome: "Smart Home: your TVs, lights and Home Assistant.",
         .skills: "Skills: instructions your Dots can use.",
-        .brain: "Brain: what I remember about you, and the screen journal.",
+        .tools: "Tools: connect your apps and install command-line tools for me and the helpers.",
+        .brain: "Brain: what I remember about you, and the timeline of what we did.",
         .meetings: "Meetings: meeting mode and your saved notes.",
         .phone: "Phone: text me from Telegram.",
+        .profile: "Profile: my level, streak, unlocks and 24/7 jobs.",
         .settings: "Settings: permissions, voice, shortcuts and more."
     ]
 
@@ -222,9 +233,11 @@ extension DottieSelfKnowledge {
         .pictures: ["picture", "photos", "images", "image library"],
         .smartHome: ["lights", "tv", "tvs", "hue", "home assistant", "devices"],
         .skills: ["skill"],
-        .brain: ["memory", "memories", "screen journal", "journal", "mcp", "second brain"],
+        .tools: ["apps", "connected apps", "mcp", "integrations", "command line tools", "homebrew", "cli"],
+        .brain: ["memory", "memories", "screen journal", "journal", "timeline", "second brain"],
         .meetings: ["meeting", "meeting mode", "notes", "meeting notes"],
         .phone: ["telegram", "phone bridge", "texting", "bot"],
+        .profile: ["level", "levels", "xp", "streak", "unlocks", "24 7 jobs", "notch effect"],
         .settings: ["preferences", "options"]
     ]
 
@@ -350,9 +363,15 @@ extension DottieSelfKnowledge {
     static func features() -> [Feature] {
         let talkKeys = companionManager?.globalPushToTalkShortcutMonitor.talkHotkey.displayText ?? ClickyHotkey.defaultTalk.displayText
         let dictateKeys = companionManager?.globalPushToTalkShortcutMonitor.dictationHotkey.displayText ?? ClickyHotkey.defaultDictation.displayText
-        let personalityNames = DottiePersonality.allCases.map(\.displayName).joined(separator: ", ")
+        let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
+        let askBarKeys = DottieEveryday.shared.shortcuts.hotkey(for: .askBar)?.displayText
+        let askBarText = askBarKeys.map { "Press \($0)" } ?? "Set a shortcut in Settings → Shortcuts, then press it"
+        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
+        let askBarKeyName: String = askBarKeys ?? "a shortcut you pick"
+        let fixTextKeyName: String = fixTextKeys ?? "a shortcut you pick (off until you choose one)"
+        let fixTextKeyNote: String = fixTextKeys.map { " (\($0))" } ?? " (set one in Settings → Shortcuts)"
 
-        return [
+        let allFeatures: [Feature] = [
             Feature(
                 id: "tour",
                 title: "A tour of Dottie",
@@ -384,9 +403,9 @@ extension DottieSelfKnowledge {
             Feature(
                 id: "type",
                 title: "Typing to me",
-                keywords: ["type", "typing", "text", "write", "keyboard", "message", "paste", "drop", "picture"],
-                summary: "Hover the notch and click \"type to dottie\", or use the box at the bottom of Home → Conversation, where you can also paste or drop pictures.",
-                whereToFind: "The notch, or Home → Conversation.",
+                keywords: ["type", "typing", "type to ask", "ask bar", "option space", "write", "keyboard", "message", "paste", "drop", "picture"],
+                summary: "\(askBarText) in any app to type a question under the notch (Enter sends, Esc closes, ↑ brings back what you asked before). Or hover the notch and click \"type to dottie\", or use the box at the bottom of Home → Conversation, where you can also paste or drop pictures.",
+                whereToFind: "Any app with the type-to-ask shortcut, the notch, or Home → Conversation.",
                 place: Place(section: .conversation),
                 steps: [
                     WalkStep(target: .text(["Type to Dottie", "Say what it is"]), say: "Type to me here and press return. You can paste or drop a picture in too.")
@@ -428,7 +447,7 @@ extension DottieSelfKnowledge {
                 id: "do",
                 title: "Doing things for you",
                 keywords: ["click", "do it", "for me", "open", "job", "task", "automate", "game", "play", "stop", "escape", "browser", "tabs"],
-                summary: "Ask me to do it (\"open youtube and search lofi\"): I click, type and scroll step by step and tell you how it went. Jobs line up in order. I can play games too. Press Escape or the stop button in the notch to stop me.",
+                summary: "Ask me to do it (\"open youtube and search lofi\"): I click, type and scroll step by step and tell you how it went. Jobs line up in order, and wait while your screen is locked. I can play games too. Press Escape or the stop button in the notch to stop me. A job that worked is saved as an instant replay, so next time I redo it straight away.",
                 whereToFind: "Any app, by voice. The tips I learn from jobs are in Settings → Using your Mac.",
                 place: .settings("Using your Mac")
             ),
@@ -443,12 +462,12 @@ extension DottieSelfKnowledge {
                 id: "helpers",
                 title: "Helpers (Dots)",
                 keywords: ["helper", "helpers", "dot", "dots", "agent", "background", "research", "website", "build", "code", "routine", "routines", "delegate", "team"],
-                summary: "Dots work on their own in a folder on your Mac with a shell, files and the web: research, documents, code, whole websites. Ask me out loud or give one a task in Home → Dots. They tell you in the notch when they're done. Routines run tasks on a schedule, and a team splits a big job between several Dots.",
-                whereToFind: "Home → Dots.",
+                summary: "Helpers (Dots) work on their own in a folder on your Mac with a shell, files and the web: research, documents, code, whole websites. Ask me out loud or give one a task in Home → Dots. They tell you in the notch when they're done. They run on your Claude plan through MausBot when it's set up, with Gemini as the backup. Routines run tasks on a schedule, and a team splits a big job between several helpers.",
+                whereToFind: "Home → Dots. Which engine they run on: Settings → Helpers: Claude via MausBot.",
                 place: Place(section: .clickys),
                 steps: [
                     WalkStep(target: .page(.clickys), say: "This is Dots, your background helpers.", wait: .none),
-                    WalkStep(target: .text(["New Dot"]), say: "Click New Dot to make one, or just ask me out loud to hand something off.")
+                    WalkStep(target: .text(["New helper", "New Dot"]), say: "Click New helper to make one, or just ask me out loud to hand something off.")
                 ]
             ),
             Feature(
@@ -487,13 +506,14 @@ extension DottieSelfKnowledge {
             Feature(
                 id: "brain",
                 title: "Memory and my second brain",
-                keywords: ["memory", "remember", "forget", "brain", "journal", "screen journal", "profile", "know about me", "folders", "mcp", "tools"],
-                summary: "I remember our chats and what the Dots did. Home → Brain shows what I know about you (you can edit it), the latest memories, the screen journal switch, the folders and tools (MCP servers) my brain can use, and Forget everything.",
+                keywords: ["memory", "remember", "forget", "brain", "journal", "screen journal", "know about me", "folders", "what i was doing"],
+                summary: "I remember our chats and what the helpers did. Home → Brain shows what I know about you (you can edit it), the latest memories, the timeline of what happened, the \"Remember what's on my screen\" switch, the folders my brain can use, and Forget everything.",
                 whereToFind: "Home → Brain.",
                 place: Place(section: .brain),
                 steps: [
                     WalkStep(target: .text(["What Dottie knows about you"]), say: "This is what I know about you. Click Edit to change it.", wait: .none),
-                    WalkStep(target: .text(["Note what I'm doing every couple of minutes"]), say: "This switch is the screen journal: I note what you're doing every couple of minutes.", wait: .none),
+                    WalkStep(target: .text(["Timeline"]), say: "This timeline is what we did, day by day. Tap a moment to see it all.", wait: .none),
+                    WalkStep(target: .text(["Remember what's on my screen"]), say: "This switch lets me note what's on your screen every few minutes. It's off unless you turn it on.", wait: .none),
                     WalkStep(target: .text(["Folders the brain can use"]), say: "Add folders here so my brain can search your files.", wait: .none),
                     WalkStep(target: .text(["Forget everything"]), say: "And this wipes every memory.", wait: .none)
                 ]
@@ -584,6 +604,148 @@ extension DottieSelfKnowledge {
                 place: .settings("Permissions")
             ),
             Feature(
+                id: "tools",
+                title: "Connected apps and tools",
+                keywords: ["tools", "apps", "connect", "connected apps", "mcp", "notion", "linear", "github", "integration", "command line", "cli", "homebrew", "install"],
+                summary: "Connect your apps (MCP servers, like Notion or Linear) so I and the helpers can use them (\"add a page to my Notion\"), and install handy command-line tools.",
+                whereToFind: "Home → Tools.",
+                place: Place(section: .tools),
+                steps: [
+                    WalkStep(target: .page(.tools), say: "This is Tools.", wait: .none),
+                    WalkStep(target: .text(["Add an app"]), say: "Pick an app here to connect it. Some ask for a key.", wait: .none),
+                    WalkStep(target: .text(["Your apps"]), say: "The ones you connected show up here.", wait: .none),
+                    WalkStep(target: .text(["Command-line tools"]), say: "And these are tools I can install for the helpers.", wait: .none)
+                ]
+            ),
+            Feature(
+                id: "mausbot",
+                title: "Helpers on your Claude plan",
+                keywords: ["mausbot", "claude", "claude code", "engine", "backup", "gemini backup", "sign in", "limit", "paused"],
+                summary: "Helpers can run on your Claude plan through MausBot, a free app, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only.",
+                whereToFind: "Settings → Helpers: Claude via MausBot.",
+                place: .settings("Helpers: Claude via MausBot"),
+                steps: [
+                    WalkStep(target: .text(["Run helpers on"]), say: "Pick what helpers run on here.", wait: .none),
+                    WalkStep(
+                        target: .text(["Set up"]),
+                        say: "Click Set up and I install MausBot and Claude Code for you.",
+                        wait: .click,
+                        isNeeded: { !DottieMausBot.shared.isSetUp || DottieMausBot.shared.claudeState == .notInstalled }
+                    ),
+                    WalkStep(
+                        target: .text(["Sign in to Claude"]),
+                        say: "Then click Sign in to Claude. Allow it once in your browser and I pick it up.",
+                        wait: .click,
+                        isNeeded: { DottieMausBot.shared.claudeState == .notSignedIn },
+                        secondsToWaitForNeed: 6
+                    ),
+                    WalkStep(
+                        target: .text(["Try Claude now"]),
+                        say: "Claude is paused for now. Click Try Claude now to give it another go.",
+                        wait: .click,
+                        isNeeded: { DottieMausBot.shared.claudePausedUntil != nil }
+                    )
+                ],
+                doneLine: "That's it. Helpers use Claude when they can and Gemini when they can't."
+            ),
+            Feature(
+                id: "profile",
+                title: "My levels",
+                keywords: ["level", "levels", "xp", "streak", "unlock", "unlocks", "notch effect", "disco ball", "wear", "profile"],
+                summary: "I level up: finished jobs, helper tasks, guides, games and days in a row earn XP. Levels unlock cursor shapes and notch effects (\"wear the disco ball\").",
+                whereToFind: "Home → Profile.",
+                place: Place(section: .profile),
+                steps: [
+                    WalkStep(target: .page(.profile), say: "This is my Profile: level, XP and streak.", wait: .none),
+                    WalkStep(target: .text(["Unlocks"]), say: "Click an unlocked shape to dress me up.", wait: .none),
+                    WalkStep(target: .text(["Notch effect"]), say: "This adds an effect around the notch.", wait: .none),
+                    WalkStep(target: .text(["24/7 jobs"]), say: "And any 24/7 jobs show here, with a stop button.", wait: .none)
+                ]
+            ),
+            Feature(
+                id: "games",
+                title: "Games",
+                keywords: ["game", "games", "trivia", "quiz", "20 questions", "twenty questions", "guess my drawing", "doodle", "word chain", "bored"],
+                summary: "Play with me: trivia on anything, 20 questions (either way round), guess my drawing, and word chain. Wins earn me XP.",
+                whereToFind: "By voice: \"let's play trivia\"."
+            ),
+            Feature(
+                id: "keepworking",
+                title: "24/7 jobs",
+                keywords: ["24 7", "all night", "keep working", "until it's done", "every 10 minutes", "overnight", "keep checking"],
+                summary: "Ask a helper to keep working on something all night or check every few minutes. Your Mac stays awake (the screen can still turn off), a moon shows in the notch, and your phone gets a text when it finds something.",
+                whereToFind: "By voice. Home → Profile lists and stops them.",
+                place: Place(section: .profile)
+            ),
+            Feature(
+                id: "focus",
+                title: "Focus mode",
+                keywords: ["focus", "focus mode", "distraction", "block", "blocked", "blocking", "youtube closes", "app keeps closing", "concentrate", "pomodoro"],
+                summary: "For a set time I hide distracting apps and close distracting sites, with a cheeky line in the notch, and tell you how it went at the end. Say \"focus for 45 minutes\" or switch it on in Settings → Everyday, where you also choose what's blocked.",
+                whereToFind: "Settings → Everyday, or by voice.",
+                place: .settings("Everyday"),
+                steps: [
+                    WalkStep(target: .text(["Focus mode"]), say: "This switch starts focus mode.", wait: .none),
+                    WalkStep(target: .text(["Focus for"]), say: "This sets how long.", wait: .none),
+                    WalkStep(target: .text(["Apps to block"]), say: "And these are the apps and sites I block.", wait: .none)
+                ]
+            ),
+            Feature(
+                id: "watches",
+                title: "Watching things for you",
+                keywords: ["watch", "watches", "tell me when", "let me know when", "download finishes", "page changes", "notify me when", "loads"],
+                summary: "\"Tell me when this download finishes\", \"when this page changes\", \"when it says Done\": I keep an eye on it on the Mac and tell you with a card in the notch, a sound, a notification and a text if your phone is paired.",
+                whereToFind: "By voice. Running watches show when you hover the notch."
+            ),
+            Feature(
+                id: "replays",
+                title: "Instant replays",
+                keywords: ["replay", "replays", "redo", "again", "faster", "remember how", "same thing again"],
+                summary: "When a screen job works I remember its steps, so the next time you ask for the same thing in the same app or site I redo it straight away. Ask \"what replays do you have?\" or forget them.",
+                whereToFind: "Settings → Instant replays, or by voice.",
+                place: .settings("Instant replays"),
+                steps: [WalkStep(target: .text(["Instant replays"]), say: "Your saved replays are listed here.", wait: .none)]
+            ),
+            Feature(
+                id: "selfcheck",
+                title: "Check everything",
+                keywords: ["self check", "check everything", "check", "test", "broken", "not working", "diagnose", "slow", "no sound"],
+                summary: "One button tests every part I need (permissions, the server, Gemini, my voice, the microphone, the screen, helpers, the phone) and says what's wrong, with a fix button where there is one. Or ask me to check myself.",
+                whereToFind: "Settings → Check everything, or by voice.",
+                place: .settings("Check everything"),
+                steps: [WalkStep(target: .text(["Check everything"]), say: "Click Check everything. It takes a few seconds.", wait: .click)]
+            ),
+            Feature(
+                id: "fixtext",
+                title: "Fix selected text",
+                keywords: ["fix text", "fix this", "rewrite", "shorter", "longer", "grammar", "spelling", "formal", "casual", "translate"],
+                summary: "Select text in any app and say \"make this shorter\", \"fix the grammar\" or \"translate this to Spanish\", or press the fix-text shortcut\(fixTextKeyNote). I put the new text back in place.",
+                whereToFind: "Any app. Shortcut in Settings → Shortcuts.",
+                place: .settings("Shortcuts"),
+                steps: [WalkStep(target: .text(["Fix selected text"]), say: "Pick a shortcut here to fix selected text in one press.", wait: .none)]
+            ),
+            Feature(
+                id: "cleanup",
+                title: "Folder cleanup",
+                keywords: ["clean up", "cleanup", "tidy", "organize", "downloads", "desktop", "duplicates", "big files"],
+                summary: "\"Clean up my Downloads\": I sort files into folders, find duplicates and big old files, and name screenshots, all on the Mac. You check the plan first, removed files go to the Trash, and you can undo the last cleanup in Settings → Everyday.",
+                whereToFind: "By voice. Undo in Settings → Everyday.",
+                place: .settings("Everyday"),
+                steps: [WalkStep(target: .text(["Last folder cleanup"]), say: "Undo your last cleanup here.", wait: .none)]
+            ),
+            Feature(
+                id: "timeline",
+                title: "My memory timeline",
+                keywords: ["timeline", "episodes", "what did we do", "what was i doing", "yesterday", "last week", "remember what's on my screen", "history of"],
+                summary: "I keep short stories of what happened (\"checked the Kaggle rank in Opera\") from our chats, helper tasks and screen jobs, and, only if you turn it on, what's on your screen. Ask \"what was I working on yesterday?\" Home → Brain shows the timeline by day; delete any moment.",
+                whereToFind: "Home → Brain → Timeline.",
+                place: Place(section: .brain),
+                steps: [
+                    WalkStep(target: .text(["Timeline"]), say: "This is the timeline, day by day.", wait: .none),
+                    WalkStep(target: .text(["Remember what's on my screen"]), say: "Switch this on if you want me to remember what's on your screen too.", wait: .none)
+                ]
+            ),
+            Feature(
                 id: "search",
                 title: "Looking things up",
                 keywords: ["search", "web", "news", "weather", "price", "look up", "google"],
@@ -628,24 +790,27 @@ extension DottieSelfKnowledge {
                 id: "voice",
                 title: "My voice and personality",
                 keywords: ["voice", "sound", "accent", "personality", "tone", "sarcastic", "funny", "calm", "tutor", "hype"],
-                summary: "Pick how I sound (tap play to hear each voice) and my personality: \(personalityNames).",
+                summary: "Pick how I sound (tap play to hear each voice) and my personality: \(personalityNames), or make your own (\"a grumpy pirate who loves cats\").",
                 whereToFind: "Settings → Voice.",
                 place: .settings("Voice"),
                 steps: [
                     WalkStep(target: .text(["Dottie's voice"]), say: "Pick my voice here. The play button lets you hear each one.", wait: .none),
-                    WalkStep(target: .text(["Personality"]), say: "And this picks my personality.", wait: .none)
+                    WalkStep(target: .text(["Personality"]), say: "This picks my personality.", wait: .none),
+                    WalkStep(target: .text(["Make your own"]), say: "And here you can make up your own.", wait: .none)
                 ]
             ),
             Feature(
                 id: "shortcuts",
                 title: "Shortcuts",
                 keywords: ["shortcut", "shortcuts", "hotkey", "keys", "change the key", "control option", "right option"],
-                summary: "Hold \(talkKeys) to talk and \(dictateKeys) to dictate. Click a shortcut in Settings → Shortcuts and press new keys to change it.",
+                summary: "Hold \(talkKeys) to talk and \(dictateKeys) to dictate. Type to me with \(askBarKeyName) and fix selected text with \(fixTextKeyName). Click a shortcut in Settings → Shortcuts and press new keys to change it.",
                 whereToFind: "Settings → Shortcuts.",
                 place: .settings("Shortcuts"),
                 steps: [
                     WalkStep(target: .text(["Talk to Dottie"]), say: "Click this, then press the keys you want to hold to talk.", wait: .none),
-                    WalkStep(target: .text(["Dictate"]), say: "This one is for dictation.", wait: .none)
+                    WalkStep(target: .text(["Dictate"]), say: "This one is for dictation.", wait: .none),
+                    WalkStep(target: .text(["Type to Dottie"]), say: "This opens a box to type to me from any app.", wait: .none),
+                    WalkStep(target: .text(["Fix selected text"]), say: "And this fixes the text you've selected.", wait: .none)
                 ]
             ),
             Feature(
@@ -724,6 +889,7 @@ extension DottieSelfKnowledge {
                 doneLine: "That's Settings! Ask me to open any of it."
             )
         ]
+        return allFeatures
     }
 
     private static func featuresText() -> String {
@@ -799,7 +965,6 @@ extension DottieSelfKnowledge {
 // MARK: - Live state
 
 extension DottieSelfKnowledge {
-    private static let essentialPermissions: [DottiePermissions.Kind] = [.microphone, .screenRecording, .accessibility]
     /// The ones macOS switches on in System Settings rather than a dialog.
     private static let permissionsSwitchedOnInSettings: [DottiePermissions.Kind] = [.accessibility, .screenRecording, .inputMonitoring]
 
@@ -809,18 +974,7 @@ extension DottieSelfKnowledge {
         var lines: [String] = []
 
         lines.append("Version: Dottie \(appVersion). " + updateDescription())
-
-        let allKinds = DottiePermissions.Kind.allCases
-        let missingKinds = allKinds.filter { permissions.statuses[$0] == .notAsked || permissions.statuses[$0] == .denied }
-        let unknownKinds = allKinds.filter { permissions.statuses[$0] == .unknown || permissions.statuses[$0] == nil }
-        var permissionLine = "Permissions: \(permissions.allowedCount) of \(allKinds.count) allowed."
-        if !missingKinds.isEmpty {
-            permissionLine += " Missing: " + missingKinds.map { "\($0.title) (\($0.reason.lowercased()))\(permissions.statuses[$0] == .denied ? ", turned down before" : "")" }.joined(separator: "; ") + "."
-        }
-        if !unknownKinds.isEmpty {
-            permissionLine += " macOS doesn't say for: " + unknownKinds.map(\.title).joined(separator: ", ") + "."
-        }
-        lines.append(permissionLine)
+        lines.append(permissionsDescription())
 
         guard let companionManager = companionManager else {
             return lines.joined(separator: "\n")
@@ -828,18 +982,89 @@ extension DottieSelfKnowledge {
 
         let voiceModeName = companionManager.voiceMode == .live ? "Gemini Live" : "classic"
         lines.append("Voice: \(companionManager.selectedVoiceName), personality \(companionManager.selectedPersonality.displayName), \(voiceModeName) mode.")
-
-        let shortcutMonitor = companionManager.globalPushToTalkShortcutMonitor
-        let isDictationOn = UserDefaults.standard.object(forKey: "clickyDictationEnabled") as? Bool ?? true
-        lines.append("Shortcuts: hold \(shortcutMonitor.talkHotkey.displayText) to talk, \(shortcutMonitor.dictationHotkey.displayText) to dictate (dictation \(isDictationOn ? "on" : "off")).")
-
+        lines.append(shortcutsDescription())
         lines.append(await helpersDescription())
+        lines.append(helperEngineDescription())
         lines.append("Phone: " + phoneDescription())
-        lines.append("Screen journal: \(companionManager.brain.isScreenJournalEnabled ? "on" : "off"). Meeting notes: \(companionManager.meetingRecorder.isRecording ? "taking notes now" : "off").")
+        lines.append(memoryAndModesDescription())
+        lines.append(levelsDescription())
         lines.append("Notch: \(companionManager.isNotchEnabled ? "shown" : "hidden"). Blue cursor: \(companionManager.isClickyCursorEnabled ? "always visible" : "only while you talk").")
+        lines.append(toolsDescription())
         lines.append("Smart home: \(companionManager.smartHome.promptSummary.isEmpty ? "nothing set up yet" : "set up").")
         lines.append("Server: \(serverDescription()).")
+        if DottieScreenLock.shared.isLocked {
+            lines.append("The screen is locked: helpers keep going, screen jobs wait until it's unlocked.")
+        }
+        if let lastCheck = DottieSelfCheck.shared.lastRunAt, !DottieSelfCheck.shared.items.isEmpty {
+            let minutesAgo = max(0, Int(Date().timeIntervalSince(lastCheck) / 60))
+            lines.append("Last self-check (\(minutesAgo) min ago): " + DottieSelfCheck.shared.summary)
+        }
         return lines.joined(separator: "\n")
+    }
+
+    private static func permissionsDescription() -> String {
+        let permissions = DottiePermissions.shared
+        let allKinds = DottiePermissions.Kind.allCases
+        let missingKinds = allKinds.filter { permissions.statuses[$0] == .notAsked || permissions.statuses[$0] == .denied }
+        let unknownKinds = allKinds.filter { permissions.statuses[$0] == .unknown || permissions.statuses[$0] == nil }
+        var description = "Permissions: \(permissions.allowedCount) of \(allKinds.count) allowed."
+        if !missingKinds.isEmpty {
+            let missingNames: [String] = missingKinds.map { kind in
+                let turnedDownNote = permissions.statuses[kind] == .denied ? ", turned down before" : ""
+                return "\(kind.title) (\(kind.reason.lowercased())\(turnedDownNote))"
+            }
+            description += " Missing: " + missingNames.joined(separator: "; ") + "."
+        }
+        if !unknownKinds.isEmpty {
+            description += " macOS doesn't say for: " + unknownKinds.map(\.title).joined(separator: ", ") + "."
+        }
+        return description
+    }
+
+    private static func shortcutsDescription() -> String {
+        guard let shortcutMonitor = companionManager?.globalPushToTalkShortcutMonitor else { return "Shortcuts: unknown." }
+        let isDictationOn = UserDefaults.standard.object(forKey: "clickyDictationEnabled") as? Bool ?? true
+        let globalShortcuts = DottieEveryday.shared.shortcuts
+        let askBarKeys = globalShortcuts.hotkey(for: .askBar)?.displayText ?? "off"
+        let fixTextKeys = globalShortcuts.hotkey(for: .fixText)?.displayText ?? "off"
+        return "Shortcuts: hold \(shortcutMonitor.talkHotkey.displayText) to talk, \(shortcutMonitor.dictationHotkey.displayText) to dictate (dictation \(isDictationOn ? "on" : "off")). Type to Dottie: \(askBarKeys). Fix selected text: \(fixTextKeys)."
+    }
+
+    private static func helperEngineDescription() -> String {
+        let mausBot = DottieMausBot.shared
+        guard mausBot.preference == .claudeWithBackup else {
+            return "Helper engine: Gemini only (free tier)."
+        }
+        var description = "Helper engine: Claude through MausBot, Gemini as backup. MausBot: \(mausBot.mausBotStatusLine). Claude: \(mausBot.claudeStatusLine)."
+        if let pausedUntil = mausBot.claudePausedUntil {
+            let reason = mausBot.claudePauseReason ?? "Claude is paused"
+            description += " \(reason): helpers use Gemini until \(pausedUntil.formatted(date: .omitted, time: .shortened))."
+        }
+        return description
+    }
+
+    private static func memoryAndModesDescription() -> String {
+        guard let companionManager = companionManager else { return "" }
+        let everyday = DottieEveryday.shared
+        let watchCount = everyday.watches.statusLines.count
+        let keepWorkingCount = DottieKeepWorking.shared.activeJobs.count
+        let screenNotes = companionManager.brain.isScreenJournalEnabled ? "on" : "off"
+        let meetingNotes = companionManager.meetingRecorder.isRecording ? "taking notes now" : "off"
+        let focusText = everyday.focus.isActive ? "on, \(everyday.focus.minutesLeft) min left" : "off"
+        return "Remember what's on my screen: \(screenNotes). Meeting notes: \(meetingNotes). Focus mode: \(focusText). Watches running: \(watchCount). 24/7 jobs: \(keepWorkingCount). Instant replays saved: \(DottieReplayStore.shared.replays.count)."
+    }
+
+    private static func levelsDescription() -> String {
+        let levels = DottieLevels.shared
+        return "Level \(levels.level) (\(levels.levelName)), \(levels.totalXP) XP, \(levels.xpToNextLevel) to the next level, \(levels.streakDays)-day streak."
+    }
+
+    private static func toolsDescription() -> String {
+        let toolsStore = DottieToolsStore.shared
+        let appNames = toolsStore.serverNames.filter { toolsStore.isEnabled($0) }.map { toolsStore.title(for: $0) }
+        let appsText = appNames.isEmpty ? "no apps connected" : "apps connected: " + appNames.joined(separator: ", ")
+        let commandLineToolCount = DottieCLIToolsManager.shared.installedToolIDs.count
+        return "Tools (Home → Tools): \(appsText); \(commandLineToolCount) command-line tools installed."
     }
 
     private static func updateDescription() -> String {
@@ -872,7 +1097,8 @@ extension DottieSelfKnowledge {
         if !waitingNames.isEmpty {
             description += " Waiting for permission to use the Mac: " + waitingNames.joined(separator: ", ") + "."
         }
-        description += await areHelpersReady() ? " Ready to run." : " Their tools are still downloading (one time, about 70 MB)."
+        let isReady = await areHelpersReady()
+        description += isReady ? " Ready to run." : " Their Gemini tools are still downloading (one time, about 70 MB)."
         return description
     }
 
@@ -900,50 +1126,104 @@ extension DottieSelfKnowledge {
         let isMajor: Bool
     }
 
-    private static func troubleshootText(question: String) async -> String {
-        let permissions = DottiePermissions.shared
-        await permissions.refresh()
-        var problems: [Problem] = []
+    /// Self-check results younger than this are reused instead of testing
+    /// again (a run takes a few seconds and one tiny Gemini call).
+    private static let selfCheckReuseSeconds: TimeInterval = 10 * 60
 
-        if !ClickyWorkerConfiguration.isWorkerConfigured {
-            problems.append(Problem(
-                text: "No server is set, so I can't reach Gemini.",
-                fix: "Settings → Connection: paste the server address (about_me open 'connection').",
-                keywords: ["voice", "talk", "server", "answer", "working", "connect"],
-                isMajor: true
-            ))
-        }
-        for kind in DottiePermissions.Kind.allCases {
-            let status = permissions.statuses[kind]
-            guard status == .notAsked || status == .denied else { continue }
-            let isEssential = essentialPermissions.contains(kind)
-            let opensSystemSettings = status == .denied || permissionsSwitchedOnInSettings.contains(kind)
-            let howToFix: String
-            if opensSystemSettings {
-                howToFix = "about_me ask_permission '\(kind.title)' opens its page in System Settings; they switch Dottie on there."
-            } else {
-                howToFix = "about_me ask_permission '\(kind.title)' shows macOS's dialog; they click Allow."
+    /// The speed pack's self-check does the real testing (permissions,
+    /// server, Gemini, voice, microphone, screen, helpers' engine, MausBot,
+    /// Claude, phone). This adds what it doesn't look at and puts what
+    /// matches the question first.
+    /// Helpers don't start a self-check (it listens to the microphone for a
+    /// second); they get the last results.
+    private static func troubleshootText(question: String, mayRunSelfCheck: Bool) async -> String {
+        let selfCheck = DottieSelfCheck.shared
+        var ranSelfCheckNow = false
+        if selfCheck.isRunning {
+            // Someone pressed Check everything a moment ago: wait for it.
+            for _ in 0..<40 where selfCheck.isRunning {
+                try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            let titleWords: [String] = kind.title.lowercased().split(separator: " ").map { String($0) }
-            let reasonWords: [String] = kind.reason.lowercased().split(separator: " ").map { String($0) }
-            let problemText: String = "\(kind.title) isn't allowed, so \(kind.reason.lowercased()) won't work."
-            problems.append(Problem(
-                text: problemText,
-                fix: howToFix + " Or Settings → Permissions → Allow everything.",
-                keywords: titleWords + reasonWords + ["permission"],
-                isMajor: isEssential
-            ))
+        } else if mayRunSelfCheck && isSelfCheckStale(selfCheck) {
+            await selfCheck.run()
+            ranSelfCheckNow = true
         }
+
+        var problems = selfCheck.items.filter { $0.level >= .warning }.map(problem(from:))
+        problems += await stateProblems()
+
+        let query = normalized(question)
+        let queryWords = Set(query.split(separator: " ").map(String.init))
+        func relevance(_ problem: Problem) -> Double {
+            let matchedCount = Set(problem.keywords).intersection(queryWords).count
+            return Double(matchedCount) * 2 + (problem.isMajor ? 1 : 0)
+        }
+        let sortedProblems = problems.sorted { relevance($0) > relevance($1) }
+        // For a question about one thing, keep what matches it and what
+        // breaks the most; leave out unrelated optional set-up.
+        let shownProblems = query.isEmpty ? sortedProblems : sortedProblems.filter { relevance($0) > 0 }
+
+        var lines: [String] = []
+        if let lastRunAt = selfCheck.lastRunAt {
+            let minutesAgo = max(0, Int(Date().timeIntervalSince(lastRunAt) / 60))
+            lines.append(ranSelfCheckNow ? "Ran the self-check just now." : "Self-check from \(minutesAgo) min ago.")
+        }
+        if shownProblems.isEmpty {
+            lines.append("Nothing in Dottie's own setup looks wrong" + (query.isEmpty ? "." : " for that."))
+        } else {
+            lines.append("Likely problems, most likely first:")
+            lines += shownProblems.prefix(6).map { "- \($0.text) Fix: \($0.fix)" }
+        }
+        lines.append("If answers fail now and then, Gemini's free tier is probably busy for a moment: try again in a few seconds.")
+        lines.append("say the most likely problem plainly in a sentence and offer the fix.")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func isSelfCheckStale(_ selfCheck: DottieSelfCheck) -> Bool {
+        guard let lastRunAt = selfCheck.lastRunAt, !selfCheck.items.isEmpty else { return true }
+        return Date().timeIntervalSince(lastRunAt) > selfCheckReuseSeconds
+    }
+
+    /// A self-check finding as a problem, with where to fix it.
+    private static func problem(from item: DottieSelfCheck.Item) -> Problem {
+        var fix: String
+        if let fixLabel = item.fixLabel, item.fix != nil {
+            fix = "about_me fix '\(item.id)' (the \(fixLabel) button in Settings → Check everything)."
+        } else {
+            fix = "Settings → Check everything has the details."
+        }
+        var keywords = normalized(item.title + " " + item.detail).split(separator: " ").map(String.init)
+        if item.id.hasPrefix("permission") {
+            keywords += ["permission", "permissions", "allow"]
+        }
+        switch item.id {
+        case "worker", "gemini", "live":
+            fix = "Settings → Connection for the server; if Gemini is busy, try again in a few seconds."
+            keywords += ["voice", "talk", "answer", "answers", "slow", "server", "working", "respond"]
+        case "mic":
+            keywords += ["hear", "voice", "talk", "sound", "microphone"]
+        case "screen", "ax-read":
+            keywords += ["see", "screen", "point", "click", "pointing"]
+        case "cua":
+            fix = "Settings → Using your Mac explains how to get the driver."
+            keywords += ["helper", "helpers", "dots", "click", "type"]
+        case "runtime", "openmausbot", "claude":
+            if item.fix == nil { fix = "Settings → Helpers: Claude via MausBot." }
+            keywords += ["helper", "helpers", "dot", "dots", "mausbot", "claude", "task"]
+        case "telegram":
+            fix = "Home → Phone (about_me guide 'phone')."
+            keywords += ["phone", "telegram", "text", "bot"]
+        default:
+            break
+        }
+        return Problem(text: "\(item.title): \(item.detail)", fix: fix, keywords: keywords, isMajor: item.level == .problem)
+    }
+
+    /// Things the self-check doesn't test: Dottie's own settings and modes.
+    private static func stateProblems() async -> [Problem] {
+        var problems: [Problem] = []
         if let companionManager = companionManager {
             let roster = companionManager.clickyRoster
-            if !(await areHelpersReady()) {
-                problems.append(Problem(
-                    text: "Dots aren't ready yet: their tools are still downloading (one time, about 70 MB).",
-                    fix: "Wait a minute with the internet on. A task given now starts when it's done.",
-                    keywords: ["helper", "helpers", "dot", "dots", "task", "agent"],
-                    isMajor: false
-                ))
-            }
             let waitingNames = roster.agents.filter { roster.pendingComputerUseRequest(for: $0) != nil }.map(\.name)
             if !waitingNames.isEmpty {
                 problems.append(Problem(
@@ -953,23 +1233,8 @@ extension DottieSelfKnowledge {
                     isMajor: true
                 ))
             }
-            if ClickyComputerUse.locateCuaDriverExecutable() == nil {
-                problems.append(Problem(
-                    text: "The computer-use driver is missing, so Dots can't click or type in apps.",
-                    fix: "Settings → Using your Mac explains how to install it.",
-                    keywords: ["helper", "dots", "click", "type", "driver"],
-                    isMajor: false
-                ))
-            }
             let phoneBridge = companionManager.phoneBridge
-            if phoneBridge.isConnected && phoneBridge.pairedChatID == nil {
-                problems.append(Problem(
-                    text: "The phone bot is connected but no phone is paired.",
-                    fix: "Home → Phone shows a code to send the bot (about_me guide 'phone').",
-                    keywords: ["phone", "telegram", "text", "bot"],
-                    isMajor: false
-                ))
-            } else if !phoneBridge.isConnected {
+            if !phoneBridge.isConnected {
                 problems.append(Problem(
                     text: "Texting from the phone isn't set up.",
                     fix: "Home → Phone, about two minutes (about_me guide 'phone').",
@@ -979,9 +1244,9 @@ extension DottieSelfKnowledge {
             }
             if !companionManager.isNotchEnabled {
                 problems.append(Problem(
-                    text: "The notch is turned off, so captions, answers and Dot updates don't show there.",
+                    text: "The notch is turned off, so captions, answers and helper updates don't show there.",
                     fix: "Settings → Appearance → Show Dottie in the notch.",
-                    keywords: ["notch", "captions", "see", "show"],
+                    keywords: ["notch", "captions", "see", "show", "type"],
                     isMajor: false
                 ))
             }
@@ -994,6 +1259,81 @@ extension DottieSelfKnowledge {
                 ))
             }
         }
+
+        let mausBot = DottieMausBot.shared
+        if mausBot.preference == .claudeWithBackup {
+            if let pausedUntil = mausBot.claudePausedUntil {
+                problems.append(Problem(
+                    text: "\(mausBot.claudePauseReason ?? "Claude is paused"), so helpers use the free Gemini backup until \(pausedUntil.formatted(date: .omitted, time: .shortened)).",
+                    fix: "Settings → Helpers: Claude via MausBot → Try Claude now (about_me guide 'mausbot').",
+                    keywords: ["helper", "helpers", "dots", "claude", "mausbot", "slow", "gemini", "limit"],
+                    isMajor: false
+                ))
+            } else if mausBot.claudeState == .notSignedIn {
+                problems.append(Problem(
+                    text: "Claude isn't signed in, so helpers use the free Gemini backup.",
+                    fix: "Settings → Helpers: Claude via MausBot → Sign in to Claude (about_me guide 'mausbot').",
+                    keywords: ["helper", "helpers", "dots", "claude", "mausbot", "sign"],
+                    isMajor: false
+                ))
+            } else if mausBot.hasLookedForMausBot && !mausBot.isSetUp {
+                problems.append(Problem(
+                    text: "MausBot isn't set up, so helpers run on Gemini's free tier instead of your Claude plan.",
+                    fix: "Settings → Helpers: Claude via MausBot → Set up (about_me guide 'mausbot').",
+                    keywords: ["helper", "helpers", "dots", "claude", "mausbot"],
+                    isMajor: false
+                ))
+            }
+        }
+
+        for (action, problemText) in DottieEveryday.shared.shortcuts.problems {
+            let shortcutName = action == .askBar ? "type-to-ask" : "fix-text"
+            problems.append(Problem(
+                text: "The \(shortcutName) shortcut doesn't work: \(problemText)",
+                fix: "Settings → Shortcuts: pick another one.",
+                keywords: ["shortcut", "type", "ask", "fix", "option", "space", "keys"],
+                isMajor: false
+            ))
+        }
+
+        let focus = DottieEveryday.shared.focus
+        if focus.isActive {
+            problems.append(Problem(
+                text: "Focus mode is on (\(focus.minutesLeft) min left), so blocked apps hide and blocked sites close.",
+                fix: "Say stop focus, or switch it off in Settings → Everyday.",
+                keywords: ["focus", "closes", "closed", "closing", "hides", "hidden", "blocked", "youtube", "app", "site", "tab"],
+                isMajor: true
+            ))
+        }
+
+        if DottieScreenLock.shared.isLocked {
+            problems.append(Problem(
+                text: "The screen is locked, so screen jobs wait (helpers keep going).",
+                fix: "Unlock the Mac; waiting jobs pick up by themselves.",
+                keywords: ["screen", "job", "jobs", "waiting", "stuck", "locked"],
+                isMajor: true
+            ))
+        }
+
+        let toolsStore = DottieToolsStore.shared
+        for serverName in toolsStore.serverNames where toolsStore.isEnabled(serverName) {
+            let appTitle = toolsStore.title(for: serverName)
+            let appProblem: String?
+            switch toolsStore.status(for: serverName) {
+            case .needsKey(let keyNames): appProblem = "needs a key (\(keyNames.joined(separator: ", ")))"
+            case .needsProgram(let programName): appProblem = "needs \(programName) installed"
+            case .failed(let message): appProblem = "couldn't start: \(message)"
+            default: appProblem = nil
+            }
+            guard let appProblem else { continue }
+            problems.append(Problem(
+                text: "\(appTitle) in Home → Tools \(appProblem).",
+                fix: "Home → Tools: open \(appTitle) and fix it there.",
+                keywords: normalized(appTitle).split(separator: " ").map(String.init) + ["tools", "app", "apps", "connected", "mcp"],
+                isMajor: false
+            ))
+        }
+
         if case .available(let version) = DottieUpdater.shared.state {
             problems.append(Problem(
                 text: "An update is waiting: Dottie \(version).",
@@ -1009,31 +1349,35 @@ extension DottieSelfKnowledge {
                 isMajor: false
             ))
         }
+        return problems
+    }
 
-        // Problems about what they asked first, then the ones that break
-        // the most.
-        let query = normalized(question)
-        let queryWords = Set(query.split(separator: " ").map(String.init))
-        func relevance(_ problem: Problem) -> Double {
-            let matchedCount = Set(problem.keywords).intersection(queryWords).count
-            return Double(matchedCount) * 2 + (problem.isMajor ? 1 : 0)
+    /// Runs a self-check item's own fix (Allow, Open Settings, install the
+    /// helpers' engine, …), the same as its button in Settings.
+    private static func applySelfCheckFix(named spokenName: String) async -> String {
+        let selfCheck = DottieSelfCheck.shared
+        if isSelfCheckStale(selfCheck) && !selfCheck.isRunning {
+            await selfCheck.run()
         }
-        let sortedProblems = problems.sorted { relevance($0) > relevance($1) }
-        // Don't bury what matters under optional set-up for unrelated
-        // questions: when they asked about something, keep the relevant
-        // and the major problems.
-        let shownProblems = query.isEmpty ? sortedProblems : sortedProblems.filter { relevance($0) > 0 }
-
-        var lines: [String] = []
-        if shownProblems.isEmpty {
-            lines.append("Nothing in Dottie's own setup looks wrong" + (query.isEmpty ? "." : " for that."))
-        } else {
-            lines.append("Likely problems, most likely first:")
-            lines += shownProblems.prefix(6).map { "- \($0.text) Fix: \($0.fix)" }
+        let query = normalized(spokenName)
+        let fixableItems = selfCheck.items.filter { $0.fix != nil && $0.level >= .warning }
+        let matchedItem = fixableItems.first { $0.id == spokenName }
+            ?? fixableItems.first { item in
+                let title = normalized(item.title)
+                return !query.isEmpty && (title.contains(query) || query.contains(title))
+            }
+        guard let item = matchedItem, let fix = item.fix else {
+            if let place = place(named: spokenName) {
+                show(place)
+                return "nothing to fix by itself there, so I opened \(place.name)."
+            }
+            let names = fixableItems.map { "\($0.id) (\($0.title))" }
+            return names.isEmpty
+                ? "the self-check has nothing it can fix by itself right now."
+                : "fixable now: " + names.joined(separator: ", ") + "."
         }
-        lines.append("If answers fail now and then, Gemini's free tier is probably busy for a moment: try again in a few seconds.")
-        lines.append("say the most likely problem plainly in a sentence and offer the fix.")
-        return lines.joined(separator: "\n")
+        selfCheck.apply(fix)
+        return "doing \"\(item.fixLabel ?? "the fix")\" for \(item.title). tell them in a few words what to do next, if anything (allow it, or switch Dottie on in System Settings)."
     }
 
     // MARK: Permissions

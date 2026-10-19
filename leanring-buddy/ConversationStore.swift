@@ -60,6 +60,8 @@ final class ConversationStore: ObservableObject {
             entries.removeFirst(entries.count - Self.maximumStoredEntries)
         }
         saveEntriesToDisk()
+        // Becomes episodes once the conversation goes quiet.
+        DottieEpisodicMemory.shared.noteExchange(userText: trimmedUserText, dottieText: trimmedClickyText)
     }
 
     func delete(entryID: UUID) {

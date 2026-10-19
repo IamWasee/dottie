@@ -501,7 +501,7 @@ final class DottieGuide {
     ) async -> [Step]? {
         let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
         let requestBody: [String: Any] = [
-            "model": Self.guideModel,
+            "model": DottieModelPicker.shared.pick(.normal),
             "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
             "contents": [[
                 "role": "user",
@@ -539,7 +539,8 @@ final class DottieGuide {
         guard let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
         request.httpBody = requestBodyData
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        let model = requestBody["model"] as? String ?? Self.guideModel
+        guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: model) else { return nil }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             print("⚠️ Guide request failed: \(String(decoding: responseData.prefix(300), as: UTF8.self))")
             return nil
