@@ -1399,8 +1399,6 @@ extension ClickyRoster {
             """,
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibrary.libraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
-            GeminiCLIAgentRuntime.buildingAgentInstructions,
-            GeminiCLIAgentRuntime.macAppsAgentInstructions,
             DottieBrowser.agentInstructions,
             helperToolSection
         ]
@@ -1409,9 +1407,15 @@ extension ClickyRoster {
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
         let enabledSkillNames = Set(agent.enabledSkillNames ?? [])
+        // Building and Mac-app instructions, read only when a task needs them.
+        let builtInSkillFileURLs = DottieBuiltInSkills.write(
+            DottieBuiltInSkills.skills(includesComputerUse: false),
+            into: cliHomeURL.appendingPathComponent("claude-helper-skills", isDirectory: true)
+        )
         let skillFiles = skillLibrary.skills
             .filter { FileManager.default.fileExists(atPath: $0.skillFileURL.path) }
             .map { (path: $0.skillFileURL.path, isEnabled: enabledSkillNames.contains($0.name)) }
+            + builtInSkillFileURLs.map { (path: $0.path, isEnabled: true) }
         let title = agent.isBrain == true
             ? "Dottie's second brain"
             : (agent.purpose.isEmpty ? "One of Dottie's helpers" : agent.purpose)
