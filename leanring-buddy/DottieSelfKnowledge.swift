@@ -636,16 +636,16 @@ extension DottieSelfKnowledge {
                 id: "mausbot",
                 title: "Helpers on your Claude plan",
                 keywords: ["mausbot", "claude", "claude code", "engine", "backup", "gemini backup", "sign in", "limit", "paused", "account", "claude account", "switch account"],
-                summary: "Helpers can run on your Claude plan through MausBot, a free app, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only. It shows which Claude account they use, and Use a different account switches it.",
+                summary: "Helpers can run on your Claude plan through MausBot, a free app I install for you in the background, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only. It shows which Claude account they use, and Use a different account switches it.",
                 whereToFind: "Settings → Helpers: Claude via MausBot.",
                 place: .settings("Helpers: Claude via MausBot"),
                 steps: [
                     WalkStep(target: .text(["Run helpers on"]), say: "Pick what helpers run on here.", wait: .none),
                     WalkStep(
                         target: .text(["Set up"]),
-                        say: "Click Set up and I install MausBot and Claude Code for you.",
+                        say: "Click Set up and I install the MausBot app and Claude Code for you.",
                         wait: .click,
-                        isNeeded: { !DottieMausBot.shared.isSetUp || DottieMausBot.shared.claudeState == .notInstalled }
+                        isNeeded: { DottieMausBot.shared.needsSetUp }
                     ),
                     WalkStep(
                         target: .text(["Sign in to Claude"]),
@@ -1051,6 +1051,9 @@ extension DottieSelfKnowledge {
             return "Helper engine: Gemini only (free tier)."
         }
         var description = "Helper engine: Claude through MausBot, Gemini as backup. MausBot: \(mausBot.mausBotStatusLine). Claude: \(mausBot.claudeStatusLine)."
+        if mausBot.isInstallingDesktopApp {
+            description += " Dottie is installing the MausBot app in the background right now (\(mausBot.busyText ?? "downloading"))."
+        }
         if let pausedUntil = mausBot.claudePausedUntil {
             let reason = mausBot.claudePauseReason ?? "Claude is paused"
             description += " \(reason): helpers use Gemini until \(pausedUntil.formatted(date: .omitted, time: .shortened))."
@@ -1293,7 +1296,9 @@ extension DottieSelfKnowledge {
                 ))
             } else if mausBot.hasLookedForMausBot && !mausBot.isSetUp {
                 problems.append(Problem(
-                    text: "MausBot isn't set up, so helpers run on Gemini's free tier instead of your Claude plan.",
+                    text: mausBot.isInstallingDesktopApp
+                        ? "I'm installing the MausBot app in the background. Until it's ready, helpers run on Gemini's free tier instead of your Claude plan."
+                        : "MausBot isn't set up, so helpers run on Gemini's free tier instead of your Claude plan.",
                     fix: "Settings → Helpers: Claude via MausBot → Set up (about_me guide 'mausbot').",
                     keywords: ["helper", "helpers", "dots", "claude", "mausbot"],
                     isMajor: false
