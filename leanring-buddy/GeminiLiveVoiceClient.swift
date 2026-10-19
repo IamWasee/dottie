@@ -120,7 +120,9 @@ final class GeminiLiveVoiceClient {
     /// Recent (user, model) exchanges, appended to the system instruction of
     /// each new session so memory survives reconnects and relaunches.
     var recentConversationHistory: [(userTranscript: String, modelTranscript: String)] = []
-    /// Prebuilt Gemini voice name (e.g. "Kore", "Puck"). Persisted by the panel.
+    /// The voice the user picked (e.g. "Kore", "Puck", or a styled one like
+    /// "Butler", which maps to a prebuilt Gemini voice plus a speaking
+    /// style; see DottieVoicePreview.voices). Persisted by the panel.
     var voiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore" {
         didSet {
             if voiceName != oldValue { startFreshSessionSoon() }
@@ -411,7 +413,7 @@ final class GeminiLiveVoiceClient {
             "generationConfig": [
                 "responseModalities": ["AUDIO"],
                 "speechConfig": [
-                    "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": voiceName]]
+                    "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": DottieVoicePreview.geminiVoiceName(for: voiceName)]]
                 ]
             ],
             "systemInstruction": ["parts": [["text": composeSystemInstruction()]]],
@@ -452,8 +454,13 @@ final class GeminiLiveVoiceClient {
         // reminder dates.
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, MMMM d yyyy, h:mm a"
-        let baseSystemInstruction = self.baseSystemInstruction
-            + "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
+        var baseSystemInstruction = self.baseSystemInstruction
+        // A styled voice (Butler) says how to speak; read at setup, so a
+        // voice change reaches the next session via startFreshSessionSoon.
+        if let speakingStyle = DottieVoicePreview.speakingStyle(for: voiceName) {
+            baseSystemInstruction += "\n\n" + speakingStyle
+        }
+        baseSystemInstruction += "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
         let historyLines = recentConversationHistory.map { exchange in

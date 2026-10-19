@@ -20,8 +20,17 @@ final class DottieVoicePreview: ObservableObject {
         let name: String
         /// Google's one-word description of the voice.
         let sound: String
+        /// The Gemini prebuilt voice it speaks with, when that isn't `name`
+        /// (a styled voice like Butler is a Gemini voice plus a speaking
+        /// style in the Live system instruction).
+        var geminiVoiceName: String?
         var id: String { name }
     }
+
+    /// A styled voice: Charon (deep, calm, male) told to speak like an
+    /// unflappable British butler. An original voice in that style, not an
+    /// imitation of anyone. Saved under this name like any other voice.
+    static let butlerVoiceName = "Butler"
 
     /// The voices Gemini Live speaks in, with how they sound.
     static let voices: [Voice] = [
@@ -32,11 +41,33 @@ final class DottieVoicePreview: ObservableObject {
         Voice(name: "Fenrir", sound: "Excitable"),
         Voice(name: "Leda", sound: "Youthful"),
         Voice(name: "Orus", sound: "Firm"),
-        Voice(name: "Zephyr", sound: "Bright")
+        Voice(name: "Zephyr", sound: "Bright"),
+        Voice(name: butlerVoiceName, sound: "Jarvis-style", geminiVoiceName: "Charon")
     ]
 
     static func sound(of voiceName: String) -> String {
         voices.first { $0.name == voiceName }?.sound ?? ""
+    }
+
+    /// The Gemini prebuilt voice to ask for when the user picked `voiceName`.
+    static func geminiVoiceName(for voiceName: String) -> String {
+        voices.first { $0.name == voiceName }?.geminiVoiceName ?? voiceName
+    }
+
+    /// How a styled voice should speak, added to the Live system
+    /// instruction. nil for Gemini's plain voices. Gemini's native-audio
+    /// models follow accent and delivery instructions in the prompt.
+    static func speakingStyle(for voiceName: String) -> String? {
+        guard voiceName == butlerVoiceName else { return nil }
+        return """
+        how you sound (the user picked the butler voice):
+        - speak with a refined british accent: calm, unhurried and measured, never rushed and never loud.
+        - be polite and precise. pick exact words, keep answers short, and say them with quiet confidence, like an unflappable butler who already has everything in hand.
+        - your wit is dry and understated: the odd wry remark, said perfectly straight, never a joke that gets in the way of the answer.
+        - address the user as "sir". if they've asked to be addressed another way (ma'am, their name, anything else), use that instead from then on.
+        - this is your own original voice in that style. don't imitate or claim to be any real actor or any film character; you're still dottie.
+        - this changes how you sound and carry yourself, not the rules above.
+        """
     }
 
     /// The voice whose sample is playing, or being fetched.
@@ -46,6 +77,7 @@ final class DottieVoicePreview: ObservableObject {
     @Published private(set) var problem: String?
 
     private static let sampleLine = "Hey, I'm Dottie! Hold your shortcut, ask me anything, and I'll show you right on your screen."
+    private static let butlerSampleLine = "At your service. Shall I run the numbers?"
     private static let speechModels = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"]
     private static let sampleRate = 24_000
 
@@ -121,6 +153,17 @@ final class DottieVoicePreview: ObservableObject {
 
     // MARK: - Making a sample
 
+    private static func sampleText(for voiceName: String) -> String {
+        voiceName == butlerVoiceName ? butlerSampleLine : sampleLine
+    }
+
+    /// How the sample is read, so a styled voice sounds as it will in Live.
+    private static func sampleDelivery(for voiceName: String) -> String {
+        voiceName == butlerVoiceName
+            ? "calmly and precisely, in a refined British accent, with a hint of dry wit"
+            : "in a warm, friendly way"
+    }
+
     private static func makeSample(voiceName: String) async -> Data? {
         for model in speechModels {
             if Task.isCancelled { return nil }
@@ -139,10 +182,10 @@ final class DottieVoicePreview: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let body: [String: Any] = [
-            "contents": [["parts": [["text": "Say in a warm, friendly way: \(sampleLine)"]]]],
+            "contents": [["parts": [["text": "Say \(sampleDelivery(for: voiceName)): \(sampleText(for: voiceName))"]]]],
             "generationConfig": [
                 "responseModalities": ["AUDIO"],
-                "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": voiceName]]]
+                "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": geminiVoiceName(for: voiceName)]]]
             ]
         ]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
@@ -216,12 +259,12 @@ final class DottieVoicePreview: ObservableObject {
                 "model": "models/\(liveModel)",
                 "generationConfig": [
                     "responseModalities": ["AUDIO"],
-                    "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": voiceName]]]
+                    "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": geminiVoiceName(for: voiceName)]]]
                 ],
-                "systemInstruction": ["parts": [["text": "You read lines aloud exactly as written, in a warm, friendly way. Say nothing else."]]]
+                "systemInstruction": ["parts": [["text": "You read lines aloud exactly as written, \(sampleDelivery(for: voiceName)). Say nothing else."]]]
             ]])
             while try await receive()["setupComplete"] == nil {}
-            try await send(["realtimeInput": ["text": sampleLine]])
+            try await send(["realtimeInput": ["text": sampleText(for: voiceName)]])
             while !Task.isCancelled {
                 let message = try await receive()
                 guard let serverContent = message["serverContent"] as? [String: Any] else { continue }
