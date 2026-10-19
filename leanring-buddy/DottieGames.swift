@@ -424,7 +424,7 @@ enum DottieGameTools: DottieToolModule {
         [
             DottieTool(
                 name: "game",
-                description: "Play a game with the user: trivia (5 questions on any category), twenty_questions (you guess, or the user guesses), drawing (guess my drawing: the user doodles on a pad, or on_screen true to guess from what's on screen) or word_chain. start a game, answer passes what the user said, hint, score, stop.",
+                description: "Play a game with the user: trivia (5 questions on any category), twenty_questions (you guess, or the user guesses), drawing (guess my drawing: the user doodles on a pad, or on_screen true to guess from what's on screen) or word_chain. start a game, then pass everything the user says during it with answer; hint, score, stop. Host like a playful game show: quick, cheeky, celebrate wins, tease losses kindly, never read out rules at length. If the result says a secret, keep it hidden.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -463,12 +463,6 @@ enum DottieGameTools: DottieToolModule {
                 }
             }
         ]
-    }
-
-    static var voicePromptSection: String {
-        """
-        games: you love games. when the user wants to play (trivia, 20 questions, guess my drawing, word chain), call game start, then pass everything they say during it to game answer. host like a playful game show: quick, cheeky, celebrate wins, tease losses kindly, never read out rules at length. if the game tool says a secret, keep it hidden.
-        """
     }
 }
 

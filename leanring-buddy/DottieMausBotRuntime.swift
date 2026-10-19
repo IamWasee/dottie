@@ -39,6 +39,9 @@ struct DottieMausBotSpec {
     let knownBotID: String?
     let knownBotName: String?
     let knownSpecHash: String?
+    /// "claude/<model>" for this bot instead of the helpers' default (the
+    /// game player uses a quick model).
+    var model: String? = nil
 }
 
 /// The bot a helper runs as.
@@ -88,7 +91,8 @@ final class DottieMausBotRuntime {
     /// Makes the helper's bot, or updates it when its instructions changed.
     /// Cheap when nothing changed: no command runs at all.
     func ensureBot(for spec: DottieMausBotSpec, launcher: DottieMausBotLauncher) async -> Result<DottieMausBotIdentity, DottieClaudeFallbackReason> {
-        let modelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
+        let helperModelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
+        let modelSelection = spec.model ?? helperModelSelection
         let instructions = Self.trimmedToByteLimit(spec.instructions, maximumBytes: Self.maximumInstructionBytes)
         let specHash = Self.fingerprint([
             spec.helperName, spec.title, instructions, spec.workspacePath, modelSelection ?? "", spec.effort ?? "", "computer=off",

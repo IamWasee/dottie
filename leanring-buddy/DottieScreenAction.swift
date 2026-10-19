@@ -87,7 +87,7 @@ enum DottieScreenAction {
     private static var pressKeysDeclaration: [String: Any] {
         [
             "name": "press_keys",
-            "description": "Press a key or keyboard shortcut on the user's Mac, like 'cmd+t' for a new tab, 'cmd+[' to go back a page, 'cmd+]' to go forward, 'cmd+l' to focus the address bar, 'enter', 'escape', 'tab', or 'cmd+w'." + onlyWhenAskedNote,
+            "description": "Press a key or keyboard shortcut on the user's Mac. Prefer a shortcut over clicking whenever one exists; it never misses: close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close window cmd+shift+w, zoom cmd+= and cmd+-, plus enter, escape and tab. To switch apps, open them instead." + onlyWhenAskedNote,
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -378,6 +378,83 @@ enum DottieScreenActionPerformer {
             // Mouse-locked games read the deltas, not the position.
             moveEvent?.setIntegerValueField(.mouseEventDeltaX, value: Int64(stepX.rounded()))
             moveEvent?.setIntegerValueField(.mouseEventDeltaY, value: Int64(stepY.rounded()))
+            moveEvent?.post(tap: .cghidEventTap)
+        }
+        if holdsButton {
+            CGEvent(mouseEventSource: eventSource, mouseType: upType, mouseCursorPosition: currentLocation, mouseButton: mouseButton)?
+                .post(tap: .cghidEventTap)
+        }
+    }
+
+    // MARK: Game input
+
+    /// Modifier keys a game may hold on their own (sprint, crouch).
+    private static let gameModifierKeyCodes: [String: Int] = [
+        "shift": kVK_Shift, "ctrl": kVK_Control, "control": kVK_Control,
+        "option": kVK_Option, "alt": kVK_Option
+    ]
+
+    /// Presses or lets go of one key without touching the others, so a game
+    /// can walk and turn, or sprint and jump, at the same time. Returns
+    /// false when the key name isn't known.
+    static func setKey(_ keyName: String, isDown: Bool) -> Bool {
+        let lowercasedKeyName = keyName.lowercased().trimmingCharacters(in: .whitespaces)
+        let keyCode: CGKeyCode
+        if let modifierKeyCode = gameModifierKeyCodes[lowercasedKeyName] {
+            keyCode = CGKeyCode(modifierKeyCode)
+        } else if let namedKeyCode = virtualKeyCode(forKeyName: lowercasedKeyName) {
+            keyCode = namedKeyCode
+        } else {
+            return false
+        }
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: isDown)?
+            .post(tap: .cghidEventTap)
+        return true
+    }
+
+    /// Turns a game camera like a hand on a mouse: eases in and out, drifts
+    /// a little off the straight line, and posts relative deltas that
+    /// mouse-locked games read. `button` is "right" (Roblox), "left" or
+    /// "none". Runs for `seconds`.
+    static func turnCameraSmoothly(deltaX: CGFloat, deltaY: CGFloat, button: String, seconds: Double) async {
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        let startLocation = quartzPoint(fromAppKit: NSEvent.mouseLocation)
+        let mouseButton: CGMouseButton = button == "right" ? .right : .left
+        let holdsButton = button == "right" || button == "left"
+        let (downType, dragType, upType): (CGEventType, CGEventType, CGEventType) = button == "right"
+            ? (.rightMouseDown, .rightMouseDragged, .rightMouseUp)
+            : (.leftMouseDown, .leftMouseDragged, .leftMouseUp)
+        if holdsButton {
+            CGEvent(mouseEventSource: eventSource, mouseType: downType, mouseCursorPosition: startLocation, mouseButton: mouseButton)?
+                .post(tap: .cghidEventTap)
+        }
+        let clampedSeconds = min(max(seconds, 0.08), 2)
+        let stepCount = max(6, Int(clampedSeconds * 90))
+        let stepDelayNanoseconds = UInt64(clampedSeconds / Double(stepCount) * 1_000_000_000)
+        // A slight sideways bow, so the path isn't a ruler-straight line.
+        let bowAmount = CGFloat.random(in: -0.08...0.08) * max(abs(deltaX), abs(deltaY))
+        var postedX: CGFloat = 0
+        var postedY: CGFloat = 0
+        var currentLocation = startLocation
+        for stepIndex in 1...stepCount {
+            try? await Task.sleep(nanoseconds: stepDelayNanoseconds)
+            let progress = CGFloat(stepIndex) / CGFloat(stepCount)
+            // Smoothstep: slow start, quick middle, slow end.
+            let easedProgress = progress * progress * (3 - 2 * progress)
+            let bow = sin(progress * .pi) * bowAmount
+            let targetX = deltaX * easedProgress + (deltaY != 0 ? bow : 0)
+            let targetY = -deltaY * easedProgress + (deltaY == 0 ? bow * 0.3 : 0)
+            let stepX = (targetX - postedX).rounded()
+            let stepY = (targetY - postedY).rounded()
+            guard stepX != 0 || stepY != 0 else { continue }
+            postedX += stepX
+            postedY += stepY
+            currentLocation = CGPoint(x: currentLocation.x + stepX, y: currentLocation.y + stepY)
+            let moveEvent = CGEvent(mouseEventSource: eventSource, mouseType: holdsButton ? dragType : .mouseMoved,
+                                    mouseCursorPosition: currentLocation, mouseButton: mouseButton)
+            moveEvent?.setIntegerValueField(.mouseEventDeltaX, value: Int64(stepX))
+            moveEvent?.setIntegerValueField(.mouseEventDeltaY, value: Int64(stepY))
             moveEvent?.post(tap: .cghidEventTap)
         }
         if holdsButton {

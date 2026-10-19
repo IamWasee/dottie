@@ -654,6 +654,7 @@ final class DottieMausBot: ObservableObject {
     private var setUpTask: Task<Void, Never>?
     private var signInWatchTask: Task<Void, Never>?
     private var cachedHelperModelSelection: String?
+    private var cachedModelSelectionByKeyword: [String: String] = [:]
     private var hasScheduledWarmUp = false
     private var terminationObserver: NSObjectProtocol?
     /// The MausBot app's download and install, shared by everyone waiting on it.
@@ -768,6 +769,44 @@ final class DottieMausBot: ObservableObject {
               let defaultModel = models["default"] as? String, !defaultModel.isEmpty else { return nil }
         cachedHelperModelSelection = "claude/\(defaultModel)"
         return cachedHelperModelSelection
+    }
+
+    /// "claude/<model>" for the newest model whose id contains `keyword`
+    /// ("haiku"), from the models this workspace offers; nil when there's
+    /// none. Info.plist's MausBotGameModel overrides it.
+    func modelSelection(matching keyword: String, launcher: DottieMausBotLauncher) async -> String? {
+        if let configuredSelection = AppBundleConfiguration.stringValue(forKey: "MausBotGameModel") {
+            return configuredSelection
+        }
+        if let cachedSelection = cachedModelSelectionByKeyword[keyword] { return cachedSelection }
+        let modelsResult = await DottieMausBotCLI.run(["models", "--json"], launcher: launcher, timeout: 30)
+        let instances = modelsResult.jsonObject?["instances"] as? [[String: Any]] ?? []
+        guard let claudeInstance = instances.first(where: { ($0["instanceId"] as? String) == "claude" }) else { return nil }
+        // The listing's shape varies by version, so every model id string
+        // anywhere under the Claude instance counts.
+        var modelIdentifiers: Set<String> = []
+        func collectModelIdentifiers(_ value: Any) {
+            if let text = value as? String, text.lowercased().contains(keyword.lowercased()), !text.contains(" ") {
+                modelIdentifiers.insert(text)
+            } else if let array = value as? [Any] {
+                array.forEach(collectModelIdentifiers)
+            } else if let dictionary = value as? [String: Any] {
+                dictionary.values.forEach(collectModelIdentifiers)
+            }
+        }
+        collectModelIdentifiers(claudeInstance["models"] ?? [:])
+        // Newest first: compare the version numbers in the ids.
+        let newestModelIdentifier = modelIdentifiers.max { firstIdentifier, secondIdentifier in
+            Self.versionNumbers(in: firstIdentifier).lexicographicallyPrecedes(Self.versionNumbers(in: secondIdentifier))
+        }
+        guard let newestModelIdentifier else { return nil }
+        let selection = newestModelIdentifier.hasPrefix("claude/") ? newestModelIdentifier : "claude/\(newestModelIdentifier)"
+        cachedModelSelectionByKeyword[keyword] = selection
+        return selection
+    }
+
+    private static func versionNumbers(in modelIdentifier: String) -> [Int] {
+        modelIdentifier.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }.filter { $0 < 1000 }
     }
 
     // MARK: Workspace

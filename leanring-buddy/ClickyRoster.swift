@@ -328,7 +328,11 @@ final class ClickyRoster: ObservableObject {
             for: agent,
             messageForAgent: "\(routinesContext)\n\n\(routineReports)\(trimmedMessageText)",
             isComputerUseApproved: isComputerUseApproved,
-            conversation: mainChatConversation(for: agent)
+            conversation: mainChatConversation(
+                for: agent,
+                messageText: trimmedMessageText,
+                isComputerUseApproved: isComputerUseApproved
+            )
         )
     }
 
@@ -341,7 +345,7 @@ final class ClickyRoster: ObservableObject {
     /// counting the turn. Starts a fresh one when the current one has gone
     /// quiet or long: a resumed session re-reads its whole history on every
     /// request, so a short handover is far cheaper and loses little.
-    private func mainChatConversation(for agent: ClickyAgent) -> ClickyTurnConversation {
+    private func mainChatConversation(for agent: ClickyAgent, messageText: String, isComputerUseApproved: Bool) -> ClickyTurnConversation {
         let lastMainTurnAt = agent.mainSessionLastTurnAt ?? agent.lastActivityAt
         let hasConversation = agent.hasStartedSession || agent.claudeMainThreadID != nil || agent.lastHelperEngine == "claude"
         let isQuietOrLong = Date().timeIntervalSince(lastMainTurnAt) > Self.mainSessionIdleSecondsBeforeFreshStart
@@ -377,6 +381,7 @@ final class ClickyRoster: ObservableObject {
             claudeConversation = "current"
         }
         let previousEngine = currentAgent.lastHelperEngine
+        let isContinuingClaudeWork = !startsFresh && previousEngine == "claude"
         return ClickyTurnConversation(
             geminiSessionID: currentAgent.sessionID,
             isFirstGeminiTurn: !currentAgent.hasStartedSession,
@@ -386,8 +391,33 @@ final class ClickyRoster: ObservableObject {
                 || previousEngine == "gemini"
                 || (previousEngine == nil && currentAgent.hasStartedSession),
             routineID: nil,
-            mayUseClaude: true
+            mayUseClaude: isContinuingClaudeWork || !Self.isEasyWorkForGemini(
+                agent: currentAgent,
+                messageText: messageText,
+                isComputerUseApproved: isComputerUseApproved
+            )
         )
+    }
+
+    /// Words that mean real building or multi-step work, which goes to
+    /// Claude when it's set up.
+    private static let buildingWords = [
+        "build", "make", "create", "write", "code", "app", "website", "site", "script",
+        "fix", "debug", "refactor", "project", "research", "analy", "plan", "design",
+        "report", "deploy", "automate", "organize", "organise", "set up", "setup"
+    ]
+
+    /// Easy work stays on Gemini to save the Claude subscription: the
+    /// Brain's quick answers, turns that click on screen (Claude helpers
+    /// can't), and short asks that aren't building anything. A follow-up in
+    /// a chat Claude is already working in stays with Claude.
+    private static func isEasyWorkForGemini(agent: ClickyAgent, messageText: String, isComputerUseApproved: Bool) -> Bool {
+        if agent.isBrain == true || isComputerUseApproved {
+            return true
+        }
+        let lowercasedMessage = messageText.lowercased()
+        let mentionsBuilding = buildingWords.contains { lowercasedMessage.contains($0) }
+        return messageText.count <= 160 && !mentionsBuilding
     }
 
     /// Routine runs keep their own conversations, so the chat with the user

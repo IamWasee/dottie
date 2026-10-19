@@ -157,13 +157,13 @@ final class DottieMacTools {
         ),
         declaration(
             "meeting_notes",
-            "Meeting mode: take notes of a meeting or call the user is in by listening to their mic and their Mac's audio. start only when the user asks you to take notes or start meeting mode, never on your own. stop when they say the meeting's over or to stop; the summary with action items comes back to you later. status tells you what's been said so far (for 'what did they just say'). latest reads the notes from their most recent meeting.",
+            "Meeting mode: take notes of a meeting or call the user is in by listening to their mic and their Mac's audio. start only when the user asks you to take notes or start meeting mode, never on your own. stop when they say the meeting's over or to stop; the summary with action items comes back to you later. status tells you what's been said so far (for 'what did they just say'). latest reads the notes from their most recent meeting. Notes are saved in Home → Meetings.",
             ["action": ["type": "STRING", "enum": ["start", "stop", "status", "latest"], "description": "What to do."]],
             required: ["action"]
         ),
         declaration(
             "take_screenshot",
-            "Take a real screenshot the user keeps, like command-shift-3: a full-resolution PNG saved where macOS saves screenshots (usually the Desktop), without your cursor in it. Use it whenever the user asks for a screenshot or screen grab. screen is the screen their cursor is on; all_screens saves one per display; window is the app window in front; pick lets them drag over the part they want; open_last opens the screenshot you just took. Say where it went in a few words.",
+            "Take a real screenshot the user keeps, like command-shift-3: a full-resolution PNG saved where macOS saves screenshots (usually the Desktop), without your cursor in it. Use it whenever the user asks for a screenshot or screen grab. screen is the screen their cursor is on; all_screens saves one per display; window is the app window in front; pick lets them drag over the part they want; open_last opens the screenshot you just took. save_to clipboard when they want to paste it. Say where it went in a few words. Never say you can't take screenshots.",
             [
                 "what": ["type": "STRING", "enum": ["screen", "all_screens", "window", "pick", "open_last"], "description": "What to capture. screen unless they said otherwise."],
                 "save_to": ["type": "STRING", "enum": ["file", "clipboard", "both"], "description": "file unless they asked to copy it (clipboard) or both."]

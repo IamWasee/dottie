@@ -243,7 +243,7 @@ enum DottieKeepWorkingTools: DottieToolModule {
         [
             DottieTool(
                 name: "keep_working",
-                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for it (\"keep at it all night until it's done\", \"check every 10 minutes\"). start needs task; stop ends one (or all); status lists them.",
+                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for nonstop or repeated work (\"keep at it all night until it's done\", \"check every 10 minutes\"); never start one on your own. start needs the helper task; stop ends one (or all); status lists them. While one runs the Mac stays awake and the notch shows a moon.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -284,8 +284,7 @@ enum DottieKeepWorkingTools: DottieToolModule {
 
     static var voicePromptSection: String {
         """
-        24/7 jobs: only when the user clearly asks for nonstop or repeated background work ("keep at it all night until it's done", "check every 10 minutes"), call keep_working start with the helper task. never start one on your own. while one runs the mac stays awake and the notch shows a moon; keep_working status or stop when asked.
-        locked screen: while the mac is locked, helpers and non-screen tools work as usual, but screen jobs wait and start by themselves when the user unlocks. say so if asked from the phone.
+        locked screen: helpers and non-screen tools work as usual, but screen jobs wait and start by themselves when the user unlocks. say so if asked from the phone.
         """
     }
 }
