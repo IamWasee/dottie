@@ -39,6 +39,28 @@ final class NotchWindowManager {
 
     /// Room on each side of the closed notch for the Dot indicators.
     static let compactIndicatorWidth: CGFloat = 30
+    /// Room on each side of the notch for the eyes and the waveform or
+    /// spinner while Dottie listens or thinks.
+    static let voiceWingWidth: CGFloat = 60
+    /// Extra canvas height below the notch: the tallest surface (the hover
+    /// peek with Dots, watches and files) has to fit, or it gets cut off.
+    private static let canvasHeightBelowNotch: CGFloat = 320
+
+    /// The island's top corners curve outward into the menu bar, like the
+    /// Dynamic Island blending into the screen edge. Closed, it's exactly
+    /// the notch; the curves grow as it opens.
+    static func shoulderRadius(for presentation: NotchPresenter.IslandPresentation) -> CGFloat {
+        switch presentation {
+        case .closed: return 0
+        case .wings: return 6
+        case .expanded: return 12
+        }
+    }
+
+    /// How wide each side of the notch is when the island grows sideways.
+    static func wingWidth(for surface: NotchPresenter.Surface) -> CGFloat {
+        surface == .compact ? compactIndicatorWidth : voiceWingWidth
+    }
     /// Height of the row of file tiles in the hover peek.
     static let peekFilePileHeight: CGFloat = 74
 
@@ -136,6 +158,18 @@ final class NotchWindowManager {
                 self.resizePanel(for: self.notchPresenter.surface, isHovering: self.notchPresenter.isHovering)
             }
             .store(in: &presenterCancellables)
+        // Dictation's words and a custom thinking label move the island
+        // between its sideways wings and the dropped-down card.
+        notchPresenter.$liveCaptionText
+            .map(\.isEmpty)
+            .combineLatest(notchPresenter.$activityLabel)
+            .removeDuplicates { $0 == $1 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.resizePanel(for: self.notchPresenter.surface, isHovering: self.notchPresenter.isHovering)
+            }
+            .store(in: &presenterCancellables)
         notchPresenter.$isKeepWorkingOn
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -166,9 +200,10 @@ final class NotchWindowManager {
     /// The panel's fixed frame: room for the largest surface, hanging from
     /// the top-center of the screen.
     private static func canvasFrame(geometry: NotchGeometry) -> CGRect {
+        let widestShoulders = 2 * shoulderRadius(for: .expanded)
         let canvasSize = CGSize(
-            width: min(max(geometry.notchWidth + 280, 500), geometry.screen.frame.width),
-            height: geometry.notchHeight + 260
+            width: min(max(geometry.notchWidth + 280, 500) + widestShoulders, geometry.screen.frame.width),
+            height: geometry.notchHeight + canvasHeightBelowNotch
         )
         return CGRect(
             x: geometry.topCenter.x - canvasSize.width / 2,
@@ -178,9 +213,11 @@ final class NotchWindowManager {
         )
     }
 
-    /// Size of the black shape for each surface. Everything grows downward
-    /// from the top-center of the screen.
+    /// Size of the black shape for each surface, shoulders included.
+    /// Everything grows sideways or downward from the top-center of the
+    /// screen.
     private func shapeSize(for surface: NotchPresenter.Surface, isHovering: Bool, geometry: NotchGeometry) -> CGSize {
+        let presentation = notchPresenter.islandPresentation
         let contentSize: CGSize
         switch surface {
         case .compact:
@@ -203,7 +240,11 @@ final class NotchWindowManager {
                 contentSize = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
             }
         case .listening, .thinking:
-            contentSize = CGSize(width: max(geometry.notchWidth + 160, 360), height: geometry.notchHeight + 48)
+            if presentation == .wings {
+                contentSize = CGSize(width: geometry.notchWidth + 2 * Self.voiceWingWidth, height: geometry.notchHeight)
+            } else {
+                contentSize = CGSize(width: max(geometry.notchWidth + 160, 360), height: geometry.notchHeight + 48)
+            }
         case .speaking:
             contentSize = CGSize(width: max(geometry.notchWidth + 220, 420), height: geometry.notchHeight + 76)
         case .textInput:
@@ -214,7 +255,11 @@ final class NotchWindowManager {
             contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 70)
         }
 
-        return contentSize
+        let shoulderWidth = 2 * Self.shoulderRadius(for: presentation)
+        return CGSize(
+            width: contentSize.width + shoulderWidth,
+            height: min(contentSize.height, geometry.notchHeight + Self.canvasHeightBelowNotch)
+        )
     }
 
     // MARK: - Hover
