@@ -21,6 +21,16 @@
 //  clicks land on the thing itself. The loop stops on finish, after
 //  maximumSteps, or when the user stops it (Escape, the notch, or by voice).
 //
+//  Long jobs work toward the user's real goal (DottieTaskGoal): "sign in
+//  with this account" is done when the account shows as signed in, not when
+//  its tile is clicked. The job gets a goal, a "done when" check and a short
+//  plan (from common goals, a plan that worked before, or written by the
+//  model with its first step, so no extra call), shown in the notch and
+//  revised as screens change. A finish is checked against "done when" on a
+//  fresh screen before it counts. When only the user can help (which
+//  account, a code, okay to pay), the job asks once and carries on. Quick
+//  asks ("scroll down") skip all of this and stay instant.
+//
 
 import AppKit
 import ApplicationServices
@@ -107,6 +117,30 @@ final class DottieScreenTaskRunner {
     /// A replay the user asked for by name, for the job with this wording.
     var requestedReplay: (id: UUID, taskText: String)?
 
+    /// The plan was made or moved on: its steps and the one being done, for
+    /// the notch.
+    var onPlanChanged: (@MainActor (_ steps: [String], _ currentStepIndex: Int) -> Void)?
+    /// The job needs something only the user knows (which account, a code,
+    /// okay to pay). Says and shows the question; the answer comes back
+    /// through DottieScreenJobQuestions.
+    var onAskUser: (@MainActor (_ question: String) -> Void)?
+    /// The job's goal, "done when" and plan. Nil for quick jobs.
+    private(set) var currentGoal: DottieTaskGoal?
+    /// A long job gets a plan and a done check before it may finish.
+    private var isLongJob = false
+    /// How many times a finish was sent back because it wasn't done yet.
+    private var finishRejectionCount = 0
+    private static let maximumFinishRejections = 2
+    /// Passwords and codes the user gave during this job, by placeholder
+    /// ("{{code}}"). The model types the placeholder and Dottie fills in the
+    /// real thing, so it's never sent to Gemini or saved in a replay.
+    private var userSecrets: [String: String] = [:]
+    /// The last type_text went into a password box (the user gave it), so
+    /// the step isn't saved.
+    private var lastTypedIntoSecureField = false
+    /// How long a question waits for the user before the job stops.
+    private static let answerWaitSeconds: Double = 180
+
     var isRunning: Bool { runTask != nil }
 
     func start(
@@ -124,6 +158,11 @@ final class DottieScreenTaskRunner {
         jobModel = nil
         jobTier = .normal
         lastReplayReport = nil
+        currentGoal = nil
+        isLongJob = false
+        finishRejectionCount = 0
+        userSecrets = [:]
+        lastTypedIntoSecureField = false
         pendingExtraImageParts = []
         lookAroundHeadings = []
         gameMap = isGameMode ? DottieGameMap(gameName: Self.currentGameName()) : nil
@@ -149,6 +188,7 @@ final class DottieScreenTaskRunner {
     @discardableResult
     func stop() -> Bool {
         guard let runTask else { return false }
+        DottieScreenJobQuestions.shared.resolve(with: nil)
         runTask.cancel()
         self.runTask = nil
         currentTaskText = nil
@@ -178,6 +218,13 @@ final class DottieScreenTaskRunner {
         // runs again from memory, and Gemini only steps in where the
         // screen doesn't match.
         let jobContext = DottieReplayContext.current()
+        // Understand the goal before acting. Quick asks skip this; long
+        // ones get a goal and plan without a model call when one's known.
+        let jobSize = isGameMode ? DottieTaskGoals.Size.short : DottieTaskGoals.size(of: taskText)
+        if jobSize == .long {
+            isLongJob = true
+            setUpGoal(taskText: taskText, appName: jobContext.appName)
+        }
         var recordedSteps: [DottieReplay.Step] = []
         var unconfirmedStepIndices: [Int] = []
         var replayUsed: DottieReplay?
@@ -258,17 +305,21 @@ final class DottieScreenTaskRunner {
             userParts.append(["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]])
             userParts.append(contentsOf: pendingExtraImageParts)
             pendingExtraImageParts = []
-            userParts.append(["text": contents.isEmpty
-                ? "Task from the user: \(taskText)\n\(lessonsText)\n\(screenNote)\nThis is the screen now. Take the first step."
-                : "\(screenNote)\nThis is the screen now. First check it against the task: which steps are already done? Then take the first step that isn't done yet."])
-            contents.append(["role": "user", "parts": userParts])
-            pendingFunctionResponseParts = []
-            Self.dropOldScreenshots(from: &contents)
-
             if jobModel == nil {
                 jobTier = await tierTask.value
                 jobModel = DottieModelPicker.shared.pick(jobTier)
+                // Words that didn't say, and a job that doesn't look simple.
+                if jobSize == .unsure, jobTier == .normal, !isGameMode {
+                    isLongJob = true
+                }
             }
+            let planReminder = isLongJob ? (currentGoal.map { $0.promptText + "\n" } ?? "") : ""
+            userParts.append(["text": contents.isEmpty
+                ? "Task from the user: \(taskText)\n\(lessonsText)\n\(isLongJob ? longJobBriefing() : "")\(screenNote)\nThis is the screen now. Take the first step."
+                : "\(screenNote)\n\(planReminder)This is the screen now. First check it against the task: which steps are already done? Then take the first step that isn't done yet."])
+            contents.append(["role": "user", "parts": userParts])
+            pendingFunctionResponseParts = []
+            Self.dropOldScreenshots(from: &contents)
             let modelParts: [[String: Any]]
             do {
                 modelParts = try await requestNextActions(contents: contents)
@@ -311,16 +362,58 @@ final class DottieScreenTaskRunner {
                 return .finished(answer: answerText.isEmpty ? "All done." : answerText)
             }
 
+            var actedThisTurn = false
             for functionCall in functionCalls {
                 if Task.isCancelled { return .stopped }
                 let functionName = functionCall["name"] as? String ?? ""
                 let arguments = functionCall["args"] as? [String: Any] ?? [:]
+                func respond(_ result: String) {
+                    var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
+                    if let functionCallID = functionCall["id"] as? String {
+                        functionResponse["id"] = functionCallID
+                    }
+                    pendingFunctionResponseParts.append(["functionResponse": functionResponse])
+                }
+
+                // Writing down or moving on in the plan doesn't touch the screen.
+                if functionName == "plan" {
+                    respond(applyPlan(arguments, taskText: taskText))
+                    continue
+                }
+
+                if functionName == "ask_user" {
+                    guard let reply = await askUser(arguments, stepNumber: stepNumber) else {
+                        if Task.isCancelled { return .stopped }
+                        let question = arguments.dottieString("question") ?? "one thing"
+                        return .failed(reason: "I needed you for one thing (\(question)) and didn't hear back, so I stopped there.")
+                    }
+                    respond(reply)
+                    // The user may have changed the screen meanwhile (typed a
+                    // code, used Touch ID), so it's not a stuck screen.
+                    previousScreenFingerprint = nil
+                    continue
+                }
 
                 if functionName == "finish" {
                     let answer = (arguments["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    // The reward for the tips this job was given.
                     let didSucceed = (arguments["succeeded"] as? Bool) ?? true
-                    DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: didSucceed)
+                    // Don't finish early: a long job is done only when its
+                    // "done when" shows on a fresh screen.
+                    if didSucceed, isLongJob, finishRejectionCount < Self.maximumFinishRejections,
+                       let problem = await doneCheckProblem(actedThisTurn: actedThisTurn, doneCheck: arguments.dottieString("done_check")) {
+                        if Task.isCancelled { return .stopped }
+                        finishRejectionCount += 1
+                        print("🧭 Not finished yet: \(problem)")
+                        onProgress?(stepNumber, "making sure it's really done")
+                        respond("not finished: \(problem)")
+                        continue
+                    }
+                    // The reward for the tips (and plan) this job was given.
+                    DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs + learnedPlanLessonIDs, succeeded: didSucceed)
+                    // A long job that got done keeps its plan for next time.
+                    if didSucceed, isLongJob, let currentGoal, !currentGoal.steps.isEmpty {
+                        DottieScreenLessons.shared.addPlan(currentGoal, task: taskText, appName: jobContext.appName)
+                    }
                     if let lesson = (arguments["lesson"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !lesson.isEmpty {
                         DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName, cameFromSuccess: didSucceed)
                     }
@@ -347,29 +440,32 @@ final class DottieScreenTaskRunner {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
                 } else {
                     // What it takes to do this step again without Gemini.
-                    let replayStep = isGameMode ? nil : await replayStep(functionName: functionName, arguments: arguments, screen: screen)
+                    // Passwords and codes the user gave are never saved.
+                    let typesUserSecret = functionName == "type_text" && ((arguments["text"] as? String) ?? "").contains("{{")
+                    let replayStep = (isGameMode || typesUserSecret) ? nil : await replayStep(functionName: functionName, arguments: arguments, screen: screen)
                     result = await perform(functionName: functionName, arguments: arguments, screen: screen, stepNumber: stepNumber)
-                    if let replayStep, Self.resultLooksDone(result) {
+                    let typedIntoPasswordBox = functionName == "type_text" && lastTypedIntoSecureField
+                    if let replayStep, Self.resultLooksDone(result), !typedIntoPasswordBox {
                         if replayStep.action == "click" || replayStep.action == "scroll" {
                             unconfirmedStepIndices.append(recordedSteps.count)
                         }
                         recordedSteps.append(replayStep)
                     }
                 }
-                var functionResponse: [String: Any] = ["name": functionName, "response": ["result": result]]
-                if let functionCallID = functionCall["id"] as? String {
-                    functionResponse["id"] = functionCallID
-                }
-                pendingFunctionResponseParts.append(["functionResponse": functionResponse])
+                respond(result)
                 didActSinceLastLook = true
+                actedThisTurn = true
             }
 
             // Let pages load and animations finish before the next look.
-            // Games keep moving, so they get a quick look straight away.
-            try? await Task.sleep(nanoseconds: isGameMode ? 200_000_000 : 900_000_000)
+            // Games keep moving, so they get a quick look straight away. A
+            // turn that only planned has nothing to wait for.
+            if actedThisTurn {
+                try? await Task.sleep(nanoseconds: isGameMode ? 200_000_000 : 900_000_000)
+            }
         }
 
-        DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: false)
+        DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs + learnedPlanLessonIDs, succeeded: false)
         if !isGameMode {
             // Next time, the job starts knowing this path didn't work.
             DottieScreenLessons.shared.add(
@@ -397,6 +493,9 @@ final class DottieScreenTaskRunner {
         let player = DottieReplayPlayer()
         player.onProgress = { [weak self] text in self?.onProgress?(0, text) }
         player.onWillClick = { [weak self] point, displayFrame in await self?.onWillClick?(point, displayFrame) }
+        if let planSteps = replay.planSteps, !planSteps.isEmpty {
+            onPlanChanged?(planSteps, 0)
+        }
         isReplaying = true
         let result = await player.play(replay)
         isReplaying = false
@@ -404,7 +503,10 @@ final class DottieScreenTaskRunner {
         case .stopped:
             return .stopped
         case .completed(let playedSteps):
-            if !replay.needsFreshAnswer, await Self.screenLooksFinished(like: replay) {
+            // A sign-in that needs a code this time isn't done, however
+            // much the window looks like last time.
+            let stillNotDone = await Self.screenShowsNotDoneSign(forTask: replay.taskText)
+            if !replay.needsFreshAnswer, !stillNotDone, await Self.screenLooksFinished(like: replay) {
                 let seconds = Date().timeIntervalSince(startedAt)
                 DottieReplayStore.shared.noteUsed(replay.id, seconds: seconds)
                 lastReplayReport = "⚡ done from memory in " + String(format: "%.1fs", seconds)
@@ -491,7 +593,8 @@ final class DottieScreenTaskRunner {
             createdAt: earlierReplay?.createdAt ?? Date(),
             lastUsedAt: Date(),
             useCount: earlierReplay?.useCount ?? 0,
-            lastReplaySeconds: earlierReplay?.lastReplaySeconds
+            lastReplaySeconds: earlierReplay?.lastReplaySeconds,
+            planSteps: isLongJob ? currentGoal?.steps : nil
         ))
     }
 
@@ -502,6 +605,127 @@ final class DottieScreenTaskRunner {
         jobTier = .normal
         jobModel = DottieModelPicker.shared.pick(.normal)
         print("🧭 Screen task: moving to \(jobModel ?? "the normal model")")
+    }
+
+    // MARK: - Goals and plans (DottieTaskGoal)
+
+    /// The goal and plan a long job starts with: a plan that worked before
+    /// for a similar job, else a common goal's ready plan. Neither costs a
+    /// model call. Without either, the model writes one with its first step.
+    private func setUpGoal(taskText: String, appName: String?) {
+        let commonGoal = DottieTaskGoals.template(for: taskText)
+        if var learnedGoal = DottieScreenLessons.shared.learnedPlan(forTask: taskText, appName: appName) {
+            learnedGoal.notDoneSigns = commonGoal?.notDoneSigns ?? []
+            if learnedGoal.doneWhen.isEmpty { learnedGoal.doneWhen = commonGoal?.doneWhen ?? "" }
+            currentGoal = learnedGoal
+        } else {
+            currentGoal = commonGoal
+        }
+        if let currentGoal {
+            print("🎯 Goal (\(currentGoal.source.rawValue)): \(currentGoal.goal). Done when: \(currentGoal.doneWhen)")
+            onPlanChanged?(currentGoal.steps, currentGoal.currentStepIndex)
+        }
+    }
+
+    /// The lesson a learned plan came from, to score it with the outcome.
+    private var learnedPlanLessonIDs: [UUID] {
+        currentGoal?.learnedLessonID.map { [$0] } ?? []
+    }
+
+    /// What the first request of a long job adds to the task.
+    private func longJobBriefing() -> String {
+        guard let currentGoal else {
+            return "This is a longer job: work out what the user really wants done, not just the first click (\"sign in with this account\" means signed in, not the account clicked). Call plan with the goal, done_when (what the screen shows once it's really done) and 3-6 short steps, together with your first action.\n"
+        }
+        let planOrigin = currentGoal.source == .learned
+            ? "This plan worked before for a job like this; follow it unless the screen says otherwise, and call plan only to change it or move current_step."
+            : "Call plan with your own goal, done_when and steps for this screen (keep or fix the ones above), together with your first action."
+        return "This is a longer job: keep going until the goal is really done, not just the first click.\n\(currentGoal.promptText)\n\(planOrigin)\n"
+    }
+
+    /// Takes the model's plan, or its move to the next step.
+    private func applyPlan(_ arguments: [String: Any], taskText: String) -> String {
+        var taskGoal = currentGoal ?? DottieTaskGoal(
+            goal: taskText,
+            doneWhen: "",
+            steps: [],
+            notDoneSigns: DottieTaskGoals.notDoneSigns(for: taskText),
+            source: .model
+        )
+        if let goalText = arguments.dottieString("goal") { taskGoal.goal = String(goalText.prefix(200)) }
+        if let doneWhen = arguments.dottieString("done_when") { taskGoal.doneWhen = String(doneWhen.prefix(300)) }
+        let newSteps = ((arguments["steps"] as? [Any]) ?? [])
+            .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(8)
+            .map { String($0.prefix(120)) }
+        if !newSteps.isEmpty {
+            taskGoal.steps = Array(newSteps)
+            taskGoal.currentStepIndex = 0
+        }
+        if let currentStepNumber = arguments.dottieNumber("current_step"), !taskGoal.steps.isEmpty {
+            taskGoal.currentStepIndex = min(max(Int(currentStepNumber) - 1, 0), taskGoal.steps.count - 1)
+        }
+        currentGoal = taskGoal
+        // The model saw a job worth planning, so it gets the done check
+        // (games keep their quick loop).
+        if !isGameMode { isLongJob = true }
+        onPlanChanged?(taskGoal.steps, taskGoal.currentStepIndex)
+        return "plan noted. keep going; call plan again with current_step as you move on, or with new steps when the screen changes the plan."
+    }
+
+    /// Asks the user once and waits for the answer. Returns what to tell
+    /// the model, or nil when no answer came (or the job was stopped).
+    private func askUser(_ arguments: [String: Any], stepNumber: Int) async -> String? {
+        let question = arguments.dottieString("question") ?? "What should I do next?"
+        let kind = arguments.dottieString("kind")?.lowercased() ?? "missing_info"
+        print("🙋 Screen job asks: \(question)")
+        onProgress?(stepNumber, "waiting for you: \(question)")
+        onAskUser?(question)
+        guard let answer = await DottieScreenJobQuestions.shared.waitForAnswer(to: question, timeoutSeconds: Self.answerWaitSeconds),
+              !Task.isCancelled else { return nil }
+        onProgress?(stepNumber, "got it, carrying on")
+        switch kind {
+        case "password", "code":
+            let placeholder = "{{\(kind)}}"
+            userSecrets[placeholder] = answer
+            return "the user gave the \(kind). It isn't shown to you: to type it, call type_text with text exactly \(placeholder) on the right field and Dottie fills in the real one."
+        case "do_it_yourself":
+            return "the user says: \(answer). Look at the new screenshot and carry on from there."
+        default:
+            return "the user answered: \(answer). Carry on with that; don't ask again."
+        }
+    }
+
+    /// Why a finish can't count yet, or nil when it can: the done-when has
+    /// to show on a screen taken after the last action. Text recognition on
+    /// the Mac catches "still on the password page" without a model call.
+    private func doneCheckProblem(actedThisTurn: Bool, doneCheck: String?) async -> String? {
+        let doneWhen = (currentGoal?.doneWhen).flatMap { $0.isEmpty ? nil : $0 } ?? "every part of the task is done on screen"
+        if let notDoneSigns = currentGoal?.notDoneSigns, !notDoneSigns.isEmpty {
+            if actedThisTurn {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+            if let freshScreen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension),
+               let visibleSign = await DottieTaskGoals.visibleNotDoneSign(in: freshScreen.image, signs: notDoneSigns) {
+                return "the screen still shows \"\(visibleSign)\", so it isn't done (done when: \(doneWhen)). Keep going on the next screenshot: pick the account, use the password the browser offers, or ask_user for what's missing."
+            }
+        }
+        if actedThisTurn {
+            return "you acted and finished in the same turn, so you haven't seen the result yet. Look at the next screenshot and finish only if it shows the job is done (done when: \(doneWhen)); otherwise keep going."
+        }
+        if (doneCheck ?? "").isEmpty {
+            return "check the done-when on this screenshot first (done when: \(doneWhen)). If it's met, call finish again with done_check saying what on screen shows it. If not, keep going."
+        }
+        return nil
+    }
+
+    /// True when a common goal's "not done yet" words are on screen now.
+    private static func screenShowsNotDoneSign(forTask taskText: String) async -> Bool {
+        let notDoneSigns = DottieTaskGoals.notDoneSigns(for: taskText)
+        guard !notDoneSigns.isEmpty,
+              let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: maximumScreenshotDimension) else { return false }
+        return await DottieTaskGoals.visibleNotDoneSign(in: screen.image, signs: notDoneSigns) != nil
     }
 
     // MARK: - Spotting a stuck loop
@@ -606,7 +830,17 @@ final class DottieScreenTaskRunner {
             return "clicked \(label)"
 
         case "type_text":
-            guard let typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
+            guard var typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
+            // "{{code}}" is a code or password the user gave (ask_user).
+            var isUserSecret = false
+            for (placeholder, secret) in userSecrets where typedText.contains(placeholder) {
+                typedText = typedText.replacingOccurrences(of: placeholder, with: secret)
+                isUserSecret = true
+            }
+            if typedText.contains("{{") && typedText.contains("}}") {
+                return "error: the user hasn't given that yet. ask_user for it first."
+            }
+            lastTypedIntoSecureField = false
             if let point = clickPoint() {
                 await onWillClick?(point, screen.displayFrame)
                 if Task.isCancelled { return "stopped" }
@@ -614,9 +848,14 @@ final class DottieScreenTaskRunner {
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
             if DottieScreenActionPerformer.isFocusedFieldSecure {
-                return "refused: that's a password field. The user has to type passwords themselves; finish and tell them."
+                // Only a password the user gave; never a guess.
+                let userGaveIt = isUserSecret || (typedText.count >= 4 && (currentTaskText ?? "").contains(typedText))
+                guard userGaveIt else {
+                    return "refused: that's a password box and the user hasn't given you this password. If the browser or keychain offers a saved one (a list under the field, a key icon, or the field fills itself), click that. Otherwise ask_user: kind password to get it, or kind do_it_yourself to have them type it."
+                }
+                lastTypedIntoSecureField = true
             }
-            onProgress?(stepNumber, "typing \"\(typedText.prefix(40))\"")
+            onProgress?(stepNumber, isUserSecret || lastTypedIntoSecureField ? "typing what you gave me" : "typing \"\(typedText.prefix(40))\"")
             if flag("select_all_first") {
                 DottieScreenActionPerformer.press(keyCombination: "cmd+a")
             }
@@ -1072,6 +1311,8 @@ final class DottieScreenTaskRunner {
     You operate the user's Mac to finish a task they asked for, one or a few actions at a time. Each turn you get a fresh screenshot of the screen they're working on; reply only with function calls.
 
     How to work:
+    - Work toward what the user really wants done, not just the first click. "Sign in with this account" is done when they're signed in (the account's picture or name shows and the sign-in page is gone), not when the account is clicked. "Send it to sam" is done when it shows as sent.
+    - For a longer job, call plan (goal, done_when, 3-6 short steps) together with your first action. As you go, call plan again with current_step, or with new steps when the screen changes things. Expect detours and go through them: "choose an account", "continue as", consent and "allow access" screens, "stay signed in?", cookie banners, a code or 2-step check, a saved password the browser or keychain offers (click it).
     - Look at the screenshot carefully before acting. Click things by their box on the screenshot (box_2d: [ymin, xmin, ymax, xmax], 0-1000 across the image).
     - To use an app, call open_app with its name (it comes to the front). To visit a site in a browser that's already open, click its address bar (or press cmd+l), type the address or search and press return. If the user named a browser, use that browser.
     - To type into a field, pass the field's box_2d to type_text so it's clicked first; use press_enter to submit.
@@ -1083,11 +1324,13 @@ final class DottieScreenTaskRunner {
     - To watch a video or reel once (\"watch it, then like it\"), start it, call wait_for_video_end, and go on when it returns.
     - Expect hiccups: popups and cookie banners (close them or press escape), slow pages (wait once, then reload or go another way), search results that don't show (press return, or click the result that's there), things not where you expected (scroll, use the app's search, or its menu bar). If an action didn't change the screen, never repeat it as is: try something else.
     - Don't give up when something isn't where you expected. It's usually a click or two away: another tab, a menu or the menu bar, a sidebar, further down, the site's or app's own search, or another page. When you don't know where something lives or how a site or app does it, call search_web (like "where are releases on a github repo" or "how to turn on subtitles in vlc") and follow what it says. Try at least three different ways before deciding it can't be done.
-    - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you truly can't go on (it needs a login, a captcha or a payment, or you've tried several ways), saying what you tried and why it stopped.
+    - Before finish, check the done_when on the latest screenshot (one taken after your last action) and say what shows it in done_check. If it isn't met, don't finish: keep going.
+    - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you truly can't go on (a captcha, or you've tried several ways), saying what you tried and why it stopped.
+    - Ask only when you must, with ask_user, once, in one short line: something only the user knows (which account when several fit and the task doesn't say, a password nobody saved, a code sent to their phone), something only they can do (Touch ID, their Mac password), or before a risky step the task didn't clearly ask for (paying, sending, posting, deleting, changing account settings). Then carry on with the answer. Never ask about anything you can see or work out.
 
     Safety:
-    - Never type passwords or payment details, and never sign in for the user.
-    - Don't buy anything, send or post messages, delete things, or change account settings unless the task explicitly asks for exactly that.
+    - Signing in is fine when the user asks for it: use the account they named and passwords the browser or keychain fills in (an autofill list, a key icon, a field that's already filled). Never type a password the user hasn't given you, and never type payment details.
+    - Don't buy anything, send or post messages, delete things, or change account settings unless the task explicitly asks for exactly that; when it isn't clear, ask_user first.
     - Stay on the task; don't open unrelated things.
     """
 
@@ -1269,10 +1512,29 @@ final class DottieScreenTaskRunner {
                 ], "required": ["query"]]
             ],
             [
+                "name": "plan",
+                "description": "Write down or update the plan for a longer job: the user's real goal, what the screen shows once it's truly done, and 3-6 short steps. Call it with your first action, then again with current_step as you move on, or with new steps when the screen changes the plan. It doesn't touch the screen.",
+                "parameters": ["type": "object", "properties": [
+                    "goal": ["type": "string", "description": "What the user really wants done, like 'get signed in to YouTube with the work account'."],
+                    "done_when": ["type": "string", "description": "What the screen shows once it's really done, like 'the work account's picture shows at the top right and no sign-in page is left'."],
+                    "steps": ["type": "array", "items": ["type": "string"], "description": "3-6 short steps, a few words each."],
+                    "current_step": ["type": "integer", "description": "The step you're on now, from 1."]
+                ]]
+            ],
+            [
+                "name": "ask_user",
+                "description": "Ask the user one short question and wait for the answer, only when you can't go on without it: which account, a password nobody saved, a code sent to them, Touch ID or something only they can do, or okay for a risky step the task didn't clearly ask for.",
+                "parameters": ["type": "object", "properties": [
+                    "question": ["type": "string", "description": "One short, friendly line, like 'Which account, work or personal?'."],
+                    "kind": ["type": "string", "enum": ["missing_info", "password", "code", "confirm", "do_it_yourself"], "description": "password or code when they'll tell you one (it stays hidden from you); do_it_yourself when they have to do something on the Mac (Touch ID, type it themselves); confirm for okay to go ahead."]
+                ], "required": ["question", "kind"]]
+            ],
+            [
                 "name": "finish",
                 "description": "End the task. answer is what Dottie tells the user: the result they asked for, or why it couldn't be done. One or two short sentences.",
                 "parameters": ["type": "object", "properties": [
                     "answer": ["type": "string"],
+                    "done_check": ["type": "string", "description": "What on the latest screenshot shows the job is really done (its done_when), like 'the work account's picture is at the top right'."],
                     "succeeded": ["type": "boolean", "description": "true if the task got done, false if it couldn't be."],
                     "lesson": ["type": "string", "description": "One short tip for doing this kind of job in this app or site next time: the path that worked, or what to avoid. Leave empty if it was straightforward."]
                 ], "required": ["answer"]]

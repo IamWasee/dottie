@@ -99,6 +99,9 @@ final class NotchPresenter: ObservableObject {
     /// True while a screen task runs; the notch comes back to it after a
     /// voice turn or a card.
     private(set) var isScreenTaskRunning = false
+    /// A long screen job's plan and the step it's on (DottieTaskGoal).
+    @Published private(set) var screenTaskPlanSteps: [String] = []
+    @Published private(set) var screenTaskPlanStepIndex = 0
     /// 1 → 0 over the auto-dismiss window; drives the countdown ring.
     @Published private(set) var autoDismissProgress: Double = 1
     @Published private(set) var isAutoDismissPaused = false
@@ -229,9 +232,30 @@ final class NotchPresenter: ObservableObject {
         }
     }
 
+    /// A long screen job made or moved on in its plan.
+    func showScreenTaskPlan(_ steps: [String], currentStepIndex: Int) {
+        screenTaskPlanSteps = steps
+        screenTaskPlanStepIndex = min(max(currentStepIndex, 0), max(steps.count - 1, 0))
+    }
+
+    /// "step 2 of 4" while a long job has a plan, else nil.
+    var screenTaskPlanProgressText: String? {
+        guard screenTaskPlanSteps.count > 1 else { return nil }
+        return "step \(screenTaskPlanStepIndex + 1) of \(screenTaskPlanSteps.count)"
+    }
+
+    /// The whole plan, one step per line, for the notch's tooltip.
+    var screenTaskPlanSummary: String {
+        screenTaskPlanSteps.enumerated().map { index, step in
+            (index < screenTaskPlanStepIndex ? "✓ " : (index == screenTaskPlanStepIndex ? "→ " : "   ")) + step
+        }.joined(separator: "\n")
+    }
+
     func endScreenTask() {
         isScreenTaskRunning = false
         screenTaskStepText = ""
+        screenTaskPlanSteps = []
+        screenTaskPlanStepIndex = 0
         if surface == .screenTask {
             collapse()
         }

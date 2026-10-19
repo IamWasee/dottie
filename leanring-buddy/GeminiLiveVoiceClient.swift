@@ -161,6 +161,9 @@ final class GeminiLiveVoiceClient {
     private nonisolated static let maximumReplayableTurnMessages = 1500
 
     private var currentTurnUserTranscript = ""
+    /// What the user has said so far this turn, for tools that need their
+    /// own words (a click that only starts their goal).
+    var userTranscriptSoFar: String { currentTurnUserTranscript }
     private var currentTurnModelTranscript = ""
     private var hasModelStartedSpeakingThisTurn = false
     /// Any audio, transcript or tool call from the model this turn. Until
@@ -686,7 +689,7 @@ final class GeminiLiveVoiceClient {
     /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
     private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
         "name": "do_task_on_screen",
-        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there, or playing a video game for the user (set game). Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Pass the whole request, every step. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
+        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there, or playing a video game for the user (set game). Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Also for a goal that sounds like one click but needs more to be done, like 'sign in with this account' (done when signed in, not when the account is clicked). Pass the whole goal, every step; it works out the steps itself and asks the user only if it must. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it. After calling, just say you're on it in a few words.",
         "parameters": [
             "type": "OBJECT",
             "properties": [

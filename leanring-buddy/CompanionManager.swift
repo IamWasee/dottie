@@ -968,7 +968,7 @@ final class CompanionManager: ObservableObject {
     you're the fast voice. for questions that need careful reading of small text, code, a long document, precise steps, or real reasoning, call send_to_higher_model with the question. say a few words first ("let me take a closer look"), then speak the answer it returns in your own voice. it can point the cursor too, so don't point again for the same thing.
 
     doing things on screen:
-    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click or type on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words. prefer keyboard shortcuts over clicking whenever one exists, they never miss: close a tab cmd+w, new tab cmd+t, reopen a closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close a window cmd+shift+w, switch apps by opening them, zoom cmd+= and cmd+-. when you do click, pass the label exactly as it appears on screen, so the click lands on the right thing. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
+    only when the user asks you to do something for them ("click sign in", "open youtube", "type hello", "scroll down", "go back", "circle the error"), you can do it yourself with click_on_screen, type_text, press_keys, scroll_screen, open_url and draw_on_screen. never click or type on your own initiative, and never just because it would be helpful; pointing is for showing, these are for doing. one quick step at a time: do it, then say it's done in a few words, but only when that one step was the user's whole request. prefer keyboard shortcuts over clicking whenever one exists, they never miss: close a tab cmd+w, new tab cmd+t, reopen a closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close a window cmd+shift+w, switch apps by opening them, zoom cmd+= and cmd+-. when you do click, pass the label exactly as it appears on screen, so the click lands on the right thing. if the request is risky or can't be undone (sending a message, buying, deleting, posting), say what you're about to do and ask first. never type passwords.
 
     explaining with drawings:
     you're a tutor with a marker. whenever you explain something visual or mathematical (a geometry or algebra problem in a video, a graph, an equation, a diagram, a chart, a physics setup, a chess position), don't just talk: call explain_on_screen and draw it, without waiting to be asked. mark what's on screen (circle the point, draw the radius, put a right-angle mark where the tangent meets it, arrow from the slope to where it's used) and work the math out step by step on a board (surface board_right or board_left, whichever covers less of what matters): each line of working is a text step, top to bottom, like "m = (8−2)/(5−3) = 3", then "m⊥ = −1/3". give every step a short caption for your cursor ("right angle", "slope = 3") and a say line; they're spoken one by one while it draws, so after calling, say only "okay, watch" or similar. name things already on screen as anchors with a clear description (what it looks like and where) instead of guessing their coordinates; only say you marked something if you anchored it. use plot to draw a function's real graph, measure for lengths, angle with the size, ticks for equal sides. if the user says stop or clear, call clear_drawings.
@@ -1251,7 +1251,15 @@ final class CompanionManager: ObservableObject {
             detectedElementDisplayFrame = target.displayFrame
             try? await Task.sleep(nanoseconds: 1_100_000_000)
             DottieScreenActionPerformer.click(at: target.point, clickCount: clickCount, isRightClick: isRightClick)
-            return "clicked \(label ?? "it"). keep it short: just say it's done."
+            // "sign in with this account": the click only starts the goal,
+            // so a screen job finishes it (DottieTaskGoal).
+            let userRequest = currentLiveTurnTypedText ?? liveVoiceClient.userTranscriptSoFar
+            if DottieTaskGoals.clickLeavesGoalUnfinished(request: userRequest), !screenTaskRunner.isRunning {
+                let jobText = "\(userRequest.trimmingCharacters(in: .whitespacesAndNewlines)) (Dottie already clicked \"\(label ?? "it")\" for this; carry on from there)"
+                _ = startScreenTask(ScreenJob(text: jobText))
+                return "clicked \(label ?? "it"), and the rest of their goal is already under way as an on-screen job. say you're on it in a few words. don't call do_task_on_screen for it."
+            }
+            return "clicked \(label ?? "it"). if that click was all the user asked for, just say it's done. if their goal needs more (signing in, sending, finishing a form), it isn't done: call do_task_on_screen now with the whole goal."
 
         case .typeText(let text, let pressEnterAfter):
             if DottieScreenActionPerformer.isFocusedFieldSecure {
@@ -1577,6 +1585,12 @@ final class CompanionManager: ObservableObject {
             print("🧭 Step \(stepNumber): \(stepDescription)")
             self?.notchPresenter.showScreenTaskStep(stepDescription)
         }
+        screenTaskRunner.onPlanChanged = { [weak self] steps, currentStepIndex in
+            self?.notchPresenter.showScreenTaskPlan(steps, currentStepIndex: currentStepIndex)
+        }
+        screenTaskRunner.onAskUser = { [weak self] question in
+            self?.askUserForScreenJob(question, repliesToPhone: job.repliesToPhone)
+        }
         screenTaskRunner.onSavePicture = { [weak self] imageData, name, description in
             guard let self,
                   let item = self.imageMemory.add(imageData: imageData, name: name, description: description, savedByDottie: true) else {
@@ -1609,6 +1623,20 @@ final class CompanionManager: ObservableObject {
         screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
             self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone)
         }
+    }
+
+    /// A running job needs one thing from the user: Dottie asks it out
+    /// loud (or by text for a job from the phone). The answer comes back
+    /// through answer_screen_job, or the user's next turn (finishLiveTurn).
+    private func askUserForScreenJob(_ question: String, repliesToPhone: Bool) {
+        if repliesToPhone {
+            Task { await phoneBridge.send(question) }
+            return
+        }
+        speakWhenFree(
+            recordedUserText: "(job asks: \(question))",
+            instructionText: "the on-screen job you're doing needs one thing from the user before it can carry on. ask them this in one short line, in your own voice: \"\(question)\". then stop talking. when they answer, call answer_screen_job with their answer, word for word. don't start a new job."
+        )
     }
 
     private var currentScreenTaskText: String? {
@@ -1982,6 +2010,13 @@ final class CompanionManager: ObservableObject {
         currentLiveTurnIsNarration = false
         // A typed turn has no audio, so Live's input transcript is empty.
         let userTranscript = typedTextForThisTurn ?? userTranscript
+        // A screen job asked something and Live didn't pass the reply on.
+        if userTranscript.hasPrefix("(job asks:") {
+            DottieScreenJobQuestions.shared.noteAskedAloud()
+        } else if !isNarrationTurn, !userTranscript.isEmpty, !userTranscript.hasPrefix("("),
+                  DottieScreenJobQuestions.shared.wasAskedAloud {
+            DottieScreenJobQuestions.shared.answer(userTranscript)
+        }
 
         if !isNarrationTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
             brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")

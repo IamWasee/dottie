@@ -94,6 +94,9 @@ struct DottieReplay: Codable, Identifiable, Equatable {
     var lastUsedAt: Date
     var useCount: Int
     var lastReplaySeconds: Double?
+    /// The plan of a long job (DottieTaskGoal), shown in the notch while it
+    /// replays. Nil for quick jobs and replays saved before plans existed.
+    var planSteps: [String]?
 
     var whereText: String {
         siteHost ?? appName ?? "any app"

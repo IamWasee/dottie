@@ -248,20 +248,32 @@ struct NotchRootView: View {
         .padding(.top, 8)
     }
 
+    /// The plan step being worked on, then what's happening right now.
+    private var screenTaskLineText: String {
+        let stepText = notchPresenter.screenTaskStepText.isEmpty ? "starting" : notchPresenter.screenTaskStepText
+        let planSteps = notchPresenter.screenTaskPlanSteps
+        guard planSteps.indices.contains(notchPresenter.screenTaskPlanStepIndex),
+              !stepText.hasPrefix("waiting for you") else { return stepText }
+        return planSteps[notchPresenter.screenTaskPlanStepIndex] + " — " + stepText
+    }
+
     private var screenTaskContent: some View {
         HStack(spacing: 12) {
             NotchEyeView(mood: .thinking)
             VStack(alignment: .leading, spacing: 1) {
-                Text(notchPresenter.screenTaskTitle)
+                // A long job's plan: "on it · step 2 of 4", then the step.
+                Text([notchPresenter.screenTaskTitle, notchPresenter.screenTaskPlanProgressText].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.white.opacity(0.55))
-                Text(notchPresenter.screenTaskStepText.isEmpty ? "starting" : notchPresenter.screenTaskStepText)
+                    .lineLimit(1)
+                Text(screenTaskLineText)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
                     .lineLimit(2)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .help(notchPresenter.screenTaskPlanSummary)
             Spacer(minLength: 0)
             Button(action: { notchPresenter.stopScreenTask() }) {
                 Text("stop")

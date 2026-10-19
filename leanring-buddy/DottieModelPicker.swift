@@ -184,6 +184,13 @@ final class DottieModelPicker: @unchecked Sendable {
     /// quickest model. Apple's on-device model decides when the Mac has it;
     /// otherwise a short single-step request counts as simple.
     static func isSimpleScreenJob(_ taskText: String) async -> Bool {
+        // The words often say on their own ("scroll down" is simple, "sign
+        // in with this account" isn't), with no wait for the model.
+        switch DottieTaskGoals.size(of: taskText) {
+        case .short: return true
+        case .long: return false
+        case .unsure: break
+        }
         if let answer = await DottieOnDeviceModel.classify(
             taskText,
             labels: ["simple", "complex"],
