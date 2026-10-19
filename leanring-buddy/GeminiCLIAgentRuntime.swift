@@ -262,7 +262,14 @@ final class GeminiCLIAgentRuntime {
             "skills": ["disabled": ClickySkillLibrary.hiddenBuiltInSkillNames],
             // Google Search grounding answers "You exceeded your current
             // quota" on a free-tier key; Dots search through the Worker instead.
-            "tools": ["exclude": ["google_web_search"]]
+            "tools": [
+                "exclude": ["google_web_search"],
+                // A long command or page output is cut to this many
+                // characters (the CLI keeps the full text in a file the
+                // helper can read), so one big result isn't re-sent with
+                // every later request of the turn.
+                "truncateToolOutputThreshold": 20_000
+            ]
         ]
         // MCP servers the user added in Home → Brain, for the Brain and
         // every Dot.

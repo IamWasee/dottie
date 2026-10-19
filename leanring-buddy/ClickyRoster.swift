@@ -55,6 +55,29 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     var mausBotSpecHash: String?
     /// "claude" or "gemini": the engine its latest turn ran on.
     var lastHelperEngine: String?
+    /// The chat with the user starts a fresh conversation, with a short
+    /// handover, after a long break or many turns, so each turn doesn't
+    /// re-read a long history (see ClickyRoster.mainChatConversation).
+    var mainSessionTurnCount: Int?
+    var mainSessionLastTurnAt: Date?
+    /// The MausBot thread of the chat with the user, once known.
+    var claudeMainThreadID: String?
+}
+
+/// Which conversation a helper turn continues, on each engine.
+struct ClickyTurnConversation {
+    var geminiSessionID: UUID
+    var isFirstGeminiTurn: Bool
+    /// Gemini didn't hear the recent chat (a fresh session, or Claude ran
+    /// the last turns), so the turn starts with it.
+    var geminiNeedsHandover: Bool
+    /// MausBot's --task: "current", "new" or a thread ID.
+    var claudeConversation: String
+    var claudeNeedsHandover: Bool
+    /// Set for a routine run, which keeps its own conversation.
+    var routineID: UUID?
+    /// Easy work (routine checks) stays on Gemini.
+    var mayUseClaude: Bool
 }
 
 struct ClickyAgentTranscriptItem: Codable, Identifiable, Equatable {
@@ -90,6 +113,8 @@ struct ClickyAgentTurnResult {
     let computerUseRequest: String?
     /// Set when the turn was a scheduled routine run.
     let routineTitle: String?
+    /// A routine run that found nothing new: no card or notification.
+    var foundNothingNew = false
 }
 
 /// Another feature (episodic memory) listens for this after every helper
@@ -131,6 +156,11 @@ final class ClickyRoster: ObservableObject {
     private var lastTurnSucceededByAgentID: [UUID: Bool] = [:]
     /// The routine a running turn belongs to, if it's a scheduled run.
     private var routineIDByRunningAgentID: [UUID: UUID] = [:]
+    /// Routines whose watched page is being read before a run.
+    private var routineIDsCheckingWatchedPage: Set<UUID> = []
+    /// A watched page's new fingerprint, saved once the run it started
+    /// succeeds (so a failed run is tried again on the next check).
+    private var pendingWatchedTextHashByRoutineID: [UUID: String] = [:]
     /// Library folders before each running turn, to spot skills it saved.
     private var skillFolderNamesBeforeTurnByAgentID: [UUID: Set<String>] = [:]
     private var routineSchedulerTimer: Timer?
@@ -290,23 +320,103 @@ final class ClickyRoster: ObservableObject {
               let agent = agent(withID: requestedAgent.id),
               !isRunning(agent) else { return }
 
+        let routineReports = routineReportsSinceLastUserMessage(forAgentID: agent.id)
         appendTranscriptItem(.user, text: trimmedMessageText, to: agent.id)
         // The agent only learns which routines it has from this list.
         let routinesContext = ClickyRoutinePrompts.currentRoutinesContext(for: routineStore.routines(for: agent.id))
         startTurn(
             for: agent,
-            messageForAgent: "\(routinesContext)\n\n\(trimmedMessageText)",
+            messageForAgent: "\(routinesContext)\n\n\(routineReports)\(trimmedMessageText)",
             isComputerUseApproved: isComputerUseApproved,
-            routineID: nil
+            conversation: mainChatConversation(for: agent)
         )
     }
 
+    /// The chat with the user starts over after this long without a turn…
+    static let mainSessionIdleSecondsBeforeFreshStart: TimeInterval = 45 * 60
+    /// …or after this many turns, carrying over the last few messages.
+    static let mainSessionTurnsBeforeFreshStart = 12
+
+    /// The conversation a turn in the chat with the user continues, after
+    /// counting the turn. Starts a fresh one when the current one has gone
+    /// quiet or long: a resumed session re-reads its whole history on every
+    /// request, so a short handover is far cheaper and loses little.
+    private func mainChatConversation(for agent: ClickyAgent) -> ClickyTurnConversation {
+        let lastMainTurnAt = agent.mainSessionLastTurnAt ?? agent.lastActivityAt
+        let hasConversation = agent.hasStartedSession || agent.claudeMainThreadID != nil || agent.lastHelperEngine == "claude"
+        let isQuietOrLong = Date().timeIntervalSince(lastMainTurnAt) > Self.mainSessionIdleSecondsBeforeFreshStart
+            || (agent.mainSessionTurnCount ?? 0) >= Self.mainSessionTurnsBeforeFreshStart
+        let startsFresh = hasConversation && isQuietOrLong
+
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agent.id }) else {
+            return ClickyTurnConversation(
+                geminiSessionID: agent.sessionID, isFirstGeminiTurn: !agent.hasStartedSession, geminiNeedsHandover: false,
+                claudeConversation: "current", claudeNeedsHandover: false, routineID: nil, mayUseClaude: true
+            )
+        }
+        if startsFresh {
+            agents[agentIndex].sessionID = UUID()
+            agents[agentIndex].hasStartedSession = false
+            agents[agentIndex].claudeMainThreadID = nil
+            agents[agentIndex].mainSessionTurnCount = 0
+        }
+        agents[agentIndex].mainSessionTurnCount = (agents[agentIndex].mainSessionTurnCount ?? 0) + 1
+        agents[agentIndex].mainSessionLastTurnAt = Date()
+        saveRoster()
+        let currentAgent = agents[agentIndex]
+
+        let claudeConversation: String
+        if startsFresh {
+            claudeConversation = "new"
+        } else if let claudeMainThreadID = currentAgent.claudeMainThreadID {
+            claudeConversation = claudeMainThreadID
+        } else if routineStore.routines(for: agent.id).contains(where: { $0.claudeThreadID != nil }) {
+            // A routine's thread may be the bot's open one by now.
+            claudeConversation = "new"
+        } else {
+            claudeConversation = "current"
+        }
+        let previousEngine = currentAgent.lastHelperEngine
+        return ClickyTurnConversation(
+            geminiSessionID: currentAgent.sessionID,
+            isFirstGeminiTurn: !currentAgent.hasStartedSession,
+            geminiNeedsHandover: startsFresh || previousEngine == "claude",
+            claudeConversation: claudeConversation,
+            claudeNeedsHandover: claudeConversation == "new"
+                || previousEngine == "gemini"
+                || (previousEngine == nil && currentAgent.hasStartedSession),
+            routineID: nil,
+            mayUseClaude: true
+        )
+    }
+
+    /// Routine runs keep their own conversations, so the chat with the user
+    /// hears what they reported since the user last wrote.
+    private func routineReportsSinceLastUserMessage(forAgentID agentID: UUID) -> String {
+        let transcript = transcriptsByAgentID[agentID] ?? []
+        let firstIndexAfterLastUserMessage = (transcript.lastIndex { $0.kind == .user }).map { $0 + 1 } ?? 0
+        guard firstIndexAfterLastUserMessage < transcript.count else { return "" }
+        var reportLines: [String] = []
+        var currentRunTitle: String?
+        for item in transcript[firstIndexAfterLastUserMessage...] {
+            if item.kind == .routineRun {
+                currentRunTitle = item.text
+            } else if item.kind == .assistant, let runTitle = currentRunTitle {
+                reportLines.append("- \(runTitle): \(item.text.prefix(600))")
+                currentRunTitle = nil
+            }
+        }
+        guard !reportLines.isEmpty else { return "" }
+        return "[Your routines reported this since the user last wrote:\n" + reportLines.suffix(3).joined(separator: "\n") + "]\n\n"
+    }
+
     /// Runs one turn. The transcript item for it is already added.
-    private func startTurn(for agent: ClickyAgent, messageForAgent: String, isComputerUseApproved: Bool, routineID: UUID?) {
+    private func startTurn(for agent: ClickyAgent, messageForAgent: String, isComputerUseApproved: Bool, conversation: ClickyTurnConversation) {
         runningAgentIDs.insert(agent.id)
         touchAgent(agent.id)
 
-        let isFirstTurn = !agent.hasStartedSession
+        let routineID = conversation.routineID
+        let isFirstTurn = conversation.isFirstGeminiTurn
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
         let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
@@ -334,23 +444,26 @@ final class ClickyRoster: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            if await self.runTurnOnClaudeIfPossible(
+            if conversation.mayUseClaude, await self.runTurnOnClaudeIfPossible(
                 agent: agent,
                 spec: claudeSpec,
                 message: fullMessageForAgent,
+                conversation: conversation,
                 conversationContext: conversationContext
             ) {
                 self.finishTurn(agentID: agentID)
                 return
             }
-            let previousEngine = self.agent(withID: agentID)?.lastHelperEngine
-            self.setLastHelperEngine("gemini", forAgentID: agentID)
-            let geminiMessage = previousEngine == "claude" ? conversationContext + fullMessageForAgent : fullMessageForAgent
+            // A routine run doesn't change which engine the chat is on.
+            if routineID == nil {
+                self.setLastHelperEngine("gemini", forAgentID: agentID)
+            }
+            let geminiMessage = conversation.geminiNeedsHandover ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {
                 do {
                     try await self.runAgentProcess(
                         agent: agent,
-                        sessionID: agent.sessionID,
+                        sessionID: conversation.geminiSessionID,
                         isFirstTurn: isFirstTurn,
                         message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
@@ -363,12 +476,21 @@ final class ClickyRoster: ObservableObject {
                     // the first turn failed before it was written). Start a
                     // fresh session and hand over the recent chat instead,
                     // rather than failing every turn from now on.
-                    let freshSessionID = self.replaceSession(forAgentID: agentID)
+                    let freshSessionID: UUID
+                    let handover: String
+                    if let routineID {
+                        freshSessionID = self.routineStore.beginFreshSession(routineID: routineID)
+                        handover = self.routineStore.routine(withID: routineID)
+                            .map { ClickyRoutinePrompts.lastReportHandover(for: $0) + "\n\n" } ?? ""
+                    } else {
+                        freshSessionID = self.replaceSession(forAgentID: agentID)
+                        handover = self.recentConversationContext(forAgentID: agentID)
+                    }
                     try await self.runAgentProcess(
                         agent: agent,
                         sessionID: freshSessionID,
                         isFirstTurn: true,
-                        message: self.recentConversationContext(forAgentID: agentID) + fullMessageForAgent,
+                        message: handover + fullMessageForAgent,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
                         additionalDirectoryURLs: additionalDirectoryURLs
@@ -379,7 +501,7 @@ final class ClickyRoster: ObservableObject {
                     // (it failed partway): carry on in it.
                     try await self.runAgentProcess(
                         agent: agent,
-                        sessionID: agent.sessionID,
+                        sessionID: conversation.geminiSessionID,
                         isFirstTurn: false,
                         message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
@@ -457,8 +579,8 @@ final class ClickyRoster: ObservableObject {
         let recentLines = (transcriptsByAgentID[agentID] ?? [])
             .filter { $0.kind == .user || $0.kind == .assistant }
             .dropLast()   // the message being sent now
-            .suffix(10)
-            .map { ($0.kind == .user ? "User: " : "You: ") + String($0.text.prefix(1500)) }
+            .suffix(6)
+            .map { ($0.kind == .user ? "User: " : "You: ") + String($0.text.prefix(600)) }
         guard !recentLines.isEmpty else { return "" }
         return "Earlier in this chat (for context):\n" + recentLines.joined(separator: "\n") + "\n\n"
     }
@@ -507,7 +629,10 @@ final class ClickyRoster: ObservableObject {
                 seconds: Double(durationMilliseconds ?? 0) / 1000
             )
             // The CLI saved the session; later turns resume it.
-            if succeeded, let agentIndex = agents.firstIndex(where: { $0.id == agentID }), !agents[agentIndex].hasStartedSession {
+            guard succeeded else { break }
+            if let routineID = routineIDByRunningAgentID[agentID] {
+                routineStore.recordGeminiSessionStarted(routineID: routineID)
+            } else if let agentIndex = agents.firstIndex(where: { $0.id == agentID }), !agents[agentIndex].hasStartedSession {
                 agents[agentIndex].hasStartedSession = true
                 saveRoster()
             }
@@ -535,23 +660,32 @@ final class ClickyRoster: ObservableObject {
         enableSkillsSavedDuringTurn(agentID: agentID, skillFolderNamesBeforeTurn: skillFolderNamesBeforeTurn)
 
         var routineTitle: String?
+        var foundNothingNew = false
         if let routineID, let routine = routineStore.routine(withID: routineID) {
             routineTitle = routine.title
             ClickyAnalytics.trackRoutineRun(succeeded: succeeded)
             if routineStore.markRunFinished(routineID: routineID, succeeded: succeeded) {
                 appendTranscriptItem(.status, text: "Paused routine “\(routine.title)” after \(ClickyRoutineStore.maximumFailedRunsInARow) failed runs in a row", to: agentID)
             }
+            let pendingWatchedTextHash = pendingWatchedTextHashByRoutineID.removeValue(forKey: routineID)
+            if succeeded {
+                if let pendingWatchedTextHash {
+                    routineStore.recordWatchedTextHash(pendingWatchedTextHash, routineID: routineID)
+                }
+                foundNothingNew = recordRoutineRunReport(routineID: routineID, agentID: agentID)
+            }
         }
 
         let computerUseRequest = moveComputerUseRequestOutOfLastReply(agentID: agentID)
         passInstallToolRequestFromLastReply(agentID: agentID)
         // Home clears this right away if the chat is on screen.
-        if let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
+        if !foundNothingNew, let agentIndex = agents.firstIndex(where: { $0.id == agentID }) {
             agents[agentIndex].hasUnreadReply = true
             saveRoster()
         }
         guard let finishedAgent = agent(withID: agentID) else { return }
-        let finalItem = transcriptsByAgentID[agentID]?
+        // A quiet run's reply is gone; an older one mustn't stand in for it.
+        let finalItem = foundNothingNew ? nil : transcriptsByAgentID[agentID]?
             .last { $0.kind == .assistant || $0.kind == .error || $0.kind == .needsApproval }
         let finalReply = finalItem.map { item in
             item.kind == .needsApproval ? "Needs your OK in MausBot: \(item.text)" : item.text
@@ -561,9 +695,10 @@ final class ClickyRoster: ObservableObject {
             finalReply: finalReply,
             succeeded: succeeded,
             computerUseRequest: computerUseRequest,
-            routineTitle: routineTitle
+            routineTitle: routineTitle,
+            foundNothingNew: foundNothingNew
         ))
-        if finalItem?.kind != .needsApproval && computerUseRequest == nil {
+        if finalItem?.kind != .needsApproval && computerUseRequest == nil && !foundNothingNew {
             postHelperFinished(agent: finishedAgent, result: finalReply, succeeded: succeeded)
         }
         // Next task in line, unless the Dot is waiting on the user to allow
@@ -573,6 +708,25 @@ final class ClickyRoster: ObservableObject {
             queuedMessagesByAgentID[agentID] = queuedMessages.isEmpty ? nil : queuedMessages
             sendMessage(nextMessage, to: finishedAgent)
         }
+    }
+
+    /// Saves what a routine run reported (for its next fresh conversation)
+    /// and whether it found anything. A "nothing new" reply becomes a
+    /// quiet status line. Returns true when nothing was new.
+    private func recordRoutineRunReport(routineID: UUID, agentID: UUID) -> Bool {
+        guard var transcript = transcriptsByAgentID[agentID],
+              let runStartIndex = transcript.lastIndex(where: { $0.kind == .routineRun }),
+              let replyIndex = transcript.lastIndex(where: { $0.kind == .assistant }),
+              replyIndex > runStartIndex else { return false }
+        let replyText = transcript[replyIndex].text
+        let foundNothingNew = ClickyRoutinePrompts.isNothingNewReply(replyText)
+        routineStore.recordRunReport(routineID: routineID, reportText: replyText, foundNothingNew: foundNothingNew)
+        if foundNothingNew {
+            transcript.remove(at: replyIndex)
+            transcriptsByAgentID[agentID] = transcript
+            appendTranscriptItem(.status, text: "Nothing new", to: agentID)
+        }
+        return foundNothingNew
     }
 
     /// Strips <ROUTINE> blocks from the agent's last reply, applies them and
@@ -733,31 +887,81 @@ final class ClickyRoster: ObservableObject {
     private func runDueRoutines() {
         guard isNetworkAvailable else { return }
         for dueRoutine in routineStore.dueRoutines(at: Date()) {
-            runRoutine(dueRoutine)
+            runRoutine(dueRoutine, checksWatchedPageFirst: true)
         }
     }
 
     /// Runs a routine now, unless its Clicky is busy (the scheduler tries
-    /// again on its next check).
-    func runRoutine(_ requestedRoutine: ClickyRoutine) {
+    /// again on its next check). A scheduled run of a routine with a
+    /// watched page reads the page first and skips the run, without asking
+    /// any model, when its text hasn't changed.
+    func runRoutine(_ requestedRoutine: ClickyRoutine, checksWatchedPageFirst: Bool = false) {
         guard let routine = routineStore.routine(withID: requestedRoutine.id),
               let agent = agent(withID: routine.agentID),
-              !isRunning(agent) else { return }
+              !isRunning(agent),
+              !routineIDsCheckingWatchedPage.contains(routine.id) else { return }
+        guard checksWatchedPageFirst,
+              let watchURLString = routine.watchURL,
+              let watchURL = URL(string: watchURLString) else {
+            startRoutineRun(routineID: routine.id)
+            return
+        }
+        let routineID = routine.id
+        routineIDsCheckingWatchedPage.insert(routineID)
+        Task { [weak self] in
+            let watchedTextHash = await ClickyRoutineWatchedPage.textHash(of: watchURL)
+            guard let self else { return }
+            self.routineIDsCheckingWatchedPage.remove(routineID)
+            if let watchedTextHash,
+               watchedTextHash == self.routineStore.routine(withID: routineID)?.lastWatchedTextHash {
+                self.routineStore.recordSkippedUnchangedRun(routineID: routineID)
+                return
+            }
+            if let watchedTextHash {
+                self.pendingWatchedTextHashByRoutineID[routineID] = watchedTextHash
+            }
+            self.startRoutineRun(routineID: routineID)
+        }
+    }
+
+    /// Starts a routine run in the routine's own conversation, on Gemini
+    /// (24/7 jobs, which build things, may run on Claude).
+    private func startRoutineRun(routineID: UUID) {
+        guard let routine = routineStore.routine(withID: routineID),
+              let agent = agent(withID: routine.agentID),
+              !isRunning(agent) else {
+            pendingWatchedTextHashByRoutineID[routineID] = nil
+            return
+        }
         let previousRunStartedAt = routine.lastRunStartedAt
         let previousRunFailed = routine.failedRunsInARow > 0
-        guard let runNumber = routineStore.markRunStarted(routineID: routine.id) else { return }
+        let isFreshSession = routineStore.startsFreshSession(routineID: routineID)
+        let geminiSessionID = isFreshSession || routine.geminiSessionID == nil
+            ? routineStore.beginFreshSession(routineID: routineID)
+            : routine.geminiSessionID ?? UUID()
+        guard let currentRoutine = routineStore.routine(withID: routineID),
+              let runNumber = routineStore.markRunStarted(routineID: routineID) else { return }
 
-        appendTranscriptItem(.routineRun, text: "Routine “\(routine.title)” · run \(runNumber)", to: agent.id)
+        appendTranscriptItem(.routineRun, text: "Routine “\(currentRoutine.title)” · run \(runNumber)", to: agent.id)
         startTurn(
             for: agent,
             messageForAgent: ClickyRoutinePrompts.runMessage(
-                for: routine,
+                for: currentRoutine,
                 runNumber: runNumber,
                 previousRunStartedAt: previousRunStartedAt,
-                previousRunFailed: previousRunFailed
+                previousRunFailed: previousRunFailed,
+                isFreshSession: isFreshSession
             ),
             isComputerUseApproved: false,
-            routineID: routine.id
+            conversation: ClickyTurnConversation(
+                geminiSessionID: geminiSessionID,
+                isFirstGeminiTurn: currentRoutine.hasStartedGeminiSession != true,
+                geminiNeedsHandover: false,
+                claudeConversation: currentRoutine.claudeThreadID ?? "new",
+                claudeNeedsHandover: false,
+                routineID: routineID,
+                mayUseClaude: currentRoutine.keepWorking != nil
+            )
         )
     }
 
@@ -942,6 +1146,7 @@ extension ClickyRoster {
         agent: ClickyAgent,
         spec: DottieMausBotSpec,
         message: String,
+        conversation: ClickyTurnConversation,
         conversationContext: String
     ) async -> Bool {
         let agentID = agent.id
@@ -968,19 +1173,25 @@ extension ClickyRoster {
             }
             rememberMausBot(identity, forAgentID: agentID)
 
-            let previousEngine = self.agent(withID: agentID)?.lastHelperEngine
-            let hasHistoryElsewhere = previousEngine == "gemini" || (previousEngine == nil && (self.agent(withID: agentID)?.hasStartedSession ?? false))
-            let claudeMessage = !hasHistoryElsewhere
-                ? message
-                : conversationContext + message
-            setLastHelperEngine("claude", forAgentID: agentID)
+            // A fresh bot (second attempt) starts a new thread too.
+            let claudeMessage = conversation.claudeNeedsHandover || attempt > 0
+                ? conversationContext + message
+                : message
+            let routineID = conversation.routineID
+            if routineID == nil {
+                setLastHelperEngine("claude", forAgentID: agentID)
+            }
 
             let claudeTurnStartedAt = Date()
             let outcome = await mausBotRuntime.runTurn(
                 agentID: agentID,
                 botID: identity.botID,
                 message: claudeMessage,
-                launcher: launcher
+                conversation: attempt == 0 ? conversation.claudeConversation : "new",
+                launcher: launcher,
+                onConversationStarted: { [weak self] threadID in
+                    self?.rememberClaudeThread(threadID, agentID: agentID, routineID: routineID)
+                }
             ) { [weak self] event in
                 self?.handleClaudeEvent(event, agentID: agentID)
             }
@@ -1120,6 +1331,18 @@ extension ClickyRoster {
         guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
               agents[agentIndex].lastHelperEngine != engineName else { return }
         agents[agentIndex].lastHelperEngine = engineName
+        saveRoster()
+    }
+
+    /// The thread a Claude turn ran in, so the next turn continues it.
+    fileprivate func rememberClaudeThread(_ threadID: String, agentID: UUID, routineID: UUID?) {
+        if let routineID {
+            routineStore.recordClaudeThread(threadID, routineID: routineID)
+            return
+        }
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
+              agents[agentIndex].claudeMainThreadID != threadID else { return }
+        agents[agentIndex].claudeMainThreadID = threadID
         saveRoster()
     }
 

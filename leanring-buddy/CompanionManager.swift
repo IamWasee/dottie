@@ -2608,6 +2608,8 @@ final class CompanionManager: ObservableObject {
                 succeeded: turnResult.succeeded,
                 routineTitle: turnResult.routineTitle
             )
+            // A routine run with nothing new stays out of the notch.
+            guard !turnResult.foundNothingNew else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
             let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
             if let computerUseRequest = turnResult.computerUseRequest {
