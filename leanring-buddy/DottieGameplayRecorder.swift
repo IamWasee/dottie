@@ -16,6 +16,7 @@
 //
 
 import AppKit
+import Combine
 import CoreImage
 import Foundation
 import ScreenCaptureKit
@@ -391,8 +392,8 @@ final class DottieGameplayInputState: @unchecked Sendable {
 final class DottieGameplayFrameOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let sessionWriter: DottieGameplaySessionWriter
     private let inputState: DottieGameplayInputState
-    nonisolated(unsafe) private let imageContext = CIContext(options: [.cacheIntermediates: false])
-    nonisolated(unsafe) private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    private let imageContext = CIContext(options: [.cacheIntermediates: false])
+    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     private let lock = NSLock()
     nonisolated(unsafe) private var frameCount = 0
     nonisolated(unsafe) private var byteCount: Int64 = 0
