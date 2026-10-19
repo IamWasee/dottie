@@ -2,11 +2,17 @@
 //  NotchRootView.swift
 //  leanring-buddy
 //
-//  The black shape that grows out of the notch, and every surface inside it:
-//  Clicky's eyes, the listening waveform, the live caption while it speaks,
-//  a text box for typing, and the finished answer as a card. Mirrors the
-//  surfaces shipped Clicky has (NotchRootView, NotchEyeView,
+//  The black island that grows out of the notch, and every surface inside
+//  it: Clicky's eyes, the listening waveform, the live caption while it
+//  speaks, a text box for typing, and the finished answer as a card. Mirrors
+//  the surfaces shipped Clicky has (NotchRootView, NotchEyeView,
 //  NotchTextInputSurface, NotchTextResponseSurface).
+//
+//  It behaves like the iPhone's Dynamic Island: short states (listening,
+//  thinking, a Dot working) grow sideways into the menu bar with something
+//  on each side of the notch, longer ones drop down into a card, and the
+//  top corners curve out into the menu bar so it reads as one piece with
+//  the notch. Every change morphs with a spring.
 //
 
 import AppKit
@@ -17,16 +23,30 @@ struct NotchRootView: View {
     let notchWidth: CGFloat
     let notchHeight: CGFloat
 
-    private var isExpanded: Bool {
-        notchPresenter.surface != .compact || notchPresenter.isHovering
+    /// The Dynamic Island's own feel: quick, with a little overshoot.
+    private static let islandSpring = Animation.spring(response: 0.42, dampingFraction: 0.74)
+
+    /// Content fades in from a blur and a slight shrink as the island
+    /// opens, and back out as it closes, instead of popping.
+    private static let islandContentTransition = AnyTransition(.blurReplace)
+        .combined(with: .scale(scale: 0.92, anchor: .top))
+
+    private var presentation: NotchPresenter.IslandPresentation {
+        notchPresenter.islandPresentation
     }
 
-    /// Matches the shape: square at the top so it merges with the notch.
-    private var shapeOutline: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            bottomLeadingRadius: isExpanded ? 22 : 10,
-            bottomTrailingRadius: isExpanded ? 22 : 10,
-            style: .continuous
+    private var isExpanded: Bool {
+        presentation == .expanded
+    }
+
+    private var shoulderRadius: CGFloat {
+        NotchWindowManager.shoulderRadius(for: presentation)
+    }
+
+    private var islandOutline: DottieIslandShape {
+        DottieIslandShape(
+            shoulderRadius: shoulderRadius,
+            bottomCornerRadius: isExpanded ? 24 : 12
         )
     }
 
@@ -34,30 +54,45 @@ struct NotchRootView: View {
         // The panel is a fixed canvas; only the shape inside it changes size,
         // so the growth animates smoothly on the GPU with its content.
         ZStack(alignment: .top) {
-            shapeOutline
+            islandOutline
                 .fill(Color.black)
 
             VStack(spacing: 0) {
                 // The physical notch covers the middle of this strip; the
-                // Dot indicators sit on either side of it.
+                // wings sit on either side of it.
                 notchStrip
                     .frame(height: notchHeight)
-                surfaceContent
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                if isExpanded {
+                    surfaceContent
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(Self.islandContentTransition)
+                }
             }
+            // The shoulders are outside the black body; keep content off them.
+            .padding(.horizontal, shoulderRadius)
 
             // Level-ups and unlocked notch effects (DottieLevels).
-            DottieNotchEffectBorder(outline: shapeOutline, isExpanded: isExpanded)
+            DottieNotchEffectBorder(outline: islandOutline, isExpanded: isExpanded)
             DottieLevelUpConfetti()
         }
         .frame(width: notchPresenter.shapeSize.width, height: notchPresenter.shapeSize.height, alignment: .top)
-        .clipShape(shapeOutline)
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: notchPresenter.shapeSize)
+        .clipShape(islandOutline)
+        // A soft shadow so the open island lifts off dark wallpapers and
+        // full-screen apps. Behind the clip, so it isn't cut off.
+        .background(
+            islandOutline
+                .fill(Color.black)
+                .shadow(color: Color.black.opacity(isExpanded ? 0.45 : 0), radius: 18, x: 0, y: 8)
+        )
+        .animation(Self.islandSpring, value: notchPresenter.shapeSize)
+        .animation(Self.islandSpring, value: presentation)
         .animation(.easeOut(duration: 0.22), value: notchPresenter.surface)
-        .animation(.easeOut(duration: 0.18), value: notchPresenter.isHovering)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The island is always black, so its colors are always the dark ones,
+        // whatever the Mac's appearance.
+        .environment(\.colorScheme, .dark)
     }
 
     @ViewBuilder
@@ -86,57 +121,105 @@ struct NotchRootView: View {
 
     @ViewBuilder
     private var notchStrip: some View {
-        if notchPresenter.surface == .compact && notchPresenter.showsCompactDotIndicators {
+        if presentation == .wings {
+            let wingWidth = NotchWindowManager.wingWidth(for: notchPresenter.surface)
             HStack(spacing: 0) {
-                // Left: a pulsing light while any Dot is working.
-                ZStack {
-                    if notchPresenter.isMeetingRecording {
-                        Circle()
-                            .fill(Color.red.opacity(0.9))
-                            .frame(width: 6, height: 6)
-                            .help("Dottie is taking meeting notes. Stop them in Home → Meetings, or tell Dottie to stop.")
-                    } else if notchPresenter.isKeepWorkingOn {
-                        Image(systemName: "moon.stars.fill")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(Color(red: 1, green: 0.84, blue: 0.4))
-                            .help("A 24/7 job is running and your Mac is staying awake. Hover the notch to stop it.")
-                    } else if notchPresenter.isAnyDotWorking {
-                        NotchWorkingLight()
-                    } else if let compactBadgeText = notchPresenter.compactBadgeText {
-                        Text(compactBadgeText)
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundColor(DS.Colors.warning)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    } else if !notchPresenter.statusLines.isEmpty {
-                        Image(systemName: "eye.fill")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.75))
-                            .help("Dottie is watching something for you. Hover to see it.")
-                    } else if notchPresenter.isScreenJournalOn {
-                        Circle()
-                            .fill(Color.green.opacity(0.85))
-                            .frame(width: 5, height: 5)
-                            .help("Dottie's brain is keeping a screen journal. Turn it off in Home → Brain.")
-                    }
-                }
-                .frame(width: NotchWindowManager.compactIndicatorWidth)
+                leadingWing
+                    .frame(width: wingWidth)
                 Spacer(minLength: notchWidth)
-                // Right: how many Dots have something new.
-                ZStack {
-                    if notchPresenter.unreadDotCount > 0 {
-                        Text("\(notchPresenter.unreadDotCount)")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                            .frame(minWidth: 16, minHeight: 16)
-                            .background(Circle().fill(DS.Colors.overlayCursorBlue))
-                            .help("\(notchPresenter.unreadDotCount) \(notchPresenter.unreadDotCount == 1 ? "Dot has" : "Dots have") something new")
-                    }
-                }
-                .frame(width: NotchWindowManager.compactIndicatorWidth)
+                trailingWing
+                    .frame(width: wingWidth)
             }
+            .transition(Self.islandContentTransition)
         } else {
             Color.clear
+        }
+    }
+
+    /// Left of the notch: Dottie's eyes while she listens or thinks, else
+    /// the Dot and status lights.
+    @ViewBuilder
+    private var leadingWing: some View {
+        switch notchPresenter.surface {
+        case .listening:
+            HStack(spacing: 5) {
+                NotchEyeView(mood: .listening)
+                if notchPresenter.isDictating {
+                    Image(systemName: "text.cursor")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                        .help("Dictating: let go to paste the text")
+                }
+            }
+        case .thinking:
+            NotchEyeView(mood: .thinking)
+        default:
+            compactStatusLight
+        }
+    }
+
+    /// Right of the notch: the waveform or a spinner while Dottie listens or
+    /// thinks, else how many Dots have something new.
+    @ViewBuilder
+    private var trailingWing: some View {
+        switch notchPresenter.surface {
+        case .listening:
+            NotchWaveformView(audioPowerLevel: notchPresenter.audioPowerLevel, barCount: 6)
+        case .thinking:
+            NotchThinkingDots()
+        default:
+            unreadDotBadge
+        }
+    }
+
+    // MARK: - Closed notch lights
+
+    private var compactStatusLight: some View {
+        // A pulsing light while any Dot is working.
+        ZStack {
+            if notchPresenter.isMeetingRecording {
+                Circle()
+                    .fill(Color.red.opacity(0.9))
+                    .frame(width: 6, height: 6)
+                    .help("Dottie is taking meeting notes. Stop them in Home → Meetings, or tell Dottie to stop.")
+            } else if notchPresenter.isKeepWorkingOn {
+                Image(systemName: "moon.stars.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color(red: 1, green: 0.84, blue: 0.4))
+                    .help("A 24/7 job is running and your Mac is staying awake. Hover the notch to stop it.")
+            } else if notchPresenter.isAnyDotWorking {
+                NotchWorkingLight()
+            } else if let compactBadgeText = notchPresenter.compactBadgeText {
+                Text(compactBadgeText)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(DS.Colors.warning)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            } else if !notchPresenter.statusLines.isEmpty {
+                Image(systemName: "eye.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                    .help("Dottie is watching something for you. Hover to see it.")
+            } else if notchPresenter.isScreenJournalOn {
+                Circle()
+                    .fill(Color.green.opacity(0.85))
+                    .frame(width: 5, height: 5)
+                    .help("Dottie's brain is keeping a screen journal. Turn it off in Home → Brain.")
+            }
+        }
+    }
+
+    private var unreadDotBadge: some View {
+        // How many Dots have something new.
+        ZStack {
+            if notchPresenter.unreadDotCount > 0 {
+                Text("\(notchPresenter.unreadDotCount)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(Circle().fill(DS.Colors.overlayCursorBlue))
+                    .help("\(notchPresenter.unreadDotCount) \(notchPresenter.unreadDotCount == 1 ? "Dot has" : "Dots have") something new")
+            }
         }
     }
 
@@ -284,6 +367,7 @@ struct NotchRootView: View {
                     .background(Capsule().fill(Color.white.opacity(0.16)))
             }
             .buttonStyle(.plain)
+            .pointerCursor()
             .help("Stop (or press Escape)")
         }
         .padding(.top, 8)
@@ -425,8 +509,11 @@ struct NotchEyeView: View {
         }
         .offset(y: mood == .thinking ? -2 : 0)
         .offset(y: speakingBounce ? -1.5 : 0)
+        // Blinks only while on screen. The old repeating dispatch never
+        // stopped, so every eyes view the notch ever showed kept a blink
+        // loop running.
+        .task { await blinkUntilCancelled() }
         .onAppear {
-            scheduleNextBlink()
             if mood == .speaking {
                 withAnimation(.easeInOut(duration: 0.28).repeatForever(autoreverses: true)) {
                     speakingBounce = true
@@ -442,14 +529,14 @@ struct NotchEyeView: View {
             .animation(.easeInOut(duration: 0.08), value: isBlinking)
     }
 
-    private func scheduleNextBlink() {
-        let secondsUntilBlink = Double.random(in: 2.5...5.0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + secondsUntilBlink) {
+    private func blinkUntilCancelled() async {
+        while !Task.isCancelled {
+            let secondsUntilBlink = Double.random(in: 2.5...5.0)
+            try? await Task.sleep(nanoseconds: UInt64(secondsUntilBlink * 1_000_000_000))
+            guard !Task.isCancelled else { return }
             isBlinking = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                isBlinking = false
-                scheduleNextBlink()
-            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            isBlinking = false
         }
     }
 }
@@ -458,7 +545,7 @@ struct NotchEyeView: View {
 
 private struct NotchWaveformView: View {
     let audioPowerLevel: CGFloat
-    private let barCount = 7
+    var barCount = 7
 
     var body: some View {
         HStack(spacing: 3) {
@@ -478,6 +565,29 @@ private struct NotchWaveformView: View {
         let centerWeight = 1 - distanceFromCenter / CGFloat(barCount)
         let clampedPowerLevel = min(1, max(0, audioPowerLevel))
         return 4 + 18 * clampedPowerLevel * centerWeight
+    }
+}
+
+// MARK: - Thinking
+
+/// Three dots that light up in turn while Dottie thinks. Reads at a glance
+/// in the small space beside the notch.
+private struct NotchThinkingDots: View {
+    private static let cycleSeconds = 0.9
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
+            let cycleProgress = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: Self.cycleSeconds) / Self.cycleSeconds
+            let litDotIndex = Int(cycleProgress * 3)
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { dotIndex in
+                    Circle()
+                        .fill(Color.white.opacity(dotIndex == litDotIndex ? 0.95 : 0.3))
+                        .frame(width: 5, height: 5)
+                }
+            }
+        }
     }
 }
 
@@ -692,5 +802,60 @@ private struct NotchTextResponseSurface: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             didJustCopy = false
         }
+    }
+}
+
+// MARK: - Island shape
+
+/// The island's outline: a body hanging from the top of the screen with
+/// rounded bottom corners, and two small inward curves ("shoulders") at the
+/// top that blend it into the menu bar the way the Dynamic Island blends
+/// into the screen edge. The shoulders sit outside the body, so the shape
+/// is 2 × shoulderRadius wider than its black body.
+struct DottieIslandShape: Shape {
+    var shoulderRadius: CGFloat
+    var bottomCornerRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(shoulderRadius, bottomCornerRadius) }
+        set {
+            shoulderRadius = newValue.first
+            bottomCornerRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let clampedShoulderRadius = max(0, min(shoulderRadius, rect.width / 4, rect.height / 2))
+        let bodyMinX = rect.minX + clampedShoulderRadius
+        let bodyMaxX = rect.maxX - clampedShoulderRadius
+        let clampedBottomCornerRadius = max(0, min(bottomCornerRadius, (bodyMaxX - bodyMinX) / 2, rect.height - clampedShoulderRadius))
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        // Left shoulder: curves from the menu bar down into the body.
+        path.addQuadCurve(
+            to: CGPoint(x: bodyMinX, y: rect.minY + clampedShoulderRadius),
+            control: CGPoint(x: bodyMinX, y: rect.minY)
+        )
+        // Down the left side, around the bottom-left corner, across.
+        path.addArc(
+            tangent1End: CGPoint(x: bodyMinX, y: rect.maxY),
+            tangent2End: CGPoint(x: bodyMaxX, y: rect.maxY),
+            radius: clampedBottomCornerRadius
+        )
+        // Around the bottom-right corner and up the right side.
+        path.addArc(
+            tangent1End: CGPoint(x: bodyMaxX, y: rect.maxY),
+            tangent2End: CGPoint(x: bodyMaxX, y: rect.minY),
+            radius: clampedBottomCornerRadius
+        )
+        path.addLine(to: CGPoint(x: bodyMaxX, y: rect.minY + clampedShoulderRadius))
+        // Right shoulder: back out into the menu bar.
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: bodyMaxX, y: rect.minY)
+        )
+        path.closeSubpath()
+        return path
     }
 }

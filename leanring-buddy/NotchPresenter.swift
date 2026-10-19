@@ -67,7 +67,18 @@ final class NotchPresenter: ObservableObject {
         case screenTask
     }
 
+    /// How the island shows the current surface, like the Dynamic Island:
+    /// hidden behind the notch, grown sideways into the menu bar with a
+    /// little status on each side of the notch, or dropped down into a card.
+    enum IslandPresentation: Equatable {
+        case closed
+        case wings
+        case expanded
+    }
+
     private static let textResponseAutoDismissSeconds: TimeInterval = 8
+    static let defaultListeningLabel = "listening"
+    static let defaultThinkingLabel = "thinking"
 
     @Published private(set) var surface: Surface = .compact
     @Published var isHovering = false
@@ -121,6 +132,28 @@ final class NotchPresenter: ObservableObject {
     @Published var peekFiles: [NotchPeekFile] = []
     nonisolated static let maximumPeekFileCount = 5
 
+    var islandPresentation: IslandPresentation {
+        switch surface {
+        case .compact:
+            if isHovering { return .expanded }
+            return showsCompactDotIndicators ? .wings : .closed
+        case .listening:
+            // Dictation shows the words as they come, which needs the card.
+            return liveCaptionText.isEmpty ? .wings : .expanded
+        case .thinking:
+            // A plain "thinking" fits beside the notch; a label like
+            // "looking at your picture" needs the card to be read.
+            return activityLabel == Self.defaultThinkingLabel ? .wings : .expanded
+        case .speaking, .textInput, .textResponse, .screenTask:
+            return .expanded
+        }
+    }
+
+    /// Hold-to-dictate is recording rather than a voice turn.
+    var isDictating: Bool {
+        surface == .listening && activityLabel != Self.defaultListeningLabel
+    }
+
     var unreadDotCount: Int {
         dotSummaries.filter { $0.status == .hasNew }.count
     }
@@ -171,14 +204,14 @@ final class NotchPresenter: ObservableObject {
 
     // MARK: - Inputs from the companion
 
-    func showListening(label: String = "listening") {
+    func showListening(label: String = defaultListeningLabel) {
         cancelAutoDismiss()
         liveCaptionText = ""
         activityLabel = label
         surface = .listening
     }
 
-    func showThinking(label: String = "thinking") {
+    func showThinking(label: String = defaultThinkingLabel) {
         guard surface != .textInput else { return }
         activityLabel = label
         surface = .thinking

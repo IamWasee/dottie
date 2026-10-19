@@ -119,7 +119,7 @@ struct HomeSkillsView: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isSelected ? DS.Colors.accentSubtle : Color.clear)
             )
             .contentShape(Rectangle())
         }

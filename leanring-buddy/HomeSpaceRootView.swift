@@ -48,15 +48,55 @@ struct HomeSpaceRootView: View {
         }
     }
 
+    /// The sidebar's headings, Talk / Make / You, each with its pages.
+    enum SidebarGroup: String, CaseIterable {
+        case talk = "Talk"
+        case make = "Make"
+        case you = "You"
+
+        var sections: [HomeSection] {
+            switch self {
+            case .talk: return [.conversation, .clickys, .projects, .meetings, .phone]
+            case .make: return [.pictures, .skills, .tools, .smartHome]
+            case .you: return [.brain, .profile, .settings]
+            }
+        }
+    }
+
+    // Sidebar layout. DottieSelfKnowledge uses these to point at a row when
+    // accessibility can't find it, so the layout below must match them.
+    static let sidebarWidth: CGFloat = 200
+    static let sidebarTopInset: CGFloat = 8
+    static let sidebarGroupHeaderHeight: CGFloat = 22
+    static let sidebarRowHeight: CGFloat = 28
+    static let sidebarRowSpacing: CGFloat = 2
+    static let sidebarGroupSpacing: CGFloat = 14
+
+    /// How far below the top of the window's content a section's sidebar
+    /// row starts.
+    static func sidebarRowTopOffset(for section: HomeSection) -> CGFloat? {
+        var groupTopOffset = sidebarTopInset
+        for group in SidebarGroup.allCases {
+            let firstRowTopOffset = groupTopOffset + sidebarGroupHeaderHeight + sidebarRowSpacing
+            if let rowIndex = group.sections.firstIndex(of: section) {
+                return firstRowTopOffset + CGFloat(rowIndex) * (sidebarRowHeight + sidebarRowSpacing)
+            }
+            let groupRowsHeight = CGFloat(group.sections.count) * (sidebarRowHeight + sidebarRowSpacing) - sidebarRowSpacing
+            groupTopOffset = firstRowTopOffset + groupRowsHeight + sidebarGroupSpacing
+        }
+        return nil
+    }
+
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var conversationStore: ConversationStore
     @ObservedObject var clickyRoster: ClickyRoster
     @State private var selectedSection: HomeSection = .conversation
+    @State private var hoveredSidebarSection: HomeSection?
 
     var body: some View {
         HStack(spacing: 0) {
-            iconRail
-            Divider().background(DS.Colors.borderSubtle)
+            sidebar
+            Divider()
             Group {
                 switch selectedSection {
                 case .conversation:
@@ -94,9 +134,9 @@ struct HomeSpaceRootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(DS.Colors.background)
         }
-        .background(DS.Colors.background)
-        .preferredColorScheme(.dark)
+        // Follows the Mac's light or dark appearance, like a built-in app.
         .onReceive(clickyRoster.$agentIDRequestedInHome) { requestedAgentID in
             // The notch asked to show a Dot; HomeClickysView selects it.
             if requestedAgentID != nil {
@@ -111,29 +151,62 @@ struct HomeSpaceRootView: View {
         }
     }
 
-    private var iconRail: some View {
-        VStack(spacing: 6) {
-            ForEach(HomeSection.allCases) { section in
-                Button(action: { selectedSection = section }) {
-                    Image(systemName: section.symbolName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(selectedSection == section ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                                .fill(selectedSection == section ? Color.white.opacity(0.08) : Color.clear)
-                        )
+    /// A Mac-style sidebar on the system's translucent sidebar material:
+    /// labeled pages under Talk, Make and You.
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: Self.sidebarGroupSpacing) {
+            ForEach(SidebarGroup.allCases, id: \.self) { sidebarGroup in
+                VStack(alignment: .leading, spacing: Self.sidebarRowSpacing) {
+                    Text(sidebarGroup.rawValue)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .padding(.horizontal, 8)
+                        .frame(height: Self.sidebarGroupHeaderHeight, alignment: .bottomLeading)
+                    ForEach(sidebarGroup.sections) { section in
+                        sidebarRow(for: section)
+                    }
                 }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help(section.rawValue)
-                .accessibilityLabel(Text(section.rawValue))
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 14)
+        .padding(.top, Self.sidebarTopInset)
         .padding(.horizontal, 10)
-        .background(DS.Colors.surface1)
+        .frame(width: Self.sidebarWidth)
+        .frame(maxHeight: .infinity, alignment: .top)
+        // The material runs up under the transparent title bar, as in Finder.
+        .background(DSVisualEffectBackground(material: .sidebar).ignoresSafeArea())
+    }
+
+    private func sidebarRow(for section: HomeSection) -> some View {
+        let isSelected = selectedSection == section
+        let isHovered = hoveredSidebarSection == section
+        return Button(action: { selectedSection = section }) {
+            HStack(spacing: 8) {
+                Image(systemName: section.symbolName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(isSelected ? DS.Colors.textOnAccent : DS.Colors.accentText)
+                    .frame(width: 18)
+                Text(section.rawValue)
+                    .font(.system(size: 13))
+                    .foregroundColor(isSelected ? DS.Colors.textOnAccent : DS.Colors.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: Self.sidebarRowHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected ? DS.Colors.accent : (isHovered ? DS.Colors.surface3.opacity(0.7) : Color.clear))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { isHovering in
+            hoveredSidebarSection = isHovering ? section : (hoveredSidebarSection == section ? nil : hoveredSidebarSection)
+        }
+        .accessibilityLabel(Text(section.rawValue))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -864,7 +937,7 @@ private struct HomeVoiceChooser: View {
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.white.opacity(0.1) : DS.Colors.surface2)
+                .fill(isSelected ? DS.Colors.accentSubtle : DS.Colors.surface2)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -885,7 +958,7 @@ private struct HomeVoiceChooser: View {
                 }
             }
             .frame(width: 24, height: 24)
-            .background(Circle().fill(Color.white.opacity(0.08)))
+            .background(Circle().fill(DS.Colors.surface3))
         }
         .buttonStyle(.plain)
         .pointerCursor()
@@ -962,7 +1035,7 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
     func showHomeWindow() {
         if homeWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+                contentRect: NSRect(x: 0, y: 0, width: 920, height: 620),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -970,7 +1043,8 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
             window.title = "Dottie"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 560, height: 400)
+            // Room for the labeled sidebar plus a readable page.
+            window.minSize = NSSize(width: 720, height: 460)
             window.contentView = NSHostingView(rootView: HomeSpaceRootView(
                 companionManager: companionManager,
                 conversationStore: conversationStore,

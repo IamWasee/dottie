@@ -331,7 +331,7 @@ extension DottieSelfKnowledge {
     enum Target {
         /// A control or text with this visible text; the first that's found.
         case text([String])
-        /// A page's icon in Home's left rail.
+        /// A page's row in Home's sidebar.
         case page(HomeSpaceRootView.HomeSection)
     }
 
@@ -1597,8 +1597,8 @@ extension DottieSelfKnowledge {
         let nodes = accessibleNodes(in: window)
         switch target {
         case .page(let section):
-            // The rail is the left edge of the window.
-            let railNodes = nodes.filter { $0.frame.maxX <= window.frame.minX + 90 }
+            // The sidebar is the left edge of the window.
+            let railNodes = nodes.filter { $0.frame.maxX <= window.frame.minX + HomeSpaceRootView.sidebarWidth + 10 }
             if let rect = bestFrame(for: [section.rawValue], in: railNodes, visibleFrame: window.frame, prefersControlOnRow: false) {
                 return (rect, section.rawValue)
             }
@@ -1697,18 +1697,17 @@ extension DottieSelfKnowledge {
             .min { $0.frame.minX < $1.frame.minX }
     }
 
-    /// Where Home's rail draws a page's icon (36pt buttons, 6pt apart, 14pt
-    /// from the top of the content), for when accessibility doesn't say.
+    /// Where Home's sidebar draws a page's row (see the sidebar layout in
+    /// HomeSpaceRootView), for when accessibility doesn't say.
     private static func railIconFrame(for section: HomeSpaceRootView.HomeSection, in window: NSWindow) -> CGRect? {
-        guard let index = HomeSpaceRootView.HomeSection.allCases.firstIndex(of: section) else { return nil }
+        guard let rowTopOffset = HomeSpaceRootView.sidebarRowTopOffset(for: section) else { return nil }
         let contentTop = window.frame.minY + window.contentLayoutRect.maxY
-        let iconSize: CGFloat = 36
-        let iconTop = contentTop - 14 - CGFloat(index) * (iconSize + 6)
+        let rowHeight = HomeSpaceRootView.sidebarRowHeight
         return CGRect(
             x: window.frame.minX + window.contentLayoutRect.minX + 10,
-            y: iconTop - iconSize,
-            width: iconSize,
-            height: iconSize
+            y: contentTop - rowTopOffset - rowHeight,
+            width: HomeSpaceRootView.sidebarWidth - 20,
+            height: rowHeight
         )
     }
 }

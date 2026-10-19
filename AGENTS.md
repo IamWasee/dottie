@@ -59,6 +59,10 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 
 **Shared URLSession**: Long-lived `URLSession`s are owned by the clients, not per request. Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
+**Native look, light and dark**: Home and the menu bar panel follow the system appearance (native macOS look: system font, sidebar material, accent #0066CC). `DS.Colors` tokens are adaptive `NSColor`s, so surfaces that must stay dark (the notch, cursor overlay, response panel, annotation windows) set `NSAppearance(named: .darkAqua)` on their window. Buttons use `.pointerCursor()` (cursor rects), not `NSCursor` push/pop, which could leave the hand cursor stuck.
+
+**Dynamic Island notch**: The notch panel is one black `DottieIslandShape` that grows out of the hardware notch. Idle it is closed (or shows small wings for unread Dots), listening and thinking open wings beside the notch (eyes + waveform or dots), and everything else (captions, answers, the hover peek, permission and screen-task cards) expands into a card below it with a spring. The window is sized per `IslandPresentation` so it only covers what is drawn.
+
 **Transient Cursor Mode**: When "Show Dottie" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
 
 ## Key Files
@@ -71,10 +75,10 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `GeminiLiveCompanionTranscriptionProvider.swift` | ~150 | Bridges `BuddyDictationManager`'s mic pipeline into the Live session. |
 | `GeminiAPI.swift` | ~210 | Gemini vision chat with SSE streaming via Worker `/chat`. Same call shape as v0's ClaudeAPI. |
 | `GeminiTTSClient.swift` | ~75 | Gemini TTS via Worker `/tts` (classic mode). |
-| `NotchPresenter.swift` | ~210 | State of the notch surface (compact, listening, thinking, speaking, text input, text response), the answer card's auto-dismiss, and the Dot summaries for the badge and hover peek. |
-| `NotchWindowManager.swift` | ~210 | Borderless panel pinned over the notch (or a top-center pill), resized per surface so it never blocks more of the menu bar than needed. |
-| `NotchRootView.swift` | ~390 | SwiftUI for every notch surface, plus `NotchEyeView` (Dottie's eyes). |
-| `HomeSpaceRootView.swift` | ~370 | Home window (conversation transcript, typed composer, settings) and `HomeWindowManager`. |
+| `NotchPresenter.swift` | ~440 | State of the notch surface (compact, listening, thinking, speaking, text input, text response), how open the island is (`IslandPresentation`: closed, wings, expanded), the answer card's auto-dismiss, and the Dot summaries for the badge and hover peek. |
+| `NotchWindowManager.swift` | ~360 | Borderless dark-appearance panel pinned over the notch (or a top-center pill), resized per surface (wings beside the notch, or a card below it) so it never blocks more of the menu bar than needed. |
+| `NotchRootView.swift` | ~860 | The Dynamic Island: `DottieIslandShape` (notch shoulders and rounded bottom), spring transitions between wings and cards, every notch surface, `NotchEyeView` (Dottie's eyes), `NotchWaveformView` and `NotchThinkingDots`. |
+| `HomeSpaceRootView.swift` | ~1060 | Home window with the native sidebar (Talk, Make, You groups), conversation transcript, typed composer, and `HomeWindowManager`. |
 | `GeminiCLIAgentRuntime.swift` | ~330 | Finds and runs Gemini CLI for one agent turn, parses its stream-json events, stops turns. |
 | `ClickyRoster.swift` | ~620 | The agents: roster, workspaces (`AGENTS.md`, `output/`, `tmp/`), transcripts, sending messages, finish callbacks, per-agent skills and the routine scheduler. |
 | `ClickyDictationController.swift` | ~380 | Hold-to-dictate: focus capture through Accessibility, 16kHz recording, Worker `/dictate`, and pasting with a clipboard swap (or clipboard fallback). |
@@ -100,7 +104,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `ClickyNotifications.swift` | ~170 | macOS notifications for Dots: one per Dot (replaced by its next reply, cleared once read), Allow / Don't Allow buttons for computer-use requests, clicks open the Dot in Home. |
 | `ClickyHotkeys.swift` | ~400 | `ClickyHotkey` (a shortcut, its matching and display), `ClickyHotkeyRecorder`, and the Settings recorder field. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
-| `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
+| `DesignSystem.swift` | ~850 | Design system tokens — adaptive light/dark colors (`Color(lightHex:darkHex:)`), corner radii, shared button styles, `DSVisualEffectBackground`. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |

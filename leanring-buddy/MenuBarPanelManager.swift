@@ -135,6 +135,8 @@ final class MenuBarPanelManager: NSObject {
 
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
+        // Recompute the shadow from what's drawn now (rounded corners).
+        panel?.invalidateShadow()
         installClickOutsideMonitor()
     }
 
@@ -163,7 +165,10 @@ final class MenuBarPanelManager: NSObject {
         menuBarPanel.level = .floating
         menuBarPanel.isOpaque = false
         menuBarPanel.backgroundColor = .clear
-        menuBarPanel.hasShadow = false
+        // The window server's shadow follows the panel's rounded shape, like
+        // a system menu bar extra. A SwiftUI shadow was clipped by the
+        // panel's own edges.
+        menuBarPanel.hasShadow = true
         menuBarPanel.hidesOnDeactivate = false
         menuBarPanel.isExcludedFromWindowsMenu = true
         menuBarPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
