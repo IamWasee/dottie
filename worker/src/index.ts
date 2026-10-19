@@ -581,7 +581,7 @@ async function searchWikipedia(query: string): Promise<SearchResult[]> {
   }));
 }
 
-/** The page's visible text, without scripts, styles and markup, cut to about 4000 characters. */
+/** The page's visible text, without scripts, styles and markup, cut to about 2500 characters (the answer is near the top, and every character is read again by the model). */
 async function fetchReadableText(pageURL: string): Promise<string> {
   const response = await fetch(pageURL, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
   const contentType = response.headers.get("content-type") ?? "";
@@ -590,7 +590,7 @@ async function fetchReadableText(pageURL: string): Promise<string> {
   const body = html
     .replace(/<(script|style|noscript|svg|nav|footer|header|form)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
-  return htmlToText(body).slice(0, 4000);
+  return htmlToText(body).slice(0, 2500);
 }
 
 function htmlToText(html: string): string {

@@ -496,8 +496,16 @@ final class ClickyRoster: ObservableObject {
             transcriptsByAgentID[agentID] = transcript
         case .warning(let warningMessage):
             appendTranscriptItem(.error, text: warningMessage, to: agentID, persist: false)
-        case .finished(let succeeded, _, _):
+        case .finished(let succeeded, let totalTokens, let durationMilliseconds):
             lastTurnSucceededByAgentID[agentID] = succeeded
+            // Gemini CLI reports one total; it's nearly all input (the
+            // instructions, tools and resumed session it reads each turn).
+            DottieUsage.shared.record(
+                area: .geminiHelpers,
+                inputTokens: totalTokens ?? 0,
+                outputTokens: 0,
+                seconds: Double(durationMilliseconds ?? 0) / 1000
+            )
             // The CLI saved the session; later turns resume it.
             if succeeded, let agentIndex = agents.firstIndex(where: { $0.id == agentID }), !agents[agentIndex].hasStartedSession {
                 agents[agentIndex].hasStartedSession = true
@@ -967,6 +975,7 @@ extension ClickyRoster {
                 : conversationContext + message
             setLastHelperEngine("claude", forAgentID: agentID)
 
+            let claudeTurnStartedAt = Date()
             let outcome = await mausBotRuntime.runTurn(
                 agentID: agentID,
                 botID: identity.botID,
@@ -975,6 +984,12 @@ extension ClickyRoster {
             ) { [weak self] event in
                 self?.handleClaudeEvent(event, agentID: agentID)
             }
+            DottieUsage.shared.record(
+                area: .claudeHelpers,
+                inputTokens: 0,
+                outputTokens: 0,
+                seconds: Date().timeIntervalSince(claudeTurnStartedAt)
+            )
 
             switch outcome {
             case .finished(let succeeded, let errorText):
@@ -1147,7 +1162,7 @@ extension ClickyRoster {
             """
             ## Your folder and notes
 
-            Your folder is `\(agentWorkspaceURL.path)` (you start there). `AGENTS.md` in it holds your standing notes: read it when you start a task, and add short notes there about the user's preferences and what you learned, so you remember them next time.
+            Your folder is `\(agentWorkspaceURL.path)` (you start there). `AGENTS.md` in it starts with the same instructions you already have here, then your standing notes under its `## Notes` heading. When you start a task, read just the notes (`sed -n '/^## Notes/,$p' AGENTS.md`), not the whole file, and add short notes there about the user's preferences and what you learned, so you remember them next time.
 
             Other folders you may use:
             \(folderLines)

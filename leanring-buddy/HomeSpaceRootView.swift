@@ -552,6 +552,10 @@ private struct HomeSettingsView: View {
                 }
                 settingsGroup(title: "Helpers: Claude via MausBot") { DottieMausBotSettingsCard() }
 
+                settingsGroup(title: "Usage") {
+                    HomeUsageSettings()
+                }
+
                 settingsGroup(title: "Check everything") {
                     HomeSelfCheckSettings()
                 }

@@ -72,9 +72,8 @@ enum DottieSelfKnowledge: DottieToolModule {
         return section
     }
 
-    static var helperPromptSection: String {
-        "about_me tells you what Dottie (the app you run in) can do, where each setting lives, and her live status."
-    }
+    // No helper section: helpers don't get the about_me tool (it's
+    // voice-only), so telling them about it only leads to failed calls.
 
     /// Nobody has had the tour offered yet and there's barely any history.
     private static var isNewUser: Bool {

@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import ImageIO
 import ScreenCaptureKit
 
 struct CompanionScreenCapture {
@@ -303,5 +304,57 @@ struct CompanionCompositeScreenFrame {
         if point.x < rect.minX { return rect.minX - point.x }
         if point.x > rect.maxX { return point.x - rect.maxX }
         return 0
+    }
+}
+
+// MARK: - Unchanged-screen check
+
+/// A tiny grayscale copy of a frame, to tell whether the screen changed
+/// since the last frame sent to Live. Small enough to compare instantly,
+/// big enough that a new line of text or a moved window shows up.
+enum ScreenFrameFingerprint {
+    private static let fingerprintMaximumDimension = 256
+    /// How much one pixel's brightness (0-255) has to move to count as changed.
+    private static let changedPixelBrightnessThreshold = 10
+    /// The mouse pointer moving changes a handful of pixels; more than this
+    /// means something on screen really changed.
+    private static let maximumChangedPixelsForSameScreen = 6
+
+    static func make(fromJPEGData jpegData: Data) -> [UInt8]? {
+        guard let imageSource = CGImageSourceCreateWithData(jpegData as CFData, nil),
+              let thumbnailImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: fingerprintMaximumDimension
+              ] as CFDictionary) else { return nil }
+        let width = thumbnailImage.width
+        let height = thumbnailImage.height
+        var grayscalePixels = [UInt8](repeating: 0, count: width * height)
+        let didDraw = grayscalePixels.withUnsafeMutableBytes { pixelBuffer -> Bool in
+            guard let drawingContext = CGContext(
+                data: pixelBuffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+            drawingContext.draw(thumbnailImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return didDraw ? grayscalePixels : nil
+    }
+
+    static func showSameScreen(_ firstFingerprint: [UInt8], _ secondFingerprint: [UInt8]) -> Bool {
+        guard firstFingerprint.count == secondFingerprint.count else { return false }
+        var changedPixelCount = 0
+        for pixelIndex in firstFingerprint.indices {
+            let brightnessDifference = abs(Int(firstFingerprint[pixelIndex]) - Int(secondFingerprint[pixelIndex]))
+            if brightnessDifference > changedPixelBrightnessThreshold {
+                changedPixelCount += 1
+                if changedPixelCount > maximumChangedPixelsForSameScreen { return false }
+            }
+        }
+        return true
     }
 }

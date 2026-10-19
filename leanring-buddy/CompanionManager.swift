@@ -1176,7 +1176,10 @@ final class CompanionManager: ObservableObject {
         currentLiveTurnScreenFrame = compositeScreenFrame
         currentLiveTurnScreenFrameCapturedAt = compositeScreenFrame == nil ? nil : Date()
         DottieEpisodicMemory.shared.noteConversationScreenshot(compositeScreenFrame?.jpegData)
-        liveVoiceClient.beginUserTurn(screenFrameJPEGData: compositeScreenFrame?.jpegData)
+        liveVoiceClient.beginUserTurn(
+            screenFrameJPEGData: compositeScreenFrame?.jpegData,
+            screenFrameFingerprint: compositeScreenFrame.flatMap { ScreenFrameFingerprint.make(fromJPEGData: $0.jpegData) }
+        )
 
         if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
             liveVoiceClient.sendTurnContextText(compositeScreenFrame.layoutDescription)
@@ -3073,7 +3076,9 @@ final class CompanionManager: ObservableObject {
         do {
             let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
             let labeledImages = labeledScreenImages(from: screenCaptures, annotation: currentTurnAnnotation)
-            let historyForAPI = conversationHistory.map { entry in
+            // The last few exchanges are enough context for one hard
+            // question, and every screen image already rides along.
+            let historyForAPI = conversationHistory.suffix(6).map { entry in
                 (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
             }
 

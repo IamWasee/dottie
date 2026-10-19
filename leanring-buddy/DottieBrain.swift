@@ -55,8 +55,10 @@ final class DottieBrain: ObservableObject {
     static let screenJournalDefaultsKey = "brainScreenJournalEnabled"
     private static let profileModel = "gemini-3.6-flash"
     private static let maximumProfileLength = 3000
-    /// New memories before the profile is brought up to date.
-    private static let memoriesPerProfileUpdate = 10
+    /// New memories before the profile is brought up to date. Every voice
+    /// exchange is a memory, so a low number rewrites the whole profile
+    /// every few minutes of talking.
+    private static let memoriesPerProfileUpdate = 30
 
     @Published private(set) var recentMemories: [Memory] = []
     @Published private(set) var profileText: String = ""

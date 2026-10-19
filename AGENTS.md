@@ -106,6 +106,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~850 | Design system tokens — adaptive light/dark colors (`Color(lightHex:darkHex:)`), corner radii, shared button styles, `DSVisualEffectBackground`. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
+| `DottieUsage.swift` | ~250 | Token counter per area (voice, screen tasks, pointing, memory, helpers) from Gemini's usageMetadata and Gemini CLI stats, Claude helper turns and time, and how fast voice answers start. Settings → Usage. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
 | `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/dictate`, `/gemini/*`, `/config`. |

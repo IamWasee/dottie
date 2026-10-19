@@ -146,6 +146,21 @@ final class GeminiLiveVoiceClient {
     private var lastServerMessageReceivedAt = Date.distantPast
     private static let responseTimeoutSeconds: TimeInterval = 20
     private var sessionResumptionHandle: String?
+    /// When the socket was last closed for being idle. A handle kept across
+    /// an idle close lets the next press pick the conversation up without
+    /// the whole setup being processed again, but only for a while: after
+    /// this long a fresh session also picks up new memories and the date.
+    private var sessionResumptionHandleKeptAt: Date?
+    /// When the user let go of the talk shortcut, to time how long the
+    /// answer takes to start (Settings → Usage).
+    private var userTurnEndedAt: Date?
+    private var openedSessionCount = 0
+    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8])?
+    /// This turn's frame when it wasn't sent because the session already had
+    /// it. A replay on a new session has no earlier picture, so it gets this.
+    private var currentTurnSkippedScreenFrameJPEGData: Data?
+
+    private static let idleResumptionWindowSeconds: TimeInterval = 30 * 60
 
     /// Messages sent before setupComplete arrives are queued here so the user
     /// can start talking immediately on the first press, while the socket is
@@ -197,7 +212,7 @@ final class GeminiLiveVoiceClient {
 
     /// Opens a user turn: connects if needed, interrupts any answer still
     /// playing, and sends the screenshot frame for this turn.
-    func beginUserTurn(screenFrameJPEGData: Data?) {
+    func beginUserTurn(screenFrameJPEGData: Data?, screenFrameFingerprint: [UInt8]? = nil) {
         cancelIdleDisconnect()
         audioPlayer.stopImmediately()
 
@@ -227,8 +242,23 @@ final class GeminiLiveVoiceClient {
 
         connectIfNeeded()
 
+        currentTurnSkippedScreenFrameJPEGData = nil
         if let screenFrameJPEGData {
-            sendScreenFrame(jpegData: screenFrameJPEGData)
+            // Each picture costs hundreds of tokens and stays in the
+            // session's context. When this session already has a picture of
+            // the same screen, say so instead of sending it again.
+            if let screenFrameFingerprint,
+               let lastSentScreenFrame,
+               lastSentScreenFrame.sessionNumber == openedSessionCount,
+               ScreenFrameFingerprint.showSameScreen(screenFrameFingerprint, lastSentScreenFrame.fingerprint) {
+                pendingTurnContextTexts.append("[note] the screen hasn't changed since the last picture you got in this conversation; use that one.")
+                currentTurnSkippedScreenFrameJPEGData = screenFrameJPEGData
+            } else {
+                sendScreenFrame(jpegData: screenFrameJPEGData)
+                if let screenFrameFingerprint {
+                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint)
+                }
+            }
         }
     }
 
@@ -274,6 +304,7 @@ final class GeminiLiveVoiceClient {
     func endUserTurn() {
         guard isUserTurnOpen else { return }
         isUserTurnOpen = false
+        userTurnEndedAt = Date()
         if !pendingTurnContextTexts.isEmpty {
             enqueueOrSend(message: ["realtimeInput": ["text": pendingTurnContextTexts.joined(separator: "\n\n")]])
             pendingTurnContextTexts = []
@@ -352,6 +383,7 @@ final class GeminiLiveVoiceClient {
     private func connectIfNeeded() {
         guard connectionState == .disconnected else { return }
         connectionState = .connecting
+        openedSessionCount += 1
 
         connectionTask = Task { [weak self] in
             guard let self else { return }
@@ -441,6 +473,11 @@ final class GeminiLiveVoiceClient {
         ]
 
         var sessionResumptionConfig: [String: Any] = [:]
+        if let sessionResumptionHandleKeptAt,
+           Date().timeIntervalSince(sessionResumptionHandleKeptAt) > Self.idleResumptionWindowSeconds {
+            sessionResumptionHandle = nil
+        }
+        sessionResumptionHandleKeptAt = nil
         if let sessionResumptionHandle {
             sessionResumptionConfig["handle"] = sessionResumptionHandle
         }
@@ -463,8 +500,16 @@ final class GeminiLiveVoiceClient {
         baseSystemInstruction += "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
-        let historyLines = recentConversationHistory.map { exchange in
-            "user: \(exchange.userTranscript)\nyou: \(exchange.modelTranscript)"
+        // Only the last few exchanges, trimmed: older facts about the user
+        // live in the profile and memories already in the instruction, and
+        // every character here is read again by each new session.
+        let carriedExchanges = Array(recentConversationHistory.suffix(Self.carriedHistoryExchangeCount))
+        let historyLines = carriedExchanges.enumerated().map { exchangeIndex, exchange in
+            let isOneOfTheLatest = exchangeIndex >= carriedExchanges.count - 2
+            let maximumCharacters = isOneOfTheLatest ? 800 : 300
+            let userText = Self.trimmedForHistory(exchange.userTranscript, maximumCharacters: maximumCharacters)
+            let modelText = Self.trimmedForHistory(exchange.modelTranscript, maximumCharacters: maximumCharacters)
+            return "user: \(userText)\nyou: \(modelText)"
         }.joined(separator: "\n")
 
         return baseSystemInstruction + """
@@ -473,6 +518,14 @@ final class GeminiLiveVoiceClient {
         recent conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
         \(historyLines)
         """
+    }
+
+    private static let carriedHistoryExchangeCount = 8
+
+    private static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedText.count > maximumCharacters else { return trimmedText }
+        return String(trimmedText.prefix(maximumCharacters)) + "…"
     }
 
     /// Tool the model calls to make the blue cursor fly to a UI element.
@@ -849,6 +902,12 @@ final class GeminiLiveVoiceClient {
             handleServerContent(serverContent)
         }
 
+        // Live reports each answer's usage once, with the prompt tokens of
+        // the whole context it read for that answer.
+        if let usageMetadata = serverMessage["usageMetadata"] as? [String: Any] {
+            DottieUsage.shared.record(area: .voice, usageMetadata: usageMetadata)
+        }
+
         if let toolCall = serverMessage["toolCall"] as? [String: Any] {
             handleToolCall(toolCall)
         }
@@ -907,6 +966,10 @@ final class GeminiLiveVoiceClient {
                 guard !isDiscardingModelAudioForCurrentTurn else { continue }
                 if !hasModelStartedSpeakingThisTurn {
                     hasModelStartedSpeakingThisTurn = true
+                    if let userTurnEndedAt {
+                        DottieUsage.shared.recordVoiceAnswerStart(seconds: Date().timeIntervalSince(userTurnEndedAt))
+                        self.userTurnEndedAt = nil
+                    }
                     onModelSpeechStarted?()
                 }
                 if !isAudioOutputMuted {
@@ -1200,7 +1263,14 @@ final class GeminiLiveVoiceClient {
         outgoingMessageLock.lock()
         let messagesToReplay = isRecordingCurrentTurnMessages ? currentTurnSentMessages : nil
         outgoingMessageLock.unlock()
-        guard let messagesToReplay else { return false }
+        guard var messagesToReplay else { return false }
+        if let currentTurnSkippedScreenFrameJPEGData,
+           let frameMessageData = try? JSONSerialization.data(withJSONObject: [
+               "realtimeInput": ["video": ["mimeType": "image/jpeg", "data": currentTurnSkippedScreenFrameJPEGData.base64EncodedString()]]
+           ]) {
+            messagesToReplay.insert(String(decoding: frameMessageData, as: UTF8.self), at: 0)
+            self.currentTurnSkippedScreenFrameJPEGData = nil
+        }
 
         turnReplayCount += 1
         shouldUseBackupLiveModel = true
@@ -1277,8 +1347,8 @@ final class GeminiLiveVoiceClient {
             try? await Task.sleep(nanoseconds: UInt64(Self.idleDisconnectDelaySeconds * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             guard !self.isModelTurnInProgress, !self.isUserTurnOpen else { return }
-            print("🔌 Gemini Live: idle, closing socket")
-            self.sessionResumptionHandle = nil
+            print("🔌 Gemini Live: idle, closing socket (keeping the session to resume)")
+            self.sessionResumptionHandleKeptAt = Date()
             self.disconnect()
         }
     }

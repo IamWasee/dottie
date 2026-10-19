@@ -75,6 +75,8 @@ enum DottieEpisodicMemoryTools: DottieToolModule {
     }
 
     static var helperPromptSection: String {
-        "Dottie's episodic memory (what happened in past conversations, helper tasks, screen jobs and on screen, with when and where) is searchable with the memories tool; its files are in \(DottieEpisodicMemory.shared.folderURL.path) (episodes.jsonl, and index.json by day). Check it when a task refers to something from before."
+        // Helpers don't get the memories tool (it's voice-only), so point
+        // them at the files they can search themselves.
+        "Dottie's episodic memory (what happened in past conversations, helper tasks, screen jobs and on screen, with when and where) is in \(DottieEpisodicMemory.shared.folderURL.path): episodes.jsonl, and index.json by day. Search those files when a task refers to something from before."
     }
 }
