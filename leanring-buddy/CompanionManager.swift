@@ -1578,6 +1578,13 @@ final class CompanionManager: ObservableObject {
         screenTaskRunner.onAskUser = { [weak self] question in
             self?.askUserForScreenJob(question, repliesToPhone: job.repliesToPhone)
         }
+        screenTaskRunner.onThinkAloud = { [weak self] line in
+            guard !job.repliesToPhone else { return }
+            self?.speakWhenFree(
+                recordedUserText: "(playing the game, thinking aloud)",
+                instructionText: "you're playing a game for the user. say this in one short line, in your own voice, as if thinking out loud next to them: \"\(line)\". then stop talking. don't call any tool."
+            )
+        }
         screenTaskRunner.onSavePicture = { [weak self] imageData, name, description in
             guard let self,
                   let item = self.imageMemory.add(imageData: imageData, name: name, description: description, savedByDottie: true) else {

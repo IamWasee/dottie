@@ -142,6 +142,10 @@ final class DottieScreenTaskRunner {
     private static let answerWaitSeconds: Double = 180
 
     var isRunning: Bool { runTask != nil }
+    /// Game jobs play through DottieGamePlayer (think, then play).
+    private var gamePlayer: DottieGamePlayer?
+    /// A game job says something out loud now and then.
+    var onThinkAloud: (@MainActor (_ line: String) -> Void)?
 
     func start(
         task taskText: String,
@@ -174,6 +178,29 @@ final class DottieScreenTaskRunner {
                 ["inlineData": ["mimeType": "image/jpeg", "data": referenceImage.jpegData.base64EncodedString()]]
             ]
         }
+        if isGameMode {
+            let player = DottieGamePlayer()
+            player.onProgress = { [weak self] progressLine in
+                self?.onProgress?(0, progressLine)
+            }
+            player.onThinkAloud = { [weak self] line in
+                self?.onThinkAloud?(line)
+            }
+            player.onAskUser = { [weak self] question in
+                self?.onAskUser?(question)
+            }
+            gamePlayer = player
+            let gameName = Self.currentGameName()
+            runTask = Task { [weak self] in
+                let outcome = await player.play(taskText: taskText, gameName: gameName, referenceImages: referenceImages)
+                guard let self, !Task.isCancelled else { return }
+                self.runTask = nil
+                self.currentTaskText = nil
+                self.gamePlayer = nil
+                completion(outcome)
+            }
+            return
+        }
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
@@ -189,6 +216,8 @@ final class DottieScreenTaskRunner {
     func stop() -> Bool {
         guard let runTask else { return false }
         DottieScreenJobQuestions.shared.resolve(with: nil)
+        gamePlayer?.stop()
+        gamePlayer = nil
         runTask.cancel()
         self.runTask = nil
         currentTaskText = nil
@@ -1208,7 +1237,7 @@ final class DottieScreenTaskRunner {
 
     /// "Frontmost app: Opera GX, window: Kaggle - Competitions."
     /// Which game a job is in: the app's name and its window's title.
-    private static func currentGameName() -> String {
+    static func currentGameName() -> String {
         let applicationName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "game"
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return applicationName }
         let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
@@ -1584,18 +1613,24 @@ final class DottieScreenTaskRunner {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestModel = jobModel ?? (isGameMode ? Self.gameModel : Self.taskModel)
-        var requestContents = contents
+        var requestContents = Self.recentSteps(of: contents)
         if !referenceImageParts.isEmpty, var firstParts = requestContents.first?["parts"] as? [[String: Any]] {
             firstParts.insert(contentsOf: referenceImageParts, at: 0)
             requestContents[0]["parts"] = firstParts
         }
-        let requestBody: [String: Any] = [
+        var requestBody: [String: Any] = [
             "model": requestModel,
             "systemInstruction": ["parts": [["text": Self.systemInstruction + (isGameMode ? Self.gameInstruction : "")]]],
             "contents": requestContents,
             "tools": [["functionDeclarations": Self.functionDeclarations + (isGameMode ? Self.gameFunctionDeclarations : [])]],
             "toolConfig": ["functionCallingConfig": ["mode": "ANY"]]
         ]
+        // A step is a quick look-and-act decision; the plan and done check
+        // carry the long thinking. Only the full Flash models take a
+        // thinking level (Teaching sets it the same way).
+        if requestModel.contains("flash") && !requestModel.contains("lite") {
+            requestBody["generationConfig"] = ["thinkingConfig": ["thinkingLevel": "low"]]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (responseData, response) = try await DottieModelPicker.shared.data(for: request, model: requestModel)
@@ -1614,6 +1649,28 @@ final class DottieScreenTaskRunner {
             throw NSError(domain: "DottieScreenTaskRunner", code: -2, userInfo: [NSLocalizedDescriptionKey: "empty answer"])
         }
         return modelParts
+    }
+
+    /// Steps whose results are re-sent with every request. Older ones are
+    /// left out (the first turn, with the task, always stays), so a long
+    /// job doesn't re-read its whole history at every step.
+    private static let keptRecentStepCount = 10
+
+    /// The task turn plus the last few steps. Each step is a model turn and
+    /// the user turn answering it, so dropping them in pairs keeps every
+    /// function call next to its response.
+    private static func recentSteps(of contents: [[String: Any]]) -> [[String: Any]] {
+        let keptEntryCount = keptRecentStepCount * 2
+        guard contents.count > 1 + keptEntryCount else { return contents }
+        let droppedEntryCount = contents.count - 1 - keptEntryCount
+        let evenDroppedEntryCount = droppedEntryCount - droppedEntryCount % 2
+        guard evenDroppedEntryCount > 0 else { return contents }
+        var trimmedContents = [contents[0]] + Array(contents.dropFirst(1 + evenDroppedEntryCount))
+        if var firstParts = trimmedContents[0]["parts"] as? [[String: Any]] {
+            firstParts.append(["text": "(\(evenDroppedEntryCount / 2) earlier steps are left out; the screen and notes since then show where things stand.)"])
+            trimmedContents[0]["parts"] = firstParts
+        }
+        return trimmedContents
     }
 
     /// Keeps only the newest screenshots in the conversation.

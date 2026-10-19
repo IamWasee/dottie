@@ -1543,7 +1543,9 @@ enum GeminiLiveToolCatalog {
         "recall_memory", "remember", "ask_brain",
         "control_device",
         "click_on_screen", "press_keys", "open_url",
-        "run_applescript", "get_schedule", "add_reminder"
+        "run_applescript", "get_schedule", "add_reminder",
+        // Co-op mid-game needs to be instant.
+        "game_command"
     ]
 
     /// One line for the voice prompt naming what the hidden tools cover, so
