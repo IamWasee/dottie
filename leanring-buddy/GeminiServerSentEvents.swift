@@ -47,6 +47,7 @@ enum GeminiServerSentEvents {
     // MARK: - Usage
 
     private static var recentlyRecordedResponseKeys: [String] = []
+    private static let recentlyRecordedResponseKeysLock = NSLock()
 
     /// Some callers read the same response twice (its parts, then its
     /// text), so each response is counted once.
@@ -55,11 +56,17 @@ enum GeminiServerSentEvents {
             .map { "\(usageMetadata[$0] as? Int ?? 0)" }
             .joined(separator: "-")
         let responseKey = "\(callerFile)-\(responseByteCount)-\(usageDescription)"
-        guard !recentlyRecordedResponseKeys.contains(responseKey) else { return }
-        recentlyRecordedResponseKeys.append(responseKey)
-        if recentlyRecordedResponseKeys.count > 50 {
-            recentlyRecordedResponseKeys.removeFirst()
+        // Readers can run on any thread, so the list is locked.
+        recentlyRecordedResponseKeysLock.lock()
+        let wasAlreadyRecorded = recentlyRecordedResponseKeys.contains(responseKey)
+        if !wasAlreadyRecorded {
+            recentlyRecordedResponseKeys.append(responseKey)
+            if recentlyRecordedResponseKeys.count > 50 {
+                recentlyRecordedResponseKeys.removeFirst()
+            }
         }
-        DottieUsage.shared.record(area: DottieUsage.area(forCallerFile: callerFile), usageMetadata: usageMetadata)
+        recentlyRecordedResponseKeysLock.unlock()
+        guard !wasAlreadyRecorded else { return }
+        DottieUsage.recordFromAnyThread(area: DottieUsage.area(forCallerFile: callerFile), usageMetadata: usageMetadata)
     }
 }

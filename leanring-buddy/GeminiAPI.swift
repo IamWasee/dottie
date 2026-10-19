@@ -197,7 +197,7 @@ final class GeminiAPI {
 
         let duration = Date().timeIntervalSince(startTime)
         if let lastUsageMetadata {
-            DottieUsage.shared.record(area: .voice, usageMetadata: lastUsageMetadata)
+            DottieUsage.recordFromAnyThread(area: .voice, usageMetadata: lastUsageMetadata)
         }
         // Teaches the model picker how quick (or busy) this model is.
         DottieModelPicker.shared.record(model: requestedModel, seconds: duration, statusCode: 200, answeredBy: answeringModel)

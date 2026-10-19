@@ -20,7 +20,7 @@ import SwiftUI
 final class DottieUsage: ObservableObject {
     static let shared = DottieUsage()
 
-    enum Area: String, CaseIterable, Codable {
+    enum Area: String, CaseIterable, Codable, Sendable {
         case voice = "Voice"
         case screenTasks = "Screen tasks and games"
         case pointing = "Pointing and teaching"
@@ -84,6 +84,20 @@ final class DottieUsage: ObservableObject {
         record(area: area, inputTokens: inputTokens, outputTokens: answerTokens + thinkingTokens)
     }
 
+    /// For code that isn't on the main actor (streaming readers): reads the
+    /// counts here and records them on the main actor.
+    nonisolated static func recordFromAnyThread(area: Area, usageMetadata: [String: Any]) {
+        let inputTokens = (usageMetadata["promptTokenCount"] as? Int) ?? 0
+        let answerTokens = (usageMetadata["candidatesTokenCount"] as? Int)
+            ?? (usageMetadata["responseTokenCount"] as? Int)
+            ?? 0
+        let thinkingTokens = (usageMetadata["thoughtsTokenCount"] as? Int) ?? 0
+        guard inputTokens + answerTokens + thinkingTokens > 0 else { return }
+        Task { @MainActor in
+            DottieUsage.shared.record(area: area, inputTokens: inputTokens, outputTokens: answerTokens + thinkingTokens)
+        }
+    }
+
     /// Time from releasing the talk shortcut to Dottie's first spoken word.
     func recordVoiceAnswerStart(seconds: Double) {
         guard seconds > 0, seconds < 60 else { return }
@@ -96,7 +110,7 @@ final class DottieUsage: ObservableObject {
     }
 
     /// Which area a Gemini request belongs to, from the file that made it.
-    static func area(forCallerFile callerFile: String) -> Area {
+    nonisolated static func area(forCallerFile callerFile: String) -> Area {
         let fileName = (callerFile as NSString).lastPathComponent
         switch fileName {
         case "DottieScreenTaskRunner.swift", "DottieTVTaskRunner.swift", "DottieGuide.swift", "DottieGames.swift":
