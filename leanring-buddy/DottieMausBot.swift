@@ -108,7 +108,16 @@ enum DottieClaudeFallbackReason: Error, Equatable {
         case .busy: return "Claude is busy right now, using the free backup"
         case .notSignedIn: return "Claude isn't signed in, using the free backup"
         case .notReachable: return "MausBot isn't answering, using the free backup"
-        case .engineProblem: return "Claude couldn't take this one, using the free backup"
+        case .engineProblem(let detail):
+            // Node's own warnings share stderr with the real error.
+            let shortDetail = String(detail
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.contains("ExperimentalWarning") && !$0.contains("--trace-warnings") }?
+                .prefix(160) ?? "")
+            return shortDetail.isEmpty
+                ? "Claude couldn't take this one, using the free backup"
+                : "Claude couldn't take this one (\(shortDetail)), using the free backup"
         }
     }
 
