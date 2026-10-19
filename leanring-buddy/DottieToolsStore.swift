@@ -318,7 +318,11 @@ final class DottieToolsStore: ObservableObject {
         guard connectTasks[serverName] == nil else { return }
         connectTasks[serverName] = Task {
             await self.connect(serverName)
-            self.connectTasks[serverName] = nil
+            // A cancelled attempt was already taken out by stopSession, which
+            // may have put a newer one in its place.
+            if !Task.isCancelled {
+                self.connectTasks[serverName] = nil
+            }
         }
     }
 
@@ -343,6 +347,14 @@ final class DottieToolsStore: ObservableObject {
             statuses[serverName] = problem.status
             return nil
         } catch {
+            // stopSession cancelled this attempt because the settings changed
+            // (a key was saved, the switch flipped). The server's session and
+            // status now belong to the attempt that replaced it, so stopping
+            // the session here would kill that one too and show
+            // "CancellationError" as the problem.
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                return nil
+            }
             let detail = await sessions[serverName]?.errorOutputTail ?? ""
             let lastLine = DottieMCPStdioTransport.lastMeaningfulLine(of: detail)
             var reason = error.localizedDescription
