@@ -23,7 +23,9 @@
 //  On disk, under ~/Library/Application Support/Dottie/MausBot/:
 //    npm/                       openmausbot and Claude Code, when Dottie installed them
 //    teams/, messages/          files handed to the CLI, removed after use
-//    claude-sign-in.command     opens Terminal on `claude auth login`
+//    claude-sign-in.command     opens Terminal on `claude auth login` (only
+//                               when the sign-in can't run inside Dottie;
+//                               see DottieClaudeAccount)
 //    workspace.log              output of the workspace Dottie started, if any
 //
 
@@ -597,6 +599,8 @@ final class DottieMausBot: ObservableObject {
     @Published private(set) var isWorkspaceReachable = false
     @Published private(set) var isWorkspaceStartedByDottie = false
     @Published private(set) var claudeState: ClaudeState = .unknown
+    /// Who Claude Code is signed in as, when it's signed in.
+    @Published private(set) var claudeAccount: DottieClaudeAccount?
     /// What a setup step is doing right now ("Installing MausBot…").
     @Published private(set) var busyText: String?
     @Published private(set) var problemText: String?
@@ -880,6 +884,7 @@ final class DottieMausBot: ObservableObject {
         claudeCheckedAt = Date()
         guard let claudeURL else {
             claudeState = .notInstalled
+            claudeAccount = nil
             return
         }
         let statusResult = await DottieMausBotProcessRunner.run(
@@ -889,10 +894,12 @@ final class DottieMausBot: ObservableObject {
             timeout: 15
         )
         let statusObject = try? JSONSerialization.jsonObject(with: statusResult.standardOutput) as? [String: Any]
-        if let isLoggedIn = statusObject?["loggedIn"] as? Bool {
+        if let statusObject, let isLoggedIn = statusObject["loggedIn"] as? Bool {
             claudeState = isLoggedIn ? .ready : .notSignedIn
+            claudeAccount = DottieClaudeAccount(statusObject: statusObject)
         } else if statusResult.exitCode == DottieMausBotCLI.exitCouldNotLaunch {
             claudeState = .notInstalled
+            claudeAccount = nil
         } else {
             // A check that timed out (a Keychain prompt left open) says nothing.
             claudeState = claudeState == .notInstalled ? .unknown : claudeState
@@ -1011,9 +1018,35 @@ final class DottieMausBot: ObservableObject {
 
     // MARK: Claude sign-in
 
-    /// Opens Terminal on `claude auth login`. The user finishes in their
-    /// browser once; Dottie notices by itself when it's done.
+    /// Signs Claude Code in from inside Dottie: the sign-in page opens in the
+    /// user's browser, and the panel in Settings and on the Helpers page
+    /// offers a private window to pick another account. See DottieClaudeAccount.
     func openClaudeSignIn() {
+        DottieClaudeSignIn.shared.start(switchingAccount: false)
+    }
+
+    /// "Use a different account": signs Claude Code out, then starts a new
+    /// sign-in whose link the user opens where they can pick the account.
+    func switchClaudeAccount() {
+        DottieClaudeSignIn.shared.start(switchingAccount: true)
+    }
+
+    /// Called when Claude Code's sign-in ended well: picks up the new
+    /// account and lifts a pause that was only about being signed out.
+    func claudeSignInFinished() async {
+        signInWatchTask?.cancel()
+        signInWatchTask = nil
+        await refreshClaudeState()
+        if claudeState == .ready,
+           DottieHelperEngine.claudePauseReason == DottieClaudeFallbackReason.notSignedIn.pauseStatusText {
+            resumeClaude()
+        }
+    }
+
+    /// The old way, kept for when Claude Code can't run inside Dottie: opens
+    /// Terminal on `claude auth login`. The user finishes in their browser
+    /// once; Dottie notices by itself when it's done.
+    func openClaudeSignInInTerminal() {
         Task {
             let claudeURL = await Task.detached(priority: .userInitiated) {
                 DottieMausBotLocator.locateClaudeCLI()
@@ -1031,6 +1064,8 @@ final class DottieMausBot: ObservableObject {
             clear
             echo "Signing in to Claude for Dottie's helpers."
             echo "Finish in your browser, then come back to Dottie."
+            echo "To pick another account: sign out of claude.ai in your browser first,"
+            echo "or copy the link below into a private window."
             echo
             '\(escapedClaudePath)' auth login --claudeai
             echo
@@ -1071,8 +1106,10 @@ final class DottieMausBot: ObservableObject {
 
     // MARK: Opening MausBot
 
-    /// The MausBot app when it's installed, else the workspace's own page in
-    /// the user's browser.
+    /// The MausBot app, brought to the front, when it's installed. Else the
+    /// workspace's own page in the user's browser, already signed in (a bare
+    /// http://127.0.0.1:8799 asks a new browser for a pairing code). See
+    /// DottieMausBotOpener.
     func openMausBot() {
         if let desktopAppURL = DottieMausBotLocator.desktopAppURL() {
             if ownedWorkspaceProcess != nil && activeClaudeTurnCount == 0 {
@@ -1080,12 +1117,19 @@ final class DottieMausBot: ObservableObject {
                 stopOwnedWorkspace()
             }
             if ownedWorkspaceProcess == nil {
-                NSWorkspace.shared.openApplication(at: desktopAppURL, configuration: NSWorkspace.OpenConfiguration())
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
+                NSWorkspace.shared.openApplication(at: desktopAppURL, configuration: configuration)
                 return
             }
         }
-        guard let workspacePageURL = URL(string: "http://127.0.0.1:8799") else { return }
-        Task { _ = await DottieBrowser.openInUsersBrowser(workspacePageURL) }
+        Task {
+            guard let launcher = await self.currentLauncher() else {
+                self.problemText = "MausBot isn't set up yet. Tap Set up first."
+                return
+            }
+            await DottieMausBotOpener.openSignedInWorkspacePage(launcher: launcher)
+        }
     }
 
     // MARK: Status lines for Settings
@@ -1109,7 +1153,12 @@ final class DottieMausBot: ObservableObject {
         case .unknown: return "Not checked yet"
         case .notInstalled: return "Claude Code isn't installed"
         case .notSignedIn: return "Not signed in"
-        case .ready: return "Signed in, using your Claude plan"
+        case .ready:
+            guard let claudeAccount else { return "Signed in, using your Claude plan" }
+            if claudeAccount.email == nil && claudeAccount.planName == nil {
+                return "\(claudeAccount.summary), using your Claude plan"
+            }
+            return "Signed in as \(claudeAccount.summary)"
         }
     }
 }
