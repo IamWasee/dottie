@@ -91,7 +91,7 @@ final class DottieMausBotRuntime {
         let modelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
         let instructions = Self.trimmedToByteLimit(spec.instructions, maximumBytes: Self.maximumInstructionBytes)
         let specHash = Self.fingerprint([
-            spec.helperName, spec.title, instructions, spec.workspacePath, modelSelection ?? "", spec.effort ?? "",
+            spec.helperName, spec.title, instructions, spec.workspacePath, modelSelection ?? "", spec.effort ?? "", "computer=off",
             spec.skillFiles.map { "\($0.path)=\($0.isEnabled)" }.joined(separator: ",")
         ])
         if let knownBotID = spec.knownBotID, let knownBotName = spec.knownBotName, spec.knownSpecHash == specHash {
@@ -126,8 +126,10 @@ final class DottieMausBotRuntime {
             "soul": instructions,
             // Like Gemini CLI's yolo mode: shell and file edits without cards.
             "approval": "full",
-            // MausBot's own computer tools; it asks in the app before clicking.
-            "computer": "local",
+            // Dottie does the screen work herself. "local" made MausBot need
+            // its CUA Driver (own Screen Recording + Accessibility grants),
+            // and without them every turn failed before Claude started.
+            "computer": "off",
             "cwd": spec.workspacePath
         ]
         if let modelSelection { botFields["model"] = modelSelection }

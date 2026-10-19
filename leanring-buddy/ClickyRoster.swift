@@ -1156,7 +1156,7 @@ extension ClickyRoster {
             """
             # Using the Mac
 
-            When a task needs an app or a website rather than files, use the computer tools you have. The user approves clicking and typing in the MausBot app; if they say no, finish what you can and say what's left.
+            You don't click or type on the screen yourself; Dottie does that. When a task needs an app or a website rather than files, use the command-line ways below (AppleScript, Shortcuts, `open`, fetching pages). If it truly needs clicking on screen, finish everything else and say exactly which on-screen steps are left, so Dottie can do them.
 
             """,
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibrary.libraryURL),
