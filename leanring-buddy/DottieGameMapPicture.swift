@@ -10,8 +10,10 @@
 //    report.txt next to it says in plain words what was mapped, whether
 //    the depth model works and what the movement model has learned, so
 //    it's easy to tell whether the map is working. map3d.obj (with
-//    map3d.mtl for its colors) is the same map as blocks in 3D, which
-//    Preview, Quick Look, Blender or MeshLab can open and turn around.
+//    map3d.mtl for its colors) is the same map as blocks in 3D, and
+//    map3d-surface.usdz (and .obj) the solid, colored model from
+//    DottieGameSurfaceMap; Preview, Quick Look, Blender or MeshLab open
+//    them and let the user turn them around.
 //  - Listing, opening and deleting maps (the menu bar panel's "Game maps"
 //    button and the `game_maps` voice tool). Deleting removes only the map
 //    and the movement model; the notebook and gameplay recordings stay.
@@ -49,6 +51,7 @@ enum DottieGameMapPicture {
         try? reportText(of: worldMap, floorPlan: floorPlan)
             .write(to: worldMap.mapFolderURL.appendingPathComponent(reportFileName), atomically: true, encoding: .utf8)
         write3DModel(of: worldMap)
+        worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL)
     }
 
     // MARK: - 3D model
@@ -405,13 +408,20 @@ enum DottieGameMapPicture {
     /// user picked another), writing it first for a map saved before 3D
     /// models were. False when it couldn't be made.
     static func open3DModel(_ savedMap: SavedMap) async -> Bool {
-        let modelURL = savedMap.mapFolderURL.appendingPathComponent(modelFileName)
-        if !FileManager.default.fileExists(atPath: modelURL.path) {
+        // The solid model looks like the game; the blocks are the fallback
+        // until enough surface has been seen.
+        let surfaceModelURL = savedMap.mapFolderURL.appendingPathComponent(DottieGameSurfaceMap.modelFileName)
+        let blocksModelURL = savedMap.mapFolderURL.appendingPathComponent(modelFileName)
+        if !FileManager.default.fileExists(atPath: surfaceModelURL.path) || !FileManager.default.fileExists(atPath: blocksModelURL.path) {
             let worldMap = DottieGameWorldMap(gameName: savedMap.gameName, gameFolderURL: savedMap.gameFolderURL)
             await write3DModel(of: worldMap).value
+            await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL).value
         }
-        guard FileManager.default.fileExists(atPath: modelURL.path) else { return false }
-        return NSWorkspace.shared.open(modelURL)
+        if FileManager.default.fileExists(atPath: surfaceModelURL.path) {
+            return NSWorkspace.shared.open(surfaceModelURL)
+        }
+        guard FileManager.default.fileExists(atPath: blocksModelURL.path) else { return false }
+        return NSWorkspace.shared.open(blocksModelURL)
     }
 
     static func deleteMap(_ savedMap: SavedMap) -> Bool {

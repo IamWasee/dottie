@@ -304,13 +304,26 @@ final class DottieGameReflexes {
 
     private func hold(keys keyCombination: String, seconds: Double) async -> StepResult {
         let keyNames = Set(keyCombination.lowercased().replacingOccurrences(of: " ", with: "").split(separator: "+").map(String.init))
+        let beforeThumbnail = recentFrames.last.flatMap { DottieGameVision.thumbnail(of: $0.image) }
         holdOnly(keyNames)
         // People never hold for exactly the same time twice.
         let heldSeconds = min(max(seconds, 0.05), 5) * Double.random(in: 0.88...1.12)
         try? await Task.sleep(nanoseconds: UInt64(heldSeconds * 1_000_000_000))
-        worldMap.noteMovement(heldKeys: heldKeys, seconds: heldSeconds)
+        let keysHeld = heldKeys
         releaseAllKeys()
-        _ = await captureFrame()
+        let afterFrame = await captureFrame()
+        // Keys say what she tried, the picture what happened: walking keys
+        // with a picture that didn't change means she was blocked, so the
+        // map doesn't move her.
+        let pictureDidNotChange: Bool
+        if let beforeThumbnail, let afterFrame, let afterThumbnail = DottieGameVision.thumbnail(of: afterFrame) {
+            pictureDidNotChange = DottieGameVision.changedShare(from: beforeThumbnail, to: afterThumbnail) < 0.01
+        } else {
+            pictureDidNotChange = false
+        }
+        if !pictureDidNotChange {
+            worldMap.noteMovement(heldKeys: keysHeld, seconds: heldSeconds)
+        }
         return StepResult(isEvent: false, note: "Held \(keyCombination) for \(String(format: "%.1f", heldSeconds))s.")
     }
 

@@ -93,6 +93,9 @@ final class DottieGameWorldMap {
     /// Each fine block's color as seen in the game (0xRRGGBB, averaged over
     /// the times it was seen), so the 3D model looks like the place.
     private(set) var detailVoxelColors: [Int64: UInt32] = [:]
+    /// The same looks as solid surfaces, for the 3D model that looks like
+    /// the game (DottieGameSurfaceMap).
+    let surfaceMap: DottieGameSurfaceMap
     /// Feature prints of each spot's view without the HUD strips (see
     /// `recognitionView`), for recognizing it again.
     private var keyframePrints: [Int: VNFeaturePrintObservation] = [:]
@@ -115,6 +118,25 @@ final class DottieGameWorldMap {
     var spawnViewCount: Int { spawnViews.count }
     private var spawnViewPrints: [String: VNFeaturePrintObservation] = [:]
     private static let maximumSpawnViewCount = 8
+
+    /// Named things (the shop, the packager, a portal) remembered like
+    /// spawn: how they look from where she named them, and where that is
+    /// from spawn. Seeing one tells her where she is without going back to
+    /// spawn. Kept in the game's `landmarks` folder beside the map.
+    private struct Landmark: Codable {
+        let name: String
+        let fileName: String
+        let x: Double
+        let y: Double
+        let headingDegrees: Double
+    }
+    private let landmarksFolderURL: URL
+    private var landmarks: [Landmark] = []
+    private var landmarkPrints: [String: VNFeaturePrintObservation] = [:]
+    private static let maximumViewsPerLandmark = 4
+    /// The newest frame's print and the pose it was seen from, for saving
+    /// a landmark's look when a place is named.
+    private var newestSeenView: (featurePrint: VNFeaturePrintObservation, pose: Pose, seenAt: Date)?
     /// Places named before she knew where she was, with her guessed pose.
     private var placesWaitingForLocalizing: [(name: String, pose: Pose)] = []
     private var nextKeyframeID = 0
@@ -181,6 +203,8 @@ final class DottieGameWorldMap {
         let loadedMapFolderURL = gameFolderURL.appendingPathComponent("map", isDirectory: true)
         mapFolderURL = loadedMapFolderURL
         spawnFolderURL = gameFolderURL.appendingPathComponent("spawn", isDirectory: true)
+        landmarksFolderURL = gameFolderURL.appendingPathComponent("landmarks", isDirectory: true)
+        surfaceMap = DottieGameSurfaceMap(mapFolderURL: loadedMapFolderURL)
         try? FileManager.default.createDirectory(at: loadedMapFolderURL.appendingPathComponent("keyframes"), withIntermediateDirectories: true)
 
         let decoder = JSONDecoder()
@@ -230,6 +254,16 @@ final class DottieGameWorldMap {
                    let spawnPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {
                     spawnViews.append(spawnView)
                     spawnViewPrints[spawnView.fileName] = spawnPrint
+                }
+            }
+        }
+        if let landmarksData = try? Data(contentsOf: landmarksFolderURL.appendingPathComponent("landmarks.json")),
+           let loadedLandmarks = try? JSONDecoder().decode([Landmark].self, from: landmarksData) {
+            for landmark in loadedLandmarks {
+                if let printData = try? Data(contentsOf: landmarksFolderURL.appendingPathComponent(landmark.fileName + ".print")),
+                   let landmarkPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {
+                    landmarks.append(landmark)
+                    landmarkPrints[landmark.fileName] = landmarkPrint
                 }
             }
         }
@@ -332,8 +366,13 @@ final class DottieGameWorldMap {
             snapPose(to: matchedKeyframe, poseAtFrame: poseAtFrame)
             return
         }
+        newestSeenView = (framePrint, poseAtFrame, Date())
         if !isLocalized, let spawnHeadingDegrees = matchingSpawnHeading(for: framePrint) {
-            snapToSpawn(facingDegrees: spawnHeadingDegrees, poseAtFrame: poseAtFrame)
+            snapToAnchor(named: "spawn", x: 0, y: 0, facingDegrees: spawnHeadingDegrees, poseAtFrame: poseAtFrame)
+            return
+        }
+        if let matchedLandmark = matchingLandmark(for: framePrint, near: poseAtFrame) {
+            snapToAnchor(named: matchedLandmark.name, x: matchedLandmark.x, y: matchedLandmark.y, facingDegrees: matchedLandmark.headingDegrees, poseAtFrame: poseAtFrame)
             return
         }
         if !isLocalized, Date().timeIntervalSince(lookingForKnownSpotSince) > Self.secondsToWaitForRelocalizing {
@@ -395,21 +434,92 @@ final class DottieGameWorldMap {
         return bestMatch.spawnView.headingDegrees
     }
 
-    /// She sees spawn: she's at 0,0,0 again, facing that view's way.
-    private func snapToSpawn(facingDegrees spawnHeadingDegrees: Double, poseAtFrame: Pose) {
+    /// The landmark this frame shows, if any: any close match while she's
+    /// finding herself, and only a very close one near where she thinks she
+    /// is otherwise (correcting the drift of counted steps).
+    private func matchingLandmark(for framePrint: VNFeaturePrintObservation, near poseAtFrame: Pose) -> Landmark? {
+        var bestMatch: (landmark: Landmark, distance: Float)?
+        for landmark in landmarks {
+            guard let landmarkPrint = landmarkPrints[landmark.fileName] else { continue }
+            var printDistance: Float = 0
+            guard (try? framePrint.computeDistance(&printDistance, to: landmarkPrint)) != nil else { continue }
+            if printDistance < (bestMatch?.distance ?? .greatestFiniteMagnitude) {
+                bestMatch = (landmark, printDistance)
+            }
+        }
+        guard let bestMatch else { return nil }
+        if !isLocalized {
+            return bestMatch.distance < 0.5 ? bestMatch.landmark : nil
+        }
+        let distanceFromPose = hypot(bestMatch.landmark.x - poseAtFrame.x, bestMatch.landmark.y - poseAtFrame.y)
+        return bestMatch.distance < 0.3 && distanceFromPose < 15 ? bestMatch.landmark : nil
+    }
+
+    /// She sees spawn or a landmark from where it was remembered: she's at
+    /// its position from spawn again, facing that view's way.
+    private func snapToAnchor(named anchorName: String, x anchorX: Double, y anchorY: Double, facingDegrees anchorHeadingDegrees: Double, poseAtFrame: Pose) {
         let movedSinceFrameX = pose.x - poseAtFrame.x
         let movedSinceFrameY = pose.y - poseAtFrame.y
         let turnedSinceFrameDegrees = Self.normalizedAngle(pose.headingDegrees - poseAtFrame.headingDegrees)
-        let poseCorrectionX = -poseAtFrame.x
-        let poseCorrectionY = -poseAtFrame.y
-        pose = Pose(x: movedSinceFrameX, y: movedSinceFrameY, headingDegrees: Self.normalizedAngle(spawnHeadingDegrees + turnedSinceFrameDegrees))
-        DottieGameNotebook.appendToPlayLog("Map: recognized spawn, so Dottie is at 0,0,0 again\(keyframes.isEmpty ? " and starts the map from there" : "").", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        let poseCorrectionX = anchorX - poseAtFrame.x
+        let poseCorrectionY = anchorY - poseAtFrame.y
+        let wasLocalized = isLocalized
+        pose = Pose(x: anchorX + movedSinceFrameX, y: anchorY + movedSinceFrameY, headingDegrees: Self.normalizedAngle(anchorHeadingDegrees + turnedSinceFrameDegrees))
+        if !wasLocalized || hypot(poseCorrectionX, poseCorrectionY) > 1 {
+            let positionText = String(format: "(%.1f, %.1f)", anchorX, anchorY)
+            DottieGameNotebook.appendToPlayLog("Map: recognized \(anchorName), so Dottie is at \(positionText) from spawn\(wasLocalized ? String(format: " (she was %.1f off)", hypot(poseCorrectionX, poseCorrectionY)) : "")\(keyframes.isEmpty ? " and starts the map from there" : "").", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        }
         isLocalized = true
         startsNewZoneIfNothingLooksFamiliar = false
         recognitionsThisSession += 1
-        lastConfirmedPose = Pose(x: 0, y: 0, headingDegrees: spawnHeadingDegrees)
+        lastConfirmedPose = Pose(x: anchorX, y: anchorY, headingDegrees: anchorHeadingDegrees)
         walkedSecondsSinceConfirmedPose = 0
-        addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: poseCorrectionY)
+        if !wasLocalized {
+            addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: poseCorrectionY)
+        }
+    }
+
+    /// Remembers how a named place looks from where she is, as a landmark.
+    /// Only with a view from the last few seconds, taken close by.
+    private func rememberLandmarkView(named placeName: String, at placePose: Pose) {
+        guard let newestSeenView, Date().timeIntervalSince(newestSeenView.seenAt) < 5,
+              hypot(newestSeenView.pose.x - placePose.x, newestSeenView.pose.y - placePose.y) < 3 else { return }
+        let viewsOfThisPlace = landmarks.filter { $0.name.caseInsensitiveCompare(placeName) == .orderedSame }
+        guard viewsOfThisPlace.count < Self.maximumViewsPerLandmark,
+              !viewsOfThisPlace.contains(where: { abs(Self.normalizedAngle($0.headingDegrees - newestSeenView.pose.headingDegrees)) < Self.newKeyframeHeadingDegrees }),
+              let printData = try? NSKeyedArchiver.archivedData(withRootObject: newestSeenView.featurePrint, requiringSecureCoding: true) else { return }
+        try? FileManager.default.createDirectory(at: landmarksFolderURL, withIntermediateDirectories: true)
+        let safeName = placeName.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        let landmark = Landmark(
+            name: placeName,
+            fileName: "\(String(safeName).prefix(40))-\(Int(Self.normalizedAngle(newestSeenView.pose.headingDegrees).rounded()))",
+            x: newestSeenView.pose.x,
+            y: newestSeenView.pose.y,
+            headingDegrees: newestSeenView.pose.headingDegrees
+        )
+        try? printData.write(to: landmarksFolderURL.appendingPathComponent(landmark.fileName + ".print"))
+        landmarks.append(landmark)
+        landmarkPrints[landmark.fileName] = newestSeenView.featurePrint
+        if let landmarksData = try? JSONEncoder().encode(landmarks) {
+            try? landmarksData.write(to: landmarksFolderURL.appendingPathComponent("landmarks.json"), options: .atomic)
+        }
+    }
+
+    /// Where each landmark is from spawn and from the others, for the
+    /// brain: "Sell is 6 ahead and 3 right of the Packager".
+    func landmarkLinesForBrain() -> [String] {
+        var firstViewByName: [String: Landmark] = [:]
+        for landmark in landmarks where firstViewByName[landmark.name.lowercased()] == nil {
+            firstViewByName[landmark.name.lowercased()] = landmark
+        }
+        let namedLandmarks = Array(firstViewByName.values).sorted { $0.name < $1.name }.prefix(12)
+        return namedLandmarks.map { landmark in
+            var line = String(format: "%@: %.0f east, %.0f north of spawn", landmark.name, landmark.x, landmark.y)
+            if let nearestOther = namedLandmarks.filter({ $0.name != landmark.name }).min(by: { hypot($0.x - landmark.x, $0.y - landmark.y) < hypot($1.x - landmark.x, $1.y - landmark.y) }) {
+                line += String(format: "; %.0f from %@", hypot(nearestOther.x - landmark.x, nearestOther.y - landmark.y), nearestOther.name)
+            }
+            return line
+        }
     }
 
     /// Keeps a view taken at spawn in the spawn folder, one per direction.
@@ -609,6 +719,11 @@ final class DottieGameWorldMap {
         }
 
         let floorFit = Self.fitFloor(through: cameraSamples.filter(\.isGroundStrip).map { ($0.up, $0.forward) })
+        var surfaceHits: [(x: Double, y: Double, z: Double, color: UInt32?)] = []
+        surfaceHits.reserveCapacity(cameraSamples.count)
+        defer {
+            surfaceMap.addRays(cameraX: framePose.x, cameraY: framePose.y, cameraHeight: Self.cameraHeight, hits: surfaceHits)
+        }
         for cameraSample in cameraSamples {
             var levelForward = cameraSample.forward
             var levelRight = cameraSample.right
@@ -631,6 +746,7 @@ final class DottieGameWorldMap {
             }
             // Far samples are too rough for small blocks.
             guard levelForward < 12 else { continue }
+            surfaceHits.append((worldX, worldY, heightAboveFloor, cameraSample.color))
             let detailKey = Self.voxelKey(
                 gridX: Int(floor(worldX / Self.detailVoxelSize)),
                 gridY: Int(floor(worldY / Self.detailVoxelSize)),
@@ -698,6 +814,7 @@ final class DottieGameWorldMap {
     private func addPlace(named placeName: String, at placePose: Pose) {
         places.removeAll { $0.name.caseInsensitiveCompare(placeName) == .orderedSame }
         places.append(Place(name: placeName, x: placePose.x, y: placePose.y, notedAt: Date()))
+        rememberLandmarkView(named: placeName, at: placePose)
         DottieGameNotebook.appendToPlayLog("Map: named a place \"\(placeName)\" at (\(String(format: "%.1f", placePose.x)), \(String(format: "%.1f", placePose.y))).", gameFolderURL: mapFolderURL.deletingLastPathComponent())
     }
 
@@ -782,6 +899,10 @@ final class DottieGameWorldMap {
                 ? "Dottie hasn't recognized where you are yet; look around a known spot to find out."
                 : "Dottie doesn't know where you are right now. To find out, look around, or head back to spawn (in many games respawning or a spawn or home button takes you there): the map snaps to 0,0,0 as soon as you see it.")
         }
+        let landmarkLines = landmarkLinesForBrain()
+        if !landmarkLines.isEmpty {
+            lines.append("Landmarks Dottie knows on sight (positions from spawn):\n- " + landmarkLines.joined(separator: "\n- "))
+        }
         let nearbyPlaces = places
             .map { place -> (place: Place, turnDegrees: Double, distance: Double) in
                 let placeBearing = bearing(toX: place.x, y: place.y)
@@ -817,6 +938,7 @@ final class DottieGameWorldMap {
         }
         Self.saveVoxels(voxelHits, to: mapFolderURL.appendingPathComponent("voxels.bin"))
         Self.saveDetailVoxels(hits: detailVoxelHits, colors: detailVoxelColors, to: mapFolderURL.appendingPathComponent("detail.bin"))
+        surfaceMap.save()
         // A picture and a report the user can open to see the map working.
         DottieGameMapPicture.write(for: self)
     }
@@ -926,7 +1048,7 @@ final class DottieGameWorldMap {
         voxelKey(gridX: Int(floor(x / voxelSize)), gridY: Int(floor(y / voxelSize)), gridZ: Int(floor(z / voxelSize)))
     }
 
-    static func voxelKey(gridX: Int, gridY: Int, gridZ: Int) -> Int64 {
+    nonisolated static func voxelKey(gridX: Int, gridY: Int, gridZ: Int) -> Int64 {
         let axisOffset = 1 << 20
         let packedX = Int64(clamping: gridX + axisOffset) & 0x1F_FFFF
         let packedY = Int64(clamping: gridY + axisOffset) & 0x1F_FFFF

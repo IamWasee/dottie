@@ -91,9 +91,16 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] Teleports: a black screen (loading, portal, respawn) makes her find where she is again; if nothing looks familiar after 30 seconds, the new area is mapped as its own zone, 500 units away, instead of on top of the old one.
 - [x] Light map (celly's idea): every frame she sees about once a second (not only new spots) casts its ~10,000 depth samples from her position, and each lights a small block (1/8 unit, a quarter of the walking grid) with the color it saw, averaged over sightings. Kept in `map/detail.bin` (13 bytes a block, up to 1.5 million). Walking plans still use the coarse grid.
 - [x] Spawn is 0,0,0 and is known by sight too: views taken at spawn are saved in the game's `spawn/` folder (outside `map/`, so deleting the map keeps them). Seeing one snaps her to 0,0,0; an empty map with a known spawn waits until she sees spawn so the new map keeps the same origin. Every session starts with a look around, which saves spawn's views the first time and finds where she is after that.
+- [x] Solid 3D model (celly: "it should look like an actual shop"): every ray also writes how far each small cell (0.1 unit) is from the surface it hit, averaged over every look, and surface nets turn that into a colored mesh, `map/map3d-surface.usdz` (Preview, Quick Look) and `.obj` (Blender, MeshLab). "Open the 3D map" opens it. Only seen sides exist; the back of a shop fills in once she walks around it.
+- [x] Landmarks: every named place also saves how it looks from where it was named (up to 4 directions) in the game's `landmarks/` folder, with its position from spawn. Seeing one tells her where she is (or corrects drift), and the brain gets each landmark's position from spawn and its distance to the nearest other one.
+- [x] Holding walking keys while the picture doesn't change no longer moves her on the map (she was blocked).
 - [x] The map as a 3D model: every save writes `map/map3d.obj` (colored blocks, opens in Preview, Blender or MeshLab), and "open the 3D map of <game>" opens it.
 
 ## 10. Later (not in this build)
+
+- [ ] Position from what she sees between frames (visual odometry), so walking distance isn't only counted from keys.
+- [ ] Painting screenshots onto the solid model as textures (it has colors per point for now).
+- [ ] Naming places from signs read on screen at the sign's 3D position.
 
 - [ ] Multi-frame reconstruction (Depth Anything 3 small) for sharper geometry.
 - [ ] A real navigation mesh (Recast/Detour style) with heights, so stairs, slopes and several floors plan properly instead of the flat grid.
