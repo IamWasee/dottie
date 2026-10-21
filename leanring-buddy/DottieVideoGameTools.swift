@@ -15,7 +15,7 @@ enum DottieVideoGameTools: DottieToolModule {
         [
             DottieTool(
                 name: "game_command",
-                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', or 'done' to finish mapping. Quick moves happen at once. Answer in two or three words, like 'on it'.",
+                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', 'this is the shop, remember it', or 'done' to finish mapping. Everything the user says about the game while it's being played goes here, never to screenshots, notes or memory tools. Quick moves happen at once. Answer in two or three words, like 'on it'.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [

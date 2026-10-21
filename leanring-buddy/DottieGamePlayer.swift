@@ -111,6 +111,7 @@ final class DottieGamePlayer {
             }
         }
 
+        notebook.log("Session \(notebook.contents.sessionCount) started. Asked: \"\(taskText)\". Window: \(windowGameName). Game: \(gameName). Map: \(worldMap.keyframes.count) spots, \(worldMap.voxelHits.count) 3D points. Depth model: \(DottieGameDepth.shared.statusText).")
         if Self.isWatchRequest(taskText) {
             return await watchUserPlay(taskText: taskText, notebook: notebook, reflexes: reflexes, brain: gameBrain)
         }
@@ -123,14 +124,17 @@ final class DottieGamePlayer {
             thinkAloudIfItsBeenAWhile("Let me look up \(gameName) first.")
             if let guide = await DottieGameResearch.writeGuide(gameName: gameName) {
                 notebook.setGuide(guide)
+                notebook.log("Looked the game up online and wrote a guide (\(guide.count) characters).")
+            } else {
+                notebook.log("Looked the game up online but found nothing useful (or the search failed).")
             }
             guard !Task.isCancelled else { return .stopped }
         }
 
         var recentHistory: [String] = []
-        var nextEvent = notebook.contents.hasLearnedControls
+        var nextEvent = !notebook.needsControlsLearned
             ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
-            : "This game is new to you: learn its controls first (`learn_controls`, or open its controls screen), then start on the task."
+            : "This game is new to you: follow the steps for a new game (read what's known about it, learn_controls, look_around, explore close by), then play what the game asks."
         if worldMap.isFamiliar {
             nextEvent += " Dottie knows this game: her map has \(worldMap.keyframes.count) spots and \(worldMap.places.count) named places, so she won't map them again."
             thinkAloudIfItsBeenAWhile("I know this one, I've got it mapped.")
@@ -189,8 +193,10 @@ final class DottieGamePlayer {
             extraNotes = []
             extraFrameJPEGs = []
 
+            notebook.log("Asked the brain\(needsStrongerModel ? " (stronger model)" : ""): \(nextEvent)")
             guard let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel) else {
                 guard !Task.isCancelled else { return .stopped }
+                notebook.log("The brain didn't answer.")
                 failedBrainCallsInARow += 1
                 if failedBrainCallsInARow >= 3 {
                     return .failed(reason: "Neither Claude nor Gemini answered, so Dottie stopped playing.")
@@ -200,6 +206,7 @@ final class DottieGamePlayer {
                 continue
             }
             failedBrainCallsInARow = 0
+            notebook.log("Brain: thought \"\(plan.thought ?? "")\"; doing \"\(plan.goal)\"; steps: \(plan.steps.map(\.kind).joined(separator: ", "))\(plan.isDone ? "; says it's done" : "")")
             learn(from: plan, notebook: notebook, newestFrame: newestFrame)
             if let placeName = plan.placeName, !placeName.isEmpty {
                 worldMap.notePlace(name: placeName)
@@ -231,6 +238,10 @@ final class DottieGamePlayer {
             for step in plan.steps.prefix(3) {
                 guard !Task.isCancelled else { return .stopped }
                 let stepResult = await reflexes.perform(step, goal: plan.goal)
+                if step.kind == "learn_controls" {
+                    notebook.markControlsRoutineDone()
+                }
+                notebook.log("  \(step.kind)\(stepResult.isEvent ? " (stopped early)" : ""): \(stepResult.note.prefix(400))")
                 recentHistory.append("\(step.kind): \(stepResult.note.prefix(200))")
                 if Self.isTrouble(stepResult.note) {
                     hadTroubleThisRound = true

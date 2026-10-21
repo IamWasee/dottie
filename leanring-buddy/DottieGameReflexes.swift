@@ -79,7 +79,10 @@ final class DottieGameReflexes {
     var currentLoudness: (@MainActor () -> Double)?
 
     let displayFrame: CGRect
-    private let cameraButton: String
+    /// The mouse button held to turn the camera ("right" for Roblox and
+    /// many third-person games, "none" when the mouse turns it freely).
+    /// Learning the controls finds out which one works.
+    private var cameraButton: String
     private let worldMap: DottieGameWorldMap
     private var heldKeys: Set<String> = []
     /// Recent frames, newest last, for the brain's motion pictures.
@@ -634,10 +637,25 @@ final class DottieGameReflexes {
 
     // MARK: - Learning the controls
 
-    private static let commonKeysToTry = ["e", "f", "q", "r", "space", "shift", "tab", "i", "m", "j", "1"]
+    /// The controls almost every game starts with, tried first and in this
+    /// order: (keys, seconds held, what they usually do).
+    private static let defaultControlsToTry: [(keys: String, seconds: Double, usualAction: String)] = [
+        ("w", 0.7, "walk forward"),
+        ("s", 0.7, "walk back"),
+        ("a", 0.7, "walk left"),
+        ("d", 0.7, "walk right"),
+        ("space", 0.15, "jump"),
+        ("w+shift", 1.0, "sprint"),
+        ("c", 0.4, "crouch")
+    ]
+    /// Other keys games often use, tried after the defaults.
+    private static let otherKeysToTry = ["e", "f", "q", "r", "tab", "i", "m", "1"]
 
-    /// Tries the menu and the usual keys one at a time and notes what each
-    /// did, for the brain to write down as controls.
+    /// Learns the controls like a person picking up a new game: the
+    /// default controls first (WASD, space, shift to sprint, C), then
+    /// turning the camera by holding the right mouse button (and without
+    /// it), then the pause menu, then other common keys. Notes what each
+    /// did for the brain to write down as controls.
     private func learnControlsByTrying() async -> StepResult {
         var findings: [String] = []
         guard let startFrame = await captureFrame() else {
@@ -645,7 +663,47 @@ final class DottieGameReflexes {
         }
         var previousTextLines = Set(await Self.readTextOffMain(startFrame))
 
-        // The pause menu often lists the controls.
+        // 1. The default controls.
+        onProgressLine?("Trying the default controls")
+        for defaultControl in Self.defaultControlsToTry {
+            guard !Task.isCancelled else { break }
+            if let finding = await tryKeys(defaultControl.keys, seconds: defaultControl.seconds, previousTextLines: &previousTextLines) {
+                findings.append("\(finding) (usually: \(defaultControl.usualAction))")
+            }
+        }
+
+        // 2. Turning the camera: holding the right mouse button, then not.
+        onProgressLine?("Trying the camera")
+        var cameraFindings: [String] = []
+        var cameraButtonsThatTurn: [String] = []
+        for buttonToTry in ["right", "none"] {
+            guard !Task.isCancelled else { break }
+            guard let beforeFrame = await captureFrame() else { continue }
+            let turnedMousePoints: CGFloat = 220
+            await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: turnedMousePoints, deltaY: 0, button: buttonToTry, seconds: 0.5)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let afterFrame = await captureFrame() else { continue }
+            let shiftFraction = DottieGameMovement.horizontalShiftFraction(from: beforeFrame, to: afterFrame)
+            let didTurn = (shiftFraction.map { abs($0) > 0.03 } ?? false)
+            let buttonDescription = buttonToTry == "right" ? "holding the right mouse button and moving the mouse" : "moving the mouse without a button"
+            if didTurn {
+                cameraButtonsThatTurn.append(buttonToTry)
+                worldMap.movement.learnCameraTurn(before: beforeFrame, after: afterFrame, turnedMousePoints: turnedMousePoints)
+                cameraFindings.append("\(buttonDescription): turns the camera")
+                // Turn back, so the view is where it started.
+                await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: -turnedMousePoints, deltaY: 0, button: buttonToTry, seconds: 0.5)
+            } else {
+                cameraFindings.append("\(buttonDescription): the camera didn't turn")
+            }
+        }
+        if cameraButtonsThatTurn.contains("none") {
+            cameraButton = "none"
+        } else if cameraButtonsThatTurn.contains("right") {
+            cameraButton = "right"
+        }
+        findings += cameraFindings
+
+        // 3. The pause menu often lists the controls.
         _ = DottieScreenActionPerformer.press(keyCombination: "escape")
         try? await Task.sleep(nanoseconds: 800_000_000)
         if let menuFrame = await captureFrame() {
@@ -657,33 +715,42 @@ final class DottieGameReflexes {
         _ = DottieScreenActionPerformer.press(keyCombination: "escape")
         try? await Task.sleep(nanoseconds: 600_000_000)
 
-        for keyName in Self.commonKeysToTry {
+        // 4. Other common keys.
+        onProgressLine?("Trying other keys")
+        for keyName in Self.otherKeysToTry {
             guard !Task.isCancelled else { break }
-            guard let beforeFrame = await captureFrame(), let beforeThumbnail = DottieGameVision.thumbnail(of: beforeFrame) else { continue }
-            _ = await hold(keys: keyName, seconds: 0.15)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard let afterFrame = await captureFrame(), let afterThumbnail = DottieGameVision.thumbnail(of: afterFrame) else { continue }
-            let changedShare = DottieGameVision.changedShare(from: beforeThumbnail, to: afterThumbnail)
-            let afterTextLines = await Self.readTextOffMain(afterFrame)
-            let newTextLines = afterTextLines.filter { !previousTextLines.contains($0) }
-            previousTextLines = Set(afterTextLines)
-            var finding = "\(keyName): "
-            if changedShare > 0.4 {
-                finding += "big change (a menu or screen opened)"
-                // Close whatever opened so the next key is tried in play.
-                _ = DottieScreenActionPerformer.press(keyCombination: keyName == "escape" ? "escape" : keyName)
-                try? await Task.sleep(nanoseconds: 400_000_000)
-            } else if changedShare > 0.05 {
-                finding += "some change"
-            } else {
-                finding += "nothing visible"
+            if let finding = await tryKeys(keyName, seconds: 0.15, previousTextLines: &previousTextLines) {
+                findings.append(finding)
             }
-            if !newTextLines.isEmpty {
-                finding += ", new text: " + newTextLines.prefix(5).joined(separator: " | ")
-            }
-            findings.append(finding)
         }
-        return StepResult(isEvent: true, note: "Tried the menu and common keys. What each did:\n" + findings.joined(separator: "\n") + "\nWrite what you can tell into `controls`.")
+        return StepResult(isEvent: true, note: "Tried the default controls, the camera, the menu and other common keys. What each did:\n" + findings.joined(separator: "\n") + "\nWrite what you can tell into `controls`.")
+    }
+
+    /// Holds keys for a moment and says what changed on screen.
+    private func tryKeys(_ keyCombination: String, seconds: Double, previousTextLines: inout Set<String>) async -> String? {
+        guard let beforeFrame = await captureFrame(), let beforeThumbnail = DottieGameVision.thumbnail(of: beforeFrame) else { return nil }
+        _ = await hold(keys: keyCombination, seconds: seconds)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard let afterFrame = await captureFrame(), let afterThumbnail = DottieGameVision.thumbnail(of: afterFrame) else { return nil }
+        let changedShare = DottieGameVision.changedShare(from: beforeThumbnail, to: afterThumbnail)
+        let afterTextLines = await Self.readTextOffMain(afterFrame)
+        let newTextLines = afterTextLines.filter { !previousTextLines.contains($0) }
+        previousTextLines = Set(afterTextLines)
+        var finding = "\(keyCombination): "
+        if changedShare > 0.4 {
+            finding += "big change (a menu or screen opened)"
+            // Close whatever opened so the next key is tried in play.
+            _ = DottieScreenActionPerformer.press(keyCombination: keyCombination)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        } else if changedShare > 0.05 {
+            finding += "the view moved or changed"
+        } else {
+            finding += "nothing visible"
+        }
+        if !newTextLines.isEmpty {
+            finding += ", new text: " + newTextLines.prefix(5).joined(separator: " | ")
+        }
+        return finding
     }
 
     static func readTextOffMain(_ image: CGImage) async -> [String] {
