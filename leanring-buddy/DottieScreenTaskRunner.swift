@@ -183,9 +183,9 @@ final class DottieScreenTaskRunner {
                 self?.onAskUser?(question)
             }
             gamePlayer = player
-            let gameName = Self.currentGameName()
+            let windowGameName = Self.currentGameName()
             runTask = Task { [weak self] in
-                let outcome = await player.play(taskText: taskText, gameName: gameName, referenceImages: referenceImages)
+                let outcome = await player.play(taskText: taskText, windowGameName: windowGameName, referenceImages: referenceImages)
                 guard let self, !Task.isCancelled else { return }
                 self.runTask = nil
                 self.currentTaskText = nil
