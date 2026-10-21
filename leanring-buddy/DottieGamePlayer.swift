@@ -130,7 +130,7 @@ final class DottieGamePlayer {
         var recentHistory: [String] = []
         var nextEvent = notebook.contents.hasLearnedControls
             ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
-            : "This game is new to you: learn its controls first (`learn_controls`, or open its controls screen), then start on the task."
+            : "This game is new to you: follow the steps for a new game (read what's known about it, learn_controls, look_around, explore close by), then play what the game asks."
         if worldMap.isFamiliar {
             nextEvent += " Dottie knows this game: her map has \(worldMap.keyframes.count) spots and \(worldMap.places.count) named places, so she won't map them again."
             thinkAloudIfItsBeenAWhile("I know this one, I've got it mapped.")
