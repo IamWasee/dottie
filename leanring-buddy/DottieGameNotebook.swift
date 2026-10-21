@@ -45,6 +45,23 @@ final class DottieGameNotebook {
         /// What the game is and how to play it, from the web.
         var guide: String?
         var guideWrittenAt: Date?
+        /// Which version of the controls routine last ran for this game
+        /// (2: default controls first, then the right-click camera).
+        var controlsRoutineVersion: Int?
+    }
+
+    static let currentControlsRoutineVersion = 2
+
+    /// True until the current controls routine has run for this game, so a
+    /// game learned the old way (no shift, C or camera) is learned again.
+    var needsControlsLearned: Bool {
+        (contents.controlsRoutineVersion ?? 0) < Self.currentControlsRoutineVersion
+    }
+
+    func markControlsRoutineDone() {
+        contents.controlsRoutineVersion = Self.currentControlsRoutineVersion
+        contents.hasLearnedControls = true
+        save()
     }
 
     private(set) var contents: Contents
@@ -141,7 +158,7 @@ final class DottieGameNotebook {
             sections.append("About this game (looked up online):\n" + guide)
         }
         if let genre = contents.genre {
-            sections.append("Genre: \(genre). \(DottieGameGenres.starter(for: genre))")
+            sections.append("Genre: \(genre). \(DottieGameGenres.starter(for: genre, gameName: contents.gameName))")
         }
         if !contents.controls.isEmpty {
             let controlLines = contents.controls.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
@@ -299,7 +316,12 @@ final class DottieGameNotebook {
 enum DottieGameGenres {
     static let knownGenres = ["shooter", "rpg", "platformer", "roblox obby", "racing", "puzzle", "strategy", "sandbox"]
 
-    static func starter(for genre: String) -> String {
+    static func starter(for genre: String, gameName: String) -> String {
+        // Roblox games share Roblox's own controls whatever their genre, so
+        // a Roblox "sandbox" doesn't get Minecraft's.
+        if gameName.lowercased().contains("roblox"), !genre.lowercased().contains("obby") {
+            return "Roblox defaults: WASD to move, space to jump, hold right click and move the mouse to turn the camera, shift sprints in some games (or toggles shift-lock), C crouches in some, E or the key shown on screen to interact, and many actions are buttons on screen to click (shops, upgrades, menus). Escape opens Roblox's own menu. Follow the game's arrows, prompts and quest text."
+        }
         switch genre.lowercased() {
         case let name where name.contains("obby"):
             return "Usual: WASD to move, space to jump (hold for longer jumps on some), right-drag turns the camera, shift may sprint. Line up jumps by looking straight at the next platform, start the jump near the edge, and keep holding forward through the air. Falling sends you back to the last checkpoint."
@@ -318,7 +340,7 @@ enum DottieGameGenres {
         case let name where name.contains("sandbox"):
             return "Usual: WASD to move, space to jump, left click to break or use, right click to place, E for inventory. Gather basics first, build shelter before night."
         default:
-            return "Try WASD or the arrow keys to move, space to jump, E or F to interact, escape for the menu."
+            return "Try the defaults: WASD to move, space to jump, shift to sprint, C to crouch, hold right click and move the mouse to turn the camera, E or F to interact, escape for the menu."
         }
     }
 }

@@ -132,7 +132,7 @@ final class DottieGamePlayer {
         }
 
         var recentHistory: [String] = []
-        var nextEvent = notebook.contents.hasLearnedControls
+        var nextEvent = !notebook.needsControlsLearned
             ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
             : "This game is new to you: follow the steps for a new game (read what's known about it, learn_controls, look_around, explore close by), then play what the game asks."
         if worldMap.isFamiliar {
@@ -238,6 +238,9 @@ final class DottieGamePlayer {
             for step in plan.steps.prefix(3) {
                 guard !Task.isCancelled else { return .stopped }
                 let stepResult = await reflexes.perform(step, goal: plan.goal)
+                if step.kind == "learn_controls" {
+                    notebook.markControlsRoutineDone()
+                }
                 notebook.log("  \(step.kind)\(stepResult.isEvent ? " (stopped early)" : ""): \(stepResult.note.prefix(400))")
                 recentHistory.append("\(step.kind): \(stepResult.note.prefix(200))")
                 if Self.isTrouble(stepResult.note) {
