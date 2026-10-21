@@ -27,7 +27,13 @@ enum DottieGameResearch {
     /// The game's name, like "Build a Golem (Roblox)", or the window's
     /// name when it can't be told.
     static func identifyGame(taskText: String, windowGameName: String, screenText: [String]) async -> String {
-        let knownGameNames = DottieGameNotebook.savedGameNames()
+        // A notebook named just "Roblox" (from before games were named) holds
+        // many different experiences; offering it would file every new one
+        // there again, so a bare platform name is never reused.
+        let bareGamePlatformNames: Set<String> = ["roblox", "fortnite", "minecraft", windowGameName.lowercased()]
+        let savedGameNames = DottieGameNotebook.savedGameNames()
+        let knownGameNames = savedGameNames
+            .filter { !bareGamePlatformNames.contains($0.lowercased()) }
         let knownGamesLine = knownGameNames.isEmpty ? "none" : knownGameNames.joined(separator: "; ")
         let prompt = """
         Which video game is the user playing?
@@ -47,7 +53,7 @@ enum DottieGameResearch {
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'*`. ").union(.whitespacesAndNewlines))
             .prefix(80))
         guard !cleanedName.isEmpty else { return windowGameName }
-        return knownGameNames.first { $0.caseInsensitiveCompare(cleanedName) == .orderedSame } ?? cleanedName
+        return savedGameNames.first { $0.caseInsensitiveCompare(cleanedName) == .orderedSame } ?? cleanedName
     }
 
     /// A short guide to the game from the web, or nil with a line saying

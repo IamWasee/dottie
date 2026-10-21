@@ -431,20 +431,45 @@ final class DottieGamePlayer {
             }
         }
 
+        // Frames go to the map below, after the turn they show is noted.
+        let wasMapFeedingPaused = reflexes.isMapFeedingPaused
+        reflexes.isMapFeedingPaused = true
+        defer { reflexes.isMapFeedingPaused = wasMapFeedingPaused }
+
         let spotsBefore = worldMap.keyframes.count
         let mappingStartedAt = Date()
         var lastMovementNotedAt = mappingStartedAt
         var lastProgressShownAt = Date.distantPast
         var finishedByUser = false
+        var previousFrame: CGImage?
+        var turnsSeenOnlyInThePicture = 0
+        var turnsFromTheMouse = 0
         while !Task.isCancelled, Date().timeIntervalSince(mappingStartedAt) < Self.mapWhileUserPlaysSeconds {
             try? await Task.sleep(nanoseconds: 250_000_000)
             // The user's own input moves Dottie's place on the map.
             let userInput = inputWatcher.takeInput()
-            worldMap.noteCameraTurn(degrees: userInput.cameraMousePoints * worldMap.movement.degreesPerMousePoint)
+            if abs(userInput.cameraMousePoints) >= 1 {
+                worldMap.noteCameraTurn(degrees: userInput.cameraMousePoints * worldMap.movement.degreesPerMousePoint)
+                turnsFromTheMouse += 1
+            }
             worldMap.noteMovement(heldKeys: userInput.heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
             lastMovementNotedAt = Date()
-            // Capturing hands the frame to the map.
-            _ = await reflexes.captureFrame()
+            guard let frame = await reflexes.captureFrame() else { continue }
+            // Some games (Roblox while right-click turns the camera) hide
+            // the mouse's movement from Dottie, so a turn the mouse didn't
+            // report is read from the picture: the horizon sliding sideways.
+            // Not while strafing, which slides the picture too.
+            let isStrafing = userInput.heldKeys.contains("a") || userInput.heldKeys.contains("d")
+            if abs(userInput.cameraMousePoints) < 1, !isStrafing, let previousFrame {
+                let shiftFraction = DottieGameMovement.horizontalShiftFraction(from: previousFrame, to: frame)
+                if let shiftFraction, abs(shiftFraction) > 0.02 {
+                    // Turning right slides the scene left.
+                    worldMap.noteCameraTurn(degrees: -shiftFraction * worldMap.movement.horizontalFieldOfViewDegrees)
+                    turnsSeenOnlyInThePicture += 1
+                }
+            }
+            previousFrame = frame
+            reflexes.letMapSee(frame)
             if pendingUserCommands.contains(where: { command in
                 let lowercasedCommand = command.lowercased()
                 return ["done", "stop", "finish", "that's it", "thats it", "enough"].contains { lowercasedCommand.contains($0) }
@@ -460,6 +485,7 @@ final class DottieGamePlayer {
             }
         }
         guard finishedByUser || !Task.isCancelled else { return .stopped }
+        DottieGameNotebook.appendToPlayLog("Mapping while the user played: \(turnsFromTheMouse) camera turns from the mouse, \(turnsSeenOnlyInThePicture) seen only in the picture.", gameFolderURL: worldMap.mapFolderURL.deletingLastPathComponent())
         worldMap.save()
         let newSpotCount = worldMap.keyframes.count - spotsBefore
         return .finished(answer: "I mapped \(newSpotCount) new spots of \(worldMap.gameName) while you played (\(worldMap.keyframes.count) in all). The picture of the map is in the Game maps folder.")
