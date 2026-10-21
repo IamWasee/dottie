@@ -101,7 +101,11 @@ final class DottieGameWorldMap {
     /// Top-down games get keyframes and places but no 3D points.
     var isTopDownView = false
 
-    private let mapFolderURL: URL
+    let mapFolderURL: URL
+    /// For the map's report: what this session added and recognized.
+    private(set) var keyframesAddedThisSession = 0
+    private(set) var framesWithDepthThisSession = 0
+    private(set) var recognitionsThisSession = 0
     private let sessionStartedAt = Date()
     private var lastSavedAt = Date()
     private var isConsideringFrame = false
@@ -242,6 +246,7 @@ final class DottieGameWorldMap {
         if !isTopDownView, voxelHits.count < Self.maximumVoxelCount,
            let depthMap = await DottieGameDepth.shared.depthMap(of: frame) {
             addPoints(from: depthMap, frameAspectRatio: Double(frame.height) / Double(max(frame.width, 1)), at: poseAtFrame)
+            framesWithDepthThisSession += 1
         }
         if Date().timeIntervalSince(lastSavedAt) > Self.secondsBetweenSaves {
             save()
@@ -291,6 +296,7 @@ final class DottieGameWorldMap {
             headingDegrees: Self.normalizedAngle(keyframe.headingDegrees + turnedSinceFrameDegrees)
         )
         isLocalized = true
+        recognitionsThisSession += 1
         lastConfirmedPose = Pose(x: keyframe.x, y: keyframe.y, headingDegrees: keyframe.headingDegrees)
         walkedSecondsSinceConfirmedPose = 0
     }
@@ -299,6 +305,7 @@ final class DottieGameWorldMap {
         let keyframe = Keyframe(id: nextKeyframeID, x: keyframePose.x, y: keyframePose.y, headingDegrees: keyframePose.headingDegrees, createdAt: Date())
         nextKeyframeID += 1
         keyframes.append(keyframe)
+        keyframesAddedThisSession += 1
         keyframePrints[keyframe.id] = featurePrint
         let keyframesFolderURL = mapFolderURL.appendingPathComponent("keyframes")
         if let printData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) {
@@ -462,6 +469,8 @@ final class DottieGameWorldMap {
             try? summaryData.write(to: mapFolderURL.appendingPathComponent("map.json"), options: .atomic)
         }
         Self.saveVoxels(voxelHits, to: mapFolderURL.appendingPathComponent("voxels.bin"))
+        // A picture and a report the user can open to see the map working.
+        DottieGameMapPicture.write(for: self)
     }
 
     /// 10 bytes a voxel: the key, then how many frames saw it.

@@ -52,6 +52,14 @@ final class DottieGameDepth {
             .appendingPathComponent("Dottie/Models", isDirectory: true)
     }
 
+    /// How the depth model is doing, for the map's report.
+    var statusText: String {
+        if estimator != nil { return "loaded and working" }
+        if loadingTask != nil { return "loading (downloading on the first run, about 50 MB)" }
+        if nextLoadAttemptAt != nil { return "couldn't be downloaded or loaded; trying again every 10 minutes, so the map has spots but no 3D shapes" }
+        return "not started"
+    }
+
     /// Starts loading (and on the first run, downloading) the model in the
     /// background, so it's ready by the time mapping needs it.
     func prepare() {

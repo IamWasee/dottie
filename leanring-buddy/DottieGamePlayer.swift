@@ -17,8 +17,14 @@
 //  blind (`go_to_place`). Haiku thinks; Sonnet takes the next look only
 //  when Haiku asks for it (`hard`) or keeps running into trouble.
 //
+//  Before the first session (and every two weeks after), Dottie works out
+//  which game it is from what the user asked and looks it up online
+//  (DottieGameResearch), so the brain starts knowing what the game is about.
+//
 //  "Watch me play" records the user's keys and a few frames for a minute
 //  and turns them into lessons in the notebook instead of playing.
+//  "Map this game for me" maps while the user plays: their keys and mouse
+//  move Dottie's place on the 3D map, and gameplay recording runs too.
 //
 //  Started by DottieScreenTaskRunner for game jobs; stops when the job is
 //  stopped (the task is cancelled).
@@ -42,6 +48,8 @@ final class DottieGamePlayer {
     var reflexModel: DottieGameReflexModel?
 
     private var pendingUserCommands: [String] = []
+    /// The game being played, once it's been named.
+    private(set) var currentGameName: String?
     private var brain: DottieGameBrain?
     private var hearing: DottieGameHearing?
     private var lastThoughtAloudAt: Date?
@@ -51,6 +59,8 @@ final class DottieGamePlayer {
     private static let secondsBetweenRoutineLooks: Double = 20
     private static let secondsBetweenThinkingAloud: Double = 25
     private static let watchSeconds: Double = 60
+    /// "Map this game for me" stops on its own after this long.
+    private static let mapWhileUserPlaysSeconds: Double = 30 * 60
 
     /// The user said something to the game mid-play ("go left", "grab
     /// that"). Quick calls act at once; the rest reach the brain.
@@ -60,7 +70,7 @@ final class DottieGamePlayer {
         pendingUserCommands.append(trimmedCommand)
     }
 
-    func play(taskText: String, gameName: String, referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []) async -> DottieScreenTaskRunner.Outcome {
+    func play(taskText: String, windowGameName: String, referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []) async -> DottieScreenTaskRunner.Outcome {
         guard DottieScreenActionPerformer.canPostEvents else {
             return .failed(reason: "Dottie needs Accessibility access to press keys in games.")
         }
@@ -68,6 +78,11 @@ final class DottieGamePlayer {
             return .failed(reason: "Dottie can't see the screen. Check Screen Recording access.")
         }
         Self.current = self
+        onProgress?("Working out which game this is")
+        let firstScreenText = await DottieGameReflexes.readTextOffMain(firstScreenshot.image)
+        let gameName = await DottieGameResearch.identifyGame(taskText: taskText, windowGameName: windowGameName, screenText: firstScreenText)
+        guard !Task.isCancelled else { return .stopped }
+        currentGameName = gameName
         let notebook = DottieGameNotebook(gameName: gameName)
         let worldMap = DottieGameWorldMap(gameName: gameName, gameFolderURL: notebook.folderURL)
         let cameraButton = gameName.lowercased().contains("roblox") ? "right" : "none"
@@ -98,6 +113,18 @@ final class DottieGamePlayer {
 
         if Self.isWatchRequest(taskText) {
             return await watchUserPlay(taskText: taskText, notebook: notebook, reflexes: reflexes, brain: gameBrain)
+        }
+        if Self.isMapRequest(taskText) {
+            return await mapWhileUserPlays(worldMap: worldMap, reflexes: reflexes, cameraButton: cameraButton)
+        }
+
+        if notebook.needsGuide {
+            onProgress?("Looking up \(gameName)")
+            thinkAloudIfItsBeenAWhile("Let me look up \(gameName) first.")
+            if let guide = await DottieGameResearch.writeGuide(gameName: gameName) {
+                notebook.setGuide(guide)
+            }
+            guard !Task.isCancelled else { return .stopped }
         }
 
         var recentHistory: [String] = []
@@ -269,6 +296,69 @@ final class DottieGamePlayer {
         onThinkAloud?(line)
     }
 
+    // MARK: - Mapping while the user plays
+
+    static func isMapRequest(_ taskText: String) -> Bool {
+        let lowercasedTask = taskText.lowercased()
+        return ["map this", "map the game", "map it", "map my game", "map while i play", "map as i play", "make a map", "build a map"]
+            .contains { lowercasedTask.contains($0) }
+    }
+
+    /// The user plays; Dottie follows along on the 3D map with their keys
+    /// and mouse and maps every new spot. Gameplay recording runs too
+    /// (unless it already was). Ends when the user says they're done
+    /// ("done", "stop mapping"), stops the job, or after half an hour.
+    private func mapWhileUserPlays(worldMap: DottieGameWorldMap, reflexes: DottieGameReflexes, cameraButton: String) async -> DottieScreenTaskRunner.Outcome {
+        onProgress?("Mapping while you play")
+        thinkAloudIfItsBeenAWhile(worldMap.isFamiliar ? "Go ahead, I'll add to my map as you play." : "Go ahead and play, I'll map as you go.")
+        let gameplayRecorder = DottieGameplayRecorder.shared
+        let didStartRecording = !gameplayRecorder.isRecording
+        if didStartRecording {
+            await gameplayRecorder.startRecording()
+        }
+        let inputWatcher = DottieGameMapInputWatcher(cameraButton: cameraButton)
+        defer {
+            inputWatcher.stop()
+            if didStartRecording, gameplayRecorder.isRecording {
+                gameplayRecorder.stopRecording()
+            }
+        }
+
+        let spotsBefore = worldMap.keyframes.count
+        let mappingStartedAt = Date()
+        var lastMovementNotedAt = mappingStartedAt
+        var lastProgressShownAt = Date.distantPast
+        var finishedByUser = false
+        while !Task.isCancelled, Date().timeIntervalSince(mappingStartedAt) < Self.mapWhileUserPlaysSeconds {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            // The user's own input moves Dottie's place on the map.
+            let userInput = inputWatcher.takeInput()
+            worldMap.noteCameraTurn(degrees: userInput.cameraMousePoints * worldMap.movement.degreesPerMousePoint)
+            worldMap.noteMovement(heldKeys: userInput.heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
+            lastMovementNotedAt = Date()
+            if let frame = await reflexes.captureFrame() {
+                reflexes.letMapSee(frame)
+            }
+            if pendingUserCommands.contains(where: { command in
+                let lowercasedCommand = command.lowercased()
+                return ["done", "stop", "finish", "that's it", "thats it", "enough"].contains { lowercasedCommand.contains($0) }
+            }) {
+                pendingUserCommands.removeAll()
+                finishedByUser = true
+                break
+            }
+            pendingUserCommands.removeAll()
+            if Date().timeIntervalSince(lastProgressShownAt) > 3 {
+                onProgress?("Mapping while you play: \(worldMap.keyframes.count - spotsBefore) new spots")
+                lastProgressShownAt = Date()
+            }
+        }
+        guard finishedByUser || !Task.isCancelled else { return .stopped }
+        worldMap.save()
+        let newSpotCount = worldMap.keyframes.count - spotsBefore
+        return .finished(answer: "I mapped \(newSpotCount) new spots of \(worldMap.gameName) while you played (\(worldMap.keyframes.count) in all). The picture of the map is in the Game maps folder.")
+    }
+
     // MARK: - Watching the user play
 
     static func isWatchRequest(_ taskText: String) -> Bool {
@@ -340,5 +430,76 @@ final class DottieGamePlayer {
         notebook.addLessonsFromWatching(plan.lessons)
         let lessonSummary = plan.lessons.prefix(3).joined(separator: "; ")
         return .finished(answer: lessonSummary.isEmpty ? "I watched you play and took notes." : "I watched you play and learned: \(lessonSummary).")
+    }
+}
+
+/// While the user plays and Dottie maps ("map this game for me"): the keys
+/// they hold and how far they turned the camera with the mouse.
+@MainActor
+final class DottieGameMapInputWatcher {
+    private var heldKeys: Set<String> = []
+    private var cameraMousePointsSinceLastTake = 0.0
+    private var eventMonitor: Any?
+    /// "right" when the camera only turns while the right button is held
+    /// (Roblox); otherwise every mouse movement turns it.
+    private let cameraButton: String
+
+    init(cameraButton: String) {
+        self.cameraButton = cameraButton
+        let watchedEventTypes: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        // Global monitors call back on the main thread.
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: watchedEventTypes) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.handle(event)
+            }
+        }
+    }
+
+    func stop() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+        eventMonitor = nil
+    }
+
+    func takeInput() -> (heldKeys: Set<String>, cameraMousePoints: Double) {
+        let takenMousePoints = cameraMousePointsSinceLastTake
+        cameraMousePointsSinceLastTake = 0
+        return (heldKeys, takenMousePoints)
+    }
+
+    private func handle(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown:
+            guard !event.isARepeat else { return }
+            heldKeys.insert(Self.keyName(for: event))
+        case .keyUp:
+            heldKeys.remove(Self.keyName(for: event))
+        case .flagsChanged:
+            if event.modifierFlags.contains(.shift) {
+                heldKeys.insert("shift")
+            } else {
+                heldKeys.remove("shift")
+            }
+        case .rightMouseDragged:
+            cameraMousePointsSinceLastTake += Double(event.deltaX)
+        case .mouseMoved, .leftMouseDragged, .otherMouseDragged:
+            if cameraButton != "right" {
+                cameraMousePointsSinceLastTake += Double(event.deltaX)
+            }
+        default:
+            break
+        }
+    }
+
+    /// The names DottieGameWorldMap.noteMovement reads (w/a/s/d, arrows).
+    private static func keyName(for event: NSEvent) -> String {
+        switch event.keyCode {
+        case 123: return "left"
+        case 124: return "right"
+        case 125: return "down"
+        case 126: return "up"
+        default: return event.charactersIgnoringModifiers?.lowercased() ?? "key \(event.keyCode)"
+        }
     }
 }

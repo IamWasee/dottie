@@ -43,9 +43,9 @@ enum DottieGameNavigator {
         let obstacleLength: Double
     }
 
-    fileprivate typealias GridPoint = DottieGameWorldMap.FloorCell
+    typealias GridPoint = DottieGameWorldMap.FloorCell
 
-    fileprivate struct FloorPlan {
+    struct FloorPlan {
         var blockedCells: Set<GridPoint> = []
         /// Low things she can jump over, with their height in units.
         var lowObstacleHeights: [GridPoint: Double] = [:]
@@ -125,7 +125,7 @@ enum DottieGameNavigator {
 
     // MARK: - Floor plan
 
-    private static func floorPlan(of worldMap: DottieGameWorldMap) -> FloorPlan {
+    static func floorPlan(of worldMap: DottieGameWorldMap) -> FloorPlan {
         let voxelSize = DottieGameWorldMap.voxelSize
         var bodyHeightHits: [GridPoint: Int] = [:]
         var highestHitRow: [GridPoint: Int] = [:]

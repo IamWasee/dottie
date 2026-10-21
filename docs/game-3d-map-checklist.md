@@ -66,7 +66,16 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] Blind walks find another way around a blocker (up to twice) before handing back to the brain.
 - [x] celly's local reflex model can drive blind walks too: `DottieGameReflexModel.nextBlindMove` gets the frame, the place, the leg and how far into it she is; returning nil keeps the planned keys.
 
-## 8. Later (not in this build)
+## 8. Research, map mode and map files (third build, asked for on 2026-10-21)
+
+- [x] Dottie names the game from what the user asked ("build a golem roblox"), the window and the screen text, so each Roblox experience gets its own notebook and map instead of sharing one called "Roblox". A game she knows keeps its exact name.
+- [x] Before the first session (and every two weeks), she searches the web for the game and writes a short guide (what it is, the goal, how to progress, controls, tips) into the notebook, which the brain reads every turn.
+- [x] "Map this game for me": the user plays, Dottie follows on the map with their keys and mouse, maps every new spot, and gameplay recording runs too. Ends on "done", stop, or after 30 minutes.
+- [x] Every save draws the map from above (`map/overview.png`) and writes `map/report.txt` saying whether the depth model works, how many spots were recognized and what movement she has learned.
+- [x] "Game maps" button in the menu bar panel opens the maps in Finder.
+- [x] `game_maps` voice tool: list maps, open one, or delete one (after an on-screen confirmation; the notebook and recordings stay).
+
+## 9. Later (not in this build)
 
 - [ ] Multi-frame reconstruction (Depth Anything 3 small) for sharper geometry.
 - [ ] A real navigation mesh (Recast/Detour style) with heights, so stairs, slopes and several floors plan properly instead of the flat grid.
@@ -79,4 +88,7 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [ ] `go_to_place` reaches a named place without the brain in between.
 - [ ] Memory stays under 4-5 GB while playing.
 - [ ] A route over something low: Dottie jumps at the right moment, and the jump height in `movement.json` moves after a few tries.
+- [ ] Say "play build a golem roblox": Dottie says she's looking it up, and the game's `notebook.json` gets a `guide`.
+- [ ] Say "map this game for me", walk around, say "done": `map/overview.png` shows the spots, and `report.txt` shows 3D points above 0.
+- [ ] Ask Dottie to delete a game's map: the confirmation shows, and the `map` folder is gone afterwards.
 - [ ] Stand a player in the way of a known route: Dottie goes around, and the spot isn't saved as blocked once they've moved.

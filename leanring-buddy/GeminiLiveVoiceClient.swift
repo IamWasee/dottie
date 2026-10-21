@@ -778,7 +778,7 @@ final class GeminiLiveVoiceClient {
                 ],
                 "game": [
                     "type": "BOOLEAN",
-                    "description": "True when the job is playing or doing something inside a video game (walking somewhere, picking up or using an item, fighting, building), so it runs in quick game mode with movement keys and camera control."
+                    "description": "True when the job is playing or doing something inside a video game (walking somewhere, picking up or using an item, fighting, building), or mapping a game while the user plays it ('map this game for me'), so it runs in quick game mode with movement keys and camera control."
                 ],
                 "reference_images": [
                     "type": "ARRAY",

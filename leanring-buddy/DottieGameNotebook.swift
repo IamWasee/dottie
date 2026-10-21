@@ -6,7 +6,8 @@
 //  gets better at it like a person does: the controls (learned from the
 //  controls screen or by trying keys), facts ("E opens doors", "red barrels
 //  explode"), guesses still to test, what killed her, lessons from watching
-//  the user play, the game's genre, and places she knows by sight.
+//  the user play, the game's genre, places she knows by sight, and a
+//  guide to the game looked up on the web (DottieGameResearch).
 //
 //  Places are remembered as a small picture plus directions in landmarks
 //  ("past the fountain, left at the red house") instead of coordinates, and
@@ -41,6 +42,9 @@ final class DottieGameNotebook {
         var lessonsFromWatching: [String] = []
         var places: [Place] = []
         var sessionCount = 0
+        /// What the game is and how to play it, from the web.
+        var guide: String?
+        var guideWrittenAt: Date?
     }
 
     private(set) var contents: Contents
@@ -70,6 +74,24 @@ final class DottieGameNotebook {
         save()
     }
 
+    static var gamesFolderURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Dottie/Games", isDirectory: true)
+    }
+
+    /// The names of every game with a notebook, so the same game is always
+    /// named the same way.
+    static func savedGameNames() -> [String] {
+        struct SavedName: Decodable {
+            let gameName: String
+        }
+        let gameFolderURLs = (try? FileManager.default.contentsOfDirectory(at: gamesFolderURL, includingPropertiesForKeys: nil)) ?? []
+        return gameFolderURLs.compactMap { gameFolderURL in
+            guard let notebookData = try? Data(contentsOf: gameFolderURL.appendingPathComponent("notebook.json")) else { return nil }
+            return (try? JSONDecoder().decode(SavedName.self, from: notebookData))?.gameName
+        }
+    }
+
     /// "Roblox — Obby Tower" → "roblox-obby-tower".
     static func folderName(for gameName: String) -> String {
         let slug = gameName.lowercased()
@@ -85,6 +107,9 @@ final class DottieGameNotebook {
     /// The notebook as short text, read at the start of every brain call.
     func promptText() -> String {
         var sections: [String] = []
+        if let guide = contents.guide {
+            sections.append("About this game (looked up online):\n" + guide)
+        }
         if let genre = contents.genre {
             sections.append("Genre: \(genre). \(DottieGameGenres.starter(for: genre))")
         }
@@ -112,6 +137,19 @@ final class DottieGameNotebook {
     }
 
     // MARK: - Learning
+
+    /// True when the game has no guide yet, or it's old enough that the
+    /// game may have changed.
+    var needsGuide: Bool {
+        guard contents.guide != nil, let guideWrittenAt = contents.guideWrittenAt else { return true }
+        return Date().timeIntervalSince(guideWrittenAt) > DottieGameResearch.secondsBeforeGuideIsLookedUpAgain
+    }
+
+    func setGuide(_ guide: String) {
+        contents.guide = guide
+        contents.guideWrittenAt = Date()
+        save()
+    }
 
     func setGenre(_ genre: String) {
         let trimmedGenre = genre.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
