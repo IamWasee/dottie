@@ -14,6 +14,9 @@
 //    faster sprinting is. Corrected every time Dottie recognizes a place
 //    she has mapped: the gap between where she thought she was and where
 //    she really is shows how fast she actually walked.
+//  - Jumping: how high and how far a jump clears. A planned jump over
+//    something low that works raises the guess; one that leaves her stuck
+//    against it lowers it.
 //
 //  Saved per game in Application Support/Dottie/Games/<game>/movement.json.
 //
@@ -33,6 +36,30 @@ final class DottieGameMovement {
         /// How many times the walk speed was corrected; more means trusted.
         var walkSpeedCorrectionCount = 0
         var cameraTurnMeasurementCount = 0
+        /// Map units a jump lifts the feet. Starts low so early routes
+        /// only jump over knee-high things.
+        var jumpHeightUnits = 1.0
+        /// Map units a running jump carries her forward.
+        var jumpDistanceUnits = 2.0
+        var jumpAttemptCount = 0
+
+        init() {}
+
+        /// Every field is optional in the file, so a movement.json saved
+        /// before a field existed still loads.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let defaults = Contents()
+            degreesPerMousePoint = try container.decodeIfPresent(Double.self, forKey: .degreesPerMousePoint) ?? defaults.degreesPerMousePoint
+            horizontalFieldOfViewDegrees = try container.decodeIfPresent(Double.self, forKey: .horizontalFieldOfViewDegrees) ?? defaults.horizontalFieldOfViewDegrees
+            walkUnitsPerSecond = try container.decodeIfPresent(Double.self, forKey: .walkUnitsPerSecond) ?? defaults.walkUnitsPerSecond
+            sprintSpeedFactor = try container.decodeIfPresent(Double.self, forKey: .sprintSpeedFactor) ?? defaults.sprintSpeedFactor
+            walkSpeedCorrectionCount = try container.decodeIfPresent(Int.self, forKey: .walkSpeedCorrectionCount) ?? defaults.walkSpeedCorrectionCount
+            cameraTurnMeasurementCount = try container.decodeIfPresent(Int.self, forKey: .cameraTurnMeasurementCount) ?? defaults.cameraTurnMeasurementCount
+            jumpHeightUnits = try container.decodeIfPresent(Double.self, forKey: .jumpHeightUnits) ?? defaults.jumpHeightUnits
+            jumpDistanceUnits = try container.decodeIfPresent(Double.self, forKey: .jumpDistanceUnits) ?? defaults.jumpDistanceUnits
+            jumpAttemptCount = try container.decodeIfPresent(Int.self, forKey: .jumpAttemptCount) ?? defaults.jumpAttemptCount
+        }
     }
 
     private(set) var contents: Contents
@@ -50,6 +77,8 @@ final class DottieGameMovement {
 
     var degreesPerMousePoint: Double { contents.degreesPerMousePoint }
     var horizontalFieldOfViewDegrees: Double { contents.horizontalFieldOfViewDegrees }
+    var jumpHeightUnits: Double { contents.jumpHeightUnits }
+    var jumpDistanceUnits: Double { contents.jumpDistanceUnits }
 
     func mousePoints(forDegrees degrees: Double) -> CGFloat {
         CGFloat(degrees / max(contents.degreesPerMousePoint, 0.01))
@@ -94,6 +123,40 @@ final class DottieGameMovement {
         let learningRate = contents.walkSpeedCorrectionCount < 5 ? 0.5 : 0.2
         contents.walkUnitsPerSecond = contents.walkUnitsPerSecond * (1 - learningRate) + measuredUnitsPerSecond * learningRate
         contents.walkSpeedCorrectionCount += 1
+        save()
+    }
+
+    /// A planned jump over something `obstacleHeight` high and
+    /// `obstacleLength` long either carried her over (`didClear`) or left
+    /// her stuck against it. Clearing proves the jump reaches at least
+    /// that far; failing shows it falls short of whichever was the stretch.
+    func learnJump(obstacleHeight: Double, obstacleLength: Double, didClear: Bool) {
+        let learningRate = contents.jumpAttemptCount < 5 ? 0.5 : 0.25
+        if didClear {
+            if obstacleHeight > contents.jumpHeightUnits {
+                contents.jumpHeightUnits += (obstacleHeight - contents.jumpHeightUnits) * learningRate
+            } else {
+                // Clearing easily hints the jump goes a little higher.
+                contents.jumpHeightUnits += 0.05
+            }
+            if obstacleLength > contents.jumpDistanceUnits {
+                contents.jumpDistanceUnits += (obstacleLength - contents.jumpDistanceUnits) * learningRate
+            }
+        } else {
+            // The part closest to the current guess is the likelier cause.
+            let heightStretch = obstacleHeight / max(contents.jumpHeightUnits, 0.1)
+            let lengthStretch = obstacleLength / max(contents.jumpDistanceUnits, 0.1)
+            if heightStretch >= lengthStretch {
+                let shortOfHeight = obstacleHeight - 0.25
+                contents.jumpHeightUnits += (min(contents.jumpHeightUnits, shortOfHeight) - contents.jumpHeightUnits) * learningRate
+            } else {
+                let shortOfLength = obstacleLength - 0.25
+                contents.jumpDistanceUnits += (min(contents.jumpDistanceUnits, shortOfLength) - contents.jumpDistanceUnits) * learningRate
+            }
+        }
+        contents.jumpHeightUnits = min(max(contents.jumpHeightUnits, 0.5), 4)
+        contents.jumpDistanceUnits = min(max(contents.jumpDistanceUnits, 0.5), 8)
+        contents.jumpAttemptCount += 1
         save()
     }
 

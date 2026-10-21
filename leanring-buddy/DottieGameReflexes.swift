@@ -45,6 +45,17 @@ struct DottieGameMove {
 @MainActor
 protocol DottieGameReflexModel: AnyObject {
     func nextMove(frame: CGImage, goal: String, step: DottieGamePlan.Step) async -> DottieGameMove?
+    /// While Dottie walks a route from the 3D map without looking
+    /// (`go_to_place`): the leg being walked and how far into it she is by
+    /// the map. Return nil to keep following the planned keys and jumps.
+    func nextBlindMove(frame: CGImage, placeName: String, leg: DottieGameNavigator.Leg, distanceWalkedInLeg: Double) async -> DottieGameMove?
+}
+
+extension DottieGameReflexModel {
+    /// A model that only plays the brain's steps leaves blind walks to the map.
+    func nextBlindMove(frame: CGImage, placeName: String, leg: DottieGameNavigator.Leg, distanceWalkedInLeg: Double) async -> DottieGameMove? {
+        nil
+    }
 }
 
 @MainActor
@@ -430,10 +441,24 @@ final class DottieGameReflexes {
 
     // MARK: - Walking by the map
 
+    private enum LegWalkEnding {
+        case arrived
+        /// Stuck against something the map didn't show, even after trying
+        /// to get unstuck.
+        case blocked
+        case stopped(StepResult)
+    }
+
+    /// How many times a blind walk finds another way around something in
+    /// the way before handing back to the brain.
+    private static let maximumReplansPerWalk = 2
+
     /// Walks a route planned on the 3D map to a named place, without
-    /// asking a model on the way: turn, hold W for the planned time, and
-    /// glance about twice a second (free, on the Mac) for anything that
-    /// should stop the walk.
+    /// asking a model on the way: turn, hold W for the planned time, jump
+    /// where the route crosses something low, and glance about twice a
+    /// second (free, on the Mac) for anything that should stop the walk.
+    /// Something in the way the map didn't show is put on the map as a
+    /// blocker and the route is planned again around it.
     private func goToPlace(named placeName: String, sprint: Bool) async -> StepResult {
         guard let place = worldMap.place(named: placeName) else {
             return StepResult(isEvent: true, note: "\(placeName) isn't on the map yet. Find it by looking, go_to it, and name it in `place` once you're there.")
@@ -441,52 +466,130 @@ final class DottieGameReflexes {
         guard worldMap.isLocalized else {
             return StepResult(isEvent: true, note: "Dottie doesn't know where you are on the map yet, so she can't walk to \(place.name) blind. Look around a spot you know first.")
         }
-        if worldMap.bearing(toX: place.x, y: place.y).distance < 1 {
-            return StepResult(isEvent: false, note: "Already at \(place.name).")
-        }
-        guard let legs = DottieGameNavigator.legs(on: worldMap, toX: place.x, y: place.y, sprint: sprint), !legs.isEmpty else {
-            return StepResult(isEvent: true, note: "No way to \(place.name) on the map; walk there by looking (go_to).")
-        }
         onProgressLine?("Walking to \(place.name) by the map")
         let walkStartedAt = Date()
+        var replanCount = 0
+        var walkedLegCount = 0
+        while true {
+            if worldMap.bearing(toX: place.x, y: place.y).distance < 1 {
+                if walkedLegCount == 0 {
+                    return StepResult(isEvent: false, note: "Already at \(place.name).")
+                }
+                break
+            }
+            guard let legs = DottieGameNavigator.legs(on: worldMap, toX: place.x, y: place.y, sprint: sprint), !legs.isEmpty else {
+                if replanCount > 0 {
+                    return StepResult(isEvent: true, note: "Something is in the way to \(place.name) and the map shows no other way round; look and find one (go_to).")
+                }
+                return StepResult(isEvent: true, note: "No way to \(place.name) on the map; walk there by looking (go_to).")
+            }
+            let walkEnding = await walk(legs, toPlaceNamed: place.name, walkStartedAt: walkStartedAt)
+            walkedLegCount += legs.count
+            switch walkEnding {
+            case .arrived:
+                break
+            case .stopped(let stopResult):
+                return stopResult
+            case .blocked:
+                // Whatever stopped her is about a step ahead.
+                worldMap.noteBlocker(distanceAhead: 1)
+                replanCount += 1
+                guard replanCount <= Self.maximumReplansPerWalk else {
+                    return StepResult(isEvent: true, note: "Stuck on the way to \(place.name) \(replanCount) times: something the map doesn't show keeps getting in the way.")
+                }
+                onProgressLine?("Something's in the way, finding another way to \(place.name)")
+                continue
+            }
+            break
+        }
+        let distanceLeft = worldMap.bearing(toX: place.x, y: place.y).distance
+        let replanNote = replanCount > 0 ? ", going around \(replanCount) thing(s) in the way," : ""
+        return StepResult(isEvent: false, note: "Walked to \(place.name) by the map\(replanNote) without stopping to look; by the map it's about \(Int(distanceLeft.rounded())) units away now. Check it's there.")
+    }
+
+    /// Runs planned legs: turn, hold the walking keys for the leg's time,
+    /// press jump at the leg's jump spots and learn from how each jump went.
+    private func walk(_ legs: [DottieGameNavigator.Leg], toPlaceNamed placeName: String, walkStartedAt: Date) async -> LegWalkEnding {
         for leg in legs {
-            guard !Task.isCancelled else { return StepResult(isEvent: true, note: "Stopped.") }
+            guard !Task.isCancelled else { return .stopped(StepResult(isEvent: true, note: "Stopped.")) }
             guard Date().timeIntervalSince(walkStartedAt) < 90 else {
-                return StepResult(isEvent: true, note: "Walking to \(place.name) took far longer than planned; look where you are.")
+                return .stopped(StepResult(isEvent: true, note: "Walking to \(placeName) took far longer than planned; look where you are."))
             }
             if abs(leg.turnDegrees) > 3 {
                 await turnCamera(degrees: leg.turnDegrees)
             }
             var walkingKeys: Set<String> = leg.isSprinting ? ["w", "shift"] : ["w"]
             holdOnly(walkingKeys)
+            let legWalkUnitsPerSecond = worldMap.movement.walkUnitsPerSecond(isSprinting: leg.isSprinting)
             let legStartedAt = Date()
             var lastMovementNotedAt = legStartedAt
             var stillSince: Date?
             var hasTriedUnsticking = false
+            var nextJumpIndex = 0
+            /// The last jump pressed, until it's known whether it cleared.
+            var jumpInTheAir: (jump: DottieGameNavigator.Jump, pressedAt: Date)?
             while Date().timeIntervalSince(legStartedAt) < leg.holdSeconds, !Task.isCancelled {
-                let secondsLeft = leg.holdSeconds - Date().timeIntervalSince(legStartedAt)
-                try? await Task.sleep(nanoseconds: UInt64(max(0.05, min(0.5, secondsLeft)) * 1_000_000_000))
+                let secondsIntoLeg = Date().timeIntervalSince(legStartedAt)
+                var secondsToSleep = max(0.05, min(0.5, leg.holdSeconds - secondsIntoLeg))
+                // Wake up in time for the next jump.
+                if nextJumpIndex < leg.jumps.count {
+                    let secondsUntilJump = leg.jumps[nextJumpIndex].takeOffDistance / legWalkUnitsPerSecond - secondsIntoLeg
+                    secondsToSleep = max(0.02, min(secondsToSleep, secondsUntilJump))
+                }
+                try? await Task.sleep(nanoseconds: UInt64(secondsToSleep * 1_000_000_000))
                 worldMap.noteMovement(heldKeys: heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
                 lastMovementNotedAt = Date()
+                let distanceWalkedInLeg = Date().timeIntervalSince(legStartedAt) * legWalkUnitsPerSecond
+                if nextJumpIndex < leg.jumps.count, distanceWalkedInLeg >= leg.jumps[nextJumpIndex].takeOffDistance {
+                    _ = DottieScreenActionPerformer.press(keyCombination: "space")
+                    jumpInTheAir = (leg.jumps[nextJumpIndex], Date())
+                    nextJumpIndex += 1
+                }
                 guard let frame = await captureFrame() else {
-                    return StepResult(isEvent: true, note: "Couldn't see the screen.")
+                    return .stopped(StepResult(isEvent: true, note: "Couldn't see the screen."))
                 }
                 if let eventNote = noticeEvent(in: frame, isTurning: false) {
-                    return StepResult(isEvent: true, note: "On the way to \(place.name): \(eventNote)")
+                    return .stopped(StepResult(isEvent: true, note: "On the way to \(placeName): \(eventNote)"))
                 }
                 if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
-                    return commandResult
+                    return .stopped(commandResult)
                 }
-                holdOnly(walkingKeys)
+                if let reflexModel, let move = await reflexModel.nextBlindMove(frame: frame, placeName: placeName, leg: leg, distanceWalkedInLeg: distanceWalkedInLeg) {
+                    holdOnly(move.heldKeys)
+                    for tappedKey in move.tappedKeys {
+                        _ = DottieScreenActionPerformer.press(keyCombination: tappedKey)
+                    }
+                    if move.cameraTurnMousePoints != 0 {
+                        await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: move.cameraTurnMousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
+                        worldMap.noteCameraTurn(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint)
+                    }
+                    if move.isStepFinished {
+                        break
+                    }
+                } else {
+                    holdOnly(walkingKeys)
+                }
                 letMapSee(frame)
                 if lastChangedShare < 0.01 {
                     stillSince = stillSince ?? Date()
                 } else {
                     stillSince = nil
                 }
+                if let currentJump = jumpInTheAir {
+                    if stillSince != nil {
+                        // Stopped right at the low thing: the jump fell short.
+                        worldMap.movement.learnJump(obstacleHeight: currentJump.jump.obstacleHeight, obstacleLength: currentJump.jump.obstacleLength, didClear: false)
+                        jumpInTheAir = nil
+                    } else if Date().timeIntervalSince(currentJump.pressedAt) > 1.5 {
+                        // Still moving well after the jump: it cleared.
+                        worldMap.movement.learnJump(obstacleHeight: currentJump.jump.obstacleHeight, obstacleLength: currentJump.jump.obstacleLength, didClear: true)
+                        jumpInTheAir = nil
+                    }
+                }
                 if let stillSince, Date().timeIntervalSince(stillSince) > 1.5 {
                     guard !hasTriedUnsticking else {
-                        return StepResult(isEvent: true, note: "Stuck on the way to \(place.name): something the map doesn't show is in the way.")
+                        releaseAllKeys()
+                        return .blocked
                     }
                     hasTriedUnsticking = true
                     await tryToUnstick()
@@ -495,8 +598,7 @@ final class DottieGameReflexes {
             }
             releaseAllKeys()
         }
-        let distanceLeft = worldMap.bearing(toX: place.x, y: place.y).distance
-        return StepResult(isEvent: false, note: "Walked to \(place.name) by the map in \(legs.count) leg(s) without stopping to look; by the map it's about \(Int(distanceLeft.rounded())) units away now. Check it's there.")
+        return .arrived
     }
 
     /// A jump forward, then a step back and a turn, before asking for help.

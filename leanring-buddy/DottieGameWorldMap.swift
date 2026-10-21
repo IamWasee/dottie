@@ -18,6 +18,11 @@
 //    keyframes (Vision feature prints). A match snaps the pose to the
 //    saved one, which also teaches the movement model how fast she walks.
 //  - Places: named spots (the shop, the spawn) with their position.
+//  - Blockers: spots where a walk got stuck though the map showed the way
+//    clear. The first time, the blocker fades after 45 seconds (likely a
+//    moving thing: a player, an enemy, a platform). Stuck at the same spot
+//    again once it has faded means something fixed the depth missed, and
+//    that spot stays blocked on the saved map.
 //
 //  The map loads into RAM when a game starts and is saved in
 //  Application Support/Dottie/Games/<game>/map/ when play stops and every
@@ -62,6 +67,14 @@ final class DottieGameWorldMap {
         var places: [Place]
         var nextKeyframeID: Int
         var sessionCount: Int
+        /// Grid cells (x, y) found blocked by walking into them.
+        var learnedBlockedCells: [[Int]]?
+    }
+
+    /// A spot on the floor grid (DottieGameNavigator's half-unit cells).
+    struct FloorCell: Hashable {
+        let gridX: Int
+        let gridY: Int
     }
 
     let gameName: String
@@ -74,6 +87,10 @@ final class DottieGameWorldMap {
     private var keyframePrints: [Int: VNFeaturePrintObservation] = [:]
     private var nextKeyframeID = 0
     private(set) var sessionCount = 0
+    /// Fixed things the depth missed, kept on the saved map.
+    private(set) var learnedBlockedCells: Set<FloorCell> = []
+    /// Blockers from this session that fade (moving things), with when.
+    private var fadingBlockers: [(cell: FloorCell, notedAt: Date)] = []
 
     /// True once Dottie knows where she is on a saved map (or the map was
     /// empty). Until then nothing new is mapped, so a second session can't
@@ -104,6 +121,7 @@ final class DottieGameWorldMap {
     private static let secondsToWaitForRelocalizing = 30.0
     private static let secondsBetweenConsideredFrames = 0.8
     private static let secondsBetweenSaves = 120.0
+    private static let secondsForBlockerToFade = 45.0
 
     init(gameName: String, gameFolderURL: URL) {
         self.gameName = gameName
@@ -118,12 +136,16 @@ final class DottieGameWorldMap {
         var loadedPlaces: [Place] = []
         var loadedNextKeyframeID = 0
         var loadedSessionCount = 0
+        var loadedBlockedCells: Set<FloorCell> = []
         if let summaryData = try? Data(contentsOf: loadedMapFolderURL.appendingPathComponent("map.json")),
            let savedSummary = try? decoder.decode(SavedSummary.self, from: summaryData) {
             loadedKeyframes = savedSummary.keyframes
             loadedPlaces = savedSummary.places
             loadedNextKeyframeID = savedSummary.nextKeyframeID
             loadedSessionCount = savedSummary.sessionCount
+            for cellCoordinates in savedSummary.learnedBlockedCells ?? [] where cellCoordinates.count == 2 {
+                loadedBlockedCells.insert(FloorCell(gridX: cellCoordinates[0], gridY: cellCoordinates[1]))
+            }
         }
         var loadedPrints: [Int: VNFeaturePrintObservation] = [:]
         for keyframe in loadedKeyframes {
@@ -137,6 +159,7 @@ final class DottieGameWorldMap {
         places = loadedPlaces
         nextKeyframeID = loadedNextKeyframeID
         sessionCount = loadedSessionCount + 1
+        learnedBlockedCells = loadedBlockedCells
         keyframePrints = loadedPrints
         voxelHits = Self.loadVoxels(from: loadedMapFolderURL.appendingPathComponent("voxels.bin"))
         isFamiliar = !loadedKeyframes.isEmpty
@@ -350,6 +373,51 @@ final class DottieGameWorldMap {
         return (Self.normalizedAngle(bearingDegrees - pose.headingDegrees), hypot(deltaX, deltaY))
     }
 
+    // MARK: - Blockers
+
+    /// A walk got stuck against something about `distanceAhead` units in
+    /// front of her that the map didn't show.
+    func noteBlocker(distanceAhead: Double) {
+        let headingRadians = pose.headingDegrees * .pi / 180
+        let blockerX = pose.x + sin(headingRadians) * distanceAhead
+        let blockerY = pose.y + cos(headingRadians) * distanceAhead
+        let blockerCell = FloorCell(gridX: Int(floor(blockerX / Self.voxelSize)), gridY: Int(floor(blockerY / Self.voxelSize)))
+        let now = Date()
+        // Stuck here before, and that blocker had faded but the thing is
+        // still there: it doesn't move.
+        let wasBlockedHereBefore = fadingBlockers.contains { earlierBlocker in
+            abs(earlierBlocker.cell.gridX - blockerCell.gridX) <= 1
+                && abs(earlierBlocker.cell.gridY - blockerCell.gridY) <= 1
+                && now.timeIntervalSince(earlierBlocker.notedAt) > Self.secondsForBlockerToFade
+        }
+        if wasBlockedHereBefore {
+            // A body is about two cells wide.
+            for offsetX in -1...1 {
+                for offsetY in -1...1 {
+                    learnedBlockedCells.insert(FloorCell(gridX: blockerCell.gridX + offsetX, gridY: blockerCell.gridY + offsetY))
+                }
+            }
+        }
+        fadingBlockers.append((blockerCell, now))
+        // Keep only the recent past; older ones can't fade-check anything useful.
+        fadingBlockers.removeAll { now.timeIntervalSince($0.notedAt) > 600 }
+    }
+
+    /// Cells routes must go around right now: learned fixed blockers and
+    /// recent ones that haven't faded, each widened to a body's width.
+    func currentBlockedCells() -> Set<FloorCell> {
+        var blockedCells = learnedBlockedCells
+        let now = Date()
+        for fadingBlocker in fadingBlockers where now.timeIntervalSince(fadingBlocker.notedAt) <= Self.secondsForBlockerToFade {
+            for offsetX in -1...1 {
+                for offsetY in -1...1 {
+                    blockedCells.insert(FloorCell(gridX: fadingBlocker.cell.gridX + offsetX, gridY: fadingBlocker.cell.gridY + offsetY))
+                }
+            }
+        }
+        return blockedCells
+    }
+
     // MARK: - For the brain
 
     func summaryText() -> String {
@@ -383,7 +451,13 @@ final class DottieGameWorldMap {
         lastSavedAt = Date()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let summary = SavedSummary(keyframes: keyframes, places: places, nextKeyframeID: nextKeyframeID, sessionCount: sessionCount)
+        let summary = SavedSummary(
+            keyframes: keyframes,
+            places: places,
+            nextKeyframeID: nextKeyframeID,
+            sessionCount: sessionCount,
+            learnedBlockedCells: learnedBlockedCells.map { [$0.gridX, $0.gridY] }
+        )
         if let summaryData = try? encoder.encode(summary) {
             try? summaryData.write(to: mapFolderURL.appendingPathComponent("map.json"), options: .atomic)
         }

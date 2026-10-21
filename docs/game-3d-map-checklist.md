@@ -57,13 +57,20 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] Sonnet 5.5 takes over only when needed: the brain marks a plan `"hard": true`, or the same trouble repeats (stuck or failing twice in a row). It hands back to Haiku after a good step.
 - [x] Gemini stays the backup when Claude isn't available.
 
-## 7. Later (not in this build)
+## 7. Jumps, blockers and the reflex model (second build, asked for on 2026-10-21)
+
+- [x] Learned jump height and distance per game (`DottieGameMovement`): start at 1 unit high and 2 units far, raised by planned jumps that clear, lowered by ones that leave her stuck. Old `movement.json` files still load.
+- [x] Jumps in routes (`DottieGameNavigator`): something at body height that's lower than the jump is a low thing to jump over (costs more than open floor); the leg gets a jump spot a little before it, and the walk presses jump there.
+- [x] Ledges and pits: cells where the ground is only seen far below are drops, and routes go around them when they can.
+- [x] Moving things: getting stuck where the map showed the way clear puts a blocker a step ahead. It fades after 45 seconds (a player, an enemy, a platform). Stuck at the same spot again after it faded means it doesn't move, so it's saved on the map for good.
+- [x] Blind walks find another way around a blocker (up to twice) before handing back to the brain.
+- [x] celly's local reflex model can drive blind walks too: `DottieGameReflexModel.nextBlindMove` gets the frame, the place, the leg and how far into it she is; returning nil keeps the planned keys.
+
+## 8. Later (not in this build)
 
 - [ ] Multi-frame reconstruction (Depth Anything 3 small) for sharper geometry.
-- [ ] Recast/Detour navigation meshes, jumps and ledges.
-- [ ] Learned jump height and distance.
-- [ ] Moving things (enemies, players, platforms) on the map.
-- [ ] Hand blind movement to celly's local reflex model.
+- [ ] A real navigation mesh (Recast/Detour style) with heights, so stairs, slopes and several floors plan properly instead of the flat grid.
+- [ ] Moving things tracked as they move (where an enemy is heading), not just as spots to avoid.
 
 ## Needs testing on a Mac
 
@@ -71,3 +78,5 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [ ] Roblox: walk around, quit, start again, and check Dottie says she knows the game and doesn't remap the start area.
 - [ ] `go_to_place` reaches a named place without the brain in between.
 - [ ] Memory stays under 4-5 GB while playing.
+- [ ] A route over something low: Dottie jumps at the right moment, and the jump height in `movement.json` moves after a few tries.
+- [ ] Stand a player in the way of a known route: Dottie goes around, and the spot isn't saved as blocked once they've moved.

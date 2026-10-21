@@ -381,7 +381,7 @@ final class DottieGameBrain {
     - Remember what you learn in `learned` ("E opens doors", "red barrels explode"), keep ideas you haven't checked in `guesses`, move them to `tested` once checked, and say what killed you in `died_because`.
     - When stuck, try something different (back up, jump, turn around, another path) before the same thing again. If truly stuck, `search_wiki` the game's wiki, or ask the user with `ask_user`.
     - When you reach a place worth knowing, name it in `place` with directions by landmarks ("past the fountain, left at the red house"). Dottie also puts it on her 3D map of the game, built from what she sees as you play; give a `go_to` a `name` and the target goes on the map once reached.
-    - To get to a place already on the map, use `go_to_place`: Dottie walks the route from the map without stopping to look, which is fast and saves your time. Use `go_to` for things the map doesn't have yet.
+    - To get to a place already on the map, use `go_to_place`: Dottie walks the route from the map without stopping to look, which is fast and saves your time. It jumps over low things on the route and goes around anything in the way on its own. Use `go_to` for things the map doesn't have yet.
     - Set `hard` to true when the next decision is beyond quick play (a puzzle, a tricky fight, being stuck): a stronger model then takes the next look.
     - Never spend real money or in-game premium currency, and never chat with other players.
     - Now and then, put one short spoken line in `say` (what you're trying, or a reaction), like a friend playing next to the user. Leave it out most of the time.
