@@ -79,6 +79,36 @@ final class DottieGameNotebook {
             .appendingPathComponent("Dottie/Games", isDirectory: true)
     }
 
+    // MARK: - Play log
+
+    /// Appends a timestamped line to the game's play-log.txt, so what
+    /// Dottie saw, decided and did can be read back after a session (her
+    /// print() lines don't reach the Mac's own log). Kept under about 2 MB.
+    static func appendToPlayLog(_ line: String, gameFolderURL: URL) {
+        let logURL = gameFolderURL.appendingPathComponent("play-log.txt")
+        let timestampFormatter = DateFormatter()
+        timestampFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let logLine = "\(timestampFormatter.string(from: Date()))  \(line.replacingOccurrences(of: "\n", with: " / "))\n"
+        guard let logLineData = logLine.data(using: .utf8) else { return }
+        let currentSize = ((try? FileManager.default.attributesOfItem(atPath: logURL.path))?[.size] as? NSNumber)?.intValue ?? 0
+        if currentSize > 2_000_000 {
+            let oldLogURL = gameFolderURL.appendingPathComponent("play-log-old.txt")
+            try? FileManager.default.removeItem(at: oldLogURL)
+            try? FileManager.default.moveItem(at: logURL, to: oldLogURL)
+        }
+        if let logHandle = try? FileHandle(forWritingTo: logURL) {
+            logHandle.seekToEndOfFile()
+            logHandle.write(logLineData)
+            try? logHandle.close()
+        } else {
+            try? logLineData.write(to: logURL)
+        }
+    }
+
+    func log(_ line: String) {
+        Self.appendToPlayLog(line, gameFolderURL: folderURL)
+    }
+
     /// The names of every game with a notebook, so the same game is always
     /// named the same way.
     static func savedGameNames() -> [String] {

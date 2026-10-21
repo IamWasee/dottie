@@ -239,6 +239,7 @@ final class DottieGameWorldMap {
             // Nothing looked familiar for a while: this is a new part of
             // the world (or the game moved her), so map from the best guess.
             isLocalized = true
+            DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds, so mapping from here as new ground.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
         }
         guard isLocalized, isNewSpot(poseAtFrame), keyframes.count < Self.maximumKeyframeCount else { return }
 
@@ -295,6 +296,9 @@ final class DottieGameWorldMap {
             y: keyframe.y + movedSinceFrameY,
             headingDegrees: Self.normalizedAngle(keyframe.headingDegrees + turnedSinceFrameDegrees)
         )
+        if !isLocalized {
+            DottieGameNotebook.appendToPlayLog("Map: recognized spot \(keyframe.id), so Dottie knows where she is.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        }
         isLocalized = true
         recognitionsThisSession += 1
         lastConfirmedPose = Pose(x: keyframe.x, y: keyframe.y, headingDegrees: keyframe.headingDegrees)
@@ -306,6 +310,7 @@ final class DottieGameWorldMap {
         nextKeyframeID += 1
         keyframes.append(keyframe)
         keyframesAddedThisSession += 1
+        DottieGameNotebook.appendToPlayLog("Map: new spot \(keyframe.id) at (\(String(format: "%.1f", keyframe.x)), \(String(format: "%.1f", keyframe.y))) facing \(Int(keyframe.headingDegrees))°.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
         keyframePrints[keyframe.id] = featurePrint
         let keyframesFolderURL = mapFolderURL.appendingPathComponent("keyframes")
         if let printData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) {
