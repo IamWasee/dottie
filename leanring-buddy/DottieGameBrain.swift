@@ -52,6 +52,8 @@ struct DottieGamePlan {
     var isDone: Bool
     var answer: String?
     var lessons: [String]
+    /// The brain says the next decision needs the stronger model.
+    var isHard: Bool
 
     init?(jsonObject: [String: Any]) {
         let stepObjects = jsonObject["steps"] as? [[String: Any]] ?? []
@@ -65,7 +67,7 @@ struct DottieGamePlan {
                 keys: stepObject["keys"] as? String,
                 seconds: (stepObject["seconds"] as? NSNumber)?.doubleValue,
                 degrees: (stepObject["degrees"] as? NSNumber)?.doubleValue,
-                text: (stepObject["text"] as? String) ?? (stepObject["query"] as? String),
+                text: (stepObject["text"] as? String) ?? (stepObject["query"] as? String) ?? (stepObject["name"] as? String),
                 sprint: (stepObject["sprint"] as? Bool) ?? false
             )
         }
@@ -88,6 +90,7 @@ struct DottieGamePlan {
         askUser = jsonObject["ask_user"] as? String
         answer = jsonObject["answer"] as? String
         lessons = jsonObject["lessons"] as? [String] ?? []
+        isHard = (jsonObject["hard"] as? Bool) ?? false
     }
 
     private static func box(_ value: Any?) -> [Double]? {
@@ -120,6 +123,8 @@ struct DottieGameBrainRequest {
     let notebookText: String
     let recentHistory: [String]
     let recognizedPlace: String?
+    /// The 3D map's summary: what's mapped, known places and how to get there.
+    let mapText: String
     let userCommands: [String]
     let extraNotes: [String]
     let isWatchingUser: Bool
@@ -136,10 +141,29 @@ struct DottieGameBrainRequest {
 final class DottieGameBrain {
     private let notebookFolderURL: URL
     private let mausBotRuntime = DottieMausBotRuntime()
-    /// A fixed id for the game bot's turns in the MausBot runtime.
-    private static let gamerAgentID = UUID(uuidString: "6A3E9F1C-4B2D-4E8A-9C7F-1D2E3F4A5B6C") ?? UUID()
-    private var claudeThreadID: String?
-    private var callsInCurrentThread = 0
+    /// Haiku plays; Sonnet takes over only when Haiku is stuck. Each has
+    /// its own MausBot bot, so switching never rewrites the other.
+    private struct ClaudeTier {
+        let modelKeyword: String
+        let helperName: String
+        /// A fixed id for this bot's turns in the MausBot runtime.
+        let agentID: UUID
+        let defaultsKeySuffix: String
+    }
+    private static let everydayTier = ClaudeTier(
+        modelKeyword: "haiku",
+        helperName: "Dottie Gamer",
+        agentID: UUID(uuidString: "6A3E9F1C-4B2D-4E8A-9C7F-1D2E3F4A5B6C") ?? UUID(),
+        defaultsKeySuffix: ""
+    )
+    private static let strongerTier = ClaudeTier(
+        modelKeyword: "sonnet",
+        helperName: "Dottie Gamer (Sonnet)",
+        agentID: UUID(uuidString: "7B4F0A2D-5C3E-4F9B-8D1A-2E3F4A5B6C7D") ?? UUID(),
+        defaultsKeySuffix: "Sonnet"
+    )
+    private var claudeThreadIDByAgentID: [UUID: String] = [:]
+    private var callsInCurrentThreadByAgentID: [UUID: Int] = [:]
     /// Each call's pictures stay in the thread, so it starts over often.
     private static let callsPerClaudeThread = 4
     private static let claudeAnswerTimeoutSeconds: Double = 45
@@ -156,16 +180,19 @@ final class DottieGameBrain {
     }
 
     func stop() {
-        mausBotRuntime.stopTurn(agentID: Self.gamerAgentID)
+        mausBotRuntime.stopTurn(agentID: Self.everydayTier.agentID)
+        mausBotRuntime.stopTurn(agentID: Self.strongerTier.agentID)
     }
 
-    /// Asks for the next plan. nil when neither engine answered.
-    func think(_ request: DottieGameBrainRequest) async -> DottieGamePlan? {
+    /// Asks for the next plan. nil when neither engine answered. With
+    /// `needsStrongerModel`, Sonnet thinks instead of Haiku.
+    func think(_ request: DottieGameBrainRequest, needsStrongerModel: Bool = false) async -> DottieGamePlan? {
         let messageText = Self.messageText(for: request)
         let mayUseClaude = claudeSkippedUntil.map { $0 < Date() } ?? true
-        if mayUseClaude, let claudeReply = await thinkWithClaude(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures) {
+        let claudeTier = needsStrongerModel ? Self.strongerTier : Self.everydayTier
+        if mayUseClaude, let claudeReply = await thinkWithClaude(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures, claudeTier: claudeTier) {
             if let plan = DottieGamePlan.parse(fromReply: claudeReply) {
-                lastEngineName = "claude"
+                lastEngineName = "claude \(claudeTier.modelKeyword)"
                 return plan
             }
             print("⚠️ Game brain: Claude's reply had no plan: \(claudeReply.prefix(300))")
@@ -178,7 +205,7 @@ final class DottieGameBrain {
 
     // MARK: - Claude
 
-    private func thinkWithClaude(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture]) async -> String? {
+    private func thinkWithClaude(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture], claudeTier: ClaudeTier) async -> String? {
         guard case .ready(let launcher) = await DottieMausBot.shared.readinessForHelperTurn() else { return nil }
         let framesFolderURL = notebookFolderURL.appendingPathComponent("frames", isDirectory: true)
         try? FileManager.default.createDirectory(at: framesFolderURL, withIntermediateDirectories: true)
@@ -203,18 +230,21 @@ final class DottieGameBrain {
             pictureInstruction += "\n"
         }
 
-        let gameModelSelection = await DottieMausBot.shared.modelSelection(matching: "haiku", launcher: launcher)
+        let gameModelSelection = await DottieMausBot.shared.modelSelection(matching: claudeTier.modelKeyword, launcher: launcher)
         let defaults = UserDefaults.standard
+        let botIDDefaultsKey = Self.gamerBotIDDefaultsKey + claudeTier.defaultsKeySuffix
+        let botNameDefaultsKey = Self.gamerBotNameDefaultsKey + claudeTier.defaultsKeySuffix
+        let specHashDefaultsKey = Self.gamerBotSpecHashDefaultsKey + claudeTier.defaultsKeySuffix
         let spec = DottieMausBotSpec(
-            helperName: "Dottie Gamer",
+            helperName: claudeTier.helperName,
             title: "Plays games with Dottie",
             instructions: Self.gamerInstructions,
             workspacePath: notebookFolderURL.deletingLastPathComponent().path,
             skillFiles: [],
             effort: "medium",
-            knownBotID: defaults.string(forKey: Self.gamerBotIDDefaultsKey),
-            knownBotName: defaults.string(forKey: Self.gamerBotNameDefaultsKey),
-            knownSpecHash: defaults.string(forKey: Self.gamerBotSpecHashDefaultsKey),
+            knownBotID: defaults.string(forKey: botIDDefaultsKey),
+            knownBotName: defaults.string(forKey: botNameDefaultsKey),
+            knownSpecHash: defaults.string(forKey: specHashDefaultsKey),
             model: gameModelSelection
         )
         let identity: DottieMausBotIdentity
@@ -225,20 +255,20 @@ final class DottieGameBrain {
         case .success(let readyIdentity):
             identity = readyIdentity
         }
-        defaults.set(identity.botID, forKey: Self.gamerBotIDDefaultsKey)
-        defaults.set(identity.botName, forKey: Self.gamerBotNameDefaultsKey)
-        defaults.set(identity.specHash, forKey: Self.gamerBotSpecHashDefaultsKey)
+        defaults.set(identity.botID, forKey: botIDDefaultsKey)
+        defaults.set(identity.botName, forKey: botNameDefaultsKey)
+        defaults.set(identity.specHash, forKey: specHashDefaultsKey)
 
-        if callsInCurrentThread >= Self.callsPerClaudeThread {
-            claudeThreadID = nil
-            callsInCurrentThread = 0
+        let gamerAgentID = claudeTier.agentID
+        if (callsInCurrentThreadByAgentID[gamerAgentID] ?? 0) >= Self.callsPerClaudeThread {
+            claudeThreadIDByAgentID[gamerAgentID] = nil
+            callsInCurrentThreadByAgentID[gamerAgentID] = 0
         }
-        callsInCurrentThread += 1
+        callsInCurrentThreadByAgentID[gamerAgentID, default: 0] += 1
 
         // A box rather than a captured var: the event handler is a
         // main-actor closure that may count as Sendable.
         let replyCollector = DottieGameReplyCollector()
-        let gamerAgentID = Self.gamerAgentID
         let runtime = mausBotRuntime
         // A game can't wait long for a decision; the backup thinks instead.
         let timeoutTask = Task { @MainActor in
@@ -251,10 +281,10 @@ final class DottieGameBrain {
             agentID: gamerAgentID,
             botID: identity.botID,
             message: pictureInstruction + messageText,
-            conversation: claudeThreadID ?? "new",
+            conversation: claudeThreadIDByAgentID[gamerAgentID] ?? "new",
             launcher: launcher,
             onConversationStarted: { [weak self] threadID in
-                self?.claudeThreadID = threadID
+                self?.claudeThreadIDByAgentID[gamerAgentID] = threadID
             }
         ) { event in
             if case .assistantTextDelta(let textDelta) = event {
@@ -270,7 +300,7 @@ final class DottieGameBrain {
             return replyText.isEmpty ? nil : replyText
         case .stopped:
             // Too slow this time; Claude gets another go on the next call.
-            claudeThreadID = nil
+            claudeThreadIDByAgentID[gamerAgentID] = nil
             return replyText.contains("}") ? replyText : nil
         default:
             skipClaudeForAWhile()
@@ -280,7 +310,7 @@ final class DottieGameBrain {
 
     private func skipClaudeForAWhile() {
         claudeSkippedUntil = Date().addingTimeInterval(120)
-        claudeThreadID = nil
+        claudeThreadIDByAgentID = [:]
     }
 
     // MARK: - Gemini
@@ -319,6 +349,9 @@ final class DottieGameBrain {
         if let recognizedPlace = request.recognizedPlace {
             sections.append("You've been here before: this looks like \(recognizedPlace).")
         }
+        if !request.mapText.isEmpty {
+            sections.append(request.mapText)
+        }
         if !request.screenText.isEmpty {
             sections.append("Text on screen now: " + request.screenText.joined(separator: " | "))
         }
@@ -347,7 +380,9 @@ final class DottieGameBrain {
     - Set a short, concrete goal you can see ("walk to the red door on the right", "jump onto the next platform"), not the whole task. Say why in `thought`.
     - Remember what you learn in `learned` ("E opens doors", "red barrels explode"), keep ideas you haven't checked in `guesses`, move them to `tested` once checked, and say what killed you in `died_because`.
     - When stuck, try something different (back up, jump, turn around, another path) before the same thing again. If truly stuck, `search_wiki` the game's wiki, or ask the user with `ask_user`.
-    - When you reach a place worth knowing, name it in `place` with directions by landmarks ("past the fountain, left at the red house").
+    - When you reach a place worth knowing, name it in `place` with directions by landmarks ("past the fountain, left at the red house"). Dottie also puts it on her 3D map of the game, built from what she sees as you play; give a `go_to` a `name` and the target goes on the map once reached.
+    - To get to a place already on the map, use `go_to_place`: Dottie walks the route from the map without stopping to look, which is fast and saves your time. Use `go_to` for things the map doesn't have yet.
+    - Set `hard` to true when the next decision is beyond quick play (a puzzle, a tricky fight, being stuck): a stronger model then takes the next look.
     - Never spend real money or in-game premium currency, and never chat with other players.
     - Now and then, put one short spoken line in `say` (what you're trying, or a reaction), like a friend playing next to the user. Leave it out most of the time.
 
@@ -358,7 +393,8 @@ final class DottieGameBrain {
       "thought": "one sentence: what you see and why this goal",
       "goal": "short concrete goal",
       "steps": [
-        {"do": "go_to", "target_box": [..], "player_box": [..] (top_down only), "view": "behind" | "top_down", "sprint": false},
+        {"do": "go_to", "target_box": [..], "player_box": [..] (top_down only), "view": "behind" | "top_down", "sprint": false, "name": "the shop" (optional)},
+        {"do": "go_to_place", "name": "the shop", "sprint": true},
         {"do": "hold", "keys": "w+space", "seconds": 0.6},
         {"do": "press", "keys": "e"},
         {"do": "click", "target_box": [..]},
@@ -374,7 +410,7 @@ final class DottieGameBrain {
       "controls": {"e": "interact"}, "controls_complete": false,
       "learned": [], "guesses": [], "tested": [], "died_because": null,
       "place": {"name": "...", "directions": "..."} or null,
-      "say": null, "ask_user": null,
+      "say": null, "ask_user": null, "hard": false,
       "done": false, "answer": "what to tell the user when done"
     }
     Use one to three steps. `go_to` walks toward the thing in `target_box` and keeps it centered while moving; prefer it to counted key holds for getting somewhere.

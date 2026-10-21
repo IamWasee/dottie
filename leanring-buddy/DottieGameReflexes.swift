@@ -17,6 +17,10 @@
 //    picture not changing while walking (stuck) ends the step early so the
 //    brain can look. Stuck first tries a jump and a step back on its own.
 //  - The user's quick calls ("stop", "jump", "run", "go left") act at once.
+//  - The 3D map (DottieGameWorldMap): every key held and camera turn moves
+//    Dottie's position on it, frames are handed to it to map new places,
+//    and `go_to_place` walks a planned route there blind, with a free
+//    glance about twice a second instead of a model call.
 //
 //  A local model (a quick game-playing network on the Mac) can take over
 //  the moment-to-moment moves through DottieGameReflexModel; until one is
@@ -56,6 +60,8 @@ final class DottieGameReflexes {
     }
 
     var reflexModel: DottieGameReflexModel?
+    /// A short line for the notch while a step runs.
+    var onProgressLine: (@MainActor (String) -> Void)?
     /// The user's quick calls, read every frame.
     var takeUserCommand: (@MainActor () -> String?)?
     /// Loudness 0…1 of the game's sound right now.
@@ -63,7 +69,7 @@ final class DottieGameReflexes {
 
     let displayFrame: CGRect
     private let cameraButton: String
-    private let gameMap: DottieGameMap
+    private let worldMap: DottieGameWorldMap
     private var heldKeys: Set<String> = []
     /// Recent frames, newest last, for the brain's motion pictures.
     private(set) var recentFrames: [(capturedAt: Date, image: CGImage)] = []
@@ -73,10 +79,19 @@ final class DottieGameReflexes {
     static let frameDimension = 768
     private static let framesPerSecond = 8.0
 
-    init(displayFrame: CGRect, cameraButton: String, gameMap: DottieGameMap) {
+    init(displayFrame: CGRect, cameraButton: String, worldMap: DottieGameWorldMap) {
         self.displayFrame = displayFrame
         self.cameraButton = cameraButton
-        self.gameMap = gameMap
+        self.worldMap = worldMap
+    }
+
+    /// Hands a frame to the 3D map without waiting for it: the map skips
+    /// frames while it's busy and only maps spots it doesn't cover yet.
+    func letMapSee(_ frame: CGImage) {
+        let gameWorldMap = worldMap
+        Task { @MainActor in
+            await gameWorldMap.considerFrame(frame)
+        }
     }
 
     // MARK: - Frames
@@ -156,10 +171,10 @@ final class DottieGameReflexes {
     }
 
     private func turnCamera(degrees: Double) async {
-        let mousePoints = CGFloat(degrees / max(gameMap.degreesPerMousePoint, 0.01))
+        let mousePoints = worldMap.movement.mousePoints(forDegrees: degrees)
         let turnSeconds = 0.18 + min(abs(degrees), 180) / 180 * 0.35
         await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: mousePoints, deltaY: 0, button: cameraButton, seconds: turnSeconds)
-        gameMap.noteCameraTurn(mousePoints: mousePoints)
+        worldMap.noteCameraTurn(degrees: degrees)
     }
 
     // MARK: - Steps
@@ -173,9 +188,20 @@ final class DottieGameReflexes {
                 return StepResult(isEvent: true, note: "go_to needs target_box.")
             }
             if step.view == "top_down" {
+                worldMap.isTopDownView = true
                 return await goToTopDown(targetBox: targetBox, playerBox: step.playerBox, step: step, goal: goal)
             }
-            return await goToBehind(targetBox: targetBox, sprint: step.sprint, step: step, goal: goal)
+            let goToResult = await goToBehind(targetBox: targetBox, sprint: step.sprint, step: step, goal: goal)
+            // A named target becomes a place on the map once reached.
+            if !goToResult.isEvent, let targetName = step.text, !targetName.isEmpty {
+                worldMap.notePlace(name: targetName)
+            }
+            return goToResult
+        case "go_to_place":
+            guard let placeName = step.text, !placeName.isEmpty else {
+                return StepResult(isEvent: true, note: "go_to_place needs the place's name.")
+            }
+            return await goToPlace(named: placeName, sprint: step.sprint)
         case "hold":
             return await hold(keys: step.keys ?? "w", seconds: step.seconds ?? 0.6)
         case "press":
@@ -206,8 +232,8 @@ final class DottieGameReflexes {
             if let beforeTurnFrame {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 if let afterTurnFrame = await captureFrame() {
-                    let turnedMousePoints = CGFloat(turnDegrees / max(gameMap.degreesPerMousePoint, 0.01))
-                    gameMap.calibrate(before: beforeTurnFrame, after: afterTurnFrame, turnedMousePoints: turnedMousePoints)
+                    let turnedMousePoints = worldMap.movement.mousePoints(forDegrees: turnDegrees)
+                    worldMap.movement.learnCameraTurn(before: beforeTurnFrame, after: afterTurnFrame, turnedMousePoints: turnedMousePoints)
                 }
             }
             return StepResult(isEvent: false, note: "Turned \(Int(turnDegrees))°.")
@@ -241,6 +267,7 @@ final class DottieGameReflexes {
         // People never hold for exactly the same time twice.
         let heldSeconds = min(max(seconds, 0.05), 5) * Double.random(in: 0.88...1.12)
         try? await Task.sleep(nanoseconds: UInt64(heldSeconds * 1_000_000_000))
+        worldMap.noteMovement(heldKeys: heldKeys, seconds: heldSeconds)
         releaseAllKeys()
         return StepResult(isEvent: false, note: "Held \(keyCombination) for \(String(format: "%.1f", heldSeconds))s.")
     }
@@ -264,17 +291,22 @@ final class DottieGameReflexes {
         var stillSince: Date?
         var hasTriedUnsticking = false
         var walkingKeys: Set<String> = sprint ? ["w", "shift"] : ["w"]
+        var lastMovementNotedAt = Date()
 
         while !Task.isCancelled {
             guard Date().timeIntervalSince(startedAt) < 14 else {
                 return StepResult(isEvent: true, note: "Didn't reach the target in 14 seconds.")
             }
+            // Whatever was held since the last frame moved her on the map.
+            worldMap.noteMovement(heldKeys: heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
+            lastMovementNotedAt = Date()
             guard let frame = await captureFrame() else {
                 return StepResult(isEvent: true, note: "Couldn't see the screen.")
             }
             if let eventNote = noticeEvent(in: frame, isTurning: false) {
                 return StepResult(isEvent: true, note: eventNote)
             }
+            letMapSee(frame)
             if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
                 return commandResult
             }
@@ -285,6 +317,7 @@ final class DottieGameReflexes {
                 }
                 if move.cameraTurnMousePoints != 0 {
                     await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: move.cameraTurnMousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
+                    worldMap.noteCameraTurn(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint)
                 }
                 if move.isStepFinished {
                     return StepResult(isEvent: false, note: "Reached the target.")
@@ -308,10 +341,10 @@ final class DottieGameReflexes {
             let horizontalOffset = Double(trackedBox.midX) - 0.5
             holdOnly(walkingKeys)
             if abs(horizontalOffset) > 0.04 {
-                let turnDegrees = horizontalOffset * DottieGameMap.horizontalFieldOfViewDegrees * 0.6
-                let mousePoints = CGFloat(turnDegrees / max(gameMap.degreesPerMousePoint, 0.01))
+                let turnDegrees = horizontalOffset * worldMap.movement.horizontalFieldOfViewDegrees * 0.6
+                let mousePoints = worldMap.movement.mousePoints(forDegrees: turnDegrees)
                 await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: mousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
-                gameMap.noteCameraTurn(mousePoints: mousePoints)
+                worldMap.noteCameraTurn(degrees: turnDegrees)
             } else {
                 try? await Task.sleep(nanoseconds: UInt64(1 / Self.framesPerSecond * 1_000_000_000))
             }
@@ -395,14 +428,87 @@ final class DottieGameReflexes {
         return StepResult(isEvent: true, note: "Stopped.")
     }
 
+    // MARK: - Walking by the map
+
+    /// Walks a route planned on the 3D map to a named place, without
+    /// asking a model on the way: turn, hold W for the planned time, and
+    /// glance about twice a second (free, on the Mac) for anything that
+    /// should stop the walk.
+    private func goToPlace(named placeName: String, sprint: Bool) async -> StepResult {
+        guard let place = worldMap.place(named: placeName) else {
+            return StepResult(isEvent: true, note: "\(placeName) isn't on the map yet. Find it by looking, go_to it, and name it in `place` once you're there.")
+        }
+        guard worldMap.isLocalized else {
+            return StepResult(isEvent: true, note: "Dottie doesn't know where you are on the map yet, so she can't walk to \(place.name) blind. Look around a spot you know first.")
+        }
+        if worldMap.bearing(toX: place.x, y: place.y).distance < 1 {
+            return StepResult(isEvent: false, note: "Already at \(place.name).")
+        }
+        guard let legs = DottieGameNavigator.legs(on: worldMap, toX: place.x, y: place.y, sprint: sprint), !legs.isEmpty else {
+            return StepResult(isEvent: true, note: "No way to \(place.name) on the map; walk there by looking (go_to).")
+        }
+        onProgressLine?("Walking to \(place.name) by the map")
+        let walkStartedAt = Date()
+        for leg in legs {
+            guard !Task.isCancelled else { return StepResult(isEvent: true, note: "Stopped.") }
+            guard Date().timeIntervalSince(walkStartedAt) < 90 else {
+                return StepResult(isEvent: true, note: "Walking to \(place.name) took far longer than planned; look where you are.")
+            }
+            if abs(leg.turnDegrees) > 3 {
+                await turnCamera(degrees: leg.turnDegrees)
+            }
+            var walkingKeys: Set<String> = leg.isSprinting ? ["w", "shift"] : ["w"]
+            holdOnly(walkingKeys)
+            let legStartedAt = Date()
+            var lastMovementNotedAt = legStartedAt
+            var stillSince: Date?
+            var hasTriedUnsticking = false
+            while Date().timeIntervalSince(legStartedAt) < leg.holdSeconds, !Task.isCancelled {
+                let secondsLeft = leg.holdSeconds - Date().timeIntervalSince(legStartedAt)
+                try? await Task.sleep(nanoseconds: UInt64(max(0.05, min(0.5, secondsLeft)) * 1_000_000_000))
+                worldMap.noteMovement(heldKeys: heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
+                lastMovementNotedAt = Date()
+                guard let frame = await captureFrame() else {
+                    return StepResult(isEvent: true, note: "Couldn't see the screen.")
+                }
+                if let eventNote = noticeEvent(in: frame, isTurning: false) {
+                    return StepResult(isEvent: true, note: "On the way to \(place.name): \(eventNote)")
+                }
+                if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
+                    return commandResult
+                }
+                holdOnly(walkingKeys)
+                letMapSee(frame)
+                if lastChangedShare < 0.01 {
+                    stillSince = stillSince ?? Date()
+                } else {
+                    stillSince = nil
+                }
+                if let stillSince, Date().timeIntervalSince(stillSince) > 1.5 {
+                    guard !hasTriedUnsticking else {
+                        return StepResult(isEvent: true, note: "Stuck on the way to \(place.name): something the map doesn't show is in the way.")
+                    }
+                    hasTriedUnsticking = true
+                    await tryToUnstick()
+                    holdOnly(walkingKeys)
+                }
+            }
+            releaseAllKeys()
+        }
+        let distanceLeft = worldMap.bearing(toX: place.x, y: place.y).distance
+        return StepResult(isEvent: false, note: "Walked to \(place.name) by the map in \(legs.count) leg(s) without stopping to look; by the map it's about \(Int(distanceLeft.rounded())) units away now. Check it's there.")
+    }
+
     /// A jump forward, then a step back and a turn, before asking for help.
     private func tryToUnstick() async {
         releaseAllKeys()
         holdOnly(["w", "space"])
         try? await Task.sleep(nanoseconds: 450_000_000)
+        worldMap.noteMovement(heldKeys: ["w"], seconds: 0.45)
         releaseAllKeys()
         holdOnly(["s"])
         try? await Task.sleep(nanoseconds: 500_000_000)
+        worldMap.noteMovement(heldKeys: ["s"], seconds: 0.5)
         releaseAllKeys()
         await turnCamera(degrees: Bool.random() ? 35 : -35)
     }
