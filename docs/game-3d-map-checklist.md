@@ -84,6 +84,9 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] Recognizing spots: prints leave out the HUD strips and are made from the 320-point picture for saved and live views alike (older spots get new prints from their pictures). Before she knows where she is, a looser match counts when it clearly beats every other spot, and the play log shows how close the nearest spot came.
 - [x] A brain look that fails tries a second Gemini model, and play stops only after five failed looks in a row, waiting a little longer each time. The play log says why each one failed.
 - [x] `report.txt`'s "Is it working?" lines are worked out from the map instead of fixed text.
+- [x] Tasks with several parts: the brain writes the parts down (`task_parts`), gets its plan back every look, and moves on to the next part by itself.
+- [x] Finding things off screen: map places first, then look around (views labeled +90°, 180°, -90°), then signs, minimap and exploring, then the wiki. `turn_to` turns to face a box exactly instead of guessing degrees.
+- [x] The map as a 3D model: every save writes `map/map3d.obj` (colored blocks, opens in Preview, Blender or MeshLab), and "open the 3D map of <game>" opens it.
 
 ## 10. Later (not in this build)
 

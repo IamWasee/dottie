@@ -54,6 +54,11 @@ struct DottieGamePlan {
     var lessons: [String]
     /// The brain says the next decision needs the stronger model.
     var isHard: Bool
+    /// The user's task broken into parts ("go to the packager", "pick up
+    /// the boxes", "find the sell area", "sell them"), when it gave them.
+    var taskParts: [String]
+    /// Which of `taskParts` it's on, counted from 1.
+    var currentTaskPartNumber: Int?
 
     init?(jsonObject: [String: Any]) {
         let stepObjects = jsonObject["steps"] as? [[String: Any]] ?? []
@@ -91,6 +96,8 @@ struct DottieGamePlan {
         answer = jsonObject["answer"] as? String
         lessons = jsonObject["lessons"] as? [String] ?? []
         isHard = (jsonObject["hard"] as? Bool) ?? false
+        taskParts = (jsonObject["task_parts"] as? [String] ?? []).filter { !$0.isEmpty }
+        currentTaskPartNumber = (jsonObject["task_part_now"] as? NSNumber)?.intValue
     }
 
     private static func box(_ value: Any?) -> [Double]? {
@@ -135,6 +142,9 @@ struct DottieGameBrainRequest {
         let jpegData: Data
     }
     let referencePictures: [ReferencePicture]
+    /// The plan for the user's task from earlier looks, as lines like
+    /// "2. find the sell area  <- now".
+    var taskPlanText: String = ""
 }
 
 @MainActor
@@ -362,6 +372,9 @@ final class DottieGameBrain {
 
     static func messageText(for request: DottieGameBrainRequest) -> String {
         var sections = ["Task from the user: \(request.taskText)", "Why you're asked now: \(request.event)"]
+        sections.append(request.taskPlanText.isEmpty
+            ? "Your plan for the task: none yet. Break the task into its parts in `task_parts`."
+            : "Your plan for the task (keep it, move on when a part is done, change it when you learn better):\n" + request.taskPlanText)
         if !request.userCommands.isEmpty {
             sections.append("The user just said: " + request.userCommands.map { "\"\($0)\"" }.joined(separator: ", ") + ". Do what they say.")
         }
@@ -402,6 +415,15 @@ final class DottieGameBrain {
     4. Explore close by: walk to the things that stand out (signs, NPCs, glowing things, doors, shops), read what they say, and name the places in `place`.
     5. Then play: do what the game asks, step by step.
 
+    The user's task often has several parts ("take the boxes from the packager and sell them" = go to the packager, pick up the boxes, find the sell area, go there, sell). Write the parts in `task_parts` the first time and say which one you're on in `task_part_now`; your plan comes back to you every time. When a part is done, move to the next one yourself: don't wait to be told, and don't stop until every part is done.
+
+    Finding things that aren't on screen (the sell area, a shop, an NPC):
+    1. Check your 3D map's named places: if it's there, `go_to_place`.
+    2. Otherwise `look_around`: you get the views to the right (+90°), behind (180°) and left (-90°). If you see it in one, `turn` by that many degrees, then `go_to` it on your next look.
+    3. Not in any view: read signs, arrows, the minimap and quest text for where it is, and check "About this game" in your notebook. Then explore: walk to open paths, roads and signs, `look_around` again at each new spot, and name every place you pass in `place` so the map remembers it.
+    4. Still lost: `search_wiki` where it is, then `ask_user`.
+    When something you want is on screen but not straight ahead, `turn_to` its box turns the camera to face it exactly; guessing degrees for a plain `turn` loses things off the edge of the screen.
+
     While playing:
     - Look at everything: what moved between the pictures, the HUD (health, money, prompts like "Press E"), quest text, arrows and markers, the minimap. When lost, open the map (`open_map`) or read the minimap.
     - Remember what you learn in `learned` ("E opens doors", "selling gives coins"), keep ideas you haven't checked in `guesses` and move them to `tested` once checked, and say what killed you in `died_because`.
@@ -425,6 +447,7 @@ final class DottieGameBrain {
         {"do": "press", "keys": "e"},
         {"do": "click", "target_box": [..]},
         {"do": "turn", "degrees": -90},
+        {"do": "turn_to", "target_box": [..]},
         {"do": "look_around"},
         {"do": "wait", "seconds": 2},
         {"do": "open_map", "keys": "m"},
@@ -436,6 +459,7 @@ final class DottieGameBrain {
       "controls": {"e": "interact"}, "controls_complete": false,
       "learned": [], "guesses": [], "tested": [], "died_because": null,
       "place": {"name": "...", "directions": "..."} or null,
+      "task_parts": ["go to the packager", "pick up the boxes", "find the sell area", "sell the boxes"], "task_part_now": 1,
       "say": null, "ask_user": null, "hard": false,
       "done": false, "answer": "what to tell the user when done"
     }

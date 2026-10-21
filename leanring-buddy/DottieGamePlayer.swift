@@ -162,6 +162,10 @@ final class DottieGamePlayer {
         var extraNotes: [String] = []
         var extraFrameJPEGs: [Data] = []
         var failedBrainCallsInARow = 0
+        // The brain's plan for the user's task, kept between looks so a
+        // task with several parts carries on to the next part on its own.
+        var taskParts: [String] = []
+        var currentTaskPartNumber = 1
         let referencePictures = referenceImages.map { referenceImage in
             DottieGameBrainRequest.ReferencePicture(
                 name: referenceImage.name,
@@ -211,7 +215,8 @@ final class DottieGamePlayer {
                 extraNotes: extraNotes,
                 isWatchingUser: false,
                 // The user's pictures matter most while finding the thing.
-                referencePictures: brainCallIndex < 3 ? referencePictures : []
+                referencePictures: brainCallIndex < 3 ? referencePictures : [],
+                taskPlanText: Self.taskPlanText(parts: taskParts, currentPartNumber: currentTaskPartNumber)
             )
             extraNotes = []
             extraFrameJPEGs = []
@@ -233,6 +238,15 @@ final class DottieGamePlayer {
             failedBrainCallsInARow = 0
             notebook.log("Brain: thought \"\(plan.thought ?? "")\"; doing \"\(plan.goal)\"; steps: \(plan.steps.map(\.kind).joined(separator: ", "))\(plan.isDone ? "; says it's done" : "")")
             learn(from: plan, notebook: notebook, newestFrame: newestFrame)
+            if !plan.taskParts.isEmpty {
+                taskParts = Array(plan.taskParts.prefix(10))
+            }
+            if let partNumber = plan.currentTaskPartNumber, !taskParts.isEmpty {
+                if partNumber != currentTaskPartNumber {
+                    notebook.log("Task part \(min(max(partNumber, 1), taskParts.count)) of \(taskParts.count) now: \(taskParts[min(max(partNumber, 1), taskParts.count) - 1])")
+                }
+                currentTaskPartNumber = min(max(partNumber, 1), taskParts.count)
+            }
             if let placeName = plan.placeName, !placeName.isEmpty {
                 worldMap.notePlace(name: placeName)
             }
@@ -305,6 +319,16 @@ final class DottieGamePlayer {
     func stop() {
         brain?.stop()
         hearing?.stop()
+    }
+
+    /// The task's parts as numbered lines, marking done ones and the one
+    /// being worked on, for the brain.
+    private static func taskPlanText(parts taskParts: [String], currentPartNumber: Int) -> String {
+        taskParts.enumerated().map { partIndex, partText in
+            let partNumber = partIndex + 1
+            let partState = partNumber < currentPartNumber ? " (done)" : partNumber == currentPartNumber ? "  <- now" : ""
+            return "\(partNumber). \(partText)\(partState)"
+        }.joined(separator: "\n")
     }
 
     /// A step result that means the plan isn't working.

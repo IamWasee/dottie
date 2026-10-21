@@ -266,6 +266,18 @@ final class DottieGameReflexes {
                 }
             }
             return StepResult(isEvent: false, note: "Turned \(Int(turnDegrees))°.")
+        case "turn_to":
+            guard let targetBox = step.targetBox else {
+                return StepResult(isEvent: true, note: "turn_to needs target_box.")
+            }
+            // How far the box's middle sits from the middle of the view, as
+            // a share of the field of view, is how far to turn.
+            let targetCenterFraction = (targetBox[1] + targetBox[3]) / 2000
+            let turnDegrees = (targetCenterFraction - 0.5) * worldMap.movement.horizontalFieldOfViewDegrees
+            await turnCamera(degrees: turnDegrees)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            _ = await captureFrame()
+            return StepResult(isEvent: false, note: "Turned \(Int(turnDegrees))° to face it.")
         case "look_around":
             return await lookAround()
         case "wait":
@@ -654,7 +666,7 @@ final class DottieGameReflexes {
         }
         return StepResult(
             isEvent: true,
-            note: "Looked around: the extra pictures are the views to the right, behind, to the left, and ahead again.",
+            note: "Looked around: the extra pictures are the views to the right (+90°), behind (180°) and to the left (-90°), and you're facing ahead again. To face something you saw in one, turn by that many degrees.",
             extraFrameJPEGs: Array(viewJPEGs.prefix(3))
         )
     }
