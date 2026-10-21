@@ -91,6 +91,8 @@ final class DottieGameWorldMap {
     /// again from the spot's picture, a few per frame.
     private var keyframeIDsWithoutViewPrint: [Int] = []
     private var lastRecognitionMissLoggedAt = Date.distantPast
+    /// Places named before she knew where she was, with her guessed pose.
+    private var placesWaitingForLocalizing: [(name: String, pose: Pose)] = []
     private var nextKeyframeID = 0
     private(set) var sessionCount = 0
     /// Fixed things the depth missed, kept on the saved map.
@@ -112,7 +114,15 @@ final class DottieGameWorldMap {
     private(set) var keyframesAddedThisSession = 0
     private(set) var framesWithDepthThisSession = 0
     private(set) var recognitionsThisSession = 0
-    private let sessionStartedAt = Date()
+    /// Since when she's been looking for a spot she knows: the session's
+    /// start, or the last teleport.
+    private var lookingForKnownSpotSince = Date()
+    /// After a teleport (a black loading screen, a portal, respawning), a
+    /// place she doesn't recognize is a new zone, laid out away from the
+    /// rest of the map instead of on top of where she was.
+    private var startsNewZoneIfNothingLooksFamiliar = false
+    /// How far apart zones are laid out on the map.
+    private static let zoneSpacing = 500.0
     private var lastSavedAt = Date()
     private var isConsideringFrame = false
     private var lastConsideredAt: Date?
@@ -199,6 +209,19 @@ final class DottieGameWorldMap {
 
     // MARK: - Moving (dead reckoning)
 
+    /// The game moved her without walking (a loading screen, a portal,
+    /// respawning): counted steps no longer say where she is, so she looks
+    /// for a spot she knows and, failing that, maps a new zone.
+    func noteTeleport() {
+        guard !keyframes.isEmpty else { return }
+        if isLocalized {
+            DottieGameNotebook.appendToPlayLog("Map: the game seems to have moved her (teleport, loading screen or respawn), so she's finding where she is again.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        }
+        isLocalized = false
+        lookingForKnownSpotSince = Date()
+        startsNewZoneIfNothingLooksFamiliar = true
+    }
+
     func noteCameraTurn(degrees: Double) {
         pose.headingDegrees = Self.normalizedAngle(pose.headingDegrees + degrees)
     }
@@ -258,11 +281,24 @@ final class DottieGameWorldMap {
             snapPose(to: matchedKeyframe, poseAtFrame: poseAtFrame)
             return
         }
-        if !isLocalized, Date().timeIntervalSince(sessionStartedAt) > Self.secondsToWaitForRelocalizing {
+        if !isLocalized, Date().timeIntervalSince(lookingForKnownSpotSince) > Self.secondsToWaitForRelocalizing {
             // Nothing looked familiar for a while: this is a new part of
             // the world (or the game moved her), so map from the best guess.
             isLocalized = true
-            DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds, so mapping from here as new ground.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+            var poseCorrectionX = 0.0
+            if startsNewZoneIfNothingLooksFamiliar {
+                // East of everything mapped so far, so zones never overlap.
+                let farthestMappedX = keyframes.map(\.x).max() ?? pose.x
+                let newZoneX = farthestMappedX + Self.zoneSpacing
+                poseCorrectionX = newZoneX - pose.x
+                pose = Pose(x: newZoneX, y: 0, headingDegrees: 0)
+                DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds after a teleport, so this is a new zone, mapped apart from the others.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+            } else {
+                DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds, so mapping from here as new ground.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+            }
+            startsNewZoneIfNothingLooksFamiliar = false
+            lastConfirmedPose = nil
+            addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: 0)
         }
         guard isLocalized, isNewSpot(poseAtFrame), keyframes.count < Self.maximumKeyframeCount else { return }
 
@@ -352,7 +388,9 @@ final class DottieGameWorldMap {
         )
         if !isLocalized {
             DottieGameNotebook.appendToPlayLog("Map: recognized spot \(keyframe.id), so Dottie knows where she is.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+            addPlacesWaitingForLocalizing(poseCorrectionX: pose.x - poseAtFrame.x - movedSinceFrameX, poseCorrectionY: pose.y - poseAtFrame.y - movedSinceFrameY)
         }
+        startsNewZoneIfNothingLooksFamiliar = false
         isLocalized = true
         recognitionsThisSession += 1
         lastConfirmedPose = Pose(x: keyframe.x, y: keyframe.y, headingDegrees: keyframe.headingDegrees)
@@ -474,11 +512,32 @@ final class DottieGameWorldMap {
     // MARK: - Places
 
     /// Names the spot Dottie is standing on (or just reached).
+    /// Before she knows where she is on a saved map, the name waits and is
+    /// placed where she stood once she finds out, instead of being lost.
     func notePlace(name: String) {
         let trimmedName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
-        guard !trimmedName.isEmpty, isLocalized else { return }
-        places.removeAll { $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame }
-        places.append(Place(name: trimmedName, x: pose.x, y: pose.y, notedAt: Date()))
+        guard !trimmedName.isEmpty else { return }
+        guard isLocalized else {
+            placesWaitingForLocalizing.append((trimmedName, pose))
+            return
+        }
+        addPlace(named: trimmedName, at: pose)
+    }
+
+    private func addPlace(named placeName: String, at placePose: Pose) {
+        places.removeAll { $0.name.caseInsensitiveCompare(placeName) == .orderedSame }
+        places.append(Place(name: placeName, x: placePose.x, y: placePose.y, notedAt: Date()))
+        DottieGameNotebook.appendToPlayLog("Map: named a place \"\(placeName)\" at (\(String(format: "%.1f", placePose.x)), \(String(format: "%.1f", placePose.y))).", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+    }
+
+    /// Names noted before she knew where she was, placed now that she does.
+    /// The pose correction from the recognized spot is applied to them too.
+    private func addPlacesWaitingForLocalizing(poseCorrectionX: Double, poseCorrectionY: Double) {
+        for waitingPlace in placesWaitingForLocalizing {
+            let correctedPose = Pose(x: waitingPlace.pose.x + poseCorrectionX, y: waitingPlace.pose.y + poseCorrectionY, headingDegrees: waitingPlace.pose.headingDegrees)
+            addPlace(named: waitingPlace.name, at: correctedPose)
+        }
+        placesWaitingForLocalizing = []
     }
 
     func place(named name: String) -> Place? {

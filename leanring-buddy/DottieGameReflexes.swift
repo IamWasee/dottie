@@ -330,6 +330,7 @@ final class DottieGameReflexes {
         trackingRequest.trackingLevel = .fast
         let sequenceHandler = VNSequenceRequestHandler()
         let startedAt = Date()
+        var lastTrackedBox = Self.visionRect(fromBox: targetBox)
         var stillSince: Date?
         var hasTriedUnsticking = false
         var walkingKeys: Set<String> = sprint ? ["w", "shift"] : ["w"]
@@ -345,7 +346,7 @@ final class DottieGameReflexes {
             guard let frame = await captureFrame() else {
                 return StepResult(isEvent: true, note: "Couldn't see the screen.")
             }
-            if let eventNote = noticeEvent(in: frame, isTurning: false) {
+            if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                 return StepResult(isEvent: true, note: eventNote)
             }
             if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
@@ -369,10 +370,16 @@ final class DottieGameReflexes {
             try? sequenceHandler.perform([trackingRequest], on: frame)
             guard let trackedObservation = trackingRequest.results?.first as? VNDetectedObjectObservation,
                   trackedObservation.confidence > 0.3 else {
+                // Something that already filled much of the view and then
+                // slipped out of it was walked up to, not lost.
+                if lastTrackedBox.height > 0.14 || lastTrackedBox.width > 0.22 {
+                    return StepResult(isEvent: false, note: "Reached the target (it was close when it went out of view).")
+                }
                 return StepResult(isEvent: true, note: "Lost sight of the target while walking.")
             }
             trackingRequest.inputObservation = trackedObservation
             let trackedBox = trackedObservation.boundingBox
+            lastTrackedBox = trackedBox
             if trackedBox.height > 0.22 || trackedBox.width > 0.35 {
                 return StepResult(isEvent: false, note: "Reached the target.")
             }
@@ -428,7 +435,7 @@ final class DottieGameReflexes {
             guard let frame = await captureFrame() else {
                 return StepResult(isEvent: true, note: "Couldn't see the screen.")
             }
-            if let eventNote = noticeEvent(in: frame, isTurning: false) {
+            if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                 return StepResult(isEvent: true, note: eventNote)
             }
             if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
@@ -578,7 +585,7 @@ final class DottieGameReflexes {
                 guard let frame = await captureFrame() else {
                     return .stopped(StepResult(isEvent: true, note: "Couldn't see the screen."))
                 }
-                if let eventNote = noticeEvent(in: frame, isTurning: false) {
+                if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                     return .stopped(StepResult(isEvent: true, note: "On the way to \(placeName): \(eventNote)"))
                 }
                 if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
@@ -843,19 +850,36 @@ final class DottieGameReflexes {
 
     private var lastChangedShare = 1.0
 
+    /// The frame noticeEvent looked at last, to read its text when the
+    /// next one changes a lot.
+    private var previousNoticedFrame: CGImage?
+
     /// Something the brain should look at, or nil.
-    private func noticeEvent(in frame: CGImage, isTurning: Bool) -> String? {
+    private func noticeEvent(in frame: CGImage, isTurning: Bool) async -> String? {
         guard let thumbnail = DottieGameVision.thumbnail(of: frame) else { return nil }
-        defer { previousThumbnail = thumbnail }
+        let earlierFrame = previousNoticedFrame
+        defer {
+            previousThumbnail = thumbnail
+            previousNoticedFrame = frame
+        }
         let brightness = DottieGameVision.averageBrightness(of: thumbnail)
         defer { previousBrightness = brightness }
         guard let previousThumbnail else { return nil }
         lastChangedShare = DottieGameVision.changedShare(from: previousThumbnail, to: thumbnail)
         if let previousBrightness, previousBrightness > 40, brightness < 12 {
-            return "The screen went dark (a death, a loading screen or a cutscene?)."
+            // Loading screens, portals and respawns move her without walking.
+            worldMap.noteTeleport()
+            return "The screen went dark (a death, a loading screen, a teleport or a cutscene?)."
         }
-        if !isTurning && lastChangedShare > 0.6 {
-            return "The screen changed a lot at once (a new area, a menu or a cutscene?)."
+        // Walking and turning in a third-person game change most of the
+        // picture, so a big change only counts when a menu or a new screen
+        // came up with it: several new lines of text at once.
+        if !isTurning, lastChangedShare > 0.6, let earlierFrame {
+            let earlierTextLineSet = Set(await Self.readTextOffMain(earlierFrame))
+            let newTextLines = await Self.readTextOffMain(frame).filter { !earlierTextLineSet.contains($0) }
+            if newTextLines.count >= 3 {
+                return "A menu or new screen came up: " + newTextLines.prefix(8).joined(separator: " | ")
+            }
         }
         if let currentLoudness, currentLoudness() > 0.7 {
             return "A loud sound in the game."

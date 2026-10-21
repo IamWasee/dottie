@@ -86,6 +86,9 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] `report.txt`'s "Is it working?" lines are worked out from the map instead of fixed text.
 - [x] Tasks with several parts: the brain writes the parts down (`task_parts`), gets its plan back every look, and moves on to the next part by itself.
 - [x] Finding things off screen: map places first, then look around (views labeled +90°, 180°, -90°), then signs, minimap and exploring, then the wiki. `turn_to` turns to face a box exactly instead of guessing degrees.
+- [x] Naming places: a name given before she knows where she is waits and is placed once she does (it was dropped before). "This is the sell area" or "remember this as the shop" names her spot at once. A `go_to` whose target was already big when it went out of view counts as reached, so its name lands on the map. The brain is told to name every landmark it's next to.
+- [x] Walking no longer ends a step as "the screen changed a lot": a big change only counts when several new lines of text come up with it (a menu).
+- [x] Teleports: a black screen (loading, portal, respawn) makes her find where she is again; if nothing looks familiar after 30 seconds, the new area is mapped as its own zone, 500 units away, instead of on top of the old one.
 - [x] The map as a 3D model: every save writes `map/map3d.obj` (colored blocks, opens in Preview, Blender or MeshLab), and "open the 3D map of <game>" opens it.
 
 ## 10. Later (not in this build)

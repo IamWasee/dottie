@@ -52,6 +52,8 @@ final class DottieGamePlayer {
     /// The game being played, once it's been named.
     private(set) var currentGameName: String?
     private var brain: DottieGameBrain?
+    /// The map of the game being played, so the user can name places by voice.
+    private var currentWorldMap: DottieGameWorldMap?
     private var hearing: DottieGameHearing?
     private var lastThoughtAloudAt: Date?
 
@@ -73,7 +75,41 @@ final class DottieGamePlayer {
     func receiveUserCommand(_ commandText: String) {
         let trimmedCommand = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else { return }
+        // "This is the sell area": the spot she's on gets that name on the
+        // map at once, without waiting for the brain to copy it over.
+        if let spokenPlaceName = Self.placeName(namedIn: trimmedCommand), let currentWorldMap {
+            currentWorldMap.notePlace(name: spokenPlaceName)
+        }
         pendingUserCommands.append(trimmedCommand)
+    }
+
+    /// The place a remark names, like "the sell area" from "this is the
+    /// sell area, remember it" or "remember this as the shop", or nil.
+    static func placeName(namedIn remark: String) -> String? {
+        let patterns = [
+            #"(?i)\bremember (?:this|here)(?: place| spot)? as (.+)"#,
+            #"(?i)\b(?:call|name) (?:this|here)(?: place| spot)? (.+)"#,
+            #"(?i)\b(?:this|here) is called (.+)"#,
+            // Only with an article, so "this is taking forever" isn't a name.
+            #"(?i)\b(?:this|here) is ((?:the|a|an|my|our) .+)"#
+        ]
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: remark, range: NSRange(remark.startIndex..., in: remark)),
+                  let nameRange = Range(match.range(at: 1), in: remark) else { continue }
+            var placeName = String(remark[nameRange])
+            // Drop what comes after the name ("..., remember it", "so go there").
+            for separator in [",", ".", "!", " remember", " so ", " and "] {
+                if let separatorRange = placeName.range(of: separator, options: .caseInsensitive) {
+                    placeName = String(placeName[..<separatorRange.lowerBound])
+                }
+            }
+            placeName = placeName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let wordCount = placeName.split(separator: " ").count
+            guard wordCount >= 1, wordCount <= 5 else { continue }
+            return placeName
+        }
+        return nil
     }
 
     func play(taskText: String, windowGameName: String, referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []) async -> DottieScreenTaskRunner.Outcome {
@@ -91,6 +127,7 @@ final class DottieGamePlayer {
         currentGameName = gameName
         let notebook = DottieGameNotebook(gameName: gameName)
         let worldMap = DottieGameWorldMap(gameName: gameName, gameFolderURL: notebook.folderURL)
+        currentWorldMap = worldMap
         let cameraButton = gameName.lowercased().contains("roblox") ? "right" : "none"
         let reflexes = DottieGameReflexes(displayFrame: firstScreenshot.displayFrame, cameraButton: cameraButton, worldMap: worldMap)
         reflexes.reflexModel = reflexModel
@@ -112,6 +149,7 @@ final class DottieGamePlayer {
             worldMap.save()
             gameHearing.stop()
             gameBrain.stop()
+            currentWorldMap = nil
             if Self.current === self {
                 Self.current = nil
             }
