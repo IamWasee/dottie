@@ -11,6 +11,12 @@
 //  notebook (DottieGameNotebook), read at the start of every decision, so
 //  the next session starts smarter.
 //
+//  Every game also gets a 3D map (DottieGameWorldMap), loaded when play
+//  starts: a familiar game picks up where its map left off, a new one is
+//  mapped automatically as Dottie plays, and places on it can be walked to
+//  blind (`go_to_place`). Haiku thinks; Sonnet takes the next look only
+//  when Haiku asks for it (`hard`) or keeps running into trouble.
+//
 //  "Watch me play" records the user's keys and a few frames for a minute
 //  and turns them into lessons in the notebook instead of playing.
 //
@@ -63,10 +69,13 @@ final class DottieGamePlayer {
         }
         Self.current = self
         let notebook = DottieGameNotebook(gameName: gameName)
-        let gameMap = DottieGameMap(gameName: gameName)
+        let worldMap = DottieGameWorldMap(gameName: gameName, gameFolderURL: notebook.folderURL)
         let cameraButton = gameName.lowercased().contains("roblox") ? "right" : "none"
-        let reflexes = DottieGameReflexes(displayFrame: firstScreenshot.displayFrame, cameraButton: cameraButton, gameMap: gameMap)
+        let reflexes = DottieGameReflexes(displayFrame: firstScreenshot.displayFrame, cameraButton: cameraButton, worldMap: worldMap)
         reflexes.reflexModel = reflexModel
+        reflexes.onProgressLine = { [weak self] progressLine in
+            self?.onProgress?(progressLine)
+        }
         reflexes.takeUserCommand = { [weak self] in
             guard let self, !self.pendingUserCommands.isEmpty else { return nil }
             return self.pendingUserCommands.removeFirst()
@@ -79,6 +88,7 @@ final class DottieGamePlayer {
         reflexes.currentLoudness = { gameHearing.currentLoudness }
         defer {
             reflexes.releaseAllKeys()
+            worldMap.save()
             gameHearing.stop()
             gameBrain.stop()
             if Self.current === self {
@@ -94,6 +104,16 @@ final class DottieGamePlayer {
         var nextEvent = notebook.contents.hasLearnedControls
             ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
             : "This game is new to you: learn its controls first (`learn_controls`, or open its controls screen), then start on the task."
+        if worldMap.isFamiliar {
+            nextEvent += " Dottie knows this game: her map has \(worldMap.keyframes.count) spots and \(worldMap.places.count) named places, so she won't map them again."
+            thinkAloudIfItsBeenAWhile("I know this one, I've got it mapped.")
+        } else {
+            nextEvent += " Dottie hasn't mapped this game before; she maps it automatically as you play."
+            thinkAloudIfItsBeenAWhile("New game for me, I'll map it as I go.")
+        }
+        // Haiku thinks unless it asked for help or keeps hitting trouble.
+        var needsStrongerModel = false
+        var troubleInARow = 0
         var extraNotes: [String] = []
         var extraFrameJPEGs: [Data] = []
         var failedBrainCallsInARow = 0
@@ -116,6 +136,7 @@ final class DottieGamePlayer {
             }
             let screenText = await DottieGameReflexes.readTextOffMain(newestFrame)
             let recognizedPlace = notebook.recognizePlace(in: newestFrame)
+            reflexes.letMapSee(newestFrame)
             let frameJPEGs = motionFrames.compactMap { DottieGameVision.jpegData(of: $0) } + extraFrameJPEGs
             var userCommands: [String] = []
             while !pendingUserCommands.isEmpty {
@@ -131,6 +152,7 @@ final class DottieGamePlayer {
                 notebookText: notebook.promptText(),
                 recentHistory: Array(recentHistory.suffix(8)),
                 recognizedPlace: recognizedPlace.map { "\($0.name) (\($0.directions))" },
+                mapText: worldMap.summaryText(),
                 userCommands: userCommands,
                 extraNotes: extraNotes,
                 isWatchingUser: false,
@@ -140,7 +162,7 @@ final class DottieGamePlayer {
             extraNotes = []
             extraFrameJPEGs = []
 
-            guard let plan = await gameBrain.think(request) else {
+            guard let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel) else {
                 guard !Task.isCancelled else { return .stopped }
                 failedBrainCallsInARow += 1
                 if failedBrainCallsInARow >= 3 {
@@ -152,6 +174,9 @@ final class DottieGamePlayer {
             }
             failedBrainCallsInARow = 0
             learn(from: plan, notebook: notebook, newestFrame: newestFrame)
+            if let placeName = plan.placeName, !placeName.isEmpty {
+                worldMap.notePlace(name: placeName)
+            }
             if let thought = plan.thought {
                 recentHistory.append("You thought: \(thought.prefix(200))")
             }
@@ -175,10 +200,14 @@ final class DottieGamePlayer {
             // happens that the brain should see.
             nextEvent = "Your steps are done; what next?"
             let playStartedAt = Date()
+            var hadTroubleThisRound = false
             for step in plan.steps.prefix(3) {
                 guard !Task.isCancelled else { return .stopped }
                 let stepResult = await reflexes.perform(step, goal: plan.goal)
                 recentHistory.append("\(step.kind): \(stepResult.note.prefix(200))")
+                if Self.isTrouble(stepResult.note) {
+                    hadTroubleThisRound = true
+                }
                 extraFrameJPEGs += stepResult.extraFrameJPEGs
                 if stepResult.isEvent {
                     nextEvent = stepResult.note
@@ -195,6 +224,10 @@ final class DottieGamePlayer {
             if plan.steps.isEmpty {
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
+            troubleInARow = hadTroubleThisRound ? troubleInARow + 1 : 0
+            // Sonnet for the next look when Haiku asked, or after trouble
+            // twice in a row; back to Haiku once a round goes fine.
+            needsStrongerModel = plan.isHard || troubleInARow >= 2
         }
         return .finished(answer: "I played for a good while and stopped there. Say the word if you want me to keep going.")
     }
@@ -202,6 +235,12 @@ final class DottieGamePlayer {
     func stop() {
         brain?.stop()
         hearing?.stop()
+    }
+
+    /// A step result that means the plan isn't working.
+    private static func isTrouble(_ stepNote: String) -> Bool {
+        let lowercasedNote = stepNote.lowercased()
+        return ["stuck", "lost sight", "didn't reach", "no way to", "couldn't"].contains { lowercasedNote.contains($0) }
     }
 
     // MARK: - Learning
@@ -288,6 +327,7 @@ final class DottieGamePlayer {
             notebookText: notebook.promptText(),
             recentHistory: [],
             recognizedPlace: nil,
+            mapText: "",
             userCommands: [],
             extraNotes: ["Their keys and clicks:\n" + keyLog.suffix(120).joined(separator: "\n")],
             isWatchingUser: true,

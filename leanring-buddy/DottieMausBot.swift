@@ -773,9 +773,10 @@ final class DottieMausBot: ObservableObject {
 
     /// "claude/<model>" for the newest model whose id contains `keyword`
     /// ("haiku"), from the models this workspace offers; nil when there's
-    /// none. Info.plist's MausBotGameModel overrides it.
+    /// none. Info.plist's MausBotGameModel overrides the game's everyday
+    /// "haiku" pick, not the stronger model it switches to when stuck.
     func modelSelection(matching keyword: String, launcher: DottieMausBotLauncher) async -> String? {
-        if let configuredSelection = AppBundleConfiguration.stringValue(forKey: "MausBotGameModel") {
+        if keyword.lowercased() == "haiku", let configuredSelection = AppBundleConfiguration.stringValue(forKey: "MausBotGameModel") {
             return configuredSelection
         }
         if let cachedSelection = cachedModelSelectionByKeyword[keyword] { return cachedSelection }
