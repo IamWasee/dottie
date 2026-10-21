@@ -212,7 +212,9 @@ final class DottieGamePlayer {
             )
         }
 
-        var lastMappingSweepAt = Date()
+        // The first look around is right away: at spawn it saves what spawn
+        // looks like, and on a known map it finds where she is.
+        var lastMappingSweepAt = Date.distantPast
         for brainCallIndex in 0..<Self.maximumBrainCalls {
             guard !Task.isCancelled else { return .stopped }
 

@@ -28,6 +28,7 @@ enum DottieGameMapPicture {
     private static let modelMaterialsFileName = "map3d.mtl"
     /// The most-seen blocks only, so the file stays small enough to open.
     private static let maximumModelBlockCount = 30_000
+    private static let maximumFineModelBlockCount = 80_000
 
     struct SavedMap {
         let gameName: String
@@ -52,42 +53,70 @@ enum DottieGameMapPicture {
 
     // MARK: - 3D model
 
-    /// Writes the map as colored blocks in a Wavefront OBJ file: grey
-    /// floor, white walls (amber when low enough to jump), blue below the
-    /// floor, a cyan post at each photographed spot and a pink one where
-    /// Dottie stands. Built off the main thread, since a big map is a few
-    /// megabytes of text.
+    /// Writes the map as blocks in a Wavefront OBJ file. With the fine
+    /// layer, each small block has the color it had in the game (rounded
+    /// to one of 64 colors, so the materials file stays short); without it,
+    /// the coarse blocks are grey floor, white walls, amber low things and
+    /// blue drops. A cyan post marks each photographed spot, a green one
+    /// spawn (0,0,0) and a pink one where Dottie stands. Built off the main
+    /// thread, since a big map is several megabytes of text.
     @discardableResult
     private static func write3DModel(of worldMap: DottieGameWorldMap) -> Task<Void, Never> {
+        let usesFineLayer = !worldMap.detailVoxelHits.isEmpty
+        let blockSize = usesFineLayer ? DottieGameWorldMap.detailVoxelSize : DottieGameWorldMap.voxelSize
         let jumpHeightGridRows = Int(ceil(worldMap.movement.jumpHeightUnits / DottieGameWorldMap.voxelSize))
-        let strongestVoxels = worldMap.voxelHits
-            .filter { $0.value >= 2 }
-            .sorted { $0.value > $1.value }
-            .prefix(maximumModelBlockCount)
-            .map { DottieGameWorldMap.gridPosition(ofVoxelKey: $0.key) }
+        let sourceHits = usesFineLayer ? worldMap.detailVoxelHits : worldMap.voxelHits
+        let blockLimit = usesFineLayer ? maximumFineModelBlockCount : maximumModelBlockCount
+        let detailColors = worldMap.detailVoxelColors
         let spotPositions = worldMap.keyframes.map { (x: $0.x, y: $0.y) }
         let dottiePosition = (x: worldMap.pose.x, y: worldMap.pose.y)
         let modelURL = worldMap.mapFolderURL.appendingPathComponent(modelFileName)
         let materialsURL = worldMap.mapFolderURL.appendingPathComponent(modelMaterialsFileName)
-        let voxelSize = DottieGameWorldMap.voxelSize
         let materialsFileName = modelMaterialsFileName
         return Task.detached(priority: .utility) {
-            let materialsText = """
-            newmtl floor
-            Kd 0.55 0.55 0.58
-            newmtl wall
-            Kd 0.95 0.95 0.95
-            newmtl low
-            Kd 0.98 0.68 0.15
-            newmtl below
-            Kd 0.25 0.5 0.95
-            newmtl spot
-            Kd 0.2 0.85 0.95
-            newmtl dottie
-            Kd 0.98 0.35 0.7
-
-            """
-            var modelLines = ["# Dottie's 3D map. Up is the height; one block is half a step.", "mtllib \(materialsFileName)"]
+            // Picking and sorting a big fine layer takes a moment, so it's
+            // done here rather than on the main thread.
+            let modelBlocks: [(gridX: Int, gridY: Int, gridZ: Int, materialName: String)] = sourceHits
+                // Seen once is often something passing by.
+                .filter { $0.value >= 2 }
+                .sorted { $0.value > $1.value }
+                .prefix(blockLimit)
+                .map { voxelEntry in
+                    let gridPosition = DottieGameWorldMap.gridPosition(ofVoxelKey: voxelEntry.key)
+                    let materialName: String
+                    if usesFineLayer {
+                        let color = detailColors[voxelEntry.key] ?? 0x808080
+                        // Four levels a channel: c<r><g><b>, each 0-3.
+                        materialName = "c\((color >> 22) & 3)\((color >> 14) & 3)\((color >> 6) & 3)"
+                    } else if gridPosition.gridZ < -1 {
+                        materialName = "below"
+                    } else if gridPosition.gridZ <= 0 {
+                        materialName = "floor"
+                    } else if gridPosition.gridZ <= jumpHeightGridRows {
+                        materialName = "low"
+                    } else {
+                        materialName = "wall"
+                    }
+                    return (gridPosition.gridX, gridPosition.gridY, gridPosition.gridZ, materialName)
+                }
+            var materialLines = [
+                "newmtl floor", "Kd 0.55 0.55 0.58",
+                "newmtl wall", "Kd 0.95 0.95 0.95",
+                "newmtl low", "Kd 0.98 0.68 0.15",
+                "newmtl below", "Kd 0.25 0.5 0.95",
+                "newmtl spot", "Kd 0.2 0.85 0.95",
+                "newmtl spawn", "Kd 0.2 0.9 0.35",
+                "newmtl dottie", "Kd 0.98 0.35 0.7"
+            ]
+            for red in 0..<4 {
+                for green in 0..<4 {
+                    for blue in 0..<4 {
+                        materialLines.append("newmtl c\(red)\(green)\(blue)")
+                        materialLines.append("Kd \(Double(red * 2 + 1) / 8) \(Double(green * 2 + 1) / 8) \(Double(blue * 2 + 1) / 8)")
+                    }
+                }
+            }
+            var modelLines = ["# Dottie's 3D map, measured from spawn (0,0,0). Up is the height.", "mtllib \(materialsFileName)"]
             var vertexCount = 0
             // One box: 8 corners, 6 square faces. OBJ is y-up, so the map's
             // height becomes y and its forward direction becomes -z.
@@ -104,33 +133,21 @@ enum DottieGameMapPicture {
                 }
                 vertexCount += 8
             }
-            var voxelsByMaterial: [String: [(gridX: Int, gridY: Int, gridZ: Int)]] = [:]
-            for voxel in strongestVoxels {
-                let material: String
-                if voxel.gridZ < -1 {
-                    material = "below"
-                } else if voxel.gridZ <= 0 {
-                    material = "floor"
-                } else if voxel.gridZ <= jumpHeightGridRows {
-                    material = "low"
-                } else {
-                    material = "wall"
-                }
-                voxelsByMaterial[material, default: []].append(voxel)
-            }
-            for (material, voxels) in voxelsByMaterial {
-                modelLines.append("usemtl \(material)")
-                for voxel in voxels {
-                    addBox(minX: Double(voxel.gridX) * voxelSize, minY: Double(voxel.gridY) * voxelSize, minHeight: Double(voxel.gridZ) * voxelSize, width: voxelSize, depth: voxelSize, height: voxelSize)
+            for (materialName, blocks) in Dictionary(grouping: modelBlocks, by: { $0.materialName }) {
+                modelLines.append("usemtl \(materialName)")
+                for block in blocks {
+                    addBox(minX: Double(block.gridX) * blockSize, minY: Double(block.gridY) * blockSize, minHeight: Double(block.gridZ) * blockSize, width: blockSize, depth: blockSize, height: blockSize)
                 }
             }
             modelLines.append("usemtl spot")
             for spotPosition in spotPositions {
-                addBox(minX: spotPosition.x - 0.1, minY: spotPosition.y - 0.1, minHeight: 0, width: 0.2, depth: 0.2, height: 2)
+                addBox(minX: spotPosition.x - 0.05, minY: spotPosition.y - 0.05, minHeight: 0, width: 0.1, depth: 0.1, height: 2)
             }
+            modelLines.append("usemtl spawn")
+            addBox(minX: -0.2, minY: -0.2, minHeight: 0, width: 0.4, depth: 0.4, height: 4)
             modelLines.append("usemtl dottie")
-            addBox(minX: dottiePosition.x - 0.25, minY: dottiePosition.y - 0.25, minHeight: 0, width: 0.5, depth: 0.5, height: 3)
-            try? materialsText.write(to: materialsURL, atomically: true, encoding: .utf8)
+            addBox(minX: dottiePosition.x - 0.15, minY: dottiePosition.y - 0.15, minHeight: 0, width: 0.3, depth: 0.3, height: 3)
+            try? (materialLines.joined(separator: "\n") + "\n").write(to: materialsURL, atomically: true, encoding: .utf8)
             try? (modelLines.joined(separator: "\n") + "\n").write(to: modelURL, atomically: true, encoding: .utf8)
         }
     }
@@ -291,7 +308,8 @@ enum DottieGameMapPicture {
             "Sessions played with this map: \(worldMap.sessionCount)",
             "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D.",
             "Spots photographed in total: \(worldMap.keyframes.count) (a spot is never photographed twice)",
-            "3D points: \(worldMap.voxelHits.count.formatted())",
+            "3D points: \(worldMap.voxelHits.count.formatted()) walking-grid blocks, \(worldMap.detailVoxelHits.count.formatted()) small blocks in the light map (map3d.obj shows the ones seen at least twice)",
+            "Spawn (0,0,0): \(worldMap.spawnViewCount) views saved for recognizing it (in the game's spawn folder, kept if the map is deleted)",
             "From above: \(floorPlan.floorCells.count) floor squares, \(floorPlan.blockedCells.count) wall squares, \(floorPlan.lowObstacleHeights.count) low squares to jump, \(floorPlan.dropCells.count) drop squares, \(worldMap.learnedBlockedCells.count) blocker squares she walked into",
             "Knows where she is right now: \(worldMap.isLocalized ? "yes" : "no, still looking for a spot she knows")",
             "Depth model: \(DottieGameDepth.shared.statusText)",

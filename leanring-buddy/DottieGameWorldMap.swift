@@ -84,6 +84,15 @@ final class DottieGameWorldMap {
     private(set) var places: [Place] = []
     /// Voxel key (see voxelKey) → how many frames saw a surface there.
     private(set) var voxelHits: [Int64: UInt16] = [:]
+    /// The fine layer: small blocks (`detailVoxelSize`) from the depth of
+    /// every frame she sees while she knows where she is, like light
+    /// falling on things in the dark. Over time it outlines shops, walls
+    /// and machines. Only for looking at (the 3D model); walking plans use
+    /// the coarse `voxelHits`.
+    private(set) var detailVoxelHits: [Int64: UInt16] = [:]
+    /// Each fine block's color as seen in the game (0xRRGGBB, averaged over
+    /// the times it was seen), so the 3D model looks like the place.
+    private(set) var detailVoxelColors: [Int64: UInt32] = [:]
     /// Feature prints of each spot's view without the HUD strips (see
     /// `recognitionView`), for recognizing it again.
     private var keyframePrints: [Int: VNFeaturePrintObservation] = [:]
@@ -91,6 +100,21 @@ final class DottieGameWorldMap {
     /// again from the spot's picture, a few per frame.
     private var keyframeIDsWithoutViewPrint: [Int] = []
     private var lastRecognitionMissLoggedAt = Date.distantPast
+    private var lastDetailFrameAt = Date.distantPast
+
+    /// What spawn looks like, kept in the game's own `spawn` folder beside
+    /// the map rather than in it, so a deleted or broken map can be rebuilt
+    /// from the same 0,0,0: on an empty map she waits until she sees spawn
+    /// and starts the new map there.
+    private struct SpawnView: Codable {
+        let fileName: String
+        let headingDegrees: Double
+    }
+    private let spawnFolderURL: URL
+    private var spawnViews: [SpawnView] = []
+    var spawnViewCount: Int { spawnViews.count }
+    private var spawnViewPrints: [String: VNFeaturePrintObservation] = [:]
+    private static let maximumSpawnViewCount = 8
     /// Places named before she knew where she was, with her guessed pose.
     private var placesWaitingForLocalizing: [(name: String, pose: Pose)] = []
     private var nextKeyframeID = 0
@@ -133,6 +157,14 @@ final class DottieGameWorldMap {
 
     static let voxelSize = 0.5
     private static let maximumVoxelCount = 600_000
+    static let detailVoxelSize = 0.125
+    /// About 40 MB in memory at the most.
+    private static let maximumDetailVoxelCount = 1_500_000
+    /// Depth for the fine layer at most this often, between new spots.
+    private static let secondsBetweenDetailFrames = 1.0
+    /// Spots this close to spawn are spawn's views: games start and
+    /// respawn there, so they're the first thing she checks.
+    private static let spawnRadius = 2.0
     private static let maximumKeyframeCount = 1_500
     private static let newKeyframeDistance = 2.0
     private static let newKeyframeHeadingDegrees = 35.0
@@ -148,6 +180,7 @@ final class DottieGameWorldMap {
         movement = DottieGameMovement(gameFolderURL: gameFolderURL)
         let loadedMapFolderURL = gameFolderURL.appendingPathComponent("map", isDirectory: true)
         mapFolderURL = loadedMapFolderURL
+        spawnFolderURL = gameFolderURL.appendingPathComponent("spawn", isDirectory: true)
         try? FileManager.default.createDirectory(at: loadedMapFolderURL.appendingPathComponent("keyframes"), withIntermediateDirectories: true)
 
         let decoder = JSONDecoder()
@@ -186,8 +219,23 @@ final class DottieGameWorldMap {
         learnedBlockedCells = loadedBlockedCells
         keyframePrints = loadedPrints
         voxelHits = Self.loadVoxels(from: loadedMapFolderURL.appendingPathComponent("voxels.bin"))
+        let loadedDetail = Self.loadDetailVoxels(from: loadedMapFolderURL.appendingPathComponent("detail.bin"))
+        detailVoxelHits = loadedDetail.hits
+        detailVoxelColors = loadedDetail.colors
         isFamiliar = !loadedKeyframes.isEmpty
-        isLocalized = loadedKeyframes.isEmpty
+        if let spawnData = try? Data(contentsOf: spawnFolderURL.appendingPathComponent("views.json")),
+           let loadedSpawnViews = try? JSONDecoder().decode([SpawnView].self, from: spawnData) {
+            for spawnView in loadedSpawnViews {
+                if let printData = try? Data(contentsOf: spawnFolderURL.appendingPathComponent(spawnView.fileName + ".print")),
+                   let spawnPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {
+                    spawnViews.append(spawnView)
+                    spawnViewPrints[spawnView.fileName] = spawnPrint
+                }
+            }
+        }
+        // An empty map with a known spawn (the map was deleted) waits to see
+        // spawn, so the new map has the same 0,0,0 as before.
+        isLocalized = loadedKeyframes.isEmpty && spawnViews.isEmpty
         // Most games start where they started last time, so the first
         // keyframe (the spawn) is the best guess until a view matches.
         if let firstKeyframe = loadedKeyframes.first {
@@ -276,9 +324,16 @@ final class DottieGameWorldMap {
 
         let poseAtFrame = pose
         await makeMissingViewPrints()
+        if keyframeIDsWithoutViewPrint.isEmpty, spawnViews.isEmpty {
+            rememberSpawnViewsFromMapIfNeeded()
+        }
         guard let framePrint = await Self.featurePrintOffMain(of: frame) else { return }
         if let matchedKeyframe = bestMatchingKeyframe(for: framePrint, near: poseAtFrame) {
             snapPose(to: matchedKeyframe, poseAtFrame: poseAtFrame)
+            return
+        }
+        if !isLocalized, let spawnHeadingDegrees = matchingSpawnHeading(for: framePrint) {
+            snapToSpawn(facingDegrees: spawnHeadingDegrees, poseAtFrame: poseAtFrame)
             return
         }
         if !isLocalized, Date().timeIntervalSince(lookingForKnownSpotSince) > Self.secondsToWaitForRelocalizing {
@@ -300,17 +355,101 @@ final class DottieGameWorldMap {
             lastConfirmedPose = nil
             addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: 0)
         }
-        guard isLocalized, isNewSpot(poseAtFrame), keyframes.count < Self.maximumKeyframeCount else { return }
-
-        addKeyframe(frame: frame, featurePrint: framePrint, at: poseAtFrame)
-        if !isTopDownView, voxelHits.count < Self.maximumVoxelCount,
+        guard isLocalized, !isTopDownView || isNewSpot(poseAtFrame) else { return }
+        let isNewSpotToMap = isNewSpot(poseAtFrame) && keyframes.count < Self.maximumKeyframeCount
+        if isNewSpotToMap {
+            addKeyframe(frame: frame, featurePrint: framePrint, at: poseAtFrame)
+        }
+        // A new spot adds to both layers; any other frame adds only to the
+        // fine layer, about once a second.
+        let isDueForDetail = Date().timeIntervalSince(lastDetailFrameAt) > Self.secondsBetweenDetailFrames
+        if !isTopDownView, isNewSpotToMap || isDueForDetail,
            let depthMap = await DottieGameDepth.shared.depthMap(of: frame) {
-            addPoints(from: depthMap, frameAspectRatio: Double(frame.height) / Double(max(frame.width, 1)), at: poseAtFrame)
+            lastDetailFrameAt = Date()
+            addPoints(
+                from: depthMap,
+                colors: Self.colorGrid(of: frame, columnCount: depthMap.columnCount, rowCount: depthMap.rowCount),
+                frameAspectRatio: Double(frame.height) / Double(max(frame.width, 1)),
+                at: poseAtFrame,
+                addsToWalkingGrid: isNewSpotToMap && voxelHits.count < Self.maximumVoxelCount
+            )
             framesWithDepthThisSession += 1
         }
         if Date().timeIntervalSince(lastSavedAt) > Self.secondsBetweenSaves {
             save()
         }
+    }
+
+    /// The heading of the spawn view this frame shows, or nil.
+    private func matchingSpawnHeading(for framePrint: VNFeaturePrintObservation) -> Double? {
+        var bestMatch: (spawnView: SpawnView, distance: Float)?
+        for spawnView in spawnViews {
+            guard let spawnPrint = spawnViewPrints[spawnView.fileName] else { continue }
+            var printDistance: Float = 0
+            guard (try? framePrint.computeDistance(&printDistance, to: spawnPrint)) != nil else { continue }
+            if printDistance < (bestMatch?.distance ?? .greatestFiniteMagnitude) {
+                bestMatch = (spawnView, printDistance)
+            }
+        }
+        guard let bestMatch, bestMatch.distance < 0.5 else { return nil }
+        return bestMatch.spawnView.headingDegrees
+    }
+
+    /// She sees spawn: she's at 0,0,0 again, facing that view's way.
+    private func snapToSpawn(facingDegrees spawnHeadingDegrees: Double, poseAtFrame: Pose) {
+        let movedSinceFrameX = pose.x - poseAtFrame.x
+        let movedSinceFrameY = pose.y - poseAtFrame.y
+        let turnedSinceFrameDegrees = Self.normalizedAngle(pose.headingDegrees - poseAtFrame.headingDegrees)
+        let poseCorrectionX = -poseAtFrame.x
+        let poseCorrectionY = -poseAtFrame.y
+        pose = Pose(x: movedSinceFrameX, y: movedSinceFrameY, headingDegrees: Self.normalizedAngle(spawnHeadingDegrees + turnedSinceFrameDegrees))
+        DottieGameNotebook.appendToPlayLog("Map: recognized spawn, so Dottie is at 0,0,0 again\(keyframes.isEmpty ? " and starts the map from there" : "").", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        isLocalized = true
+        startsNewZoneIfNothingLooksFamiliar = false
+        recognitionsThisSession += 1
+        lastConfirmedPose = Pose(x: 0, y: 0, headingDegrees: spawnHeadingDegrees)
+        walkedSecondsSinceConfirmedPose = 0
+        addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: poseCorrectionY)
+    }
+
+    /// Keeps a view taken at spawn in the spawn folder, one per direction.
+    private func rememberSpawnView(frame: CGImage?, featurePrint: VNFeaturePrintObservation, headingDegrees: Double, pictureToCopyURL: URL? = nil) {
+        guard spawnViews.count < Self.maximumSpawnViewCount,
+              !spawnViews.contains(where: { abs(Self.normalizedAngle($0.headingDegrees - headingDegrees)) < Self.newKeyframeHeadingDegrees }),
+              let printData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) else { return }
+        try? FileManager.default.createDirectory(at: spawnFolderURL, withIntermediateDirectories: true)
+        let spawnView = SpawnView(fileName: "view-\(Int(Self.normalizedAngle(headingDegrees).rounded()))", headingDegrees: headingDegrees)
+        try? printData.write(to: spawnFolderURL.appendingPathComponent(spawnView.fileName + ".print"))
+        let spawnPictureURL = spawnFolderURL.appendingPathComponent(spawnView.fileName + ".jpg")
+        if let frame, let smallFrame = Self.scaled(frame, maximumDimension: 320),
+           let pictureData = DottieGameVision.jpegData(of: smallFrame, quality: 0.6) {
+            try? pictureData.write(to: spawnPictureURL)
+        } else if let pictureToCopyURL {
+            try? FileManager.default.removeItem(at: spawnPictureURL)
+            try? FileManager.default.copyItem(at: pictureToCopyURL, to: spawnPictureURL)
+        }
+        spawnViews.append(spawnView)
+        spawnViewPrints[spawnView.fileName] = featurePrint
+        if let spawnData = try? JSONEncoder().encode(spawnViews) {
+            try? spawnData.write(to: spawnFolderURL.appendingPathComponent("views.json"), options: .atomic)
+        }
+    }
+
+    /// A map made before spawn had its own folder: its spots at spawn
+    /// become spawn's views, once their prints are ready.
+    private func rememberSpawnViewsFromMapIfNeeded() {
+        guard spawnViews.count < Self.maximumSpawnViewCount else { return }
+        for keyframe in keyframes where isSpawnView(keyframe) {
+            guard let keyframePrint = keyframePrints[keyframe.id] else { continue }
+            let pictureURL = mapFolderURL.appendingPathComponent("keyframes/\(keyframe.id).jpg")
+            rememberSpawnView(frame: nil, featurePrint: keyframePrint, headingDegrees: keyframe.headingDegrees, pictureToCopyURL: pictureURL)
+        }
+    }
+
+    /// Spawn is (0, 0) at floor height, where she stood the first time she
+    /// played; everything on the map is measured from it.
+    private func isSpawnView(_ keyframe: Keyframe) -> Bool {
+        hypot(keyframe.x, keyframe.y) < Self.spawnRadius
     }
 
     /// No keyframe was taken from about here, facing about this way.
@@ -344,6 +483,9 @@ final class DottieGameWorldMap {
         if bestMatch.distance < 0.35 { return bestMatch.keyframe }
         if bestMatch.distance < 0.5, distanceFromPose < 12 { return bestMatch.keyframe }
         if !isLocalized, bestMatch.distance < 0.6, secondBestDistance - bestMatch.distance > 0.1 { return bestMatch.keyframe }
+        // Games start and respawn at spawn, so while she's finding herself a
+        // looser match to one of spawn's views counts.
+        if !isLocalized, isSpawnView(bestMatch.keyframe), bestMatch.distance < 0.55 { return bestMatch.keyframe }
         if !isLocalized, Date().timeIntervalSince(lastRecognitionMissLoggedAt) > 10 {
             // How close the nearest spot came, to tune these limits from the play log.
             lastRecognitionMissLoggedAt = Date()
@@ -404,6 +546,9 @@ final class DottieGameWorldMap {
         keyframesAddedThisSession += 1
         DottieGameNotebook.appendToPlayLog("Map: new spot \(keyframe.id) at (\(String(format: "%.1f", keyframe.x)), \(String(format: "%.1f", keyframe.y))) facing \(Int(keyframe.headingDegrees))°.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
         keyframePrints[keyframe.id] = featurePrint
+        if isSpawnView(keyframe) {
+            rememberSpawnView(frame: frame, featurePrint: featurePrint, headingDegrees: keyframe.headingDegrees)
+        }
         let keyframesFolderURL = mapFolderURL.appendingPathComponent("keyframes")
         if let printData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) {
             try? printData.write(to: keyframesFolderURL.appendingPathComponent("\(keyframe.id).view.print"))
@@ -429,13 +574,13 @@ final class DottieGameWorldMap {
     /// which puts open ground at height 0 instead of reading it as wall.
     /// When the strip doesn't look like ground, the camera is taken as
     /// level at head height.
-    private func addPoints(from depthMap: DottieDepthMap, frameAspectRatio: Double, at framePose: Pose) {
+    private func addPoints(from depthMap: DottieDepthMap, colors colorGrid: [UInt32]?, frameAspectRatio: Double, at framePose: Pose, addsToWalkingGrid: Bool) {
         let horizontalHalfTangent = tan(movement.horizontalFieldOfViewDegrees / 2 * .pi / 180)
         let verticalHalfTangent = horizontalHalfTangent * frameAspectRatio
         let headingRadians = framePose.headingDegrees * .pi / 180
 
         // Samples in camera space: right, up and forward along the view.
-        var cameraSamples: [(right: Double, up: Double, forward: Double, isGroundStrip: Bool)] = []
+        var cameraSamples: [(right: Double, up: Double, forward: Double, isGroundStrip: Bool, isWalkingGridSample: Bool, color: UInt32?)] = []
         for row in 0..<depthMap.rowCount {
             let rowFraction = (Double(row) + 0.5) / Double(depthMap.rowCount)
             // The HUD usually sits in the top and bottom strips.
@@ -454,7 +599,11 @@ final class DottieGameWorldMap {
                     right: (columnFraction - 0.5) * 2 * horizontalHalfTangent * forwardDistance,
                     up: (0.5 - rowFraction) * 2 * verticalHalfTangent * forwardDistance,
                     forward: forwardDistance,
-                    isGroundStrip: rowFraction > 0.68 && (columnFraction < 0.3 || columnFraction > 0.7)
+                    isGroundStrip: rowFraction > 0.68 && (columnFraction < 0.3 || columnFraction > 0.7),
+                    // The walking grid was tuned on a sample grid half as
+                    // dense, so it keeps every other row and column.
+                    isWalkingGridSample: row % 2 == 0 && column % 2 == 0,
+                    color: colorGrid?[row * depthMap.columnCount + column]
                 ))
             }
         }
@@ -473,10 +622,32 @@ final class DottieGameWorldMap {
             }
             let worldX = framePose.x + sin(headingRadians) * levelForward + cos(headingRadians) * levelRight
             let worldY = framePose.y + cos(headingRadians) * levelForward - sin(headingRadians) * levelRight
-            let key = Self.voxelKey(x: worldX, y: worldY, z: heightAboveFloor)
-            let currentHits = voxelHits[key] ?? 0
-            if currentHits < UInt16.max {
-                voxelHits[key] = currentHits + 1
+            if addsToWalkingGrid, cameraSample.isWalkingGridSample {
+                let key = Self.voxelKey(x: worldX, y: worldY, z: heightAboveFloor)
+                let currentHits = voxelHits[key] ?? 0
+                if currentHits < UInt16.max {
+                    voxelHits[key] = currentHits + 1
+                }
+            }
+            // Far samples are too rough for small blocks.
+            guard levelForward < 12 else { continue }
+            let detailKey = Self.voxelKey(
+                gridX: Int(floor(worldX / Self.detailVoxelSize)),
+                gridY: Int(floor(worldY / Self.detailVoxelSize)),
+                gridZ: Int(floor(heightAboveFloor / Self.detailVoxelSize))
+            )
+            if let currentDetailHits = detailVoxelHits[detailKey] {
+                if currentDetailHits < UInt16.max {
+                    detailVoxelHits[detailKey] = currentDetailHits + 1
+                }
+                if let sampleColor = cameraSample.color {
+                    detailVoxelColors[detailKey] = Self.blendedColor(detailVoxelColors[detailKey] ?? sampleColor, with: sampleColor, earlierSightings: Int(currentDetailHits))
+                }
+            } else if detailVoxelHits.count < Self.maximumDetailVoxelCount {
+                detailVoxelHits[detailKey] = 1
+                if let sampleColor = cameraSample.color {
+                    detailVoxelColors[detailKey] = sampleColor
+                }
             }
         }
     }
@@ -605,9 +776,11 @@ final class DottieGameWorldMap {
         guard isFamiliar || !keyframes.isEmpty else {
             return "Map: this game is new to Dottie; she maps it as you play."
         }
-        var lines = ["Map: \(keyframes.count) spots mapped over \(sessionCount) session(s)."]
+        var lines = ["Map: \(keyframes.count) spots mapped over \(sessionCount) session(s). Positions are measured from spawn (0, 0), where she first started; she's at (\(String(format: "%.0f", pose.x)), \(String(format: "%.0f", pose.y))) now."]
         if !isLocalized {
-            lines.append("Dottie hasn't recognized where you are yet; look around a known spot to find out.")
+            lines.append(spawnViews.isEmpty
+                ? "Dottie hasn't recognized where you are yet; look around a known spot to find out."
+                : "Dottie doesn't know where you are right now. To find out, look around, or head back to spawn (in many games respawning or a spawn or home button takes you there): the map snaps to 0,0,0 as soon as you see it.")
         }
         let nearbyPlaces = places
             .map { place -> (place: Place, turnDegrees: Double, distance: Double) in
@@ -643,8 +816,79 @@ final class DottieGameWorldMap {
             try? summaryData.write(to: mapFolderURL.appendingPathComponent("map.json"), options: .atomic)
         }
         Self.saveVoxels(voxelHits, to: mapFolderURL.appendingPathComponent("voxels.bin"))
+        Self.saveDetailVoxels(hits: detailVoxelHits, colors: detailVoxelColors, to: mapFolderURL.appendingPathComponent("detail.bin"))
         // A picture and a report the user can open to see the map working.
         DottieGameMapPicture.write(for: self)
+    }
+
+    /// The frame shrunk to the depth grid's size, one 0xRRGGBB color a
+    /// sample, row 0 at the top like the depth.
+    private static func colorGrid(of frame: CGImage, columnCount: Int, rowCount: Int) -> [UInt32]? {
+        var pixelBytes = [UInt8](repeating: 0, count: columnCount * rowCount * 4)
+        let didDraw = pixelBytes.withUnsafeMutableBytes { rawBuffer -> Bool in
+            guard let context = CGContext(
+                data: rawBuffer.baseAddress,
+                width: columnCount,
+                height: rowCount,
+                bitsPerComponent: 8,
+                bytesPerRow: columnCount * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(frame, in: CGRect(x: 0, y: 0, width: columnCount, height: rowCount))
+            return true
+        }
+        guard didDraw else { return nil }
+        // A bitmap context's memory starts at the top row.
+        return (0..<(columnCount * rowCount)).map { sampleIndex in
+            let byteOffset = sampleIndex * 4
+            return UInt32(pixelBytes[byteOffset]) << 16 | UInt32(pixelBytes[byteOffset + 1]) << 8 | UInt32(pixelBytes[byteOffset + 2])
+        }
+    }
+
+    /// The running average of a block's color.
+    private static func blendedColor(_ earlierColor: UInt32, with newColor: UInt32, earlierSightings: Int) -> UInt32 {
+        let earlierWeight = Double(min(earlierSightings, 20))
+        func blendedChannel(_ shift: UInt32) -> UInt32 {
+            let earlierChannel = Double((earlierColor >> shift) & 0xFF)
+            let newChannel = Double((newColor >> shift) & 0xFF)
+            return UInt32(((earlierChannel * earlierWeight + newChannel) / (earlierWeight + 1)).rounded()) << shift
+        }
+        return blendedChannel(16) | blendedChannel(8) | blendedChannel(0)
+    }
+
+    /// 13 bytes a fine block: the key, how many frames saw it, its color.
+    private static func saveDetailVoxels(hits detailHits: [Int64: UInt16], colors detailColors: [Int64: UInt32], to fileURL: URL) {
+        var detailData = Data(capacity: detailHits.count * 13)
+        for (key, hits) in detailHits {
+            withUnsafeBytes(of: key.littleEndian) { detailData.append(contentsOf: $0) }
+            withUnsafeBytes(of: hits.littleEndian) { detailData.append(contentsOf: $0) }
+            let color = detailColors[key] ?? 0x808080
+            detailData.append(contentsOf: [UInt8((color >> 16) & 0xFF), UInt8((color >> 8) & 0xFF), UInt8(color & 0xFF)])
+        }
+        try? detailData.write(to: fileURL, options: .atomic)
+    }
+
+    private static func loadDetailVoxels(from fileURL: URL) -> (hits: [Int64: UInt16], colors: [Int64: UInt32]) {
+        guard let detailData = try? Data(contentsOf: fileURL) else { return ([:], [:]) }
+        let bytes = [UInt8](detailData)
+        let blockCount = bytes.count / 13
+        var detailHits: [Int64: UInt16] = [:]
+        var detailColors: [Int64: UInt32] = [:]
+        detailHits.reserveCapacity(blockCount)
+        detailColors.reserveCapacity(blockCount)
+        for blockIndex in 0..<blockCount {
+            let offset = blockIndex * 13
+            var key: UInt64 = 0
+            for byteIndex in 0..<8 {
+                key |= UInt64(bytes[offset + byteIndex]) << (8 * UInt64(byteIndex))
+            }
+            let signedKey = Int64(bitPattern: key)
+            detailHits[signedKey] = UInt16(bytes[offset + 8]) | (UInt16(bytes[offset + 9]) << 8)
+            detailColors[signedKey] = UInt32(bytes[offset + 10]) << 16 | UInt32(bytes[offset + 11]) << 8 | UInt32(bytes[offset + 12])
+        }
+        return (detailHits, detailColors)
     }
 
     /// 10 bytes a voxel: the key, then how many frames saw it.
@@ -690,7 +934,7 @@ final class DottieGameWorldMap {
         return (packedX << 42) | (packedY << 21) | packedZ
     }
 
-    static func gridPosition(ofVoxelKey key: Int64) -> (gridX: Int, gridY: Int, gridZ: Int) {
+    nonisolated static func gridPosition(ofVoxelKey key: Int64) -> (gridX: Int, gridY: Int, gridZ: Int) {
         let axisOffset = 1 << 20
         let gridX = Int((key >> 42) & 0x1F_FFFF) - axisOffset
         let gridY = Int((key >> 21) & 0x1F_FFFF) - axisOffset
