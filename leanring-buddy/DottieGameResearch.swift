@@ -50,15 +50,29 @@ enum DottieGameResearch {
         return knownGameNames.first { $0.caseInsensitiveCompare(cleanedName) == .orderedSame } ?? cleanedName
     }
 
-    /// A short guide to the game from the web, or nil when nothing useful
-    /// was found.
-    static func writeGuide(gameName: String) async -> String? {
-        async let guideResults = DottieWebSearch.search("\(gameName) beginner guide how to play")
-        async let wikiResults = DottieWebSearch.search("\(gameName) wiki")
-        let allResults = [await guideResults, await wikiResults]
-            // A failed search says so in a sentence instead of results.
-            .filter { $0.hasPrefix("web results") }
-        guard !allResults.isEmpty else { return nil }
+    /// A short guide to the game from the web, or nil with a line saying
+    /// why nothing came of the search (for the play log).
+    static func writeGuide(gameName: String) async -> (guide: String?, problem: String) {
+        // "Build a Golem (Roblox)" searches better as "Build a Golem Roblox".
+        let searchName = gameName
+            .replacingOccurrences(of: "(", with: " ")
+            .replacingOccurrences(of: ")", with: " ")
+            .split(separator: " ").joined(separator: " ")
+        async let guideResults = DottieWebSearch.search("\(searchName) guide how to play")
+        async let wikiResults = DottieWebSearch.search("\(searchName) wiki")
+        var allResults = [await guideResults, await wikiResults]
+        // A failed search says so in a sentence instead of results.
+        var usefulResults = allResults.filter { $0.hasPrefix("web results") }
+        if usefulResults.isEmpty {
+            // Long queries find nothing on the fallback engines; the bare
+            // name often does.
+            let nameOnlyResults = await DottieWebSearch.search(searchName)
+            allResults.append(nameOnlyResults)
+            usefulResults = [nameOnlyResults].filter { $0.hasPrefix("web results") }
+        }
+        guard !usefulResults.isEmpty else {
+            return (nil, "the web search found nothing (\(allResults.last?.prefix(80) ?? ""))")
+        }
 
         let prompt = """
         An AI is about to play the video game "\(gameName)" by watching the screen and pressing keys. Using only the web results below, write it a guide.
@@ -72,11 +86,14 @@ enum DottieGameResearch {
 
         Under 250 words, plain text. Write "unknown" where the results don't say. If the results aren't about this game, answer exactly: NOT FOUND
 
-        \(allResults.joined(separator: "\n\n"))
+        \(usefulResults.joined(separator: "\n\n"))
         """
-        guard let guideText = await DottieChat.ask(prompt, model: guideModel),
-              !guideText.isEmpty,
-              !guideText.uppercased().hasPrefix("NOT FOUND") else { return nil }
-        return String(guideText.prefix(2500))
+        guard let guideText = await DottieChat.ask(prompt, model: guideModel), !guideText.isEmpty else {
+            return (nil, "the web search worked but Gemini didn't write the guide")
+        }
+        guard !guideText.uppercased().hasPrefix("NOT FOUND") else {
+            return (nil, "the web results weren't about this game")
+        }
+        return (String(guideText.prefix(2500)), "")
     }
 }

@@ -170,6 +170,8 @@ final class DottieGameBrain {
     /// Claude failed or was too slow: Gemini thinks until this time.
     private var claudeSkippedUntil: Date?
     private(set) var lastEngineName = "claude"
+    /// Why the last look got no plan, for the play log.
+    private(set) var lastProblem: String?
 
     private static let gamerBotIDDefaultsKey = "dottieGamerBotID"
     private static let gamerBotNameDefaultsKey = "dottieGamerBotName"
@@ -198,9 +200,26 @@ final class DottieGameBrain {
             print("⚠️ Game brain: Claude's reply had no plan: \(claudeReply.prefix(300))")
         }
         guard !Task.isCancelled else { return nil }
-        guard let geminiReply = await thinkWithGemini(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures) else { return nil }
-        lastEngineName = "gemini"
-        return DottieGamePlan.parse(fromReply: geminiReply)
+        // A timed-out or busy Gemini model gets one more try on another
+        // model before the look counts as failed.
+        var triedGeminiModels: Set<String> = []
+        for _ in 0..<2 {
+            guard !Task.isCancelled else { return nil }
+            let geminiModel = DottieModelPicker.shared.pick(.normal, avoiding: triedGeminiModels)
+            triedGeminiModels.insert(geminiModel)
+            guard let geminiReply = await thinkWithGemini(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures, model: geminiModel) else {
+                lastProblem = "\(mayUseClaude ? "Claude (MausBot) wasn't open or didn't answer, then " : "")\(geminiModel) timed out or failed"
+                continue
+            }
+            lastEngineName = "gemini"
+            guard let plan = DottieGamePlan.parse(fromReply: geminiReply) else {
+                lastProblem = "\(geminiModel) answered without a plan"
+                continue
+            }
+            lastProblem = nil
+            return plan
+        }
+        return nil
     }
 
     // MARK: - Claude
@@ -315,7 +334,7 @@ final class DottieGameBrain {
 
     // MARK: - Gemini
 
-    private func thinkWithGemini(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture]) async -> String? {
+    private func thinkWithGemini(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture], model: String) async -> String? {
         var parts: [[String: Any]] = []
         for referencePicture in referencePictures {
             parts.append(["text": "The user's picture \"\(referencePicture.name)\"\(referencePicture.description.isEmpty ? "" : " (\(referencePicture.description))"); when the task mentions it, find that thing in the game by its look:"])
@@ -328,7 +347,7 @@ final class DottieGameBrain {
         }
         parts.append(["text": messageText])
         let requestBody: [String: Any] = [
-            "model": DottieModelPicker.shared.pick(.normal),
+            "model": model,
             "systemInstruction": ["parts": [["text": Self.gamerInstructions]]],
             "contents": [["role": "user", "parts": parts]],
             "generationConfig": [
@@ -336,7 +355,7 @@ final class DottieGameBrain {
                 "thinkingConfig": ["thinkingLevel": "low"]
             ]
         ]
-        return await DottieChat.send(requestBody, timeout: 40)
+        return await DottieChat.send(requestBody, timeout: 30)
     }
 
     // MARK: - Prompts

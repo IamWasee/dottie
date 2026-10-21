@@ -84,7 +84,13 @@ final class DottieGameWorldMap {
     private(set) var places: [Place] = []
     /// Voxel key (see voxelKey) → how many frames saw a surface there.
     private(set) var voxelHits: [Int64: UInt16] = [:]
+    /// Feature prints of each spot's view without the HUD strips (see
+    /// `recognitionView`), for recognizing it again.
     private var keyframePrints: [Int: VNFeaturePrintObservation] = [:]
+    /// Spots saved before prints left out the HUD; their prints are made
+    /// again from the spot's picture, a few per frame.
+    private var keyframeIDsWithoutViewPrint: [Int] = []
+    private var lastRecognitionMissLoggedAt = Date.distantPast
     private var nextKeyframeID = 0
     private(set) var sessionCount = 0
     /// Fixed things the depth missed, kept on the saved map.
@@ -152,13 +158,17 @@ final class DottieGameWorldMap {
             }
         }
         var loadedPrints: [Int: VNFeaturePrintObservation] = [:]
+        var loadedKeyframeIDsWithoutViewPrint: [Int] = []
         for keyframe in loadedKeyframes {
-            let printURL = loadedMapFolderURL.appendingPathComponent("keyframes/\(keyframe.id).print")
+            let printURL = loadedMapFolderURL.appendingPathComponent("keyframes/\(keyframe.id).view.print")
             if let printData = try? Data(contentsOf: printURL),
                let featurePrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {
                 loadedPrints[keyframe.id] = featurePrint
+            } else {
+                loadedKeyframeIDsWithoutViewPrint.append(keyframe.id)
             }
         }
+        keyframeIDsWithoutViewPrint = loadedKeyframeIDsWithoutViewPrint
         keyframes = loadedKeyframes
         places = loadedPlaces
         nextKeyframeID = loadedNextKeyframeID
@@ -222,6 +232,18 @@ final class DottieGameWorldMap {
     /// Looks at one frame: recognizes a mapped place (and snaps the pose
     /// to it), or maps it when it shows somewhere the map doesn't cover.
     /// Cheap to call often; it skips frames while one is being worked on.
+    /// Like considerFrame, but this frame is never skipped: waits for the
+    /// frame being worked on and ignores the pause between frames. For the
+    /// views of a deliberate look around.
+    func considerFrameWithoutSkipping(_ frame: CGImage) async {
+        let waitStartedAt = Date()
+        while isConsideringFrame, Date().timeIntervalSince(waitStartedAt) < 3 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        lastConsideredAt = nil
+        await considerFrame(frame)
+    }
+
     func considerFrame(_ frame: CGImage) async {
         guard !isConsideringFrame else { return }
         if let lastConsideredAt, Date().timeIntervalSince(lastConsideredAt) < Self.secondsBetweenConsideredFrames { return }
@@ -230,6 +252,7 @@ final class DottieGameWorldMap {
         defer { isConsideringFrame = false }
 
         let poseAtFrame = pose
+        await makeMissingViewPrints()
         guard let framePrint = await Self.featurePrintOffMain(of: frame) else { return }
         if let matchedKeyframe = bestMatchingKeyframe(for: framePrint, near: poseAtFrame) {
             snapPose(to: matchedKeyframe, poseAtFrame: poseAtFrame)
@@ -264,21 +287,52 @@ final class DottieGameWorldMap {
 
     private func bestMatchingKeyframe(for framePrint: VNFeaturePrintObservation, near poseAtFrame: Pose) -> Keyframe? {
         var bestMatch: (keyframe: Keyframe, distance: Float)?
+        var secondBestDistance: Float = .greatestFiniteMagnitude
         for keyframe in keyframes {
             guard let keyframePrint = keyframePrints[keyframe.id] else { continue }
             var printDistance: Float = 0
             guard (try? framePrint.computeDistance(&printDistance, to: keyframePrint)) != nil else { continue }
             if printDistance < (bestMatch?.distance ?? .greatestFiniteMagnitude) {
+                secondBestDistance = bestMatch?.distance ?? secondBestDistance
                 bestMatch = (keyframe, printDistance)
+            } else if printDistance < secondBestDistance {
+                secondBestDistance = printDistance
             }
         }
         guard let bestMatch else { return nil }
         // A very close match counts anywhere; a looser one only near where
         // dead reckoning says she is, so look-alike rooms don't fool it.
+        // Before she knows where she is, a loose match also counts when it
+        // stands out from every other spot.
         let distanceFromPose = hypot(bestMatch.keyframe.x - poseAtFrame.x, bestMatch.keyframe.y - poseAtFrame.y)
         if bestMatch.distance < 0.35 { return bestMatch.keyframe }
-        if bestMatch.distance < 0.45, isLocalized, distanceFromPose < 12 { return bestMatch.keyframe }
+        if bestMatch.distance < 0.5, distanceFromPose < 12 { return bestMatch.keyframe }
+        if !isLocalized, bestMatch.distance < 0.6, secondBestDistance - bestMatch.distance > 0.1 { return bestMatch.keyframe }
+        if !isLocalized, Date().timeIntervalSince(lastRecognitionMissLoggedAt) > 10 {
+            // How close the nearest spot came, to tune these limits from the play log.
+            lastRecognitionMissLoggedAt = Date()
+            DottieGameNotebook.appendToPlayLog("Map: no spot recognized yet; the closest was spot \(bestMatch.keyframe.id) at \(String(format: "%.2f", bestMatch.distance)) (0.35 or less counts anywhere, 0.5 nearby).", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+        }
         return nil
+    }
+
+    /// Makes prints for a few spots saved before prints left out the HUD,
+    /// from each spot's saved picture.
+    private func makeMissingViewPrints() async {
+        guard !keyframeIDsWithoutViewPrint.isEmpty else { return }
+        let keyframeIDsThisTime = Array(keyframeIDsWithoutViewPrint.prefix(10))
+        keyframeIDsWithoutViewPrint.removeFirst(keyframeIDsThisTime.count)
+        let keyframesFolderURL = mapFolderURL.appendingPathComponent("keyframes")
+        for keyframeID in keyframeIDsThisTime {
+            let pictureURL = keyframesFolderURL.appendingPathComponent("\(keyframeID).jpg")
+            guard let imageSource = CGImageSourceCreateWithURL(pictureURL as CFURL, nil),
+                  let picture = CGImageSourceCreateImageAtIndex(imageSource, 0, nil),
+                  let viewPrint = await Self.featurePrintOffMain(of: picture) else { continue }
+            keyframePrints[keyframeID] = viewPrint
+            if let printData = try? NSKeyedArchiver.archivedData(withRootObject: viewPrint, requiringSecureCoding: true) {
+                try? printData.write(to: keyframesFolderURL.appendingPathComponent("\(keyframeID).view.print"))
+            }
+        }
     }
 
     private func snapPose(to keyframe: Keyframe, poseAtFrame: Pose) {
@@ -314,7 +368,7 @@ final class DottieGameWorldMap {
         keyframePrints[keyframe.id] = featurePrint
         let keyframesFolderURL = mapFolderURL.appendingPathComponent("keyframes")
         if let printData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) {
-            try? printData.write(to: keyframesFolderURL.appendingPathComponent("\(keyframe.id).print"))
+            try? printData.write(to: keyframesFolderURL.appendingPathComponent("\(keyframe.id).view.print"))
         }
         if let smallFrame = Self.scaled(frame, maximumDimension: 320),
            let pictureData = DottieGameVision.jpegData(of: smallFrame, quality: 0.6) {
@@ -326,13 +380,24 @@ final class DottieGameWorldMap {
         }
     }
 
-    /// Places the frame's depth samples in 3D around the pose. The camera
-    /// is taken as level at head height, which holds for most third- and
-    /// first-person games while walking.
+    /// Places the frame's depth samples in 3D around the pose.
+    ///
+    /// Game cameras usually look down at the player a little, and the depth
+    /// model only gives relative distances. So the floor is found first:
+    /// the strip at the bottom of the view, either side of the player, is
+    /// taken as ground, and a line through it gives the camera's downward
+    /// tilt and its height above the ground. Every sample is then turned
+    /// level and scaled so the camera sits `cameraHeight` above the floor,
+    /// which puts open ground at height 0 instead of reading it as wall.
+    /// When the strip doesn't look like ground, the camera is taken as
+    /// level at head height.
     private func addPoints(from depthMap: DottieDepthMap, frameAspectRatio: Double, at framePose: Pose) {
         let horizontalHalfTangent = tan(movement.horizontalFieldOfViewDegrees / 2 * .pi / 180)
         let verticalHalfTangent = horizontalHalfTangent * frameAspectRatio
         let headingRadians = framePose.headingDegrees * .pi / 180
+
+        // Samples in camera space: right, up and forward along the view.
+        var cameraSamples: [(right: Double, up: Double, forward: Double, isGroundStrip: Bool)] = []
         for row in 0..<depthMap.rowCount {
             let rowFraction = (Double(row) + 0.5) / Double(depthMap.rowCount)
             // The HUD usually sits in the top and bottom strips.
@@ -347,18 +412,63 @@ final class DottieGameWorldMap {
                 guard nearness > 0.08 else { continue }
                 // Inverse depth spread over about 1-20 units.
                 let forwardDistance = 1.0 / (0.05 + 0.95 * nearness)
-                let cameraRight = (columnFraction - 0.5) * 2 * horizontalHalfTangent * forwardDistance
-                let cameraUp = (0.5 - rowFraction) * 2 * verticalHalfTangent * forwardDistance
-                let worldX = framePose.x + sin(headingRadians) * forwardDistance + cos(headingRadians) * cameraRight
-                let worldY = framePose.y + cos(headingRadians) * forwardDistance - sin(headingRadians) * cameraRight
-                let worldZ = Self.cameraHeight + cameraUp
-                let key = Self.voxelKey(x: worldX, y: worldY, z: worldZ)
-                let currentHits = voxelHits[key] ?? 0
-                if currentHits < UInt16.max {
-                    voxelHits[key] = currentHits + 1
-                }
+                cameraSamples.append((
+                    right: (columnFraction - 0.5) * 2 * horizontalHalfTangent * forwardDistance,
+                    up: (0.5 - rowFraction) * 2 * verticalHalfTangent * forwardDistance,
+                    forward: forwardDistance,
+                    isGroundStrip: rowFraction > 0.68 && (columnFraction < 0.3 || columnFraction > 0.7)
+                ))
             }
         }
+
+        let floorFit = Self.fitFloor(through: cameraSamples.filter(\.isGroundStrip).map { ($0.up, $0.forward) })
+        for cameraSample in cameraSamples {
+            var levelForward = cameraSample.forward
+            var levelRight = cameraSample.right
+            var heightAboveFloor = Self.cameraHeight + cameraSample.up
+            if let floorFit {
+                // Undo the downward tilt, then scale to the camera's height.
+                levelForward = (cameraSample.forward * floorFit.tiltCosine + cameraSample.up * floorFit.tiltSine) * floorFit.scale
+                levelRight = cameraSample.right * floorFit.scale
+                let heightAboveCamera = (cameraSample.up * floorFit.tiltCosine - cameraSample.forward * floorFit.tiltSine) * floorFit.scale
+                heightAboveFloor = Self.cameraHeight + heightAboveCamera
+            }
+            let worldX = framePose.x + sin(headingRadians) * levelForward + cos(headingRadians) * levelRight
+            let worldY = framePose.y + cos(headingRadians) * levelForward - sin(headingRadians) * levelRight
+            let key = Self.voxelKey(x: worldX, y: worldY, z: heightAboveFloor)
+            let currentHits = voxelHits[key] ?? 0
+            if currentHits < UInt16.max {
+                voxelHits[key] = currentHits + 1
+            }
+        }
+    }
+
+    /// The camera's downward tilt and the scale that puts it `cameraHeight`
+    /// above the floor, from samples taken to be ground: in camera space a
+    /// flat floor is the line up = intercept + slope × forward, where the
+    /// slope is the tilt's tangent and the intercept sits a camera height
+    /// (over the tilt's cosine) below. nil when they don't fit a floor.
+    private static func fitFloor(through groundSamples: [(up: Double, forward: Double)]) -> (tiltSine: Double, tiltCosine: Double, scale: Double)? {
+        guard groundSamples.count >= 12 else { return nil }
+        let sampleCount = Double(groundSamples.count)
+        let meanForward = groundSamples.reduce(0) { $0 + $1.forward } / sampleCount
+        let meanUp = groundSamples.reduce(0) { $0 + $1.up } / sampleCount
+        var forwardVariance = 0.0
+        var forwardUpCovariance = 0.0
+        for groundSample in groundSamples {
+            forwardVariance += (groundSample.forward - meanForward) * (groundSample.forward - meanForward)
+            forwardUpCovariance += (groundSample.forward - meanForward) * (groundSample.up - meanUp)
+        }
+        guard forwardVariance > 1e-6 else { return nil }
+        let slope = forwardUpCovariance / forwardVariance
+        let intercept = meanUp - slope * meanForward
+        let tiltRadians = atan(slope)
+        // Ground is below the camera, and game cameras tilt down by up to
+        // about 60°, rarely up.
+        guard intercept < 0, tiltRadians > -10 * .pi / 180, tiltRadians < 60 * .pi / 180 else { return nil }
+        let cameraHeightInSampleUnits = -intercept * cos(tiltRadians)
+        guard cameraHeightInSampleUnits > 0.05 else { return nil }
+        return (sin(tiltRadians), cos(tiltRadians), cameraHeight / cameraHeightInSampleUnits)
     }
 
     // MARK: - Places
@@ -550,10 +660,12 @@ final class DottieGameWorldMap {
         }
     }
 
+    /// The print of the frame's recognition view, made off the main thread.
     private static func featurePrintOffMain(of frame: CGImage) async -> VNFeaturePrintObservation? {
         let printData: Data? = await Task.detached(priority: .utility) { () -> Data? in
+            guard let viewImage = recognitionView(of: frame) else { return nil }
             let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
-            let requestHandler = VNImageRequestHandler(cgImage: frame, options: [:])
+            let requestHandler = VNImageRequestHandler(cgImage: viewImage, options: [:])
             try? requestHandler.perform([featurePrintRequest])
             guard let featurePrint = featurePrintRequest.results?.first else { return nil }
             // Archived to cross back to the main actor as plain data.
@@ -561,6 +673,32 @@ final class DottieGameWorldMap {
         }.value
         guard let printData else { return nil }
         return try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData)
+    }
+
+    /// What's compared to recognize a spot: the view at the size of the
+    /// saved spot pictures (320 points wide), without the top and bottom
+    /// strips where the HUD (money, chat, buttons) changes between visits.
+    /// Live frames and saved pictures go through the same steps, so their
+    /// prints compare fairly.
+    nonisolated private static func recognitionView(of image: CGImage) -> CGImage? {
+        let scale = min(1, 320 / Double(max(image.width, image.height)))
+        let width = max(1, Int(Double(image.width) * scale))
+        let height = max(1, Int(Double(image.height) * scale))
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let scaledImage = context.makeImage() else { return nil }
+        // Rows 10% to 88% from the top, as in addPoints.
+        let keptRect = CGRect(x: 0, y: Int(Double(height) * 0.1), width: width, height: Int(Double(height) * 0.78))
+        return scaledImage.cropping(to: keptRect)
     }
 
     private static func scaled(_ image: CGImage, maximumDimension: Int) -> CGImage? {

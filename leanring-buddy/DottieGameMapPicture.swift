@@ -218,13 +218,27 @@ enum DottieGameMapPicture {
                 lines.append("- \(place.name) at (\(String(format: "%.1f", place.x)), \(String(format: "%.1f", place.y)))")
             }
         }
-        lines += [
-            "",
-            "Is it working?",
-            "- \"3D points\" stays 0: the depth model isn't working, so the map only has photographed spots (see Depth model above).",
-            "- On a second session \"recognized a spot\" stays 0: she isn't recognizing places she's been, so she may map them again.",
-            "- Walking still at 1.00 corrected 0 times: she hasn't come back to a known spot yet, so distances are guesses."
-        ]
+        // Checks worked out from this map, not fixed text.
+        lines += ["", "Is it working?"]
+        lines.append(worldMap.voxelHits.isEmpty
+            ? "- No 3D points: the depth model isn't working, so the map only has photographed spots (see Depth model above)."
+            : "- 3D: yes, the depth model has turned frames into \(worldMap.voxelHits.count.formatted()) points.")
+        let facingDirections = Set(worldMap.keyframes.map { Int((($0.headingDegrees + 360).truncatingRemainder(dividingBy: 360)) / 45) })
+        lines.append(facingDirections.count < 4
+            ? "- Directions: her spots face only \(facingDirections.count) of 8 directions, so the map covers little more than the way she walked. Turning around fills it in."
+            : "- Directions: her spots face \(facingDirections.count) of 8 directions.")
+        let mappedSquareCount = floorPlan.floorCells.count + floorPlan.blockedCells.count
+        if mappedSquareCount > 20, floorPlan.blockedCells.count > floorPlan.floorCells.count * 3 {
+            lines.append("- Floor: most squares read as wall, which is unusual for an open area. The floor finding may be off for this game's camera.")
+        }
+        if worldMap.sessionCount > 1 {
+            lines.append(worldMap.recognitionsThisSession == 0
+                ? "- Recognizing: she hasn't recognized a spot she knew this session yet, so she may map places again."
+                : "- Recognizing: yes, \(worldMap.recognitionsThisSession) times this session.")
+        }
+        if movementContents.walkSpeedCorrectionCount == 0 {
+            lines.append("- Distances: walking speed hasn't been corrected yet (she corrects it on coming back to a known spot), so distances are guesses.")
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 

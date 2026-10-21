@@ -75,7 +75,17 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] "Game maps" button in the menu bar panel opens the maps in Finder.
 - [x] `game_maps` voice tool: list maps, open one, or delete one (after an on-screen confirmation; the notebook and recordings stay).
 
-## 9. Later (not in this build)
+## 9. Fixes from the first Mac test of Build a Golem (2026-10-21)
+
+- [x] The controls test only counts once it learned something, writes what it learned straight into the notebook, and runs again for games it got wrong before (routine version 3). Walking no longer reads as "a menu opened": a menu also needs new text on screen. A default key that did nothing is tried once more at the end.
+- [x] The game lookup runs while Dottie starts playing instead of before. A lookup that found nothing waits a day, and the play log says why it failed. Searches drop the brackets ("Build a Golem Roblox") and try the bare name when the longer searches find nothing; the Worker's search also asks Roblox's own search for Roblox games.
+- [x] Every captured frame goes to the map (not only brain looks and walking), except while trying keys or watching the user. Every minute she turns all the way around in eighths, so the map covers every direction.
+- [x] Floor and walls: the bottom of the view either side of the player is taken as ground, which gives the camera's tilt and height, so open ground lands at floor height instead of reading as wall.
+- [x] Recognizing spots: prints leave out the HUD strips and are made from the 320-point picture for saved and live views alike (older spots get new prints from their pictures). Before she knows where she is, a looser match counts when it clearly beats every other spot, and the play log shows how close the nearest spot came.
+- [x] A brain look that fails tries a second Gemini model, and play stops only after five failed looks in a row, waiting a little longer each time. The play log says why each one failed.
+- [x] `report.txt`'s "Is it working?" lines are worked out from the map instead of fixed text.
+
+## 10. Later (not in this build)
 
 - [ ] Multi-frame reconstruction (Depth Anything 3 small) for sharper geometry.
 - [ ] A real navigation mesh (Recast/Detour style) with heights, so stairs, slopes and several floors plan properly instead of the flat grid.
