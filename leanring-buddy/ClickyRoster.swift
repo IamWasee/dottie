@@ -53,7 +53,8 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     /// Fingerprint of what the bot was last given (instructions, skills,
     /// folder), so it's only updated when something changed.
     var mausBotSpecHash: String?
-    /// "claude" or "gemini": the engine its latest turn ran on.
+    /// "claude", "gemini", or "gemini-backup" (Claude was meant to take the
+    /// turn and couldn't): the engine its latest turn ran on.
     var lastHelperEngine: String?
     /// The chat with the user starts a fresh conversation, with a short
     /// handover, after a long break or many turns, so each turn doesn't
@@ -388,7 +389,7 @@ final class ClickyRoster: ObservableObject {
             geminiNeedsHandover: startsFresh || previousEngine == "claude",
             claudeConversation: claudeConversation,
             claudeNeedsHandover: claudeConversation == "new"
-                || previousEngine == "gemini"
+                || previousEngine?.hasPrefix("gemini") == true
                 || (previousEngine == nil && currentAgent.hasStartedSession),
             routineID: nil,
             mayUseClaude: isContinuingClaudeWork || !Self.isEasyWorkForGemini(
@@ -485,8 +486,12 @@ final class ClickyRoster: ObservableObject {
                 return
             }
             // A routine run doesn't change which engine the chat is on.
+            // "gemini-backup" only when Claude was meant to take this turn
+            // and couldn't, so the badge doesn't call planned Gemini work a
+            // backup.
             if routineID == nil {
-                self.setLastHelperEngine("gemini", forAgentID: agentID)
+                let claudeWasWanted = conversation.mayUseClaude && DottieMausBot.shared.preference == .claudeWithBackup
+                self.setLastHelperEngine(claudeWasWanted ? "gemini-backup" : "gemini", forAgentID: agentID)
             }
             let geminiMessage = conversation.geminiNeedsHandover ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {

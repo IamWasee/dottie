@@ -273,13 +273,14 @@ private struct HelperAvatar: View {
     }
 }
 
-/// "Claude" or "Gemini backup": which engine the helper's latest turn ran on.
+/// "Claude", "Gemini", or "Gemini backup" (Claude was meant to take it and
+/// couldn't): which engine the helper's latest turn ran on.
 private struct HelperEngineBadge: View {
     let engineName: String?
 
     var body: some View {
         if let engineName {
-            Text(engineName == "claude" ? "Claude" : "Gemini backup")
+            Text(engineName == "claude" ? "Claude" : (engineName == "gemini-backup" ? "Gemini backup" : "Gemini"))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(engineName == "claude" ? DS.Colors.accentText : DS.Colors.textTertiary)
                 .padding(.horizontal, 6)
