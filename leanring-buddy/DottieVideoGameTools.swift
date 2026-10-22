@@ -16,7 +16,7 @@ enum DottieVideoGameTools: DottieToolModule {
         [
             DottieTool(
                 name: "game_command",
-                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', 'this is the shop, remember it', 'in this game F opens the egg shop' (she presses the key to check and saves it), or 'done' to finish mapping. Everything the user says about the game while it's being played goes here, never to screenshots, notes or memory tools. Quick moves happen at once. Answer in two or three words, like 'on it'.",
+                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', 'this is the shop, remember it', 'in this game F opens the egg shop' (she presses the key to check and saves it), 'for this run, no jumping' (a rule for this run only), 'clear instructions', or 'done' to finish mapping. When she reads a plan back and asks for a go, the user's go or changes are the answer to her question, not a game_command. Everything the user says about the game while it's being played goes here, never to screenshots, notes or memory tools. Quick moves happen at once. Answer in two or three words, like 'on it'.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -34,11 +34,12 @@ enum DottieVideoGameTools: DottieToolModule {
             },
             DottieTool(
                 name: "gameplay_recording",
-                description: "Record the user playing a game: the screen plus every key, mouse button and mouse move, saved as gameplay data (the same as Record gameplay in the menu bar). start: when they say 'record this', 'record me playing', 'start recording'. stop: 'stop recording', 'that's it'. status: whether it's recording and how much it saved. open: show the recordings folder. Recordings are never deleted. Answer in a few words.",
+                description: "Record the user playing a game (the screen plus every key, mouse button and mouse move, the same as Record gameplay in the menu bar) and play recordings back. start: 'record this', 'record me playing', 'record this as the sell loop' (put the name in name). stop: 'stop recording', or stop a recording being played back. play: 'do what I recorded', 'do the sell loop', 'replay that' (name, or empty for the newest): Dottie presses the same keys and moves the mouse the same way. list: which recordings there are. status: whether it's recording. open: show the recordings folder. Recordings are never deleted. Answer in a few words.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
-                        "action": ["type": "STRING", "enum": ["start", "stop", "status", "open"], "description": "What to do."]
+                        "action": ["type": "STRING", "enum": ["start", "stop", "play", "list", "status", "open"], "description": "What to do."],
+                        "name": ["type": "STRING", "description": "The recording's name, for start (to name it) and play (which one)."]
                     ],
                     "required": ["action"]
                 ],
@@ -48,15 +49,31 @@ enum DottieVideoGameTools: DottieToolModule {
                 switch arguments.dottieString("action") ?? "status" {
                 case "start":
                     guard !recorder.isRecording else { return "already recording." }
-                    await recorder.startRecording()
+                    await recorder.startRecording(name: arguments.dottieString("name"))
                     if let problemMessage = recorder.problemMessage {
                         return "couldn't start: \(problemMessage)"
                     }
                     return recorder.isRecording ? "recording now. say stop recording when done." : "couldn't start recording."
                 case "stop":
+                    if DottieGameplayPlayback.shared.stop() {
+                        return "stopped playing it back."
+                    }
                     guard recorder.isRecording else { return "wasn't recording." }
                     recorder.stopRecording()
                     return "stopped. saved \(recorder.savedFrameCount) frames with the keys and mouse."
+                case "play":
+                    let spokenName = arguments.dottieString("name") ?? ""
+                    guard let recording = DottieGameplayPlayback.recording(named: spokenName) else {
+                        let names = DottieGameplayPlayback.savedRecordings().prefix(8).map(\.name)
+                        return names.isEmpty
+                            ? "there are no recordings yet. say record this to make one."
+                            : "no recording matches \"\(spokenName)\". recordings: \(names.joined(separator: ", ")). ask which one."
+                    }
+                    return await DottieGameplayPlayback.shared.play(recording)
+                case "list":
+                    let recordings = DottieGameplayPlayback.savedRecordings().prefix(10)
+                    guard !recordings.isEmpty else { return "no recordings yet." }
+                    return recordings.map { "\($0.name) (\(Int($0.durationSeconds.rounded())) s)" }.joined(separator: "; ")
                 case "open":
                     recorder.openGameDataFolder()
                     return "opened the recordings folder in Finder."

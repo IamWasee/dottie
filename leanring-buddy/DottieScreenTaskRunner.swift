@@ -207,7 +207,9 @@ final class DottieScreenTaskRunner {
     /// Stops after the current action. Returns true if a task was running.
     @discardableResult
     func stop() -> Bool {
-        guard let runTask else { return false }
+        // Stop also ends a gameplay recording being played back.
+        let stoppedPlayback = DottieGameplayPlayback.shared.stop()
+        guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
         gamePlayer?.stop()
         gamePlayer = nil

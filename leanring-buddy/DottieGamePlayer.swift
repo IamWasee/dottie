@@ -62,6 +62,13 @@ final class DottieGamePlayer {
     /// Set by Stop, so every loop ends even if a step doesn't notice the
     /// task being cancelled.
     private(set) var isStopped = false
+    /// Rules the user gave for this run only ("for this commercial, no
+    /// jumping"), kept until the job ends or they say "clear instructions".
+    private var temporaryInstructions: [String] = []
+    /// The brain's answer to the decision being waited on, set by the
+    /// thinking task so the wait can give up at a deadline.
+    private var brainAnswerByCallNumber: [Int: DottieGamePlan?] = [:]
+    private var brainCallNumber = 0
     /// The game being played, once it's been named.
     private(set) var currentGameName: String?
     private var brain: DottieGameBrain?
@@ -72,7 +79,10 @@ final class DottieGamePlayer {
 
     private static let maximumBrainCalls = 120
     /// A dropped network or a busy model shouldn't end play at once.
-    private static let maximumFailedBrainCallsInARow = 5
+    /// One retry, then the user hears about it instead of a silent wait.
+    private static let maximumFailedBrainCallsInARow = 2
+    /// The longest one decision may take, whatever the engines do.
+    private static let brainDeadlineSeconds: Double = 45
     /// How often Dottie turns all the way around on her own, so the 3D map
     /// covers every direction and not just the way she walks.
     private static let secondsBetweenMappingSweeps: Double = 60
@@ -92,6 +102,16 @@ final class DottieGamePlayer {
         // map at once, without waiting for the brain to copy it over.
         if let spokenPlaceName = Self.placeName(namedIn: trimmedCommand), let currentWorldMap {
             currentWorldMap.notePlace(name: spokenPlaceName)
+        }
+        if Self.isClearInstructionsRequest(trimmedCommand) {
+            temporaryInstructions = []
+            onThinkAloud?("Okay, cleared your instructions.")
+            return
+        }
+        if let temporaryInstruction = Self.temporaryInstruction(in: trimmedCommand) {
+            temporaryInstructions.append(temporaryInstruction)
+            onThinkAloud?("Got it, for this run: \(temporaryInstruction).")
+            return
         }
         // "In this game F opens the egg shop": she tries F and says what
         // happened, or just writes it down while the user has the keyboard.
@@ -185,6 +205,60 @@ final class DottieGamePlayer {
         return nil
     }
 
+    // MARK: - What kind of ask it is
+
+    /// "Play this", "explore", "beat the level": she plays on her own and
+    /// may learn the controls and look around. Anything else is a task she
+    /// does exactly, with nothing extra.
+    static func isOpenEndedPlay(_ taskText: String) -> Bool {
+        let lowercasedTask = taskText.lowercased()
+        return ["play", "explore", "beat", "grind", "farm", "level up", "learn the game", "learn this game", "figure out"]
+            .contains { lowercasedTask.contains($0) }
+    }
+
+    /// A run the user is directing step by step, like filming a commercial.
+    static func isDirectedRun(_ taskText: String) -> Bool {
+        let lowercasedTask = taskText.lowercased()
+        return ["for this run", "for the run", "for this commercial", "for a commercial", "for the commercial", "for an ad", "for this ad",
+                "for this clip", "for a clip", "for this video", "for this shot", "for this take", "directed run",
+                "temporary instructions", "exactly like this", "exactly how i say", "exactly as i say"]
+            .contains { lowercasedTask.contains($0) }
+    }
+
+    /// "For this run, no jumping" or "for now walk slowly" said mid-play:
+    /// the rule ("no jumping"), or nil.
+    static func temporaryInstruction(in remark: String) -> String? {
+        let pattern = #"(?i)^\s*(?:for (?:this|the|a) (?:run|commercial|clip|video|shot|take|recording|ad)|for now|from now on|until i say otherwise)\s*[,:]?\s*(.+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: remark, range: NSRange(remark.startIndex..., in: remark)),
+              let ruleRange = Range(match.range(at: 1), in: remark) else { return nil }
+        let rule = remark[ruleRange].trimmingCharacters(in: CharacterSet(charactersIn: " .,!"))
+        return rule.isEmpty ? nil : String(rule.prefix(200))
+    }
+
+    static func isClearInstructionsRequest(_ remark: String) -> Bool {
+        let lowercasedRemark = remark.lowercased()
+        return ["clear instructions", "clear the instructions", "clear my instructions", "forget the instructions", "forget my instructions", "drop the instructions"]
+            .contains { lowercasedRemark.contains($0) }
+    }
+
+    /// "Go", "yes", "action": the user approved the plan as read back.
+    static func isGoAnswer(_ answer: String) -> Bool {
+        let answerWords = Set(answer.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty })
+        let approvingWords: Set<String> = ["go", "yes", "yeah", "yep", "start", "action", "ok", "okay", "sure", "good", "perfect", "correct", "right"]
+        let changingWords: Set<String> = ["but", "change", "instead", "not", "don't", "dont", "no", "wait"]
+        return !answerWords.isDisjoint(with: approvingWords) && answerWords.isDisjoint(with: changingWords)
+    }
+
+    /// The task as the brain reads it, with the user's rules for this run.
+    private func brainTaskText(for taskText: String, isDirectedRun: Bool) -> String {
+        var brainTaskText = isDirectedRun ? "Directed run. The user's instructions: \(taskText)" : taskText
+        if !temporaryInstructions.isEmpty {
+            brainTaskText += "\n\nRules the user set for this run (follow them exactly, in every step, above anything else):\n- " + temporaryInstructions.joined(separator: "\n- ")
+        }
+        return brainTaskText
+    }
+
     func play(taskText: String, windowGameName: String, referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []) async -> DottieScreenTaskRunner.Outcome {
         guard DottieScreenActionPerformer.canPostEvents else {
             return .failed(reason: "Dottie needs Accessibility access to press keys in games.")
@@ -193,9 +267,14 @@ final class DottieGamePlayer {
             return .failed(reason: "Dottie can't see the screen. Check Screen Recording access.")
         }
         Self.current = self
-        onProgress?("Working out which game this is")
+        let isDirectedRun = Self.isDirectedRun(taskText)
+        let isOpenEndedPlay = !isDirectedRun && Self.isOpenEndedPlay(taskText)
+        let directCommand = isDirectedRun ? nil : DottieGameDirectCommand.parse(taskText)
+        if directCommand == nil {
+            onProgress?("Working out which game this is")
+        }
         let firstScreenText = await DottieGameReflexes.readTextOffMain(firstScreenshot.image)
-        let gameName = await DottieGameResearch.identifyGame(taskText: taskText, windowGameName: windowGameName, screenText: firstScreenText)
+        let gameName = await DottieGameResearch.identifyGame(taskText: taskText, windowGameName: windowGameName, screenText: firstScreenText, prefersRecentGame: !isOpenEndedPlay)
         guard !(Task.isCancelled || isStopped) else { return .stopped }
         currentGameName = gameName
         let notebook = DottieGameNotebook(gameName: gameName)
@@ -244,10 +323,22 @@ final class DottieGamePlayer {
             return await mapWhileUserPlays(worldMap: worldMap, reflexes: reflexes, cameraButton: cameraButton)
         }
 
+        // "Go to the packager": done straight away, with no brain, look
+        // around or controls test, when the map or the keys can do it alone.
+        var directCommandNote: String?
+        if let directCommand {
+            let directResult = await runDirectCommand(directCommand, notebook: notebook, worldMap: worldMap, reflexes: reflexes)
+            if let outcome = directResult.outcome {
+                return outcome
+            }
+            directCommandNote = directResult.noteForBrain
+        }
+
         // The lookup runs beside play instead of before it, so the first
         // move isn't held up; the guide reaches the brain once it's written.
+        // Only when playing on her own: a task doesn't need the game's guide.
         var guideLookupTask: Task<Void, Never>?
-        if notebook.needsGuide, !DottieGameResearch.isBarePlatformName(gameName) {
+        if isOpenEndedPlay, notebook.needsGuide, !DottieGameResearch.isBarePlatformName(gameName) {
             onProgress?("Looking up \(gameName)")
             thinkAloudIfItsBeenAWhile("Let me look up \(gameName) while I start.")
             guideLookupTask = Task { @MainActor in
@@ -265,15 +356,23 @@ final class DottieGamePlayer {
         defer { guideLookupTask?.cancel() }
 
         var recentHistory: [String] = []
-        var nextEvent = !notebook.needsControlsLearned
-            ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
-            : "This game is new to you: follow the steps for a new game (read what's known about it, learn_controls, look_around, explore close by), then play what the game asks."
-        if worldMap.isFamiliar {
-            nextEvent += " Dottie knows this game: her map has \(worldMap.keyframes.count) spots and \(worldMap.places.count) named places, so she won't map them again."
-            thinkAloudIfItsBeenAWhile("I know this one, I've got it mapped.")
+        var nextEvent: String
+        if isOpenEndedPlay {
+            nextEvent = !notebook.needsControlsLearned
+                ? "Starting to play (session \(notebook.contents.sessionCount) of this game)."
+                : "This game is new to you: follow the steps for a new game (read what's known about it, learn_controls, look_around, explore close by), then play what the game asks."
+            if worldMap.isFamiliar {
+                nextEvent += " Dottie knows this game: her map has \(worldMap.keyframes.count) spots and \(worldMap.places.count) named places, so she won't map them again."
+                thinkAloudIfItsBeenAWhile("I know this one, I've got it mapped.")
+            } else {
+                nextEvent += " Dottie hasn't mapped this game before; she maps it automatically as you play."
+                thinkAloudIfItsBeenAWhile("New game for me, I'll map it as I go.")
+            }
         } else {
-            nextEvent += " Dottie hasn't mapped this game before; she maps it automatically as you play."
-            thinkAloudIfItsBeenAWhile("New game for me, I'll map it as I go.")
+            nextEvent = "Do exactly what the user asked, nothing else, and set done as soon as it's done."
+            if let directCommandNote {
+                nextEvent += " " + directCommandNote
+            }
         }
         // Haiku thinks unless it asked for help or keeps hitting trouble.
         var needsStrongerModel = false
@@ -293,13 +392,27 @@ final class DottieGamePlayer {
             )
         }
 
-        // The first look around is right away: at spawn it saves what spawn
-        // looks like, and on a known map it finds where she is.
+        // A directed run starts only once the user approved the plan as
+        // read back to them.
+        if isDirectedRun {
+            onProgress?("Planning your run")
+            guard let approvedPlanParts = await agreeOnDirectedRunPlan(taskText: taskText, notebook: notebook, worldMap: worldMap, reflexes: reflexes, brain: gameBrain) else {
+                guard !(Task.isCancelled || isStopped) else { return .stopped }
+                return .finished(answer: "I didn't start the run, since we didn't agree on a plan. Tell me again when you're ready.")
+            }
+            taskParts = approvedPlanParts
+            nextEvent = "The user approved the plan. Do step 1 exactly as written."
+            notebook.log("Directed run approved: \(approvedPlanParts.joined(separator: " / "))")
+        }
+
+        // When playing on her own, the first look around is right away: at
+        // spawn it saves what spawn looks like, and on a known map it finds
+        // where she is. A task only looks around when the brain asks to.
         var lastMappingSweepAt = Date.distantPast
         for brainCallIndex in 0..<Self.maximumBrainCalls {
             guard !(Task.isCancelled || isStopped) else { return .stopped }
 
-            if !worldMap.isTopDownView, Date().timeIntervalSince(lastMappingSweepAt) > Self.secondsBetweenMappingSweeps {
+            if isOpenEndedPlay, !worldMap.isTopDownView, Date().timeIntervalSince(lastMappingSweepAt) > Self.secondsBetweenMappingSweeps {
                 lastMappingSweepAt = Date()
                 onProgress?("Looking around to map this spot")
                 let sweepResult = await reflexes.perform(DottieGamePlan.Step(kind: "look_around", sprint: false), goal: "")
@@ -327,7 +440,7 @@ final class DottieGamePlayer {
             }
 
             let request = DottieGameBrainRequest(
-                taskText: taskText,
+                taskText: brainTaskText(for: taskText, isDirectedRun: isDirectedRun),
                 event: nextEvent,
                 frameJPEGs: frameJPEGs,
                 screenText: screenText,
@@ -349,23 +462,23 @@ final class DottieGamePlayer {
             guard !(Task.isCancelled || isStopped) else { return .stopped }
             onProgress?("Thinking about what to do next")
             notebook.log("Asked the brain\(needsStrongerModel ? " (stronger model)" : ""): \(nextEvent)")
-            guard let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel) else {
+            guard let plan = await thinkWithDeadline(request, brain: gameBrain, needsStrongerModel: needsStrongerModel) else {
                 guard !(Task.isCancelled || isStopped) else { return .stopped }
                 failedBrainCallsInARow += 1
                 notebook.log("The brain didn't answer (\(failedBrainCallsInARow) in a row\(gameBrain.lastProblem.map { ": \($0)" } ?? "")).")
                 if failedBrainCallsInARow >= Self.maximumFailedBrainCallsInARow {
-                    return .failed(reason: "Neither Claude nor Gemini answered, so Dottie stopped playing.")
+                    return .failed(reason: "My brain didn't answer twice in a row, so I stopped instead of guessing. Try again in a moment.")
                 }
-                onProgress?("Waiting for my brain to answer")
+                onProgress?("My brain didn't answer, trying once more")
                 nextEvent = "Your last answer didn't come through; look again."
-                // A slow or busy network gets a little longer each time.
-                try? await Task.sleep(nanoseconds: UInt64(failedBrainCallsInARow) * 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
             failedBrainCallsInARow = 0
             notebook.log("Brain: thought \"\(plan.thought ?? "")\"; doing \"\(plan.goal)\"; steps: \(plan.steps.map(\.kind).joined(separator: ", "))\(plan.isDone ? "; says it's done" : "")")
             learn(from: plan, notebook: notebook, newestFrame: newestFrame)
-            if !plan.taskParts.isEmpty {
+            // A directed run keeps the plan the user approved.
+            if !plan.taskParts.isEmpty, !isDirectedRun {
                 taskParts = Array(plan.taskParts.prefix(10))
             }
             if let partNumber = plan.currentTaskPartNumber, !taskParts.isEmpty {
@@ -380,7 +493,9 @@ final class DottieGamePlayer {
             if let thought = plan.thought {
                 recentHistory.append("You thought: \(thought.prefix(200))")
             }
-            if !plan.goal.isEmpty {
+            if isDirectedRun, !taskParts.isEmpty {
+                onProgress?("Your plan, step \(currentTaskPartNumber) of \(taskParts.count): \(taskParts[currentTaskPartNumber - 1])")
+            } else if !plan.goal.isEmpty {
                 onProgress?(plan.goal)
             }
             thinkAloudIfItsBeenAWhile(plan.say)
@@ -448,6 +563,113 @@ final class DottieGamePlayer {
         currentReflexes?.stopEverything()
         brain?.stop()
         hearing?.stop()
+    }
+
+    /// Asks the brain and waits at most brainDeadlineSeconds, so an engine
+    /// that never answers can't hang the job. nil when no plan came.
+    private func thinkWithDeadline(_ request: DottieGameBrainRequest, brain gameBrain: DottieGameBrain, needsStrongerModel: Bool) async -> DottieGamePlan? {
+        brainCallNumber += 1
+        let thisCallNumber = brainCallNumber
+        let thinkingTask = Task { @MainActor [weak self] in
+            let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel)
+            self?.brainAnswerByCallNumber[thisCallNumber] = .some(plan)
+        }
+        let deadline = Date().addingTimeInterval(Self.brainDeadlineSeconds)
+        while brainAnswerByCallNumber[thisCallNumber] == nil, Date() < deadline, !(Task.isCancelled || isStopped) {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        guard let answeredPlan = brainAnswerByCallNumber.removeValue(forKey: thisCallNumber) else {
+            thinkingTask.cancel()
+            gameBrain.stop()
+            return nil
+        }
+        return answeredPlan
+    }
+
+    /// Reads the user's instructions back as a numbered plan and waits for
+    /// "go". Changes they say are planned again. nil when they never
+    /// approved one.
+    private func agreeOnDirectedRunPlan(taskText: String, notebook: DottieGameNotebook, worldMap: DottieGameWorldMap, reflexes: DottieGameReflexes, brain gameBrain: DottieGameBrain) async -> [String]? {
+        var changesTheUserAsked: [String] = []
+        for _ in 0..<4 {
+            guard !(Task.isCancelled || isStopped) else { return nil }
+            let motionFrames = await reflexes.motionFrames()
+            let changesLine = changesTheUserAsked.isEmpty ? "" : " The user changed the plan: " + changesTheUserAsked.map { "\"\($0)\"" }.joined(separator: ", ") + "."
+            let request = DottieGameBrainRequest(
+                taskText: brainTaskText(for: taskText, isDirectedRun: true),
+                event: "Before moving: write the user's instructions as a short numbered plan in `task_parts`, in their order and their words, with their rules folded into the steps where they apply. Give no steps and don't move yet.\(changesLine)",
+                frameJPEGs: motionFrames.compactMap { DottieGameVision.jpegData(of: $0) },
+                screenText: [],
+                dialogue: [],
+                notebookText: notebook.promptText(),
+                recentHistory: [],
+                recognizedPlace: nil,
+                mapText: worldMap.summaryText(),
+                userCommands: [],
+                extraNotes: [],
+                isWatchingUser: false,
+                referencePictures: [],
+                taskPlanText: ""
+            )
+            onProgress?("Planning your run")
+            guard let plan = await thinkWithDeadline(request, brain: gameBrain, needsStrongerModel: false) else { return nil }
+            let planParts = plan.taskParts.isEmpty ? [taskText] : Array(plan.taskParts.prefix(10))
+            let numberedPlan = planParts.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " ")
+            let readBack = "Here's the plan: \(numberedPlan). Say go when you're ready, or tell me what to change."
+            onProgress?("Waiting for your go")
+            onAskUser?(readBack)
+            guard let answer = await DottieScreenJobQuestions.shared.waitForAnswer(to: readBack, timeoutSeconds: 300) else { return nil }
+            guard !(Task.isCancelled || isStopped) else { return nil }
+            if Self.isGoAnswer(answer) {
+                return planParts
+            }
+            notebook.log("Directed run: the user changed the plan: \(answer)")
+            changesTheUserAsked.append(answer)
+        }
+        return nil
+    }
+
+    /// Does a direct command with no brain. The outcome when it's done, or
+    /// a note for the brain when it needs eyes (the place isn't mapped).
+    private func runDirectCommand(_ directCommand: DottieGameDirectCommand, notebook: DottieGameNotebook, worldMap: DottieGameWorldMap, reflexes: DottieGameReflexes) async -> (outcome: DottieScreenTaskRunner.Outcome?, noteForBrain: String?) {
+        notebook.log("Direct command: \(directCommand.description)")
+        switch directCommand {
+        case .goTo(let placeName):
+            guard let place = worldMap.place(named: placeName) else {
+                return (nil, "\(placeName) isn't on your map yet: find it on screen and go_to it.")
+            }
+            onProgress?("Going to \(place.name)")
+            // A saved map needs to know where she is before walking blind:
+            // a frame or two usually tells it, a look around if not.
+            if !worldMap.isLocalized {
+                for _ in 0..<3 where !worldMap.isLocalized {
+                    _ = await reflexes.captureFrame()
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+                if !worldMap.isLocalized {
+                    onProgress?("Finding where I am")
+                    _ = await reflexes.perform(DottieGamePlan.Step(kind: "look_around", sprint: false), goal: "")
+                }
+            }
+            guard !(Task.isCancelled || isStopped) else { return (.stopped, nil) }
+            let walkResult = await reflexes.perform(DottieGamePlan.Step(kind: "go_to_place", text: place.name, sprint: false), goal: "go to \(place.name)")
+            notebook.log("  go_to_place: \(walkResult.note)")
+            guard !(Task.isCancelled || isStopped) else { return (.stopped, nil) }
+            if walkResult.isEvent {
+                return (nil, "Walking to \(place.name) by the map didn't work: \(walkResult.note)")
+            }
+            return (.finished(answer: "I'm at \(place.name)."), nil)
+        case .press(let keys):
+            onProgress?("Pressing \(keys.uppercased())")
+            let pressResult = await reflexes.perform(DottieGamePlan.Step(kind: "press", keys: keys, sprint: false), goal: "")
+            notebook.log("  press: \(pressResult.note)")
+            return (.finished(answer: pressResult.note), nil)
+        case .turn(let degrees):
+            onProgress?(degrees == 180 ? "Turning around" : "Turning")
+            let turnResult = await reflexes.perform(DottieGamePlan.Step(kind: "turn", degrees: degrees, sprint: false), goal: "")
+            notebook.log("  turn: \(turnResult.note)")
+            return (.finished(answer: "Turned."), nil)
+        }
     }
 
     /// Presses a key the user taught, says out loud what happened, and
@@ -746,5 +968,67 @@ final class DottieGameMapInputWatcher {
         case 126: return "up"
         default: return event.charactersIgnoringModifiers?.lowercased() ?? "key \(event.keyCode)"
         }
+    }
+}
+
+// MARK: - Direct commands
+
+/// A short, clear command ("go to the packager", "press E", "jump", "turn
+/// around") that Dottie does at once, without the brain.
+enum DottieGameDirectCommand {
+    case goTo(placeName: String)
+    case press(keys: String)
+    case turn(degrees: Double)
+
+    var description: String {
+        switch self {
+        case .goTo(let placeName): return "go to \(placeName)"
+        case .press(let keys): return "press \(keys)"
+        case .turn(let degrees): return "turn \(Int(degrees))°"
+        }
+    }
+
+    /// The command in a task, or nil when the task is more than one
+    /// command ("go to the shop and buy an egg") or isn't one.
+    static func parse(_ taskText: String) -> DottieGameDirectCommand? {
+        var command = taskText.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .!?").union(.whitespacesAndNewlines))
+        for politePrefix in ["dottie, ", "dottie ", "hey dottie ", "can you ", "could you ", "please ", "now "] where command.hasPrefix(politePrefix) {
+            command = String(command.dropFirst(politePrefix.count))
+        }
+        for trailingWords in [" please", " now", " on the screen", " on screen", " in the game", " in this game", " in roblox", " for me"] where command.hasSuffix(trailingWords) {
+            command = String(command.dropLast(trailingWords.count))
+        }
+        command = command.trimmingCharacters(in: CharacterSet(charactersIn: " ,.!?"))
+        guard !command.isEmpty, command.split(separator: " ").count <= 8,
+              !command.contains(" and "), !command.contains(" then "), !command.contains(",") else { return nil }
+
+        if ["jump", "jump once"].contains(command) {
+            return .press(keys: "space")
+        }
+        if command == "turn around" {
+            return .turn(degrees: 180)
+        }
+        if command == "turn left" {
+            return .turn(degrees: -90)
+        }
+        if command == "turn right" {
+            return .turn(degrees: 90)
+        }
+        let pressPattern = #"^(?:press|hit|tap)\s+(?:the\s+)?([a-z0-9]|space|enter|return|tab|escape|esc|f1[0-2]|f[1-9])(?:\s+key|\s+button)?(?:\s+once)?$"#
+        if let pressedKey = firstCapture(of: pressPattern, in: command) {
+            return .press(keys: pressedKey == "esc" ? "escape" : pressedKey)
+        }
+        let goToPattern = #"^(?:go|walk|run|head|move|get|take me)\s+(?:back\s+|over\s+)?to\s+(.+)$"#
+        if let placeName = firstCapture(of: goToPattern, in: command) {
+            return .goTo(placeName: placeName)
+        }
+        return nil
+    }
+
+    private static func firstCapture(of pattern: String, in text: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let captureRange = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[captureRange])
     }
 }

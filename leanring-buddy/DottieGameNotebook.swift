@@ -150,6 +150,11 @@ final class DottieGameNotebook {
     /// The saved game whose notebook changed last among those whose name
     /// ends with this, like "(Roblox)", or nil.
     static func mostRecentlyPlayedGameName(endingWith nameEnding: String) -> String? {
+        mostRecentlyPlayedGame(endingWith: nameEnding)?.name
+    }
+
+    /// Like mostRecentlyPlayedGameName, with when its notebook last changed.
+    static func mostRecentlyPlayedGame(endingWith nameEnding: String) -> (name: String, playedAt: Date)? {
         struct SavedName: Decodable {
             let gameName: String
         }
@@ -165,7 +170,7 @@ final class DottieGameNotebook {
                 newestGame = (gameName, changedAt)
             }
         }
-        return newestGame?.name
+        return newestGame.map { (name: $0.name, playedAt: $0.changedAt) }
     }
 
     /// "Roblox — Obby Tower" → "roblox-obby-tower".

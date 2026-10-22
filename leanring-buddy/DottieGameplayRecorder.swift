@@ -67,7 +67,9 @@ final class DottieGameplayRecorder: ObservableObject {
         NSWorkspace.shared.open(Self.gameDataFolderURL)
     }
 
-    func startRecording() async {
+    /// `recordingName` is what the user called it ("record this as the
+    /// sell loop"), so it can be played back by name.
+    func startRecording(name recordingName: String? = nil) async {
         guard !isRecording, !isStarting else { return }
         isStarting = true
         problemMessage = nil
@@ -144,6 +146,7 @@ final class DottieGameplayRecorder: ObservableObject {
         }
 
         writer.writeSessionDetails([
+            "name": recordingName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             "started_at": ISO8601DateFormatter().string(from: Date()),
             "display_points": ["width": display.width, "height": display.height],
             "frame_pixels": ["width": configuration.width, "height": configuration.height],

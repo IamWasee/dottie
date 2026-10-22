@@ -23,10 +23,37 @@ enum DottieGameResearch {
     private static let namingModel = "gemini-3.5-flash-lite"
     private static let guideModel = "gemini-3.6-flash"
     static let secondsBeforeGuideIsLookedUpAgain = 14.0 * 24 * 60 * 60
+    private static let secondsAGameCountsAsRecent = 3.0 * 60 * 60
 
     /// The game's name, like "Build a Golem (Roblox)", or the window's
     /// name when it can't be told.
-    static func identifyGame(taskText: String, windowGameName: String, screenText: [String]) async -> String {
+    static func identifyGame(taskText: String, windowGameName: String, screenText: [String], prefersRecentGame: Bool = false) async -> String {
+        // The game the user named in the task, when Dottie has played it.
+        let lowercasedTask = taskText.lowercased()
+        let savedGameNamesForMatching = DottieGameNotebook.savedGameNames()
+        if let namedGame = savedGameNamesForMatching.first(where: { savedGameName in
+            let nameWithoutPlatform = savedGameName.replacingOccurrences(of: #"\s*\([^)]*\)\s*$"#, with: "", options: .regularExpression).lowercased()
+            return nameWithoutPlatform.count >= 4 && !gamePlatformNames.contains(nameWithoutPlatform) && lowercasedTask.contains(nameWithoutPlatform)
+        }) {
+            return namedGame
+        }
+        // A quick command ("go to the packager") is about the game the user
+        // was just playing, so it's not worked out again.
+        let platformSuffix = "(\(windowGameName))"
+        let recentGameOnThisPlatform = DottieGameNotebook.mostRecentlyPlayedGame(endingWith: platformSuffix)
+            .flatMap { Date().timeIntervalSince($0.playedAt) < secondsAGameCountsAsRecent ? $0 : nil }
+        if prefersRecentGame {
+            if let recentGameOnThisPlatform {
+                return recentGameOnThisPlatform.name
+            }
+            if savedGameNamesForMatching.contains(where: { $0.caseInsensitiveCompare(windowGameName) == .orderedSame }),
+               !gamePlatformNames.contains(windowGameName.lowercased()) {
+                return windowGameName
+            }
+        }
+        let recentGameLine = recentGameOnThisPlatform.map {
+            "\nPlayed on \(windowGameName) in the last few hours: \"\($0.name)\". If the screen could be that game, answer exactly that: text like a player's, server's or team's name on screen doesn't make it a different game."
+        } ?? ""
         // A notebook named just "Roblox" (from before games were named) holds
         // many different experiences; offering it would file every new one
         // there again, so a bare platform name is never reused.
@@ -40,7 +67,7 @@ enum DottieGameResearch {
         What the user asked: "\(taskText)"
         The game's window: "\(windowGameName)"
         Text on the screen: \(screenText.prefix(30).joined(separator: " | "))
-        Games already played before: \(knownGamesLine)
+        Games already played before: \(knownGamesLine)\(recentGameLine)
 
         Answer with the game's name only, nothing else.
         - If it's one of the games already played before, answer that name exactly as written there.

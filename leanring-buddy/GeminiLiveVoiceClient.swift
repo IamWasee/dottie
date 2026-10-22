@@ -1557,7 +1557,7 @@ enum GeminiLiveToolCatalog {
     /// with the tool's description ("turn into a cat" → change_cursor).
     private static let extraSearchWordsByToolName: [String: String] = [
         "stop_helper": "stop cancel helper dot",
-        "gameplay_recording": "record recording gameplay game me playing capture keys keybinds clip",
+        "gameplay_recording": "record recording gameplay game me playing capture keys keybinds clip replay play back do what i recorded routine",
         "open_helper_result": "open show result website file folder helper made",
         "type_text": "type write enter text field",
         "scroll_screen": "scroll page down up",

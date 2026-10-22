@@ -240,7 +240,7 @@ final class DottieGameWorldMap {
         }
         keyframeIDsWithoutViewPrint = loadedKeyframeIDsWithoutViewPrint
         keyframes = loadedKeyframes
-        places = loadedPlaces
+        places = Self.placesWithoutDuplicates(loadedPlaces)
         nextKeyframeID = loadedNextKeyframeID
         sessionCount = loadedSessionCount + 1
         learnedBlockedCells = loadedBlockedCells
@@ -821,8 +821,40 @@ final class DottieGameWorldMap {
         addPlace(named: trimmedName, at: pose)
     }
 
+    /// "The Shop Area", "shop" and "the shop" are one place: articles and
+    /// words like "area" don't change which place it is.
+    static func normalizedPlaceName(_ placeName: String) -> String {
+        var words = placeName.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        while let firstWord = words.first, ["the", "a", "an", "my", "our"].contains(firstWord), words.count > 1 {
+            words.removeFirst()
+        }
+        while let lastWord = words.last, ["area", "spot", "zone", "place", "point"].contains(lastWord), words.count > 1 {
+            words.removeLast()
+        }
+        return words.joined(separator: " ")
+    }
+
+    /// Keeps the newest of each place saved under several spellings.
+    private static func placesWithoutDuplicates(_ savedPlaces: [Place]) -> [Place] {
+        var newestPlaceByNormalizedName: [String: Place] = [:]
+        for savedPlace in savedPlaces {
+            let normalizedName = normalizedPlaceName(savedPlace.name)
+            if let keptPlace = newestPlaceByNormalizedName[normalizedName], keptPlace.notedAt > savedPlace.notedAt {
+                continue
+            }
+            newestPlaceByNormalizedName[normalizedName] = savedPlace
+        }
+        return savedPlaces.filter { savedPlace in
+            let keptPlace = newestPlaceByNormalizedName[normalizedPlaceName(savedPlace.name)]
+            return keptPlace?.name == savedPlace.name && keptPlace?.notedAt == savedPlace.notedAt
+        }
+    }
+
     private func addPlace(named placeName: String, at placePose: Pose) {
-        places.removeAll { $0.name.caseInsensitiveCompare(placeName) == .orderedSame }
+        let normalizedName = Self.normalizedPlaceName(placeName)
+        places.removeAll { Self.normalizedPlaceName($0.name) == normalizedName }
         places.append(Place(name: placeName, x: placePose.x, y: placePose.y, notedAt: Date()))
         rememberLandmarkView(named: placeName, at: placePose)
         DottieGameNotebook.appendToPlayLog("Map: named a place \"\(placeName)\" at (\(String(format: "%.1f", placePose.x)), \(String(format: "%.1f", placePose.y))).", gameFolderURL: mapFolderURL.deletingLastPathComponent())
@@ -840,7 +872,9 @@ final class DottieGameWorldMap {
 
     func place(named name: String) -> Place? {
         let lowercasedName = name.lowercased()
+        let normalizedName = Self.normalizedPlaceName(name)
         return places.first { $0.name.lowercased() == lowercasedName }
+            ?? places.first { Self.normalizedPlaceName($0.name) == normalizedName }
             ?? places.first { $0.name.lowercased().contains(lowercasedName) || lowercasedName.contains($0.name.lowercased()) }
     }
 
