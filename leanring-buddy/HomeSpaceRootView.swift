@@ -19,6 +19,7 @@ struct HomeSpaceRootView: View {
         case clickys = "Dots"
         case projects = "Projects"
         case pictures = "Pictures"
+        case smartReplays = "Smart Replays"
         case smartHome = "Smart Home"
         case skills = "Skills"
         case tools = "Tools"
@@ -36,6 +37,7 @@ struct HomeSpaceRootView: View {
             case .clickys: return "person.2.fill"
             case .projects: return "folder.fill"
             case .pictures: return "photo.on.rectangle.angled"
+            case .smartReplays: return "play.rectangle.on.rectangle"
             case .smartHome: return "house.fill"
             case .skills: return "sparkles"
             case .tools: return "wrench.and.screwdriver.fill"
@@ -57,7 +59,7 @@ struct HomeSpaceRootView: View {
         var sections: [HomeSection] {
             switch self {
             case .talk: return [.conversation, .clickys, .projects, .meetings, .phone]
-            case .make: return [.pictures, .skills, .tools, .smartHome]
+            case .make: return [.pictures, .smartReplays, .skills, .tools, .smartHome]
             case .you: return [.brain, .profile, .settings]
             }
         }
@@ -111,6 +113,8 @@ struct HomeSpaceRootView: View {
                     HomeProjectsView(projects: companionManager.projects, clickyRoster: clickyRoster)
                 case .pictures:
                     HomePicturesView(imageMemory: companionManager.imageMemory)
+                case .smartReplays:
+                    HomeSmartReplaysView(smartReplayStore: DottieSmartReplayStore.shared)
                 case .smartHome:
                     HomeSmartHomeView(smartHome: companionManager.smartHome)
                 case .skills:

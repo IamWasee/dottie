@@ -1451,6 +1451,11 @@ final class CompanionManager: ObservableObject {
         var restart = true
         /// A saved replay the user asked for by name, run when the job starts.
         var replayID: UUID?
+        /// A smart replay's closing line, said word for word when it finishes.
+        var closingMessage: String?
+        /// A commercial smart replay is being filmed: the cursor moves at a
+        /// calm pace the viewer can follow.
+        var isCommercial = false
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
@@ -1604,7 +1609,9 @@ final class CompanionManager: ObservableObject {
             self.detectedElementScreenLocation = point
             self.detectedElementDisplayFrame = displayFrame
             // A replay already knows its target, so the flight is quicker.
-            try? await Task.sleep(nanoseconds: self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
+            // A commercial run is filmed, so it lingers long enough to see.
+            let pauseNanoseconds: UInt64 = job.isCommercial ? 1_200_000_000 : (self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
+            try? await Task.sleep(nanoseconds: pauseNanoseconds)
         }
         currentScreenTaskText = taskText
         currentScreenJob = job
@@ -1623,7 +1630,7 @@ final class CompanionManager: ObservableObject {
             }
         }
         screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
-            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone)
+            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone, closingMessage: job.closingMessage)
         }
     }
 
@@ -1791,7 +1798,7 @@ final class CompanionManager: ObservableObject {
         return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
     }
 
-    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false) {
+    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false, closingMessage: String? = nil) {
         currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1816,10 +1823,13 @@ final class CompanionManager: ObservableObject {
         var jobSucceeded = false
         if case .finished = outcome { jobSucceeded = true }
         DottieEpisodicMemory.shared.recordScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded)
+        // A smart replay's closing line only follows a run that worked.
+        let closingMessageToSay = jobSucceeded ? closingMessage : nil
         if repliesToPhone {
             startNextQueuedScreenTask()
             scheduleTransientHideIfNeeded()
-            Task { await phoneBridge.send(resultText) }
+            let phoneText = closingMessageToSay.map { "\(resultText)\n\($0)" } ?? resultText
+            Task { await phoneBridge.send(phoneText) }
             return
         }
         let waitingCount = queuedScreenTasks.count
@@ -1836,16 +1846,21 @@ final class CompanionManager: ObservableObject {
                 if !isBusy { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText, waitingCount: waitingCount)
+            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText, waitingCount: waitingCount, closingMessage: closingMessageToSay)
         }
     }
 
     /// Dottie says how the job went, as a turn of its own, so it reads like
     /// her answer and lands in the conversation history.
-    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0) {
+    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
         let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
-        let instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
+        var instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
             + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
+        // The user typed this line for the end of every run of a smart
+        // replay, so it's said exactly, in place of the usual result.
+        if let closingMessage {
+            instructionText = "the smart replay you were running is finished. say exactly this, word for word, and nothing else: \"\(closingMessage)\". don't start the job again." + nextLine
+        }
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -2539,6 +2554,15 @@ final class CompanionManager: ObservableObject {
         DottieSpeedTools.startReplayJob = { [weak self] replay in
             guard let self else { return "Dottie isn't ready yet." }
             return self.startScreenTask(ScreenJob(text: replay.taskText, replayID: replay.id))
+        }
+        DottieSmartReplayTools.startSmartReplayJob = { [weak self] smartReplay, details in
+            guard let self else { return "Dottie isn't ready yet." }
+            DottieSmartReplayStore.shared.noteRun(smartReplay.id)
+            return self.startScreenTask(ScreenJob(
+                text: smartReplay.screenJobTaskText(details: details),
+                closingMessage: smartReplay.closingMessage,
+                isCommercial: smartReplay.kind == .commercial
+            ))
         }
     }
 

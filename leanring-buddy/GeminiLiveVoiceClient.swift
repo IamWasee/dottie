@@ -504,6 +504,9 @@ final class GeminiLiveVoiceClient {
         if let replayShortcutsLine = DottieReplayStore.shared.voiceShortcutsPromptLine {
             baseSystemInstruction += "\n\n" + replayShortcutsLine
         }
+        if let smartReplaysLine = DottieSmartReplayStore.shared.voicePromptLine {
+            baseSystemInstruction += "\n\n" + smartReplaysLine
+        }
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
         // Only the last few exchanges, trimmed: older facts about the user
@@ -1554,7 +1557,7 @@ enum GeminiLiveToolCatalog {
     /// One line for the voice prompt naming what the hidden tools cover, so
     /// the model knows to look for them. Keep it in step with what isn't in
     /// directFunctionNames.
-    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, self-check, about yourself and your settings (about_me), installing command-line tools, and the user's connected apps"
+    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), installing command-line tools, and the user's connected apps"
 
     /// Extra words find_tool matches on, for asks that don't share words
     /// with the tool's description ("turn into a cat" → change_cursor).
@@ -1594,6 +1597,7 @@ enum GeminiLiveToolCatalog {
         "focus": "focus block distractions pomodoro concentrate",
         "clean_folder": "clean tidy organize folder downloads desktop duplicates",
         "replays": "replay replays redo again saved jobs shortcut when i say rename call it first second",
+        "smart_replays": "create smart replay commercial replay of me doing this watch me record steps show you how redo closing line say at the end edit filming",
         "self_check": "broken working diagnose check test sound microphone problem",
         "about_me": "dottie yourself settings version features permission help how tour update account",
         "install_tool": "install command line cli homebrew brew npm pip uninstall"
