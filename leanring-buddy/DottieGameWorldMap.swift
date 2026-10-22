@@ -270,6 +270,10 @@ final class DottieGameWorldMap {
         // An empty map with a known spawn (the map was deleted) waits to see
         // spawn, so the new map has the same 0,0,0 as before.
         isLocalized = loadedKeyframes.isEmpty && spawnViews.isEmpty
+        // A session that starts somewhere she doesn't recognize (another
+        // server, a checkpoint) maps it as its own zone with its own start,
+        // instead of drifting counted steps over the old map.
+        startsNewZoneIfNothingLooksFamiliar = !loadedKeyframes.isEmpty
         // Most games start where they started last time, so the first
         // keyframe (the spawn) is the best guess until a view matches.
         if let firstKeyframe = loadedKeyframes.first {
@@ -386,7 +390,7 @@ final class DottieGameWorldMap {
                 let newZoneX = farthestMappedX + Self.zoneSpacing
                 poseCorrectionX = newZoneX - pose.x
                 pose = Pose(x: newZoneX, y: 0, headingDegrees: 0)
-                DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds after a teleport, so this is a new zone, mapped apart from the others.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
+                DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds (after a teleport or at the start), so this is a new zone, mapped apart from the others.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
             } else {
                 DottieGameNotebook.appendToPlayLog("Map: nothing looked familiar for 30 seconds, so mapping from here as new ground.", gameFolderURL: mapFolderURL.deletingLastPathComponent())
             }

@@ -30,7 +30,7 @@ enum DottieGameResearch {
         // A notebook named just "Roblox" (from before games were named) holds
         // many different experiences; offering it would file every new one
         // there again, so a bare platform name is never reused.
-        let bareGamePlatformNames: Set<String> = ["roblox", "fortnite", "minecraft", windowGameName.lowercased()]
+        let bareGamePlatformNames: Set<String> = Self.gamePlatformNames.union([windowGameName.lowercased()])
         let savedGameNames = DottieGameNotebook.savedGameNames()
         let knownGameNames = savedGameNames
             .filter { !bareGamePlatformNames.contains($0.lowercased()) }
@@ -53,7 +53,23 @@ enum DottieGameResearch {
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'*`. ").union(.whitespacesAndNewlines))
             .prefix(80))
         guard !cleanedName.isEmpty else { return windowGameName }
+        // "Map it while I play" doesn't say which Roblox experience it is,
+        // and the window only says "Roblox". The one played most recently on
+        // that platform is the best guess, so its notebook and map are used.
+        if bareGamePlatformNames.contains(cleanedName.lowercased()),
+           let mostRecentExperienceName = DottieGameNotebook.mostRecentlyPlayedGameName(endingWith: "(\(cleanedName))") {
+            return mostRecentExperienceName
+        }
         return savedGameNames.first { $0.caseInsensitiveCompare(cleanedName) == .orderedSame } ?? cleanedName
+    }
+
+    /// Platforms whose window name says nothing about the game inside.
+    static let gamePlatformNames: Set<String> = ["roblox", "fortnite", "minecraft"]
+
+    /// "Roblox" alone is a platform, not a game: a guide about it ("sign
+    /// up, download the app") only misleads the game brain.
+    static func isBarePlatformName(_ gameName: String) -> Bool {
+        gamePlatformNames.contains(gameName.lowercased())
     }
 
     /// A short guide to the game from the web, or nil with a line saying

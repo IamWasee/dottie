@@ -147,6 +147,27 @@ final class DottieGameNotebook {
         }
     }
 
+    /// The saved game whose notebook changed last among those whose name
+    /// ends with this, like "(Roblox)", or nil.
+    static func mostRecentlyPlayedGameName(endingWith nameEnding: String) -> String? {
+        struct SavedName: Decodable {
+            let gameName: String
+        }
+        let gameFolderURLs = (try? FileManager.default.contentsOfDirectory(at: gamesFolderURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var newestGame: (name: String, changedAt: Date)?
+        for gameFolderURL in gameFolderURLs {
+            let notebookURL = gameFolderURL.appendingPathComponent("notebook.json")
+            guard let notebookData = try? Data(contentsOf: notebookURL),
+                  let gameName = (try? JSONDecoder().decode(SavedName.self, from: notebookData))?.gameName,
+                  gameName.lowercased().hasSuffix(nameEnding.lowercased()) else { continue }
+            let changedAt = (try? notebookURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if changedAt > (newestGame?.changedAt ?? .distantPast) {
+                newestGame = (gameName, changedAt)
+            }
+        }
+        return newestGame?.name
+    }
+
     /// "Roblox — Obby Tower" → "roblox-obby-tower".
     static func folderName(for gameName: String) -> String {
         let slug = gameName.lowercased()

@@ -166,7 +166,7 @@ final class DottieGamePlayer {
         // The lookup runs beside play instead of before it, so the first
         // move isn't held up; the guide reaches the brain once it's written.
         var guideLookupTask: Task<Void, Never>?
-        if notebook.needsGuide {
+        if notebook.needsGuide, !DottieGameResearch.isBarePlatformName(gameName) {
             onProgress?("Looking up \(gameName)")
             thinkAloudIfItsBeenAWhile("Let me look up \(gameName) while I start.")
             guideLookupTask = Task { @MainActor in
