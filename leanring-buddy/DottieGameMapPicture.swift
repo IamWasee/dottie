@@ -410,14 +410,18 @@ enum DottieGameMapPicture {
     static func open3DModel(_ savedMap: SavedMap) async -> Bool {
         // The solid model looks like the game; the blocks are the fallback
         // until enough surface has been seen.
-        let surfaceModelURL = savedMap.mapFolderURL.appendingPathComponent(DottieGameSurfaceMap.modelFileName)
+        let surfaceModelURLs = [DottieGameSurfaceMap.modelFileName, DottieGameSurfaceMap.fallbackModelFileName]
+            .map { savedMap.mapFolderURL.appendingPathComponent($0) }
         let blocksModelURL = savedMap.mapFolderURL.appendingPathComponent(modelFileName)
-        if !FileManager.default.fileExists(atPath: surfaceModelURL.path) || !FileManager.default.fileExists(atPath: blocksModelURL.path) {
+        func existingSurfaceModelURL() -> URL? {
+            surfaceModelURLs.first { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        if existingSurfaceModelURL() == nil || !FileManager.default.fileExists(atPath: blocksModelURL.path) {
             let worldMap = DottieGameWorldMap(gameName: savedMap.gameName, gameFolderURL: savedMap.gameFolderURL)
             await write3DModel(of: worldMap).value
             await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL).value
         }
-        if FileManager.default.fileExists(atPath: surfaceModelURL.path) {
+        if let surfaceModelURL = existingSurfaceModelURL() {
             return NSWorkspace.shared.open(surfaceModelURL)
         }
         guard FileManager.default.fileExists(atPath: blocksModelURL.path) else { return false }

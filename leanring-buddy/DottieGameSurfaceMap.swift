@@ -53,6 +53,9 @@ final class DottieGameSurfaceMap {
     private static let maximumRayLength = 12.0
 
     static let modelFileName = "map3d-surface.usdz"
+    /// Written instead when this Mac's Model I/O can't write USDZ (1.0.34
+    /// left none on celly's Mac); Preview opens it the same way.
+    static let fallbackModelFileName = "map3d-surface.usdc"
     static let plainModelFileName = "map3d-surface.obj"
 
     private(set) var cells: [Int64: Cell] = [:]
@@ -127,6 +130,7 @@ final class DottieGameSurfaceMap {
     func writeModel(into mapFolderURL: URL) -> Task<Void, Never> {
         let cellsSnapshot = cells
         let usdzURL = mapFolderURL.appendingPathComponent(Self.modelFileName)
+        let usdcURL = mapFolderURL.appendingPathComponent(Self.fallbackModelFileName)
         let objURL = mapFolderURL.appendingPathComponent(Self.plainModelFileName)
         return Task.detached(priority: .utility) {
             let mesh = Self.surfaceMesh(from: cellsSnapshot)
@@ -134,11 +138,16 @@ final class DottieGameSurfaceMap {
                 // An older, better-looking model isn't there to replace, so
                 // opening the map falls back to the colored blocks.
                 try? FileManager.default.removeItem(at: usdzURL)
+                try? FileManager.default.removeItem(at: usdcURL)
                 try? FileManager.default.removeItem(at: objURL)
                 return
             }
             Self.writeObj(mesh, to: objURL)
-            Self.writeUSDZ(mesh, to: usdzURL)
+            try? FileManager.default.removeItem(at: usdzURL)
+            try? FileManager.default.removeItem(at: usdcURL)
+            if !Self.writeUSD(mesh, to: usdzURL) {
+                Self.writeUSD(mesh, to: usdcURL)
+            }
         }
     }
 
@@ -261,10 +270,12 @@ final class DottieGameSurfaceMap {
         try? (lines.joined(separator: "\n") + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
-    /// The same mesh as USDZ through Model I/O, with the colors per point,
-    /// in triangles.
-    nonisolated private static func writeUSDZ(_ mesh: SurfaceMesh, to fileURL: URL) {
-        guard MDLAsset.canExportFileExtension("usdz") else { return }
+    /// The same mesh as USD (the file's extension picks USDZ or USDC)
+    /// through Model I/O, with the colors per point, in triangles. False
+    /// when nothing was written.
+    @discardableResult
+    nonisolated private static func writeUSD(_ mesh: SurfaceMesh, to fileURL: URL) -> Bool {
+        guard MDLAsset.canExportFileExtension(fileURL.pathExtension) else { return false }
         var triangleIndices: [UInt32] = []
         triangleIndices.reserveCapacity(mesh.quads.count * 6)
         for quad in mesh.quads {
@@ -295,7 +306,12 @@ final class DottieGameSurfaceMap {
         surfaceMesh.addNormals(withAttributeNamed: MDLVertexAttributeNormal, creaseThreshold: 0.5)
         let asset = MDLAsset()
         asset.add(surfaceMesh)
-        try? asset.export(to: fileURL)
+        do {
+            try asset.export(to: fileURL)
+        } catch {
+            print("⚠️ Couldn't write \(fileURL.lastPathComponent): \(error.localizedDescription)")
+        }
+        return FileManager.default.fileExists(atPath: fileURL.path)
     }
 
     // MARK: - Saving
