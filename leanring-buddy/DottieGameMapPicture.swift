@@ -334,7 +334,7 @@ enum DottieGameMapPicture {
             "Saved \(dateFormatter.string(from: Date()))",
             "",
             "Sessions played with this map: \(worldMap.sessionCount)",
-            "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D.",
+            "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D (\(Int((Double(worldMap.framesWithDepthThisSession) / max(Date().timeIntervalSince(worldMap.sessionStartedAt) / 60, 1 / 60)).rounded())) a minute).",
             "Spots photographed in total: \(worldMap.keyframes.count) (a spot is never photographed twice)",
             "3D points: \(worldMap.voxelHits.count.formatted()) walking-grid blocks, \(worldMap.detailVoxelHits.count.formatted()) small blocks in the light map (map3d.obj shows the ones seen at least twice)",
             "Spawn (0,0,0): \(worldMap.spawnViewCount) views saved for recognizing it (in the game's spawn folder, kept if the map is deleted)",

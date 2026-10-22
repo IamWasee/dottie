@@ -159,6 +159,7 @@ final class DottieGameWorldMap {
     /// For the map's report: what this session added and recognized.
     private(set) var keyframesAddedThisSession = 0
     private(set) var framesWithDepthThisSession = 0
+    let sessionStartedAt = Date()
     private(set) var recognitionsThisSession = 0
     /// Since when she's been looking for a spot she knows: the session's
     /// start, or the last teleport.
@@ -182,8 +183,10 @@ final class DottieGameWorldMap {
     static let detailVoxelSize = 0.125
     /// About 40 MB in memory at the most.
     private static let maximumDetailVoxelCount = 1_500_000
-    /// Depth for the fine layer at most this often, between new spots.
-    private static let secondsBetweenDetailFrames = 1.0
+    /// Depth for the fine layer at most this often, between new spots. At
+    /// one a second, fast runs and quick turns swept past whole walls
+    /// between shots; the depth model runs on the Neural Engine and keeps up.
+    private static let secondsBetweenDetailFrames = 0.25
     /// Spots this close to spawn are spawn's views: games start and
     /// respawn there, so they're the first thing she checks.
     private static let spawnRadius = 2.0
@@ -193,7 +196,7 @@ final class DottieGameWorldMap {
     private static let cameraHeight = 1.6
     /// How long to look for a known place before mapping on anyway.
     private static let secondsToWaitForRelocalizing = 30.0
-    private static let secondsBetweenConsideredFrames = 0.8
+    private static let secondsBetweenConsideredFrames = 0.25
     private static let secondsBetweenSaves = 120.0
     private static let secondsForBlockerToFade = 45.0
 
@@ -366,18 +369,21 @@ final class DottieGameWorldMap {
             rememberSpawnViewsFromMapIfNeeded()
         }
         guard let framePrint = await Self.featurePrintOffMain(of: frame) else { return }
+        // A recognized view corrects where she is, and the frame still adds
+        // its depth: skipping it left a gap at every familiar spot.
+        var framePose = poseAtFrame
         if let matchedKeyframe = bestMatchingKeyframe(for: framePrint, near: poseAtFrame) {
             snapPose(to: matchedKeyframe, poseAtFrame: poseAtFrame)
-            return
-        }
-        newestSeenView = (framePrint, poseAtFrame, Date())
-        if !isLocalized, let spawnHeadingDegrees = matchingSpawnHeading(for: framePrint) {
-            snapToAnchor(named: "spawn", x: 0, y: 0, facingDegrees: spawnHeadingDegrees, poseAtFrame: poseAtFrame)
-            return
-        }
-        if let matchedLandmark = matchingLandmark(for: framePrint, near: poseAtFrame) {
-            snapToAnchor(named: matchedLandmark.name, x: matchedLandmark.x, y: matchedLandmark.y, facingDegrees: matchedLandmark.headingDegrees, poseAtFrame: poseAtFrame)
-            return
+            framePose = Pose(x: matchedKeyframe.x, y: matchedKeyframe.y, headingDegrees: matchedKeyframe.headingDegrees)
+        } else {
+            newestSeenView = (framePrint, poseAtFrame, Date())
+            if !isLocalized, let spawnHeadingDegrees = matchingSpawnHeading(for: framePrint) {
+                snapToAnchor(named: "spawn", x: 0, y: 0, facingDegrees: spawnHeadingDegrees, poseAtFrame: poseAtFrame)
+                framePose = Pose(x: 0, y: 0, headingDegrees: spawnHeadingDegrees)
+            } else if let matchedLandmark = matchingLandmark(for: framePrint, near: poseAtFrame) {
+                snapToAnchor(named: matchedLandmark.name, x: matchedLandmark.x, y: matchedLandmark.y, facingDegrees: matchedLandmark.headingDegrees, poseAtFrame: poseAtFrame)
+                framePose = Pose(x: matchedLandmark.x, y: matchedLandmark.y, headingDegrees: matchedLandmark.headingDegrees)
+            }
         }
         if !isLocalized, Date().timeIntervalSince(lookingForKnownSpotSince) > Self.secondsToWaitForRelocalizing {
             // Nothing looked familiar for a while: this is a new part of
@@ -398,13 +404,13 @@ final class DottieGameWorldMap {
             lastConfirmedPose = nil
             addPlacesWaitingForLocalizing(poseCorrectionX: poseCorrectionX, poseCorrectionY: 0)
         }
-        guard isLocalized, !isTopDownView || isNewSpot(poseAtFrame) else { return }
-        let isNewSpotToMap = isNewSpot(poseAtFrame) && keyframes.count < Self.maximumKeyframeCount
+        guard isLocalized, !isTopDownView || isNewSpot(framePose) else { return }
+        let isNewSpotToMap = isNewSpot(framePose) && keyframes.count < Self.maximumKeyframeCount
         if isNewSpotToMap {
-            addKeyframe(frame: frame, featurePrint: framePrint, at: poseAtFrame)
+            addKeyframe(frame: frame, featurePrint: framePrint, at: framePose)
         }
         // A new spot adds to both layers; any other frame adds only to the
-        // fine layer, about once a second.
+        // fine layer, a few times a second.
         let isDueForDetail = Date().timeIntervalSince(lastDetailFrameAt) > Self.secondsBetweenDetailFrames
         if !isTopDownView, isNewSpotToMap || isDueForDetail,
            let depthMap = await DottieGameDepth.shared.depthMap(of: frame) {
@@ -413,7 +419,7 @@ final class DottieGameWorldMap {
                 from: depthMap,
                 colors: Self.colorGrid(of: frame, columnCount: depthMap.columnCount, rowCount: depthMap.rowCount),
                 frameAspectRatio: Double(frame.height) / Double(max(frame.width, 1)),
-                at: poseAtFrame,
+                at: framePose,
                 addsToWalkingGrid: isNewSpotToMap && voxelHits.count < Self.maximumVoxelCount
             )
             framesWithDepthThisSession += 1
