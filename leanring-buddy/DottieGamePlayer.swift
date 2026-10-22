@@ -120,9 +120,9 @@ final class DottieGamePlayer {
         // The verb stays in the meaning when it says what the key does
         // ("opens the shop") and is dropped when it only links ("is for").
         let patterns: [String] = [
-            (#"(?i)\b(?:press|hit|use|hold|tap)\s+(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:to|for)\s+(.+)"#,
-            (#"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?(?:is for|is to|is|does|means|=|:)\s+(.+)"#,
-            (#"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?((?:opens|open|closes|sells|buys|jumps|crouches|sprints|runs|attacks|picks|drops|throws|toggles|shows|uses|equips|interacts|lets you|makes you|will)\b.+)"#
+            #"(?i)\b(?:press|hit|use|hold|tap)\s+(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:to|for)\s+(.+)"#,
+            #"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?(?:is for|is to|is|does|means|=|:)\s+(.+)"#,
+            #"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?((?:opens|open|closes|sells|buys|jumps|crouches|sprints|runs|attacks|picks|drops|throws|toggles|shows|uses|equips|interacts|lets you|makes you|will)\b.+)"#
         ]
         for pattern in patterns {
             guard let expression = try? NSRegularExpression(pattern: pattern),
