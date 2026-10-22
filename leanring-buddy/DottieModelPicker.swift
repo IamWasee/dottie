@@ -121,10 +121,25 @@ final class DottieModelPicker: @unchecked Sendable {
     }
 
     /// Sends a /chat request and learns from how it went.
-    func data(for request: URLRequest, model: String) async throws -> (Data, URLResponse) {
+    /// `totalSeconds` caps the whole request. A request's own
+    /// timeoutInterval only counts time with nothing arriving, so a slowly
+    /// streamed answer could otherwise take minutes.
+    func data(for request: URLRequest, model: String, totalSeconds: Double? = nil) async throws -> (Data, URLResponse) {
         let startedAt = Date()
+        let deadlineSeconds = totalSeconds ?? (request.timeoutInterval + 10)
         do {
-            let (responseData, response) = try await URLSession.shared.data(for: request)
+            let (responseData, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { requestGroup in
+                requestGroup.addTask {
+                    try await URLSession.shared.data(for: request)
+                }
+                requestGroup.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(deadlineSeconds * 1_000_000_000))
+                    throw URLError(.timedOut)
+                }
+                defer { requestGroup.cancelAll() }
+                guard let firstFinished = try await requestGroup.next() else { throw URLError(.unknown) }
+                return firstFinished
+            }
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
             record(
                 model: model,

@@ -19,12 +19,14 @@ enum DottieSpeedTools: DottieToolModule {
         [
             DottieTool(
                 name: "replays",
-                description: "Screen jobs that worked are remembered and redone instantly next time (no need to mention it unless asked). list shows them, run starts one by name, forget deletes one.",
+                description: "Screen jobs that worked are remembered and redone instantly next time (no need to mention it unless asked). list shows them, numbered. run starts one by name, number ('the first replay') or shortcut phrase. forget deletes one. rename gives one a short name ('call it school fest'). shortcut saves a phrase that starts it ('when I say find me a school fest, run the first replay'): use this, not remember, for any 'when I say X, run/do replay Y'.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
-                        "action": ["type": "STRING", "enum": ["list", "run", "forget"]],
-                        "name": ["type": "STRING", "description": "The replay's name or a few words of it (for run and forget)."]
+                        "action": ["type": "STRING", "enum": ["list", "run", "forget", "rename", "shortcut"]],
+                        "name": ["type": "STRING", "description": "Which replay: its name, a few words of it, or its number in the list."],
+                        "new_name": ["type": "STRING", "description": "rename: the new short name."],
+                        "phrase": ["type": "STRING", "description": "shortcut: what the user will say to start it, word for word."]
                     ],
                     "required": ["action"]
                 ],
@@ -48,7 +50,21 @@ enum DottieSpeedTools: DottieToolModule {
                 return "no saved replay matches that. call replays with action list to see them."
             }
             guard let startReplayJob else { return "replays can't run right now." }
-            return "replaying \"\(replay.name)\": " + startReplayJob(replay)
+            return "replay \"\(replay.name)\": " + startReplayJob(replay)
+        case "rename":
+            guard let name = arguments.dottieString("name"), let replay = store.replay(named: name) else {
+                return "no saved replay matches that. call replays with action list to see them."
+            }
+            guard let newName = arguments.dottieString("new_name") else { return "say what to call it." }
+            store.rename(replay.id, to: newName)
+            return "renamed \"\(replay.name)\" to \"\(newName)\"."
+        case "shortcut":
+            guard let name = arguments.dottieString("name"), let replay = store.replay(named: name) else {
+                return "no saved replay matches that. call replays with action list to see them."
+            }
+            guard let phrase = arguments.dottieString("phrase") else { return "say which phrase should start it." }
+            store.addVoiceShortcut(phrase, to: replay.id)
+            return "saved: saying \"\(phrase)\" now runs \"\(replay.name)\". it works from the next conversation on."
         case "forget":
             guard let name = arguments.dottieString("name"), let replay = store.replay(named: name) else {
                 return "no saved replay matches that."

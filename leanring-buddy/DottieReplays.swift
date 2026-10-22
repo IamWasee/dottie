@@ -97,6 +97,9 @@ struct DottieReplay: Codable, Identifiable, Equatable {
     /// The plan of a long job (DottieTaskGoal), shown in the notch while it
     /// replays. Nil for quick jobs and replays saved before plans existed.
     var planSteps: [String]?
+    /// Phrases the user set to start this replay ("when I say find me a
+    /// school fest, run it"). Nil for replays without one.
+    var voiceShortcuts: [String]?
 
     var whereText: String {
         siteHost ?? appName ?? "any app"
@@ -191,10 +194,67 @@ final class DottieReplayStore: ObservableObject {
         replays.first { $0.id == replayID }
     }
 
-    /// A replay by (part of) its name or wording, for the voice tool.
+    /// "first", "2", "the second one", "number 3": a position in the list
+    /// the replays tool reads out, counted from 1.
+    private static func listPosition(in wanted: String) -> Int? {
+        let ordinalWords = ["first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10, "last": -1]
+        let words = wanted.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let ignoredWords: Set<String> = ["the", "one", "replay", "number", "no", "run"]
+        let meaningfulWords = words.filter { !ignoredWords.contains($0) }
+        guard meaningfulWords.count == 1, let onlyWord = meaningfulWords.first else { return nil }
+        return ordinalWords[onlyWord] ?? Int(onlyWord)
+    }
+
+    /// Renames a replay to something short to say ("school fest").
+    func rename(_ replayID: UUID, to newName: String) {
+        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, let index = replays.firstIndex(where: { $0.id == replayID }) else { return }
+        replays[index].name = String(trimmedName.prefix(60))
+        write(replays[index])
+    }
+
+    /// Saves a phrase that starts this replay, taken off any other replay.
+    func addVoiceShortcut(_ phrase: String, to replayID: UUID) {
+        let trimmedPhrase = phrase.trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\"'")).lowercased()
+        guard !trimmedPhrase.isEmpty, replays.contains(where: { $0.id == replayID }) else { return }
+        for index in replays.indices where replays[index].voiceShortcuts?.contains(trimmedPhrase) == true && replays[index].id != replayID {
+            replays[index].voiceShortcuts?.removeAll { $0 == trimmedPhrase }
+            write(replays[index])
+        }
+        guard let index = replays.firstIndex(where: { $0.id == replayID }) else { return }
+        var shortcuts = replays[index].voiceShortcuts ?? []
+        if !shortcuts.contains(trimmedPhrase) {
+            shortcuts.append(trimmedPhrase)
+        }
+        replays[index].voiceShortcuts = shortcuts
+        write(replays[index])
+    }
+
+    /// For the voice prompt: each phrase the user set and the replay it
+    /// starts, or nil when there are none.
+    var voiceShortcutsPromptLine: String? {
+        let shortcutLines = replays.flatMap { replay in
+            (replay.voiceShortcuts ?? []).map { "\"\($0)\" → replay \"\(replay.name)\"" }
+        }
+        guard !shortcutLines.isEmpty else { return nil }
+        return "replay shortcuts the user set. when they say one of these phrases (or close to it), call replays with action run and that replay's name right away, no questions: " + shortcutLines.prefix(20).joined(separator: "; ")
+    }
+
+    /// A replay by (part of) its name or wording, a phrase the user set for
+    /// it, or its number in the list, for the voice tool.
     func replay(named name: String) -> DottieReplay? {
         let wanted = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return nil }
+        if let shortcutMatch = replays.first(where: { replay in
+            (replay.voiceShortcuts ?? []).contains { $0 == wanted || wanted.contains($0) }
+        }) {
+            return shortcutMatch
+        }
+        if let position = Self.listPosition(in: wanted) {
+            // "The last one" is the newest one made.
+            if position == -1 { return replays.max { $0.createdAt < $1.createdAt } }
+            return replays.indices.contains(position - 1) ? replays[position - 1] : nil
+        }
         if let exact = replays.first(where: { $0.name.lowercased() == wanted || $0.taskText.lowercased() == wanted }) { return exact }
         if let contained = replays.first(where: { $0.name.lowercased().contains(wanted) || $0.taskText.lowercased().contains(wanted) }) { return contained }
         return replays

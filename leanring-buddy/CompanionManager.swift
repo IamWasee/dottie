@@ -1449,6 +1449,8 @@ final class CompanionManager: ObservableObject {
         var repliesToPhone = false
         /// The user already said yes to starting over a matching job.
         var restart = true
+        /// A saved replay the user asked for by name, run when the job starts.
+        var replayID: UUID?
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
@@ -1556,7 +1558,8 @@ final class CompanionManager: ObservableObject {
             print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
             refreshScreenTaskTitle()
             let position = queuedScreenTasks.count
-            return "added to the list: it starts after the current job\(position > 1 ? " and \(position - 1) more" : ""). say that in a few words; each result comes to you as it finishes."
+            let runningJobText = currentScreenTaskText.map { "\"\($0.prefix(80))\"" } ?? "the current job"
+            return "not started yet: it's waiting in line behind \(runningJobText)\(position > 1 ? " and \(position - 1) more" : ""). tell the user it's queued, not running, and ask in a few words if they want \(runningJobText) stopped so this one starts now (if yes, call stop_screen_task with current). each result comes to you as it finishes."
         }
         runScreenTask(job)
         return "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
@@ -1570,6 +1573,7 @@ final class CompanionManager: ObservableObject {
 
         screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
             print("🧭 Step \(stepNumber): \(stepDescription)")
+            self?.lastScreenJobProgressAt = Date()
             self?.notchPresenter.showScreenTaskStep(stepDescription)
         }
         screenTaskRunner.onPlanChanged = { [weak self] steps, currentStepIndex in
@@ -1604,6 +1608,10 @@ final class CompanionManager: ObservableObject {
         }
         currentScreenTaskText = taskText
         currentScreenJob = job
+        if let replayID = job.replayID {
+            screenTaskRunner.requestedReplay = (id: replayID, taskText: taskText)
+        }
+        watchForStuckScreenJob(taskText: taskText)
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
         // Pictures named in the job count even when Live didn't pass them.
         let referenceItems = job.referenceImageNames.isEmpty
@@ -1711,6 +1719,46 @@ final class CompanionManager: ObservableObject {
         clearDetectedElementLocation()
         scheduleTransientHideIfNeeded()
         return true
+    }
+
+    /// When the running job last showed a step, for the stuck-job watchdog.
+    private var lastScreenJobProgressAt = Date()
+    private var stuckScreenJobWatchdogTask: Task<Void, Never>?
+    /// A job with no step for this long is stuck (a step that never comes
+    /// back), so it's stopped and the line moves on.
+    private static let secondsBeforeScreenJobCountsAsStuck: Double = 240
+
+    private func watchForStuckScreenJob(taskText: String) {
+        lastScreenJobProgressAt = Date()
+        stuckScreenJobWatchdogTask?.cancel()
+        stuckScreenJobWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard let self, self.screenTaskRunner.isRunning, self.currentScreenTaskText == taskText else { return }
+                // Waiting for the user's answer isn't being stuck.
+                if DottieScreenJobQuestions.shared.isWaitingForAnswer {
+                    self.lastScreenJobProgressAt = Date()
+                    continue
+                }
+                guard Date().timeIntervalSince(self.lastScreenJobProgressAt) > Self.secondsBeforeScreenJobCountsAsStuck else { continue }
+                print("🧭 Screen task stuck with no step for \(Int(Self.secondsBeforeScreenJobCountsAsStuck)) s, stopping it: \(taskText)")
+                self.noteStoppedJob("the on-screen job \"\(taskText)\" (it got stuck)")
+                self.screenTaskRunner.stop()
+                self.currentScreenTaskText = nil
+                self.notchPresenter.endScreenTask()
+                self.clearDetectedElementLocation()
+                self.speakWhenFree(
+                    recordedUserText: "(screen job stuck)",
+                    instructionText: "the on-screen job \"\(taskText.prefix(120))\" got stuck with nothing happening for four minutes, so you stopped it\(self.queuedScreenTasks.isEmpty ? "" : " and started the next one in line"). tell the user that in one short sentence. don't call any tool."
+                )
+                if self.queuedScreenTasks.isEmpty {
+                    self.scheduleTransientHideIfNeeded()
+                } else {
+                    self.startNextQueuedScreenTask()
+                }
+                return
+            }
+        }
     }
 
     /// Stops only the running job; the next waiting one starts.
@@ -2490,8 +2538,7 @@ final class CompanionManager: ObservableObject {
         DottieSelfCheck.shared.phoneBridge = phoneBridge
         DottieSpeedTools.startReplayJob = { [weak self] replay in
             guard let self else { return "Dottie isn't ready yet." }
-            self.screenTaskRunner.requestedReplay = (id: replay.id, taskText: replay.taskText)
-            return self.startScreenTask(ScreenJob(text: replay.taskText))
+            return self.startScreenTask(ScreenJob(text: replay.taskText, replayID: replay.id))
         }
     }
 

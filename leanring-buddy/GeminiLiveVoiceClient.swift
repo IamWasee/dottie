@@ -501,6 +501,9 @@ final class GeminiLiveVoiceClient {
             baseSystemInstruction += "\n\n" + speakingStyle
         }
         baseSystemInstruction += "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
+        if let replayShortcutsLine = DottieReplayStore.shared.voiceShortcutsPromptLine {
+            baseSystemInstruction += "\n\n" + replayShortcutsLine
+        }
         guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
 
         // Only the last few exchanges, trimmed: older facts about the user
@@ -1590,7 +1593,7 @@ enum GeminiLiveToolCatalog {
         "watch": "watch alert notify tell when download finishes loads",
         "focus": "focus block distractions pomodoro concentrate",
         "clean_folder": "clean tidy organize folder downloads desktop duplicates",
-        "replays": "replay replays redo again saved jobs",
+        "replays": "replay replays redo again saved jobs shortcut when i say rename call it first second",
         "self_check": "broken working diagnose check test sound microphone problem",
         "about_me": "dottie yourself settings version features permission help how tour update account",
         "install_tool": "install command line cli homebrew brew npm pip uninstall"
