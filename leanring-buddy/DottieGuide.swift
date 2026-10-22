@@ -156,6 +156,7 @@ final class DottieGuide {
     func stop() -> Bool {
         guard let guideTask else { return false }
         guideTask.cancel()
+        DottieGuideBrain.shared.stop()
         resumeStepWait(with: .timedOut)
         finish(spokenGoodbye: nil)
         return true
@@ -175,6 +176,11 @@ final class DottieGuide {
     private func runSteps(goal: String) async -> String? {
         var history: [String] = []
         var consecutiveClicksElsewhere = 0
+        let frontmostAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+        // How this app really does it, from the web, looked up while the
+        // first screenshot is taken. Guessing from one screenshot is how
+        // Dottie sent the user to an audio button CapCut doesn't have.
+        let howToLookup = Task { await Self.lookUpHowTo(goal: goal, appName: frontmostAppName) }
 
         for round in 1...Self.maximumRounds {
             if Task.isCancelled { return nil }
@@ -184,15 +190,16 @@ final class DottieGuide {
                 return "I can't see your screen. I need Screen Recording permission for that."
             }
             let remainingRounds = Self.maximumRounds - round
-            guard let step = await requestSteps(
+            let howToText = await howToLookup.value
+            guard let step = await requestVerifiedStep(
                 goal: goal,
-                mode: .steps,
                 history: history,
                 remainingRounds: remainingRounds,
-                screen: screen
-            )?.first else {
+                screen: screen,
+                howToText: howToText
+            ) else {
                 if Task.isCancelled { return nil }
-                return "Gemini's too busy to guide right now. Try me again in a sec."
+                return "Claude and Gemini are both too busy to guide right now. Try me again in a sec."
             }
             if Task.isCancelled { return nil }
 
@@ -239,6 +246,77 @@ final class DottieGuide {
             try? await Task.sleep(nanoseconds: 900_000_000)
         }
         return "That's as far as I can take you for now."
+    }
+
+    /// The web's how-to for this app (its own help pages first), as text
+    /// for the step prompt, or nil when the search fails or takes too long.
+    private static let howToLookupTimeoutSeconds: UInt64 = 8
+    private static func lookUpHowTo(goal: String, appName: String) async -> String? {
+        let query = appName.isEmpty ? "how to \(goal)" : "\(appName) how to \(goal) help"
+        let searchTask = Task { await DottieWebSearch.search(query) }
+        let timeoutTask = Task {
+            try? await Task.sleep(nanoseconds: howToLookupTimeoutSeconds * 1_000_000_000)
+            searchTask.cancel()
+        }
+        let searchText = await searchTask.value
+        timeoutTask.cancel()
+        // Failures come back as an instruction for the voice, not results.
+        guard searchText.hasPrefix("web results") else { return nil }
+        return String(searchText.prefix(3500))
+    }
+
+    /// The next step, with its click target checked against the screen
+    /// (Accessibility, then on-screen text, then a sharper look) and moved
+    /// onto the real control. A target that can't be found anywhere gets
+    /// one more ask, telling Gemini it pointed at something that isn't
+    /// there, so a made-up button is never shown.
+    private func requestVerifiedStep(
+        goal: String,
+        history: [String],
+        remainingRounds: Int,
+        screen: DottieDisplayCapture.Screenshot,
+        howToText: String?
+    ) async -> Step? {
+        var historyForThisStep = history
+        for attempt in 1...2 {
+            guard var step = await requestSteps(
+                goal: goal,
+                mode: .steps,
+                history: historyForThisStep,
+                remainingRounds: remainingRounds,
+                screen: screen,
+                howToText: howToText
+            )?.first else { return nil }
+            guard step.kind == .click, let targetRect = step.targetRect, let targetLabel = step.targetLabel else {
+                return step
+            }
+            let foundFrame = await PointingRefiner.refineFrame(
+                elementLabel: targetLabel,
+                userQuestion: goal,
+                roughPoint: CGPoint(x: targetRect.midX, y: targetRect.midY),
+                displayFrame: screen.displayFrame
+            )
+            if let foundFrame, screen.displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: foundFrame.midX, y: foundFrame.midY)) {
+                step = Step(
+                    kind: step.kind,
+                    say: step.say,
+                    targetRect: foundFrame,
+                    targetLabel: step.targetLabel,
+                    marks: step.marks,
+                    displayFrame: step.displayFrame,
+                    reveal: step.reveal
+                )
+                return step
+            }
+            print("🧑‍🏫 Guide target \"\(targetLabel)\" isn't on screen (attempt \(attempt))")
+            if attempt == 2 {
+                // Still nothing there: say it without pointing at a spot
+                // that may be wrong.
+                return Step(kind: .look, say: step.say, targetRect: nil, targetLabel: nil, marks: [], displayFrame: step.displayFrame)
+            }
+            historyForThisStep.append("Your last answer pointed at \"\(targetLabel)\", but nothing with that name is on this screen. Don't point at it again unless you can read it on the screenshot. Point at what's really there that leads to it (per the how-to), or say honestly that you're not sure where it is in their version.")
+        }
+        return nil
     }
 
     // MARK: - Scripted walkthroughs
@@ -295,7 +373,7 @@ final class DottieGuide {
             guard let beats = await requestSteps(goal: goal, mode: .tour, history: history, remainingRounds: beatsLeft, screen: screen),
                   !beats.isEmpty else {
                 if Task.isCancelled { return nil }
-                return round == 1 ? "Gemini's too busy for a tour right now. Try me again in a sec." : nil
+                return round == 1 ? "Claude and Gemini are both too busy for a tour right now. Try me again in a sec." : nil
             }
             var didReveal = false
             for beat in beats {
@@ -419,13 +497,17 @@ final class DottieGuide {
     Marks are drawn on the screen: circle (a small control or word), box (a group of controls), underline (text), arrow (point toward something), highlight (a whole area or panel). Use one or two marks per step, never more than three.
     """
 
-    private static func instruction(goal: String, mode: Mode, history: [String], remainingRounds: Int, frontmostApp: String) -> String {
+    private static func instruction(goal: String, mode: Mode, history: [String], remainingRounds: Int, frontmostApp: String, howToText: String?) -> String {
+        let appLessons = DottieAppLessons.shared.lessons(forApp: frontmostApp)
+        let appLessonsText = appLessons.isEmpty ? "" : "\nThe user has corrected you about \(frontmostApp) before; these are right, follow them over anything else:\n" + appLessons.map { "- \($0)" }.joined(separator: "\n") + "\n"
         switch mode {
         case .steps:
             let historyText = history.isEmpty ? "Nothing yet; this is the first step." : history.joined(separator: "\n")
+            let howToSection = howToText.map { "\nHow this is done, from the web (may be for another version; the screenshot wins where they differ):\n\($0)\n" } ?? ""
             return """
             Frontmost app: \(frontmostApp).
             What the user wants: \(goal)
+            \(appLessonsText)\(howToSection)
 
             What has happened in this guide so far, oldest first:
             \(historyText)
@@ -434,7 +516,7 @@ final class DottieGuide {
             - kind "click": the next action is a single click on something visible now (a menu, menu item, tab, button, panel). Set target_box tightly on it and target_label to its visible text. "say" names only that one click.
             - kind "look": the next action is manual work you can't watch for (dragging a clip, typing a name, moving a slider, choosing by taste), or something to notice. Mark the place and say what to do, ending with "say next when you're done".
             - kind "done": the goal is reached or already visible; "say" is a short, warm wrap-up of how they got there.
-            If what's needed isn't visible, guide them to reveal it (a menu in the menu bar, a Window menu item, a panel tab, a scroll). Treat steps in the history as done unless the screen clearly shows they failed; never repeat the same target. If a menu you pointed at is now open, the next target is inside it. If the screen shows a different app than the goal needs, guide them back to it.
+            Never make up a control. Only target something you can actually read or clearly recognize on this screenshot, and set target_label to its exact visible text (or its tooltip name for an icon). Follow the app's real way of doing it, from the corrections and how-to above, not a guess about what apps usually have. If what's needed isn't visible, guide them to reveal it the way this app does it (select the clip first, a panel tab, a menu in the menu bar, a right-click menu, a scroll). If you don't know where it is in their version, say so honestly in a "look" step and suggest where to look, instead of pointing somewhere. Treat steps in the history as done unless the screen clearly shows they failed; never repeat the same target. If a menu you pointed at is now open, the next target is inside it. If the screen shows a different app than the goal needs, guide them back to it.
             \(remainingRounds == 0 ? "This is the last step you can give: use kind 'done' and tell them what's left in one sentence." : "")
             """
         case .tour:
@@ -442,7 +524,7 @@ final class DottieGuide {
             return """
             Frontmost app: \(frontmostApp).
             What the user wants: \(goal)
-
+            \(appLessonsText)
             Already shown in this tour, oldest first:
             \(historyText)
 
@@ -497,9 +579,21 @@ final class DottieGuide {
         mode: Mode,
         history: [String],
         remainingRounds: Int,
-        screen: DottieDisplayCapture.Screenshot
+        screen: DottieDisplayCapture.Screenshot,
+        howToText: String? = nil
     ) async -> [Step]? {
         let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+        let stepInstruction = Self.instruction(goal: goal, mode: mode, history: history, remainingRounds: remainingRounds, frontmostApp: frontmostApp, howToText: howToText)
+        // Claude Sonnet first (the user's Claude plan); Gemini when it
+        // isn't there or is too slow.
+        if let claudeAnswer = await DottieGuideBrain.shared.askClaude(
+            systemInstruction: Self.systemInstruction,
+            stepInstruction: stepInstruction,
+            screenshotJPEG: screen.jpegData
+        ), let steps = Self.parseSteps(from: claudeAnswer, screen: screen), !steps.isEmpty {
+            return steps
+        }
+        if Task.isCancelled { return nil }
         let requestBody: [String: Any] = [
             "model": DottieModelPicker.shared.pick(.normal),
             "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
@@ -507,7 +601,7 @@ final class DottieGuide {
                 "role": "user",
                 "parts": [
                     ["inlineData": ["mimeType": "image/jpeg", "data": screen.jpegData.base64EncodedString()]],
-                    ["text": Self.instruction(goal: goal, mode: mode, history: history, remainingRounds: remainingRounds, frontmostApp: frontmostApp)]
+                    ["text": stepInstruction]
                 ]
             ]],
             "generationConfig": [
