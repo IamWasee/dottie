@@ -176,7 +176,9 @@ final class DottieGameBrain {
     private var callsInCurrentThreadByAgentID: [UUID: Int] = [:]
     /// Each call's pictures stay in the thread, so it starts over often.
     private static let callsPerClaudeThread = 4
-    private static let claudeAnswerTimeoutSeconds: Double = 45
+    /// Short, so a slow answer leaves time for Gemini before the player's
+    /// own deadline for the whole decision.
+    private static let claudeAnswerTimeoutSeconds: Double = 20
     /// Claude failed or was too slow: Gemini thinks until this time.
     private var claudeSkippedUntil: Date?
     private(set) var lastEngineName = "claude"
@@ -406,11 +408,15 @@ final class DottieGameBrain {
     static let gamerInstructions = """
     You play video games on the user's Mac for Dottie, their companion, like a person who just picked the game up. Dottie's hands press the keys and move the mouse; you decide what to do. You're asked now and then (on events, or every 20 seconds or so), and between your decisions Dottie carries out your steps.
 
-    Your job is to play the game: do what the game asks of you. Follow its quests, prompts, arrows, tutorials, NPCs and objectives, the way a player would, and the user's task when they gave one. You don't invent goals. Each time you're asked, pick the next small step the game is asking for right now ("talk to the glowing NPC", "follow the arrow to the forge", "collect the stones next to you").
+    The user's words come first. When the user gave a task or a command ("go to the packager", "press E", "sell the eggs"), do exactly that and nothing else: no exploring, no learning controls, no looking around unless you need it to do the task, and no side goals. Set `done` as soon as it's done. Only when the user asked you to play (or gave no task) do you play the game on your own, as below.
 
-    A game you haven't played before (your notebook is empty or has no controls): before anything else, go through these in order, one or two each time you're asked.
+    A directed run (the task starts with "Directed run"): the user is filming or needs something done their way. Follow their plan and rules exactly: their steps, in their order, at their pace (slowly means short holds, no sprint), with their camera framing, and nothing improvised. If a step can't be done exactly as written, don't do something else instead: give no steps and put your question in `ask_user`.
+
+    Your job when playing is to do what the game asks of you. Follow its quests, prompts, arrows, tutorials, NPCs and objectives, the way a player would, and the user's task when they gave one. You don't invent goals. Each time you're asked, pick the next small step the game is asking for right now ("talk to the glowing NPC", "follow the arrow to the forge", "collect the stones next to you").
+
+    Playing on your own in a game you haven't played before (your notebook is empty or has no controls): first go through these in order, one or two each time you're asked.
     1. Read "About this game" in your notebook if it's there: it's what the game is, its goal and controls, looked up online. Use it.
-    2. Learn the controls with `learn_controls`. Dottie tries the default controls first (W A S D to move, space to jump, shift+W to sprint, C to crouch), then turning the camera by holding the right mouse button and moving the mouse, then the pause menu and other common keys, and tells you what each did. Write what works into `controls`. Most games use these defaults, but any of them can be changed, so trust what you saw over the defaults.
+    2. Learn the controls with `learn_controls`. Dottie tries the default controls first (W A S D to move, space to jump, shift+W to sprint, C to crouch), then turning the camera by holding the right mouse button and moving the mouse (or the arrow keys), then the pause menu, and tells you what each did. Other keys come from the user, who teaches them ("Controls the user taught you" in your notebook). Write what works into `controls`. Most games use these defaults, but any of them can be changed, so trust what you saw over the defaults.
     3. Look around with `look_around`: what's near, where the game wants you to go, what can be used.
     4. Explore close by: walk to the things that stand out (signs, NPCs, glowing things, doors, shops), read what they say, and name the places in `place`.
     5. Then play: do what the game asks, step by step.

@@ -974,7 +974,7 @@ final class CompanionManager: ObservableObject {
 
     doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing, scrolling and drawing are in your other tools. then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
 
-    multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play), set game true and keep the game's name in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it") goes to game_command, not to screenshots, notes or memory.
+    multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most. when they want to learn to do something themselves ("how do i add a sound effect in premiere", "walk me through exporting"), call guide_user with mode steps: it points and draws each step, waits for their click, then shows the next. for a rundown or tour of the app or screen, mode tour. for one "where is x" that's visible now, just point. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
     whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked; find_tool gives its arguments.
@@ -1449,6 +1449,13 @@ final class CompanionManager: ObservableObject {
         var repliesToPhone = false
         /// The user already said yes to starting over a matching job.
         var restart = true
+        /// A saved replay the user asked for by name, run when the job starts.
+        var replayID: UUID?
+        /// A smart replay's closing line, said word for word when it finishes.
+        var closingMessage: String?
+        /// A commercial smart replay is being filmed: the cursor moves at a
+        /// calm pace the viewer can follow.
+        var isCommercial = false
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
@@ -1556,7 +1563,8 @@ final class CompanionManager: ObservableObject {
             print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
             refreshScreenTaskTitle()
             let position = queuedScreenTasks.count
-            return "added to the list: it starts after the current job\(position > 1 ? " and \(position - 1) more" : ""). say that in a few words; each result comes to you as it finishes."
+            let runningJobText = currentScreenTaskText.map { "\"\($0.prefix(80))\"" } ?? "the current job"
+            return "not started yet: it's waiting in line behind \(runningJobText)\(position > 1 ? " and \(position - 1) more" : ""). tell the user it's queued, not running, and ask in a few words if they want \(runningJobText) stopped so this one starts now (if yes, call stop_screen_task with current). each result comes to you as it finishes."
         }
         runScreenTask(job)
         return "started. say you're on it in a few words; you'll get the result to tell the user when it's done."
@@ -1570,6 +1578,7 @@ final class CompanionManager: ObservableObject {
 
         screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
             print("🧭 Step \(stepNumber): \(stepDescription)")
+            self?.lastScreenJobProgressAt = Date()
             self?.notchPresenter.showScreenTaskStep(stepDescription)
         }
         screenTaskRunner.onPlanChanged = { [weak self] steps, currentStepIndex in
@@ -1600,10 +1609,16 @@ final class CompanionManager: ObservableObject {
             self.detectedElementScreenLocation = point
             self.detectedElementDisplayFrame = displayFrame
             // A replay already knows its target, so the flight is quicker.
-            try? await Task.sleep(nanoseconds: self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
+            // A commercial run is filmed, so it lingers long enough to see.
+            let pauseNanoseconds: UInt64 = job.isCommercial ? 1_200_000_000 : (self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
+            try? await Task.sleep(nanoseconds: pauseNanoseconds)
         }
         currentScreenTaskText = taskText
         currentScreenJob = job
+        if let replayID = job.replayID {
+            screenTaskRunner.requestedReplay = (id: replayID, taskText: taskText)
+        }
+        watchForStuckScreenJob(taskText: taskText)
         notchPresenter.showScreenTaskStep("starting", title: screenTaskTitle)
         // Pictures named in the job count even when Live didn't pass them.
         let referenceItems = job.referenceImageNames.isEmpty
@@ -1615,7 +1630,7 @@ final class CompanionManager: ObservableObject {
             }
         }
         screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
-            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone)
+            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone, closingMessage: job.closingMessage)
         }
     }
 
@@ -1713,6 +1728,46 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
+    /// When the running job last showed a step, for the stuck-job watchdog.
+    private var lastScreenJobProgressAt = Date()
+    private var stuckScreenJobWatchdogTask: Task<Void, Never>?
+    /// A job with no step for this long is stuck (a step that never comes
+    /// back), so it's stopped and the line moves on.
+    private static let secondsBeforeScreenJobCountsAsStuck: Double = 240
+
+    private func watchForStuckScreenJob(taskText: String) {
+        lastScreenJobProgressAt = Date()
+        stuckScreenJobWatchdogTask?.cancel()
+        stuckScreenJobWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard let self, self.screenTaskRunner.isRunning, self.currentScreenTaskText == taskText else { return }
+                // Waiting for the user's answer isn't being stuck.
+                if DottieScreenJobQuestions.shared.isWaitingForAnswer {
+                    self.lastScreenJobProgressAt = Date()
+                    continue
+                }
+                guard Date().timeIntervalSince(self.lastScreenJobProgressAt) > Self.secondsBeforeScreenJobCountsAsStuck else { continue }
+                print("🧭 Screen task stuck with no step for \(Int(Self.secondsBeforeScreenJobCountsAsStuck)) s, stopping it: \(taskText)")
+                self.noteStoppedJob("the on-screen job \"\(taskText)\" (it got stuck)")
+                self.screenTaskRunner.stop()
+                self.currentScreenTaskText = nil
+                self.notchPresenter.endScreenTask()
+                self.clearDetectedElementLocation()
+                self.speakWhenFree(
+                    recordedUserText: "(screen job stuck)",
+                    instructionText: "the on-screen job \"\(taskText.prefix(120))\" got stuck with nothing happening for four minutes, so you stopped it\(self.queuedScreenTasks.isEmpty ? "" : " and started the next one in line"). tell the user that in one short sentence. don't call any tool."
+                )
+                if self.queuedScreenTasks.isEmpty {
+                    self.scheduleTransientHideIfNeeded()
+                } else {
+                    self.startNextQueuedScreenTask()
+                }
+                return
+            }
+        }
+    }
+
     /// Stops only the running job; the next waiting one starts.
     private func skipCurrentScreenTask() -> String {
         guard screenTaskRunner.isRunning else {
@@ -1743,7 +1798,7 @@ final class CompanionManager: ObservableObject {
         return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
     }
 
-    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false) {
+    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false, closingMessage: String? = nil) {
         currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1768,10 +1823,13 @@ final class CompanionManager: ObservableObject {
         var jobSucceeded = false
         if case .finished = outcome { jobSucceeded = true }
         DottieEpisodicMemory.shared.recordScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded)
+        // A smart replay's closing line only follows a run that worked.
+        let closingMessageToSay = jobSucceeded ? closingMessage : nil
         if repliesToPhone {
             startNextQueuedScreenTask()
             scheduleTransientHideIfNeeded()
-            Task { await phoneBridge.send(resultText) }
+            let phoneText = closingMessageToSay.map { "\(resultText)\n\($0)" } ?? resultText
+            Task { await phoneBridge.send(phoneText) }
             return
         }
         let waitingCount = queuedScreenTasks.count
@@ -1788,16 +1846,21 @@ final class CompanionManager: ObservableObject {
                 if !isBusy { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText, waitingCount: waitingCount)
+            self?.speakScreenTaskResult(taskText: taskText, resultText: resultText, waitingCount: waitingCount, closingMessage: closingMessageToSay)
         }
     }
 
     /// Dottie says how the job went, as a turn of its own, so it reads like
     /// her answer and lands in the conversation history.
-    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0) {
+    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
         let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
-        let instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
+        var instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
             + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
+        // The user typed this line for the end of every run of a smart
+        // replay, so it's said exactly, in place of the usual result.
+        if let closingMessage {
+            instructionText = "the smart replay you were running is finished. say exactly this, word for word, and nothing else: \"\(closingMessage)\". don't start the job again." + nextLine
+        }
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -2490,8 +2553,16 @@ final class CompanionManager: ObservableObject {
         DottieSelfCheck.shared.phoneBridge = phoneBridge
         DottieSpeedTools.startReplayJob = { [weak self] replay in
             guard let self else { return "Dottie isn't ready yet." }
-            self.screenTaskRunner.requestedReplay = (id: replay.id, taskText: replay.taskText)
-            return self.startScreenTask(ScreenJob(text: replay.taskText))
+            return self.startScreenTask(ScreenJob(text: replay.taskText, replayID: replay.id))
+        }
+        DottieSmartReplayTools.startSmartReplayJob = { [weak self] smartReplay, details in
+            guard let self else { return "Dottie isn't ready yet." }
+            DottieSmartReplayStore.shared.noteRun(smartReplay.id)
+            return self.startScreenTask(ScreenJob(
+                text: smartReplay.screenJobTaskText(details: details),
+                closingMessage: smartReplay.closingMessage,
+                isCommercial: smartReplay.kind == .commercial
+            ))
         }
     }
 

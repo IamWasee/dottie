@@ -42,6 +42,13 @@ final class DottieGameMovement {
         /// Map units a running jump carries her forward.
         var jumpDistanceUnits = 2.0
         var jumpAttemptCount = 0
+        /// What turns the camera, once the controls test found out: "right"
+        /// (hold the right mouse button), "none" (the mouse alone) or
+        /// "arrows" (the left and right arrow keys, Roblox's fallback when
+        /// the mouse camera ignores Dottie). nil until tested.
+        var cameraControl: String?
+        /// Degrees the camera turns per second of holding an arrow key.
+        var arrowKeyDegreesPerSecond = 90.0
 
         init() {}
 
@@ -59,6 +66,8 @@ final class DottieGameMovement {
             jumpHeightUnits = try container.decodeIfPresent(Double.self, forKey: .jumpHeightUnits) ?? defaults.jumpHeightUnits
             jumpDistanceUnits = try container.decodeIfPresent(Double.self, forKey: .jumpDistanceUnits) ?? defaults.jumpDistanceUnits
             jumpAttemptCount = try container.decodeIfPresent(Int.self, forKey: .jumpAttemptCount) ?? defaults.jumpAttemptCount
+            cameraControl = try container.decodeIfPresent(String.self, forKey: .cameraControl)
+            arrowKeyDegreesPerSecond = try container.decodeIfPresent(Double.self, forKey: .arrowKeyDegreesPerSecond) ?? defaults.arrowKeyDegreesPerSecond
         }
     }
 
@@ -76,6 +85,8 @@ final class DottieGameMovement {
     }
 
     var degreesPerMousePoint: Double { contents.degreesPerMousePoint }
+    var cameraControl: String? { contents.cameraControl }
+    var arrowKeyDegreesPerSecond: Double { contents.arrowKeyDegreesPerSecond }
     var horizontalFieldOfViewDegrees: Double { contents.horizontalFieldOfViewDegrees }
     var jumpHeightUnits: Double { contents.jumpHeightUnits }
     var jumpDistanceUnits: Double { contents.jumpDistanceUnits }
@@ -106,6 +117,22 @@ final class DottieGameMovement {
         guard measuredDegreesPerPoint > 0.01, measuredDegreesPerPoint < 3 else { return }
         contents.degreesPerMousePoint = contents.degreesPerMousePoint * 0.4 + measuredDegreesPerPoint * 0.6
         contents.cameraTurnMeasurementCount += 1
+        save()
+    }
+
+    func rememberCameraControl(_ cameraControl: String) {
+        contents.cameraControl = cameraControl
+        save()
+    }
+
+    /// Lines up the frames before and after holding an arrow key to
+    /// measure how fast it turns the camera.
+    func learnArrowKeyTurn(before beforeFrame: CGImage, after afterFrame: CGImage, heldSeconds: Double) {
+        guard heldSeconds > 0.05,
+              let shiftFraction = Self.horizontalShiftFraction(from: beforeFrame, to: afterFrame) else { return }
+        let measuredDegreesPerSecond = abs(shiftFraction) * contents.horizontalFieldOfViewDegrees / heldSeconds
+        guard measuredDegreesPerSecond > 10, measuredDegreesPerSecond < 720 else { return }
+        contents.arrowKeyDegreesPerSecond = measuredDegreesPerSecond
         save()
     }
 

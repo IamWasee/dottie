@@ -62,6 +62,9 @@ final class DottieScreenTaskRunner {
     /// lookup takes about a second on it, Oct 2026).
     private static let gameScreenshotDimension = 1024
     private static let gameModel = "gemini-3.5-flash-lite"
+    /// The longest one step's answer may take before it's asked again on
+    /// another model.
+    private static let stepAnswerDeadlineSeconds: Double = 22
 
     /// A picture the user saved in Home → Conversation that the job needs
     /// ("grab the golden sword").
@@ -207,7 +210,9 @@ final class DottieScreenTaskRunner {
     /// Stops after the current action. Returns true if a task was running.
     @discardableResult
     func stop() -> Bool {
-        guard let runTask else { return false }
+        // Stop also ends a gameplay recording being played back.
+        let stoppedPlayback = DottieGameplayPlayback.shared.stop()
+        guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
         gamePlayer?.stop()
         gamePlayer = nil
@@ -340,10 +345,22 @@ final class DottieScreenTaskRunner {
             pendingFunctionResponseParts = []
             Self.dropOldScreenshots(from: &contents)
             let modelParts: [[String: Any]]
+            // A slow answer shows in the notch, so waiting on Gemini doesn't
+            // look like Dottie being stuck.
+            let waitingStartedAt = Date()
+            let slowAnswerNotice = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                while !Task.isCancelled {
+                    self?.onProgress?(stepNumber, "waiting on Gemini… \(Int(Date().timeIntervalSince(waitingStartedAt))) s")
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                }
+            }
             do {
                 modelParts = try await requestNextActions(contents: contents)
+                slowAnswerNotice.cancel()
                 consecutiveRequestFailures = 0
             } catch {
+                slowAnswerNotice.cancel()
                 if Task.isCancelled { return .stopped }
                 consecutiveRequestFailures += 1
                 print("⚠️ Screen task step \(stepNumber) failed: \(error.localizedDescription)")
@@ -360,9 +377,12 @@ final class DottieScreenTaskRunner {
                 // little later each time so a per-minute limit can reset.
                 contents.removeLast()
                 pendingFunctionResponseParts = functionResponsesForThisTurn
-                // A busy or slow model is skipped for a while.
-                jobModel = DottieModelPicker.shared.pick(jobTier)
-                let backoffSeconds = UInt64(consecutiveRequestFailures) * (isRateLimited ? 5 : 2)
+                // A busy or slow model is skipped for a while; after two
+                // misses in a row the quickest model takes over the steps.
+                let failedModel = jobModel ?? ""
+                jobModel = DottieModelPicker.shared.pick(consecutiveRequestFailures >= 2 ? .tiny : jobTier, avoiding: [failedModel])
+                onProgress?(stepNumber, "Gemini is slow, asking again (\(consecutiveRequestFailures) of 2)")
+                let backoffSeconds = UInt64(consecutiveRequestFailures) * (isRateLimited ? 5 : 1)
                 try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
                 continue
             }
@@ -1476,8 +1496,9 @@ final class DottieScreenTaskRunner {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         // A step normally takes 2-8s. One stuck in Google's queue (seen at
-        // 90s+) is dropped and asked again, which is usually much quicker.
-        request.timeoutInterval = 30
+        // 50-90s) is dropped and asked again on another model, which is
+        // usually much quicker than waiting it out.
+        request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestModel = jobModel ?? (isGameMode ? Self.gameModel : Self.taskModel)
@@ -1501,7 +1522,7 @@ final class DottieScreenTaskRunner {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (responseData, response) = try await DottieModelPicker.shared.data(for: request, model: requestModel)
+        let (responseData, response) = try await DottieModelPicker.shared.data(for: request, model: requestModel, totalSeconds: Self.stepAnswerDeadlineSeconds)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard statusCode == 200 else {
             throw NSError(domain: "DottieScreenTaskRunner", code: statusCode, userInfo: [

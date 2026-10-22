@@ -147,6 +147,32 @@ final class DottieGameNotebook {
         }
     }
 
+    /// The saved game whose notebook changed last among those whose name
+    /// ends with this, like "(Roblox)", or nil.
+    static func mostRecentlyPlayedGameName(endingWith nameEnding: String) -> String? {
+        mostRecentlyPlayedGame(endingWith: nameEnding)?.name
+    }
+
+    /// Like mostRecentlyPlayedGameName, with when its notebook last changed.
+    static func mostRecentlyPlayedGame(endingWith nameEnding: String) -> (name: String, playedAt: Date)? {
+        struct SavedName: Decodable {
+            let gameName: String
+        }
+        let gameFolderURLs = (try? FileManager.default.contentsOfDirectory(at: gamesFolderURL, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var newestGame: (name: String, changedAt: Date)?
+        for gameFolderURL in gameFolderURLs {
+            let notebookURL = gameFolderURL.appendingPathComponent("notebook.json")
+            guard let notebookData = try? Data(contentsOf: notebookURL),
+                  let gameName = (try? JSONDecoder().decode(SavedName.self, from: notebookData))?.gameName,
+                  gameName.lowercased().hasSuffix(nameEnding.lowercased()) else { continue }
+            let changedAt = (try? notebookURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if changedAt > (newestGame?.changedAt ?? .distantPast) {
+                newestGame = (gameName, changedAt)
+            }
+        }
+        return newestGame.map { (name: $0.name, playedAt: $0.changedAt) }
+    }
+
     /// "Roblox — Obby Tower" → "roblox-obby-tower".
     static func folderName(for gameName: String) -> String {
         let slug = gameName.lowercased()
@@ -167,6 +193,11 @@ final class DottieGameNotebook {
         }
         if let genre = contents.genre {
             sections.append("Genre: \(genre). \(DottieGameGenres.starter(for: genre, gameName: contents.gameName))")
+        }
+        let controlsTheUserTaught = userTaughtControls()
+        if !controlsTheUserTaught.isEmpty {
+            let taughtLines = controlsTheUserTaught.map { "\($0.keys): \($0.meaning)" }
+            sections.append("Controls the user taught you (always right, use these first):\n- " + taughtLines.joined(separator: "\n- "))
         }
         if !contents.controls.isEmpty {
             let controlLines = contents.controls.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
@@ -232,6 +263,70 @@ final class DottieGameNotebook {
         if isComplete || contents.controls.count >= 5 {
             contents.hasLearnedControls = true
         }
+        save()
+    }
+
+    // MARK: - Controls the user teaches
+
+    /// The user's own controls for this game, one "KEY = what it does" per
+    /// line, in a text file they can open and edit. Saying "in this game F
+    /// opens the shop" adds a line here too.
+    var userControlsFileURL: URL {
+        folderURL.appendingPathComponent("my-controls.txt")
+    }
+
+    private static let userControlsFileHeader = """
+    # Your controls for this game. One per line: KEY = what it does
+    # For example:  F = open the egg shop
+    #               shift+E = sell everything
+    # Dottie reads this every time she plays. Lines starting with # are ignored.
+
+    """
+
+    /// Creates my-controls.txt with its explanation when it doesn't exist
+    /// yet, so the user always has a file to open and edit.
+    func createUserControlsFileIfMissing() {
+        guard !FileManager.default.fileExists(atPath: userControlsFileURL.path) else { return }
+        try? Self.userControlsFileHeader.write(to: userControlsFileURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Reads my-controls.txt fresh each time, so edits the user makes while
+    /// she plays count at her next decision.
+    func userTaughtControls() -> [(keys: String, meaning: String)] {
+        guard let fileText = try? String(contentsOf: userControlsFileURL, encoding: .utf8) else { return [] }
+        var taughtControls: [(keys: String, meaning: String)] = []
+        for rawLine in fileText.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let separatorRange = line.range(of: "=") ?? line.range(of: ":")
+            guard let separatorRange else { continue }
+            let keys = line[..<separatorRange.lowerBound].trimmingCharacters(in: .whitespaces).lowercased()
+            let meaning = line[separatorRange.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard !keys.isEmpty, !meaning.isEmpty else { continue }
+            taughtControls.append((keys: keys, meaning: String(meaning.prefix(120))))
+        }
+        return taughtControls
+    }
+
+    /// Saves a control the user taught by voice into my-controls.txt
+    /// (replacing that key's old line) and into the learned controls.
+    func teachControl(keys: String, meaning: String) {
+        let normalizedKeys = keys.trimmingCharacters(in: .whitespaces).lowercased()
+        let trimmedMeaning = meaning.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedKeys.isEmpty, !trimmedMeaning.isEmpty else { return }
+        createUserControlsFileIfMissing()
+        let existingText = (try? String(contentsOf: userControlsFileURL, encoding: .utf8)) ?? Self.userControlsFileHeader
+        var keptLines = existingText.components(separatedBy: "\n").filter { existingLine in
+            let line = existingLine.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#"), let separatorRange = line.range(of: "=") ?? line.range(of: ":") else { return true }
+            return line[..<separatorRange.lowerBound].trimmingCharacters(in: .whitespaces).lowercased() != normalizedKeys
+        }
+        while let lastLine = keptLines.last, lastLine.trimmingCharacters(in: .whitespaces).isEmpty {
+            keptLines.removeLast()
+        }
+        keptLines.append("\(normalizedKeys) = \(trimmedMeaning)")
+        try? (keptLines.joined(separator: "\n") + "\n").write(to: userControlsFileURL, atomically: true, encoding: .utf8)
+        contents.controls[normalizedKeys] = String(trimmedMeaning.prefix(80)) + " (taught by the user)"
         save()
     }
 

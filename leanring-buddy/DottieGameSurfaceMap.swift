@@ -37,9 +37,13 @@ final class DottieGameSurfaceMap {
         var color: UInt32
     }
 
-    static let cellSize = 0.1
+    /// Depth rays from a few dozen frames are too far apart for smaller
+    /// cells: 0.1 left most cells seen only once and the model full of holes.
+    static let cellSize = 0.2
     /// How far before and behind a hit the surface is written.
-    private static let truncationDistance = 0.3
+    private static let truncationDistance = 0.5
+    /// Fewer faces than this is scattered dots, not a model worth opening.
+    private static let minimumFaceCount = 300
     /// Older looks stop counting more than this, so the surface can follow
     /// a game world that changes (a door opening).
     private static let maximumWeight: UInt8 = 40
@@ -49,13 +53,18 @@ final class DottieGameSurfaceMap {
     private static let maximumRayLength = 12.0
 
     static let modelFileName = "map3d-surface.usdz"
+    /// Written instead when this Mac's Model I/O can't write USDZ (1.0.34
+    /// left none on celly's Mac); Preview opens it the same way.
+    static let fallbackModelFileName = "map3d-surface.usdc"
     static let plainModelFileName = "map3d-surface.obj"
 
     private(set) var cells: [Int64: Cell] = [:]
     private let fileURL: URL
 
     init(mapFolderURL: URL) {
-        fileURL = mapFolderURL.appendingPathComponent("surface.bin")
+        fileURL = mapFolderURL.appendingPathComponent("surface-v2.bin")
+        // surface.bin held 0.1-unit cells, which don't fit the new size.
+        try? FileManager.default.removeItem(at: mapFolderURL.appendingPathComponent("surface.bin"))
         cells = Self.loadCells(from: fileURL)
     }
 
@@ -121,12 +130,24 @@ final class DottieGameSurfaceMap {
     func writeModel(into mapFolderURL: URL) -> Task<Void, Never> {
         let cellsSnapshot = cells
         let usdzURL = mapFolderURL.appendingPathComponent(Self.modelFileName)
+        let usdcURL = mapFolderURL.appendingPathComponent(Self.fallbackModelFileName)
         let objURL = mapFolderURL.appendingPathComponent(Self.plainModelFileName)
         return Task.detached(priority: .utility) {
             let mesh = Self.surfaceMesh(from: cellsSnapshot)
-            guard !mesh.quads.isEmpty else { return }
+            guard mesh.quads.count >= Self.minimumFaceCount else {
+                // An older, better-looking model isn't there to replace, so
+                // opening the map falls back to the colored blocks.
+                try? FileManager.default.removeItem(at: usdzURL)
+                try? FileManager.default.removeItem(at: usdcURL)
+                try? FileManager.default.removeItem(at: objURL)
+                return
+            }
             Self.writeObj(mesh, to: objURL)
-            Self.writeUSDZ(mesh, to: usdzURL)
+            try? FileManager.default.removeItem(at: usdzURL)
+            try? FileManager.default.removeItem(at: usdcURL)
+            if !Self.writeUSD(mesh, to: usdzURL) {
+                Self.writeUSD(mesh, to: usdcURL)
+            }
         }
     }
 
@@ -140,31 +161,44 @@ final class DottieGameSurfaceMap {
     /// placed at the average of where it crosses the cube's edges, and a
     /// face for every cell edge the surface crosses, joining the points of
     /// the four cubes around that edge. Cubes are named by their lowest
-    /// corner cell. Only cells seen at least twice count.
+    /// corner cell. A cube with some corners never seen still gets a point
+    /// from the edges between the corners that were.
     nonisolated private static func surfaceMesh(from cells: [Int64: Cell]) -> SurfaceMesh {
         let cellSize = Float(Self.cellSize)
         func cell(_ gridX: Int, _ gridY: Int, _ gridZ: Int) -> Cell? {
-            guard let foundCell = cells[DottieGameWorldMap.voxelKey(gridX: gridX, gridY: gridY, gridZ: gridZ)], foundCell.weight >= 2 else { return nil }
-            return foundCell
+            cells[DottieGameWorldMap.voxelKey(gridX: gridX, gridY: gridY, gridZ: gridZ)]
         }
         let cornerOffsets: [(Int, Int, Int)] = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1)]
         let cubeEdges: [(Int, Int)] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
 
+        // Every cube that has at least one seen cell as a corner, so a cube
+        // whose lowest corner was never seen still gets its point.
+        var candidateCubeKeys = Set<Int64>()
+        candidateCubeKeys.reserveCapacity(cells.count * 2)
+        for cellKey in cells.keys {
+            let cellPosition = DottieGameWorldMap.gridPosition(ofVoxelKey: cellKey)
+            for offset in cornerOffsets {
+                candidateCubeKeys.insert(DottieGameWorldMap.voxelKey(
+                    gridX: cellPosition.gridX - offset.0,
+                    gridY: cellPosition.gridY - offset.1,
+                    gridZ: cellPosition.gridZ - offset.2
+                ))
+            }
+        }
+
         var mesh = SurfaceMesh()
         var pointIndexByCube: [Int64: Int32] = [:]
-        for cellKey in cells.keys {
+        for cellKey in candidateCubeKeys {
             let cubeCorner = DottieGameWorldMap.gridPosition(ofVoxelKey: cellKey)
-            var cornerCells: [Cell] = []
-            for offset in cornerOffsets {
-                guard let cornerCell = cell(cubeCorner.gridX + offset.0, cubeCorner.gridY + offset.1, cubeCorner.gridZ + offset.2) else { break }
-                cornerCells.append(cornerCell)
+            let cornerCells: [Cell?] = cornerOffsets.map { offset in
+                cell(cubeCorner.gridX + offset.0, cubeCorner.gridY + offset.1, cubeCorner.gridZ + offset.2)
             }
-            guard cornerCells.count == 8 else { continue }
             var crossingSum = SIMD3<Float>(0, 0, 0)
             var crossingCount: Float = 0
             for edge in cubeEdges {
-                let firstDistance = cornerCells[edge.0].signedDistance
-                let secondDistance = cornerCells[edge.1].signedDistance
+                guard let firstCornerCell = cornerCells[edge.0], let secondCornerCell = cornerCells[edge.1] else { continue }
+                let firstDistance = firstCornerCell.signedDistance
+                let secondDistance = secondCornerCell.signedDistance
                 guard (firstDistance < 0) != (secondDistance < 0) else { continue }
                 let crossingFraction = firstDistance / (firstDistance - secondDistance)
                 let firstCorner = SIMD3<Float>(Float(cornerOffsets[edge.0].0), Float(cornerOffsets[edge.0].1), Float(cornerOffsets[edge.0].2))
@@ -180,7 +214,7 @@ final class DottieGameSurfaceMap {
             // OBJ and USD are y-up: the map's height becomes y and its
             // forward direction -z.
             mesh.positions.append(SIMD3<Float>(mapPoint.x, mapPoint.z, -mapPoint.y))
-            let nearestColor = cornerCells.min { abs($0.signedDistance) < abs($1.signedDistance) }?.color ?? 0x808080
+            let nearestColor = cornerCells.compactMap { $0 }.min { abs($0.signedDistance) < abs($1.signedDistance) }?.color ?? 0x808080
             mesh.colors.append(SIMD3<Float>(
                 Float((nearestColor >> 16) & 0xFF) / 255,
                 Float((nearestColor >> 8) & 0xFF) / 255,
@@ -236,10 +270,12 @@ final class DottieGameSurfaceMap {
         try? (lines.joined(separator: "\n") + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
-    /// The same mesh as USDZ through Model I/O, with the colors per point,
-    /// in triangles.
-    nonisolated private static func writeUSDZ(_ mesh: SurfaceMesh, to fileURL: URL) {
-        guard MDLAsset.canExportFileExtension("usdz") else { return }
+    /// The same mesh as USD (the file's extension picks USDZ or USDC)
+    /// through Model I/O, with the colors per point, in triangles. False
+    /// when nothing was written.
+    @discardableResult
+    nonisolated private static func writeUSD(_ mesh: SurfaceMesh, to fileURL: URL) -> Bool {
+        guard MDLAsset.canExportFileExtension(fileURL.pathExtension) else { return false }
         var triangleIndices: [UInt32] = []
         triangleIndices.reserveCapacity(mesh.quads.count * 6)
         for quad in mesh.quads {
@@ -270,7 +306,12 @@ final class DottieGameSurfaceMap {
         surfaceMesh.addNormals(withAttributeNamed: MDLVertexAttributeNormal, creaseThreshold: 0.5)
         let asset = MDLAsset()
         asset.add(surfaceMesh)
-        try? asset.export(to: fileURL)
+        do {
+            try asset.export(to: fileURL)
+        } catch {
+            print("⚠️ Couldn't write \(fileURL.lastPathComponent): \(error.localizedDescription)")
+        }
+        return FileManager.default.fileExists(atPath: fileURL.path)
     }
 
     // MARK: - Saving

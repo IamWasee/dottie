@@ -21,6 +21,7 @@
 
 import AppKit
 import Foundation
+import ModelIO
 
 @MainActor
 enum DottieGameMapPicture {
@@ -152,8 +153,32 @@ enum DottieGameMapPicture {
             addBox(minX: dottiePosition.x - 0.15, minY: dottiePosition.y - 0.15, minHeight: 0, width: 0.3, depth: 0.3, height: 3)
             try? (materialLines.joined(separator: "\n") + "\n").write(to: materialsURL, atomically: true, encoding: .utf8)
             try? (modelLines.joined(separator: "\n") + "\n").write(to: modelURL, atomically: true, encoding: .utf8)
+            writeOpenableCopy(ofObjModel: modelURL)
         }
     }
+
+    /// Finder can list an .obj as plain text that Preview won't open (it
+    /// did on celly's Mac), so the blocks are also written as USD, which
+    /// Preview and Quick Look show in 3D: USDZ, or USDC where this Mac's
+    /// Model I/O can't write USDZ.
+    nonisolated private static func writeOpenableCopy(ofObjModel objModelURL: URL) {
+        let baseURL = objModelURL.deletingPathExtension()
+        for fileExtension in openableModelExtensions {
+            try? FileManager.default.removeItem(at: baseURL.appendingPathExtension(fileExtension))
+        }
+        let asset = MDLAsset(url: objModelURL)
+        for fileExtension in openableModelExtensions where MDLAsset.canExportFileExtension(fileExtension) {
+            let openableModelURL = baseURL.appendingPathExtension(fileExtension)
+            do {
+                try asset.export(to: openableModelURL)
+            } catch {
+                print("⚠️ Couldn't write \(openableModelURL.lastPathComponent): \(error.localizedDescription)")
+            }
+            if FileManager.default.fileExists(atPath: openableModelURL.path) { return }
+        }
+    }
+
+    nonisolated private static let openableModelExtensions = ["usdz", "usdc"]
 
     private static func picture(of worldMap: DottieGameWorldMap, floorPlan: DottieGameNavigator.FloorPlan) -> Data? {
         let voxelSize = DottieGameWorldMap.voxelSize
@@ -309,7 +334,7 @@ enum DottieGameMapPicture {
             "Saved \(dateFormatter.string(from: Date()))",
             "",
             "Sessions played with this map: \(worldMap.sessionCount)",
-            "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D.",
+            "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D (\(Int((Double(worldMap.framesWithDepthThisSession) / max(Date().timeIntervalSince(worldMap.sessionStartedAt) / 60, 1 / 60)).rounded())) a minute).",
             "Spots photographed in total: \(worldMap.keyframes.count) (a spot is never photographed twice)",
             "3D points: \(worldMap.voxelHits.count.formatted()) walking-grid blocks, \(worldMap.detailVoxelHits.count.formatted()) small blocks in the light map (map3d.obj shows the ones seen at least twice)",
             "Spawn (0,0,0): \(worldMap.spawnViewCount) views saved for recognizing it (in the game's spawn folder, kept if the map is deleted)",
@@ -318,7 +343,7 @@ enum DottieGameMapPicture {
             "Depth model: \(DottieGameDepth.shared.statusText)",
             "",
             "Movement she has learned for this game:",
-            "- Camera: \(String(format: "%.2f", movementContents.degreesPerMousePoint))° per mouse point (measured \(movementContents.cameraTurnMeasurementCount) times)",
+            "- Camera: \(String(format: "%.2f", movementContents.degreesPerMousePoint))° per mouse point (checked by her own test turns \(movementContents.cameraTurnMeasurementCount) times; your turns while she maps use this figure)",
             "- Walking: \(String(format: "%.2f", movementContents.walkUnitsPerSecond)) units a second (corrected \(movementContents.walkSpeedCorrectionCount) times), sprinting \(String(format: "%.1f", movementContents.sprintSpeedFactor))x",
             "- Jumping: \(String(format: "%.1f", movementContents.jumpHeightUnits)) units high, \(String(format: "%.1f", movementContents.jumpDistanceUnits)) far (from \(movementContents.jumpAttemptCount) jumps)",
             ""
@@ -410,18 +435,31 @@ enum DottieGameMapPicture {
     static func open3DModel(_ savedMap: SavedMap) async -> Bool {
         // The solid model looks like the game; the blocks are the fallback
         // until enough surface has been seen.
-        let surfaceModelURL = savedMap.mapFolderURL.appendingPathComponent(DottieGameSurfaceMap.modelFileName)
+        let surfaceModelURLs = [DottieGameSurfaceMap.modelFileName, DottieGameSurfaceMap.fallbackModelFileName]
+            .map { savedMap.mapFolderURL.appendingPathComponent($0) }
         let blocksModelURL = savedMap.mapFolderURL.appendingPathComponent(modelFileName)
-        if !FileManager.default.fileExists(atPath: surfaceModelURL.path) || !FileManager.default.fileExists(atPath: blocksModelURL.path) {
+        let openableBlocksModelURLs = openableModelExtensions.map { blocksModelURL.deletingPathExtension().appendingPathExtension($0) }
+        func existingSurfaceModelURL() -> URL? {
+            surfaceModelURLs.first { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        func existingOpenableBlocksModelURL() -> URL? {
+            openableBlocksModelURLs.first { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        if existingSurfaceModelURL() == nil || existingOpenableBlocksModelURL() == nil {
             let worldMap = DottieGameWorldMap(gameName: savedMap.gameName, gameFolderURL: savedMap.gameFolderURL)
             await write3DModel(of: worldMap).value
             await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL).value
         }
-        if FileManager.default.fileExists(atPath: surfaceModelURL.path) {
+        if let surfaceModelURL = existingSurfaceModelURL() {
             return NSWorkspace.shared.open(surfaceModelURL)
         }
+        if let openableBlocksModelURL = existingOpenableBlocksModelURL() {
+            return NSWorkspace.shared.open(openableBlocksModelURL)
+        }
         guard FileManager.default.fileExists(atPath: blocksModelURL.path) else { return false }
-        return NSWorkspace.shared.open(blocksModelURL)
+        // Only the .obj: shown in Finder, since opening it may open a text editor.
+        NSWorkspace.shared.activateFileViewerSelecting([blocksModelURL])
+        return true
     }
 
     static func deleteMap(_ savedMap: SavedMap) -> Bool {
