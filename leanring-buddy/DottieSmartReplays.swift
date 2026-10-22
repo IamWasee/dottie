@@ -27,6 +27,7 @@
 
 import AppKit
 import ApplicationServices
+import Combine
 import Foundation
 
 struct DottieSmartReplay: Codable, Identifiable, Equatable {
