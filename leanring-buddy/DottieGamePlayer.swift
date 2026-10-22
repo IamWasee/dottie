@@ -17,9 +17,10 @@
 //  blind (`go_to_place`). Haiku thinks; Sonnet takes the next look only
 //  when Haiku asks for it (`hard`) or keeps running into trouble.
 //
-//  Before the first session (and every two weeks after), Dottie works out
-//  which game it is from what the user asked and looks it up online
-//  (DottieGameResearch), so the brain starts knowing what the game is about.
+//  Dottie works out which game it is from what the user asked and, before
+//  the first session (and every two weeks after), looks it up online
+//  (DottieGameResearch) while she starts playing, so the brain soon knows
+//  what the game is about. A lookup that found nothing waits a day.
 //
 //  "Watch me play" records the user's keys and a few frames for a minute
 //  and turns them into lessons in the notebook instead of playing.
@@ -51,10 +52,17 @@ final class DottieGamePlayer {
     /// The game being played, once it's been named.
     private(set) var currentGameName: String?
     private var brain: DottieGameBrain?
+    /// The map of the game being played, so the user can name places by voice.
+    private var currentWorldMap: DottieGameWorldMap?
     private var hearing: DottieGameHearing?
     private var lastThoughtAloudAt: Date?
 
     private static let maximumBrainCalls = 120
+    /// A dropped network or a busy model shouldn't end play at once.
+    private static let maximumFailedBrainCallsInARow = 5
+    /// How often Dottie turns all the way around on her own, so the 3D map
+    /// covers every direction and not just the way she walks.
+    private static let secondsBetweenMappingSweeps: Double = 60
     /// The brain looks again at least this often, even with nothing new.
     private static let secondsBetweenRoutineLooks: Double = 20
     private static let secondsBetweenThinkingAloud: Double = 25
@@ -67,7 +75,41 @@ final class DottieGamePlayer {
     func receiveUserCommand(_ commandText: String) {
         let trimmedCommand = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else { return }
+        // "This is the sell area": the spot she's on gets that name on the
+        // map at once, without waiting for the brain to copy it over.
+        if let spokenPlaceName = Self.placeName(namedIn: trimmedCommand), let currentWorldMap {
+            currentWorldMap.notePlace(name: spokenPlaceName)
+        }
         pendingUserCommands.append(trimmedCommand)
+    }
+
+    /// The place a remark names, like "the sell area" from "this is the
+    /// sell area, remember it" or "remember this as the shop", or nil.
+    static func placeName(namedIn remark: String) -> String? {
+        let patterns = [
+            #"(?i)\bremember (?:this|here)(?: place| spot)? as (.+)"#,
+            #"(?i)\b(?:call|name) (?:this|here)(?: place| spot)? (.+)"#,
+            #"(?i)\b(?:this|here) is called (.+)"#,
+            // Only with an article, so "this is taking forever" isn't a name.
+            #"(?i)\b(?:this|here) is ((?:the|a|an|my|our) .+)"#
+        ]
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: remark, range: NSRange(remark.startIndex..., in: remark)),
+                  let nameRange = Range(match.range(at: 1), in: remark) else { continue }
+            var placeName = String(remark[nameRange])
+            // Drop what comes after the name ("..., remember it", "so go there").
+            for separator in [",", ".", "!", " remember", " so ", " and "] {
+                if let separatorRange = placeName.range(of: separator, options: .caseInsensitive) {
+                    placeName = String(placeName[..<separatorRange.lowerBound])
+                }
+            }
+            placeName = placeName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let wordCount = placeName.split(separator: " ").count
+            guard wordCount >= 1, wordCount <= 5 else { continue }
+            return placeName
+        }
+        return nil
     }
 
     func play(taskText: String, windowGameName: String, referenceImages: [DottieScreenTaskRunner.ReferenceImage] = []) async -> DottieScreenTaskRunner.Outcome {
@@ -85,6 +127,7 @@ final class DottieGamePlayer {
         currentGameName = gameName
         let notebook = DottieGameNotebook(gameName: gameName)
         let worldMap = DottieGameWorldMap(gameName: gameName, gameFolderURL: notebook.folderURL)
+        currentWorldMap = worldMap
         let cameraButton = gameName.lowercased().contains("roblox") ? "right" : "none"
         let reflexes = DottieGameReflexes(displayFrame: firstScreenshot.displayFrame, cameraButton: cameraButton, worldMap: worldMap)
         reflexes.reflexModel = reflexModel
@@ -106,6 +149,7 @@ final class DottieGamePlayer {
             worldMap.save()
             gameHearing.stop()
             gameBrain.stop()
+            currentWorldMap = nil
             if Self.current === self {
                 Self.current = nil
             }
@@ -119,17 +163,25 @@ final class DottieGamePlayer {
             return await mapWhileUserPlays(worldMap: worldMap, reflexes: reflexes, cameraButton: cameraButton)
         }
 
+        // The lookup runs beside play instead of before it, so the first
+        // move isn't held up; the guide reaches the brain once it's written.
+        var guideLookupTask: Task<Void, Never>?
         if notebook.needsGuide {
             onProgress?("Looking up \(gameName)")
-            thinkAloudIfItsBeenAWhile("Let me look up \(gameName) first.")
-            if let guide = await DottieGameResearch.writeGuide(gameName: gameName) {
-                notebook.setGuide(guide)
-                notebook.log("Looked the game up online and wrote a guide (\(guide.count) characters).")
-            } else {
-                notebook.log("Looked the game up online but found nothing useful (or the search failed).")
+            thinkAloudIfItsBeenAWhile("Let me look up \(gameName) while I start.")
+            guideLookupTask = Task { @MainActor in
+                let guideResult = await DottieGameResearch.writeGuide(gameName: gameName)
+                guard !Task.isCancelled else { return }
+                if let guide = guideResult.guide {
+                    notebook.setGuide(guide)
+                    notebook.log("Looked the game up online and wrote a guide (\(guide.count) characters).")
+                } else {
+                    notebook.noteGuideLookupFailed()
+                    notebook.log("Looked the game up online but \(guideResult.problem). Trying again tomorrow.")
+                }
             }
-            guard !Task.isCancelled else { return .stopped }
         }
+        defer { guideLookupTask?.cancel() }
 
         var recentHistory: [String] = []
         var nextEvent = !notebook.needsControlsLearned
@@ -148,6 +200,10 @@ final class DottieGamePlayer {
         var extraNotes: [String] = []
         var extraFrameJPEGs: [Data] = []
         var failedBrainCallsInARow = 0
+        // The brain's plan for the user's task, kept between looks so a
+        // task with several parts carries on to the next part on its own.
+        var taskParts: [String] = []
+        var currentTaskPartNumber = 1
         let referencePictures = referenceImages.map { referenceImage in
             DottieGameBrainRequest.ReferencePicture(
                 name: referenceImage.name,
@@ -156,8 +212,20 @@ final class DottieGamePlayer {
             )
         }
 
+        // The first look around is right away: at spawn it saves what spawn
+        // looks like, and on a known map it finds where she is.
+        var lastMappingSweepAt = Date.distantPast
         for brainCallIndex in 0..<Self.maximumBrainCalls {
             guard !Task.isCancelled else { return .stopped }
+
+            if !worldMap.isTopDownView, Date().timeIntervalSince(lastMappingSweepAt) > Self.secondsBetweenMappingSweeps {
+                lastMappingSweepAt = Date()
+                onProgress?("Looking around to map this spot")
+                let sweepResult = await reflexes.perform(DottieGamePlan.Step(kind: "look_around", sprint: false), goal: "")
+                extraFrameJPEGs += sweepResult.extraFrameJPEGs
+                extraNotes.append("Dottie just looked all the way around to map this spot: the extra pictures are the views to the right, behind and to the left.")
+                notebook.log("Looked all the way around for the map (\(worldMap.keyframes.count) spots now).")
+            }
 
             // Look: frames over about a second, the text on screen, what
             // the game said, and whether this place is a known one.
@@ -167,7 +235,6 @@ final class DottieGamePlayer {
             }
             let screenText = await DottieGameReflexes.readTextOffMain(newestFrame)
             let recognizedPlace = notebook.recognizePlace(in: newestFrame)
-            reflexes.letMapSee(newestFrame)
             let frameJPEGs = motionFrames.compactMap { DottieGameVision.jpegData(of: $0) } + extraFrameJPEGs
             var userCommands: [String] = []
             while !pendingUserCommands.isEmpty {
@@ -188,7 +255,8 @@ final class DottieGamePlayer {
                 extraNotes: extraNotes,
                 isWatchingUser: false,
                 // The user's pictures matter most while finding the thing.
-                referencePictures: brainCallIndex < 3 ? referencePictures : []
+                referencePictures: brainCallIndex < 3 ? referencePictures : [],
+                taskPlanText: Self.taskPlanText(parts: taskParts, currentPartNumber: currentTaskPartNumber)
             )
             extraNotes = []
             extraFrameJPEGs = []
@@ -196,18 +264,29 @@ final class DottieGamePlayer {
             notebook.log("Asked the brain\(needsStrongerModel ? " (stronger model)" : ""): \(nextEvent)")
             guard let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel) else {
                 guard !Task.isCancelled else { return .stopped }
-                notebook.log("The brain didn't answer.")
                 failedBrainCallsInARow += 1
-                if failedBrainCallsInARow >= 3 {
+                notebook.log("The brain didn't answer (\(failedBrainCallsInARow) in a row\(gameBrain.lastProblem.map { ": \($0)" } ?? "")).")
+                if failedBrainCallsInARow >= Self.maximumFailedBrainCallsInARow {
                     return .failed(reason: "Neither Claude nor Gemini answered, so Dottie stopped playing.")
                 }
+                onProgress?("Waiting for my brain to answer")
                 nextEvent = "Your last answer didn't come through; look again."
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                // A slow or busy network gets a little longer each time.
+                try? await Task.sleep(nanoseconds: UInt64(failedBrainCallsInARow) * 2_000_000_000)
                 continue
             }
             failedBrainCallsInARow = 0
             notebook.log("Brain: thought \"\(plan.thought ?? "")\"; doing \"\(plan.goal)\"; steps: \(plan.steps.map(\.kind).joined(separator: ", "))\(plan.isDone ? "; says it's done" : "")")
             learn(from: plan, notebook: notebook, newestFrame: newestFrame)
+            if !plan.taskParts.isEmpty {
+                taskParts = Array(plan.taskParts.prefix(10))
+            }
+            if let partNumber = plan.currentTaskPartNumber, !taskParts.isEmpty {
+                if partNumber != currentTaskPartNumber {
+                    notebook.log("Task part \(min(max(partNumber, 1), taskParts.count)) of \(taskParts.count) now: \(taskParts[min(max(partNumber, 1), taskParts.count) - 1])")
+                }
+                currentTaskPartNumber = min(max(partNumber, 1), taskParts.count)
+            }
             if let placeName = plan.placeName, !placeName.isEmpty {
                 worldMap.notePlace(name: placeName)
             }
@@ -239,9 +318,16 @@ final class DottieGamePlayer {
                 guard !Task.isCancelled else { return .stopped }
                 let stepResult = await reflexes.perform(step, goal: plan.goal)
                 if step.kind == "learn_controls" {
-                    notebook.markControlsRoutineDone()
+                    // Written straight into the notebook, so the controls
+                    // don't depend on the brain copying them over.
+                    if !stepResult.learnedControls.isEmpty {
+                        notebook.learnControls(stepResult.learnedControls, isComplete: false)
+                        notebook.markControlsRoutineDone()
+                    }
+                    notebook.log("  learn_controls: learned \(stepResult.learnedControls.count) controls. \(stepResult.note)")
+                } else {
+                    notebook.log("  \(step.kind)\(stepResult.isEvent ? " (ended for a look)" : ""): \(stepResult.note.prefix(400))")
                 }
-                notebook.log("  \(step.kind)\(stepResult.isEvent ? " (stopped early)" : ""): \(stepResult.note.prefix(400))")
                 recentHistory.append("\(step.kind): \(stepResult.note.prefix(200))")
                 if Self.isTrouble(stepResult.note) {
                     hadTroubleThisRound = true
@@ -273,6 +359,16 @@ final class DottieGamePlayer {
     func stop() {
         brain?.stop()
         hearing?.stop()
+    }
+
+    /// The task's parts as numbered lines, marking done ones and the one
+    /// being worked on, for the brain.
+    private static func taskPlanText(parts taskParts: [String], currentPartNumber: Int) -> String {
+        taskParts.enumerated().map { partIndex, partText in
+            let partNumber = partIndex + 1
+            let partState = partNumber < currentPartNumber ? " (done)" : partNumber == currentPartNumber ? "  <- now" : ""
+            return "\(partNumber). \(partText)\(partState)"
+        }.joined(separator: "\n")
     }
 
     /// A step result that means the plan isn't working.
@@ -335,21 +431,45 @@ final class DottieGamePlayer {
             }
         }
 
+        // Frames go to the map below, after the turn they show is noted.
+        let wasMapFeedingPaused = reflexes.isMapFeedingPaused
+        reflexes.isMapFeedingPaused = true
+        defer { reflexes.isMapFeedingPaused = wasMapFeedingPaused }
+
         let spotsBefore = worldMap.keyframes.count
         let mappingStartedAt = Date()
         var lastMovementNotedAt = mappingStartedAt
         var lastProgressShownAt = Date.distantPast
         var finishedByUser = false
+        var previousFrame: CGImage?
+        var turnsSeenOnlyInThePicture = 0
+        var turnsFromTheMouse = 0
         while !Task.isCancelled, Date().timeIntervalSince(mappingStartedAt) < Self.mapWhileUserPlaysSeconds {
             try? await Task.sleep(nanoseconds: 250_000_000)
             // The user's own input moves Dottie's place on the map.
             let userInput = inputWatcher.takeInput()
-            worldMap.noteCameraTurn(degrees: userInput.cameraMousePoints * worldMap.movement.degreesPerMousePoint)
+            if abs(userInput.cameraMousePoints) >= 1 {
+                worldMap.noteCameraTurn(degrees: userInput.cameraMousePoints * worldMap.movement.degreesPerMousePoint)
+                turnsFromTheMouse += 1
+            }
             worldMap.noteMovement(heldKeys: userInput.heldKeys, seconds: Date().timeIntervalSince(lastMovementNotedAt))
             lastMovementNotedAt = Date()
-            if let frame = await reflexes.captureFrame() {
-                reflexes.letMapSee(frame)
+            guard let frame = await reflexes.captureFrame() else { continue }
+            // Some games (Roblox while right-click turns the camera) hide
+            // the mouse's movement from Dottie, so a turn the mouse didn't
+            // report is read from the picture: the horizon sliding sideways.
+            // Not while strafing, which slides the picture too.
+            let isStrafing = userInput.heldKeys.contains("a") || userInput.heldKeys.contains("d")
+            if abs(userInput.cameraMousePoints) < 1, !isStrafing, let previousFrame {
+                let shiftFraction = DottieGameMovement.horizontalShiftFraction(from: previousFrame, to: frame)
+                if let shiftFraction, abs(shiftFraction) > 0.02 {
+                    // Turning right slides the scene left.
+                    worldMap.noteCameraTurn(degrees: -shiftFraction * worldMap.movement.horizontalFieldOfViewDegrees)
+                    turnsSeenOnlyInThePicture += 1
+                }
             }
+            previousFrame = frame
+            reflexes.letMapSee(frame)
             if pendingUserCommands.contains(where: { command in
                 let lowercasedCommand = command.lowercased()
                 return ["done", "stop", "finish", "that's it", "thats it", "enough"].contains { lowercasedCommand.contains($0) }
@@ -365,6 +485,7 @@ final class DottieGamePlayer {
             }
         }
         guard finishedByUser || !Task.isCancelled else { return .stopped }
+        DottieGameNotebook.appendToPlayLog("Mapping while the user played: \(turnsFromTheMouse) camera turns from the mouse, \(turnsSeenOnlyInThePicture) seen only in the picture.", gameFolderURL: worldMap.mapFolderURL.deletingLastPathComponent())
         worldMap.save()
         let newSpotCount = worldMap.keyframes.count - spotsBefore
         return .finished(answer: "I mapped \(newSpotCount) new spots of \(worldMap.gameName) while you played (\(worldMap.keyframes.count) in all). The picture of the map is in the Game maps folder.")
@@ -382,6 +503,9 @@ final class DottieGamePlayer {
     /// brain write down what they did and why as lessons.
     private func watchUserPlay(taskText: String, notebook: DottieGameNotebook, reflexes: DottieGameReflexes, brain gameBrain: DottieGameBrain) async -> DottieScreenTaskRunner.Outcome {
         onProgress?("Watching you play")
+        // The user's moves aren't tracked here, so the map would place
+        // these views wrongly.
+        reflexes.isMapFeedingPaused = true
         let watchStartedAt = Date()
         var keyLog: [String] = []
         var keyDownTimes: [String: Date] = [:]

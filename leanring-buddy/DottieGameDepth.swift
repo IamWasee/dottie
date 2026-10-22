@@ -38,8 +38,10 @@ final class DottieGameDepth {
 
     nonisolated private static let modelRepository = "apple/coreml-depth-anything-v2-small"
     nonisolated private static let compiledModelName = "DepthAnythingV2Small.mlmodelc"
-    nonisolated static let sampleColumnCount = 64
-    nonisolated static let sampleRowCount = 40
+    // Dense enough for the fine detail layer of the map (every sample
+    // lands a point); the walking grid uses every other one.
+    nonisolated static let sampleColumnCount = 128
+    nonisolated static let sampleRowCount = 80
 
     private var estimator: DottieDepthEstimator?
     private var loadingTask: Task<DottieDepthEstimator?, Never>?

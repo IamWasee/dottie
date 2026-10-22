@@ -75,7 +75,32 @@ How this game's character moves, learned while playing and saved per game in `Ga
 - [x] "Game maps" button in the menu bar panel opens the maps in Finder.
 - [x] `game_maps` voice tool: list maps, open one, or delete one (after an on-screen confirmation; the notebook and recordings stay).
 
-## 9. Later (not in this build)
+## 9. Fixes from the first Mac test of Build a Golem (2026-10-21)
+
+- [x] The controls test only counts once it learned something, writes what it learned straight into the notebook, and runs again for games it got wrong before (routine version 3). Walking no longer reads as "a menu opened": a menu also needs new text on screen. A default key that did nothing is tried once more at the end.
+- [x] The game lookup runs while Dottie starts playing instead of before. A lookup that found nothing waits a day, and the play log says why it failed. Searches drop the brackets ("Build a Golem Roblox") and try the bare name when the longer searches find nothing; the Worker's search also asks Roblox's own search for Roblox games.
+- [x] Every captured frame goes to the map (not only brain looks and walking), except while trying keys or watching the user. Every minute she turns all the way around in eighths, so the map covers every direction.
+- [x] Floor and walls: the bottom of the view either side of the player is taken as ground, which gives the camera's tilt and height, so open ground lands at floor height instead of reading as wall.
+- [x] Recognizing spots: prints leave out the HUD strips and are made from the 320-point picture for saved and live views alike (older spots get new prints from their pictures). Before she knows where she is, a looser match counts when it clearly beats every other spot, and the play log shows how close the nearest spot came.
+- [x] A brain look that fails tries a second Gemini model, and play stops only after five failed looks in a row, waiting a little longer each time. The play log says why each one failed.
+- [x] `report.txt`'s "Is it working?" lines are worked out from the map instead of fixed text.
+- [x] Tasks with several parts: the brain writes the parts down (`task_parts`), gets its plan back every look, and moves on to the next part by itself.
+- [x] Finding things off screen: map places first, then look around (views labeled +90°, 180°, -90°), then signs, minimap and exploring, then the wiki. `turn_to` turns to face a box exactly instead of guessing degrees.
+- [x] Naming places: a name given before she knows where she is waits and is placed once she does (it was dropped before). "This is the sell area" or "remember this as the shop" names her spot at once. A `go_to` whose target was already big when it went out of view counts as reached, so its name lands on the map. The brain is told to name every landmark it's next to.
+- [x] Walking no longer ends a step as "the screen changed a lot": a big change only counts when several new lines of text come up with it (a menu).
+- [x] Teleports: a black screen (loading, portal, respawn) makes her find where she is again; if nothing looks familiar after 30 seconds, the new area is mapped as its own zone, 500 units away, instead of on top of the old one.
+- [x] Light map (celly's idea): every frame she sees about once a second (not only new spots) casts its ~10,000 depth samples from her position, and each lights a small block (1/8 unit, a quarter of the walking grid) with the color it saw, averaged over sightings. Kept in `map/detail.bin` (13 bytes a block, up to 1.5 million). Walking plans still use the coarse grid.
+- [x] Spawn is 0,0,0 and is known by sight too: views taken at spawn are saved in the game's `spawn/` folder (outside `map/`, so deleting the map keeps them). Seeing one snaps her to 0,0,0; an empty map with a known spawn waits until she sees spawn so the new map keeps the same origin. Every session starts with a look around, which saves spawn's views the first time and finds where she is after that.
+- [x] Solid 3D model (celly: "it should look like an actual shop"): every ray also writes how far each small cell (0.1 unit) is from the surface it hit, averaged over every look, and surface nets turn that into a colored mesh, `map/map3d-surface.usdz` (Preview, Quick Look) and `.obj` (Blender, MeshLab). "Open the 3D map" opens it. Only seen sides exist; the back of a shop fills in once she walks around it.
+- [x] Landmarks: every named place also saves how it looks from where it was named (up to 4 directions) in the game's `landmarks/` folder, with its position from spawn. Seeing one tells her where she is (or corrects drift), and the brain gets each landmark's position from spawn and its distance to the nearest other one.
+- [x] Holding walking keys while the picture doesn't change no longer moves her on the map (she was blocked).
+- [x] The map as a 3D model: every save writes `map/map3d.obj` (colored blocks, opens in Preview, Blender or MeshLab), and "open the 3D map of <game>" opens it.
+
+## 10. Later (not in this build)
+
+- [ ] Position from what she sees between frames (visual odometry), so walking distance isn't only counted from keys.
+- [ ] Painting screenshots onto the solid model as textures (it has colors per point for now).
+- [ ] Naming places from signs read on screen at the sign's 3D position.
 
 - [ ] Multi-frame reconstruction (Depth Anything 3 small) for sharper geometry.
 - [ ] A real navigation mesh (Recast/Detour style) with heights, so stairs, slopes and several floors plan properly instead of the flat grid.

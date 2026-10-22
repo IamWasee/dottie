@@ -227,8 +227,15 @@ jobs:
           done
           codesign --force --sign "$identity" --keychain "$keychain" \
             --entitlements leanring-buddy/leanring-buddy.entitlements "$app"
-          codesign -d -r- "$app"
+          # The designated requirement is what macOS remembers permissions by.
+          # It must name the certificate; a cdhash one changes every build.
+          designated_requirement="$(codesign -d -r- "$app" 2>&1)"
+          echo "$designated_requirement"
           security delete-keychain "$keychain"
+          if echo "$designated_requirement" | grep -q "cdhash"; then
+            echo "::error::The app's designated requirement is a cdhash, so permissions would reset on every update."
+            exit 1
+          fi
 
       - name: Check the app
         run: |

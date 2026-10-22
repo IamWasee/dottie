@@ -474,8 +474,9 @@ interface SearchResult {
  * Web search for a free-tier key, which gets "You exceeded your current
  * quota" for Gemini's Google Search tool. Reads Bing's results page, then
  * DuckDuckGo's (it often answers servers with a 202 challenge page), then
- * Wikipedia's search, and adds the readable text of the first result so a
- * short answer needs no second call.
+ * Wikipedia's search, adds Roblox's own search for Roblox games, and adds
+ * the readable text of the first result so a short answer needs no second
+ * call.
  */
 async function handleSearch(url: URL): Promise<Response> {
   const query = (url.searchParams.get("q") ?? "").trim().slice(0, 300);
@@ -493,6 +494,16 @@ async function handleSearch(url: URL): Promise<Response> {
     results = await searchEngine(query).catch(() => [] as SearchResult[]);
     source = engineName;
     if (results.length > 0) break;
+  }
+
+  // Roblox experiences are often too new or small for the web engines, but
+  // Roblox's own search has the game and its description.
+  if (/\broblox\b/i.test(query)) {
+    const robloxGame = await searchRobloxGame(query).catch(() => undefined);
+    if (robloxGame) {
+      results = [robloxGame, ...results].slice(0, 6);
+      source = source ? `roblox+${source}` : "roblox";
+    }
   }
 
   let topPage: { url: string; text: string } | undefined;
@@ -541,6 +552,45 @@ async function searchBing(query: string): Promise<SearchResult[]> {
     if (results.length === 6) break;
   }
   return results;
+}
+
+/** The best-matching Roblox experience and its description, from Roblox's own search. */
+async function searchRobloxGame(query: string): Promise<SearchResult | undefined> {
+  const gameName = query
+    .replace(/\b(roblox|guide|how to play|wiki|beginner|tips)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!gameName) return undefined;
+  const searchResponse = await fetch(
+    `https://apis.roblox.com/search-api/omni-search?searchQuery=${encodeURIComponent(gameName)}&pageType=all&sessionId=${crypto.randomUUID()}`,
+    { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) }
+  );
+  if (!searchResponse.ok) return undefined;
+  const searchPayload = (await searchResponse.json()) as {
+    searchResults?: { contentGroupType?: string; contents?: { universeId?: number; rootPlaceId?: number; name?: string; description?: string }[] }[];
+  };
+  const firstGame = (searchPayload.searchResults ?? [])
+    .filter((group) => group.contentGroupType === "Game")
+    .flatMap((group) => group.contents ?? [])
+    .find((game) => game.universeId && game.name);
+  if (!firstGame?.universeId || !firstGame.name) return undefined;
+
+  let description = firstGame.description ?? "";
+  if (!description) {
+    const detailsResponse = await fetch(`https://games.roblox.com/v1/games?universeIds=${firstGame.universeId}`, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (detailsResponse.ok) {
+      const detailsPayload = (await detailsResponse.json()) as { data?: { description?: string }[] };
+      description = detailsPayload.data?.[0]?.description ?? "";
+    }
+  }
+  return {
+    title: `${firstGame.name} (Roblox experience)`,
+    url: firstGame.rootPlaceId ? `https://www.roblox.com/games/${firstGame.rootPlaceId}` : "https://www.roblox.com/discover",
+    snippet: `The game's own description on Roblox: ${description.replace(/\s+/g, " ").slice(0, 1500)}`,
+  };
 }
 
 async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {

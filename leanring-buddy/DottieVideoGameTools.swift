@@ -33,11 +33,11 @@ enum DottieVideoGameTools: DottieToolModule {
             },
             DottieTool(
                 name: "game_maps",
-                description: "Dottie's saved 3D maps of video games. list: which games have a map and how big. open: show a game's map picture and report in Finder (or every map with no game). delete: erase a game's map so it's mapped from scratch next time; only when the user asks to delete it, and the user confirms on screen. Deleting keeps the game's notebook and gameplay recordings.",
+                description: "Dottie's saved 3D maps of video games. list: which games have a map and how big. open: show a game's map picture and report in Finder (or every map with no game). open_3d: open a game's map as a 3D model the user can turn around. delete: erase a game's map so it's mapped from scratch next time; only when the user asks to delete it, and the user confirms on screen. Deleting keeps the game's notebook and gameplay recordings.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
-                        "action": ["type": "STRING", "enum": ["list", "open", "delete"], "description": "What to do."],
+                        "action": ["type": "STRING", "enum": ["list", "open", "open_3d", "delete"], "description": "What to do."],
                         "game": ["type": "STRING", "description": "The game's name as the user said it. Needed for delete."]
                     ],
                     "required": ["action"]
@@ -53,6 +53,16 @@ enum DottieVideoGameTools: DottieToolModule {
                         return "there's no map of \(spokenGameName); opened the folder with every game's map instead."
                     }
                     return "opened in Finder."
+                case "open_3d":
+                    guard let savedMap = DottieGameMapPicture.savedMap(named: spokenGameName) else {
+                        let mapNames = DottieGameMapPicture.savedMaps().map(\.gameName)
+                        return mapNames.isEmpty
+                            ? "there are no saved game maps."
+                            : "no map matches \"\(spokenGameName)\". saved maps: \(mapNames.joined(separator: ", ")). ask which one."
+                    }
+                    return await DottieGameMapPicture.open3DModel(savedMap)
+                        ? "opened the 3D map of \(savedMap.gameName). drag in it to turn it around."
+                        : "couldn't make a 3D model of \(savedMap.gameName)'s map."
                 case "delete":
                     guard let savedMap = DottieGameMapPicture.savedMap(named: spokenGameName) else {
                         let mapNames = DottieGameMapPicture.savedMaps().map(\.gameName)

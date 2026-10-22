@@ -9,7 +9,11 @@
 //    the spots Dottie photographed, named places, and where she stands.
 //    report.txt next to it says in plain words what was mapped, whether
 //    the depth model works and what the movement model has learned, so
-//    it's easy to tell whether the map is working.
+//    it's easy to tell whether the map is working. map3d.obj (with
+//    map3d.mtl for its colors) is the same map as blocks in 3D, and
+//    map3d-surface.usdz (and .obj) the solid, colored model from
+//    DottieGameSurfaceMap; Preview, Quick Look, Blender or MeshLab open
+//    them and let the user turn them around.
 //  - Listing, opening and deleting maps (the menu bar panel's "Game maps"
 //    button and the `game_maps` voice tool). Deleting removes only the map
 //    and the movement model; the notebook and gameplay recordings stay.
@@ -22,6 +26,11 @@ import Foundation
 enum DottieGameMapPicture {
     static let pictureFileName = "overview.png"
     static let reportFileName = "report.txt"
+    static let modelFileName = "map3d.obj"
+    private static let modelMaterialsFileName = "map3d.mtl"
+    /// The most-seen blocks only, so the file stays small enough to open.
+    private static let maximumModelBlockCount = 30_000
+    private static let maximumFineModelBlockCount = 80_000
 
     struct SavedMap {
         let gameName: String
@@ -41,6 +50,109 @@ enum DottieGameMapPicture {
         }
         try? reportText(of: worldMap, floorPlan: floorPlan)
             .write(to: worldMap.mapFolderURL.appendingPathComponent(reportFileName), atomically: true, encoding: .utf8)
+        write3DModel(of: worldMap)
+        worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL)
+    }
+
+    // MARK: - 3D model
+
+    /// Writes the map as blocks in a Wavefront OBJ file. With the fine
+    /// layer, each small block has the color it had in the game (rounded
+    /// to one of 64 colors, so the materials file stays short); without it,
+    /// the coarse blocks are grey floor, white walls, amber low things and
+    /// blue drops. A cyan post marks each photographed spot, a green one
+    /// spawn (0,0,0) and a pink one where Dottie stands. Built off the main
+    /// thread, since a big map is several megabytes of text.
+    @discardableResult
+    private static func write3DModel(of worldMap: DottieGameWorldMap) -> Task<Void, Never> {
+        let usesFineLayer = !worldMap.detailVoxelHits.isEmpty
+        let blockSize = usesFineLayer ? DottieGameWorldMap.detailVoxelSize : DottieGameWorldMap.voxelSize
+        let jumpHeightGridRows = Int(ceil(worldMap.movement.jumpHeightUnits / DottieGameWorldMap.voxelSize))
+        let sourceHits = usesFineLayer ? worldMap.detailVoxelHits : worldMap.voxelHits
+        let blockLimit = usesFineLayer ? maximumFineModelBlockCount : maximumModelBlockCount
+        let detailColors = worldMap.detailVoxelColors
+        let spotPositions = worldMap.keyframes.map { (x: $0.x, y: $0.y) }
+        let dottiePosition = (x: worldMap.pose.x, y: worldMap.pose.y)
+        let modelURL = worldMap.mapFolderURL.appendingPathComponent(modelFileName)
+        let materialsURL = worldMap.mapFolderURL.appendingPathComponent(modelMaterialsFileName)
+        let materialsFileName = modelMaterialsFileName
+        return Task.detached(priority: .utility) {
+            // Picking and sorting a big fine layer takes a moment, so it's
+            // done here rather than on the main thread.
+            let modelBlocks: [(gridX: Int, gridY: Int, gridZ: Int, materialName: String)] = sourceHits
+                // Seen once is often something passing by.
+                .filter { $0.value >= 2 }
+                .sorted { $0.value > $1.value }
+                .prefix(blockLimit)
+                .map { voxelEntry in
+                    let gridPosition = DottieGameWorldMap.gridPosition(ofVoxelKey: voxelEntry.key)
+                    let materialName: String
+                    if usesFineLayer {
+                        let color = detailColors[voxelEntry.key] ?? 0x808080
+                        // Four levels a channel: c<r><g><b>, each 0-3.
+                        materialName = "c\((color >> 22) & 3)\((color >> 14) & 3)\((color >> 6) & 3)"
+                    } else if gridPosition.gridZ < -1 {
+                        materialName = "below"
+                    } else if gridPosition.gridZ <= 0 {
+                        materialName = "floor"
+                    } else if gridPosition.gridZ <= jumpHeightGridRows {
+                        materialName = "low"
+                    } else {
+                        materialName = "wall"
+                    }
+                    return (gridPosition.gridX, gridPosition.gridY, gridPosition.gridZ, materialName)
+                }
+            var materialLines = [
+                "newmtl floor", "Kd 0.55 0.55 0.58",
+                "newmtl wall", "Kd 0.95 0.95 0.95",
+                "newmtl low", "Kd 0.98 0.68 0.15",
+                "newmtl below", "Kd 0.25 0.5 0.95",
+                "newmtl spot", "Kd 0.2 0.85 0.95",
+                "newmtl spawn", "Kd 0.2 0.9 0.35",
+                "newmtl dottie", "Kd 0.98 0.35 0.7"
+            ]
+            for red in 0..<4 {
+                for green in 0..<4 {
+                    for blue in 0..<4 {
+                        materialLines.append("newmtl c\(red)\(green)\(blue)")
+                        materialLines.append("Kd \(Double(red * 2 + 1) / 8) \(Double(green * 2 + 1) / 8) \(Double(blue * 2 + 1) / 8)")
+                    }
+                }
+            }
+            var modelLines = ["# Dottie's 3D map, measured from spawn (0,0,0). Up is the height.", "mtllib \(materialsFileName)"]
+            var vertexCount = 0
+            // One box: 8 corners, 6 square faces. OBJ is y-up, so the map's
+            // height becomes y and its forward direction becomes -z.
+            func addBox(minX: Double, minY: Double, minHeight: Double, width: Double, depth: Double, height: Double) {
+                for corner in 0..<8 {
+                    let cornerX = minX + (corner & 1 == 0 ? 0 : width)
+                    let cornerY = minY + (corner & 2 == 0 ? 0 : depth)
+                    let cornerHeight = minHeight + (corner & 4 == 0 ? 0 : height)
+                    modelLines.append("v \(cornerX) \(cornerHeight) \(-cornerY)")
+                }
+                let first = vertexCount + 1
+                for face in [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]] {
+                    modelLines.append("f " + face.map { String(first + $0) }.joined(separator: " "))
+                }
+                vertexCount += 8
+            }
+            for (materialName, blocks) in Dictionary(grouping: modelBlocks, by: { $0.materialName }) {
+                modelLines.append("usemtl \(materialName)")
+                for block in blocks {
+                    addBox(minX: Double(block.gridX) * blockSize, minY: Double(block.gridY) * blockSize, minHeight: Double(block.gridZ) * blockSize, width: blockSize, depth: blockSize, height: blockSize)
+                }
+            }
+            modelLines.append("usemtl spot")
+            for spotPosition in spotPositions {
+                addBox(minX: spotPosition.x - 0.05, minY: spotPosition.y - 0.05, minHeight: 0, width: 0.1, depth: 0.1, height: 2)
+            }
+            modelLines.append("usemtl spawn")
+            addBox(minX: -0.2, minY: -0.2, minHeight: 0, width: 0.4, depth: 0.4, height: 4)
+            modelLines.append("usemtl dottie")
+            addBox(minX: dottiePosition.x - 0.15, minY: dottiePosition.y - 0.15, minHeight: 0, width: 0.3, depth: 0.3, height: 3)
+            try? (materialLines.joined(separator: "\n") + "\n").write(to: materialsURL, atomically: true, encoding: .utf8)
+            try? (modelLines.joined(separator: "\n") + "\n").write(to: modelURL, atomically: true, encoding: .utf8)
+        }
     }
 
     private static func picture(of worldMap: DottieGameWorldMap, floorPlan: DottieGameNavigator.FloorPlan) -> Data? {
@@ -199,7 +311,8 @@ enum DottieGameMapPicture {
             "Sessions played with this map: \(worldMap.sessionCount)",
             "This session: \(worldMap.keyframesAddedThisSession) new spots photographed, \(worldMap.recognitionsThisSession) times she recognized a spot she knew, \(worldMap.framesWithDepthThisSession) frames turned into 3D.",
             "Spots photographed in total: \(worldMap.keyframes.count) (a spot is never photographed twice)",
-            "3D points: \(worldMap.voxelHits.count.formatted())",
+            "3D points: \(worldMap.voxelHits.count.formatted()) walking-grid blocks, \(worldMap.detailVoxelHits.count.formatted()) small blocks in the light map (map3d.obj shows the ones seen at least twice)",
+            "Spawn (0,0,0): \(worldMap.spawnViewCount) views saved for recognizing it (in the game's spawn folder, kept if the map is deleted)",
             "From above: \(floorPlan.floorCells.count) floor squares, \(floorPlan.blockedCells.count) wall squares, \(floorPlan.lowObstacleHeights.count) low squares to jump, \(floorPlan.dropCells.count) drop squares, \(worldMap.learnedBlockedCells.count) blocker squares she walked into",
             "Knows where she is right now: \(worldMap.isLocalized ? "yes" : "no, still looking for a spot she knows")",
             "Depth model: \(DottieGameDepth.shared.statusText)",
@@ -218,13 +331,27 @@ enum DottieGameMapPicture {
                 lines.append("- \(place.name) at (\(String(format: "%.1f", place.x)), \(String(format: "%.1f", place.y)))")
             }
         }
-        lines += [
-            "",
-            "Is it working?",
-            "- \"3D points\" stays 0: the depth model isn't working, so the map only has photographed spots (see Depth model above).",
-            "- On a second session \"recognized a spot\" stays 0: she isn't recognizing places she's been, so she may map them again.",
-            "- Walking still at 1.00 corrected 0 times: she hasn't come back to a known spot yet, so distances are guesses."
-        ]
+        // Checks worked out from this map, not fixed text.
+        lines += ["", "Is it working?"]
+        lines.append(worldMap.voxelHits.isEmpty
+            ? "- No 3D points: the depth model isn't working, so the map only has photographed spots (see Depth model above)."
+            : "- 3D: yes, the depth model has turned frames into \(worldMap.voxelHits.count.formatted()) points.")
+        let facingDirections = Set(worldMap.keyframes.map { Int((($0.headingDegrees + 360).truncatingRemainder(dividingBy: 360)) / 45) })
+        lines.append(facingDirections.count < 4
+            ? "- Directions: her spots face only \(facingDirections.count) of 8 directions, so the map covers little more than the way she walked. Turning around fills it in."
+            : "- Directions: her spots face \(facingDirections.count) of 8 directions.")
+        let mappedSquareCount = floorPlan.floorCells.count + floorPlan.blockedCells.count
+        if mappedSquareCount > 20, floorPlan.blockedCells.count > floorPlan.floorCells.count * 3 {
+            lines.append("- Floor: most squares read as wall, which is unusual for an open area. The floor finding may be off for this game's camera.")
+        }
+        if worldMap.sessionCount > 1 {
+            lines.append(worldMap.recognitionsThisSession == 0
+                ? "- Recognizing: she hasn't recognized a spot she knew this session yet, so she may map places again."
+                : "- Recognizing: yes, \(worldMap.recognitionsThisSession) times this session.")
+        }
+        if movementContents.walkSpeedCorrectionCount == 0 {
+            lines.append("- Distances: walking speed hasn't been corrected yet (she corrects it on coming back to a known spot), so distances are guesses.")
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -277,6 +404,26 @@ enum DottieGameMapPicture {
 
     /// Removes a game's map and movement model so the game is mapped from
     /// scratch next time. The notebook and gameplay recordings stay.
+    /// Opens map3d.obj in the Mac's app for 3D models (Preview unless the
+    /// user picked another), writing it first for a map saved before 3D
+    /// models were. False when it couldn't be made.
+    static func open3DModel(_ savedMap: SavedMap) async -> Bool {
+        // The solid model looks like the game; the blocks are the fallback
+        // until enough surface has been seen.
+        let surfaceModelURL = savedMap.mapFolderURL.appendingPathComponent(DottieGameSurfaceMap.modelFileName)
+        let blocksModelURL = savedMap.mapFolderURL.appendingPathComponent(modelFileName)
+        if !FileManager.default.fileExists(atPath: surfaceModelURL.path) || !FileManager.default.fileExists(atPath: blocksModelURL.path) {
+            let worldMap = DottieGameWorldMap(gameName: savedMap.gameName, gameFolderURL: savedMap.gameFolderURL)
+            await write3DModel(of: worldMap).value
+            await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL).value
+        }
+        if FileManager.default.fileExists(atPath: surfaceModelURL.path) {
+            return NSWorkspace.shared.open(surfaceModelURL)
+        }
+        guard FileManager.default.fileExists(atPath: blocksModelURL.path) else { return false }
+        return NSWorkspace.shared.open(blocksModelURL)
+    }
+
     static func deleteMap(_ savedMap: SavedMap) -> Bool {
         do {
             try FileManager.default.removeItem(at: savedMap.mapFolderURL)

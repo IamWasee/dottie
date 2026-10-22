@@ -18,7 +18,8 @@
 //    brain can look. Stuck first tries a jump and a step back on its own.
 //  - The user's quick calls ("stop", "jump", "run", "go left") act at once.
 //  - The 3D map (DottieGameWorldMap): every key held and camera turn moves
-//    Dottie's position on it, frames are handed to it to map new places,
+//    Dottie's position on it, every captured frame is handed to it to map
+//    new places (except while trying keys),
 //    and `go_to_place` walks a planned route there blind, with a free
 //    glance about twice a second instead of a model call.
 //
@@ -68,6 +69,8 @@ final class DottieGameReflexes {
         var note: String
         /// Extra views to show the brain (look_around).
         var extraFrameJPEGs: [Data] = []
+        /// Key or button → what it did, from learn_controls.
+        var learnedControls: [String: String] = [:]
     }
 
     var reflexModel: DottieGameReflexModel?
@@ -88,6 +91,10 @@ final class DottieGameReflexes {
     /// Recent frames, newest last, for the brain's motion pictures.
     private(set) var recentFrames: [(capturedAt: Date, image: CGImage)] = []
     private var previousThumbnail: [UInt8]?
+    /// Off while trying keys and the camera, or while the user plays and
+    /// their moves aren't tracked, when the view changes without the map's
+    /// pose knowing.
+    var isMapFeedingPaused = false
     private var previousBrightness: Double?
 
     static let frameDimension = 768
@@ -110,10 +117,14 @@ final class DottieGameReflexes {
 
     // MARK: - Frames
 
-    /// Captures the game now and notes it in the recent frames.
+    /// Captures the game now, notes it in the recent frames and lets the
+    /// 3D map see it, so every step maps as it goes.
     func captureFrame() async -> CGImage? {
         guard let image = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: Self.frameDimension) else {
             return nil
+        }
+        if !isMapFeedingPaused {
+            letMapSee(image)
         }
         recentFrames.append((Date(), image))
         let oldestKeptDate = Date().addingTimeInterval(-1.5)
@@ -243,6 +254,10 @@ final class DottieGameReflexes {
                 beforeTurnFrame = await captureFrame()
             }
             await turnCamera(degrees: turnDegrees)
+            if beforeTurnFrame == nil {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                _ = await captureFrame()
+            }
             if let beforeTurnFrame {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 if let afterTurnFrame = await captureFrame() {
@@ -251,6 +266,18 @@ final class DottieGameReflexes {
                 }
             }
             return StepResult(isEvent: false, note: "Turned \(Int(turnDegrees))°.")
+        case "turn_to":
+            guard let targetBox = step.targetBox else {
+                return StepResult(isEvent: true, note: "turn_to needs target_box.")
+            }
+            // How far the box's middle sits from the middle of the view, as
+            // a share of the field of view, is how far to turn.
+            let targetCenterFraction = (targetBox[1] + targetBox[3]) / 2000
+            let turnDegrees = (targetCenterFraction - 0.5) * worldMap.movement.horizontalFieldOfViewDegrees
+            await turnCamera(degrees: turnDegrees)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            _ = await captureFrame()
+            return StepResult(isEvent: false, note: "Turned \(Int(turnDegrees))° to face it.")
         case "look_around":
             return await lookAround()
         case "wait":
@@ -277,12 +304,26 @@ final class DottieGameReflexes {
 
     private func hold(keys keyCombination: String, seconds: Double) async -> StepResult {
         let keyNames = Set(keyCombination.lowercased().replacingOccurrences(of: " ", with: "").split(separator: "+").map(String.init))
+        let beforeThumbnail = recentFrames.last.flatMap { DottieGameVision.thumbnail(of: $0.image) }
         holdOnly(keyNames)
         // People never hold for exactly the same time twice.
         let heldSeconds = min(max(seconds, 0.05), 5) * Double.random(in: 0.88...1.12)
         try? await Task.sleep(nanoseconds: UInt64(heldSeconds * 1_000_000_000))
-        worldMap.noteMovement(heldKeys: heldKeys, seconds: heldSeconds)
+        let keysHeld = heldKeys
         releaseAllKeys()
+        let afterFrame = await captureFrame()
+        // Keys say what she tried, the picture what happened: walking keys
+        // with a picture that didn't change means she was blocked, so the
+        // map doesn't move her.
+        let pictureDidNotChange: Bool
+        if let beforeThumbnail, let afterFrame, let afterThumbnail = DottieGameVision.thumbnail(of: afterFrame) {
+            pictureDidNotChange = DottieGameVision.changedShare(from: beforeThumbnail, to: afterThumbnail) < 0.01
+        } else {
+            pictureDidNotChange = false
+        }
+        if !pictureDidNotChange {
+            worldMap.noteMovement(heldKeys: keysHeld, seconds: heldSeconds)
+        }
         return StepResult(isEvent: false, note: "Held \(keyCombination) for \(String(format: "%.1f", heldSeconds))s.")
     }
 
@@ -302,6 +343,7 @@ final class DottieGameReflexes {
         trackingRequest.trackingLevel = .fast
         let sequenceHandler = VNSequenceRequestHandler()
         let startedAt = Date()
+        var lastTrackedBox = Self.visionRect(fromBox: targetBox)
         var stillSince: Date?
         var hasTriedUnsticking = false
         var walkingKeys: Set<String> = sprint ? ["w", "shift"] : ["w"]
@@ -317,10 +359,9 @@ final class DottieGameReflexes {
             guard let frame = await captureFrame() else {
                 return StepResult(isEvent: true, note: "Couldn't see the screen.")
             }
-            if let eventNote = noticeEvent(in: frame, isTurning: false) {
+            if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                 return StepResult(isEvent: true, note: eventNote)
             }
-            letMapSee(frame)
             if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
                 return commandResult
             }
@@ -342,10 +383,16 @@ final class DottieGameReflexes {
             try? sequenceHandler.perform([trackingRequest], on: frame)
             guard let trackedObservation = trackingRequest.results?.first as? VNDetectedObjectObservation,
                   trackedObservation.confidence > 0.3 else {
+                // Something that already filled much of the view and then
+                // slipped out of it was walked up to, not lost.
+                if lastTrackedBox.height > 0.14 || lastTrackedBox.width > 0.22 {
+                    return StepResult(isEvent: false, note: "Reached the target (it was close when it went out of view).")
+                }
                 return StepResult(isEvent: true, note: "Lost sight of the target while walking.")
             }
             trackingRequest.inputObservation = trackedObservation
             let trackedBox = trackedObservation.boundingBox
+            lastTrackedBox = trackedBox
             if trackedBox.height > 0.22 || trackedBox.width > 0.35 {
                 return StepResult(isEvent: false, note: "Reached the target.")
             }
@@ -401,7 +448,7 @@ final class DottieGameReflexes {
             guard let frame = await captureFrame() else {
                 return StepResult(isEvent: true, note: "Couldn't see the screen.")
             }
-            if let eventNote = noticeEvent(in: frame, isTurning: false) {
+            if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                 return StepResult(isEvent: true, note: eventNote)
             }
             if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
@@ -551,7 +598,7 @@ final class DottieGameReflexes {
                 guard let frame = await captureFrame() else {
                     return .stopped(StepResult(isEvent: true, note: "Couldn't see the screen."))
                 }
-                if let eventNote = noticeEvent(in: frame, isTurning: false) {
+                if let eventNote = await noticeEvent(in: frame, isTurning: false) {
                     return .stopped(StepResult(isEvent: true, note: "On the way to \(placeName): \(eventNote)"))
                 }
                 if let commandResult = await handleUserCommand(walkingKeys: &walkingKeys) {
@@ -572,7 +619,6 @@ final class DottieGameReflexes {
                 } else {
                     holdOnly(walkingKeys)
                 }
-                letMapSee(frame)
                 if lastChangedShare < 0.01 {
                     stillSince = stillSince ?? Date()
                 } else {
@@ -618,19 +664,29 @@ final class DottieGameReflexes {
         await turnCamera(degrees: Bool.random() ? 35 : -35)
     }
 
-    /// Four quarter turns, a picture of each view, ending where it began.
+    /// A full turn in eighths, ending where it began: each view goes to the
+    /// 3D map, and the quarter views (right, behind, left) to the brain.
     private func lookAround() async -> StepResult {
         var viewJPEGs: [Data] = []
-        for _ in 0..<4 {
-            await turnCamera(degrees: 90)
+        // Each view is handed to the map below, so none is skipped.
+        let wasMapFeedingPaused = isMapFeedingPaused
+        isMapFeedingPaused = true
+        defer { isMapFeedingPaused = wasMapFeedingPaused }
+        for eighthIndex in 1...8 {
+            await turnCamera(degrees: 45)
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if let viewFrame = await captureFrame(), let viewJPEG = DottieGameVision.jpegData(of: viewFrame, quality: 0.6) {
+            guard let viewFrame = await captureFrame() else { continue }
+            // Let the map take this view before the next turn moves on.
+            if !wasMapFeedingPaused {
+                await worldMap.considerFrameWithoutSkipping(viewFrame)
+            }
+            if eighthIndex % 2 == 0, let viewJPEG = DottieGameVision.jpegData(of: viewFrame, quality: 0.6) {
                 viewJPEGs.append(viewJPEG)
             }
         }
         return StepResult(
             isEvent: true,
-            note: "Looked around: the extra pictures are the views to the right, behind, to the left, and ahead again.",
+            note: "Looked around: the extra pictures are the views to the right (+90°), behind (180°) and to the left (-90°), and you're facing ahead again. To face something you saw in one, turn by that many degrees.",
             extraFrameJPEGs: Array(viewJPEGs.prefix(3))
         )
     }
@@ -651,30 +707,62 @@ final class DottieGameReflexes {
     /// Other keys games often use, tried after the defaults.
     private static let otherKeysToTry = ["e", "f", "q", "r", "tab", "i", "m", "1"]
 
+    /// What a key did when tried.
+    private enum KeyTryOutcome {
+        case nothingVisible
+        /// The picture moved or changed without a menu: the character moved,
+        /// the camera turned, or something happened in the world.
+        case viewChanged
+        /// New text appeared at once: a menu, inventory or screen opened.
+        case openedScreen(textLines: [String])
+    }
+
     /// Learns the controls like a person picking up a new game: the
     /// default controls first (WASD, space, shift to sprint, C), then
     /// turning the camera by holding the right mouse button (and without
-    /// it), then the pause menu, then other common keys. Notes what each
-    /// did for the brain to write down as controls.
+    /// it), then the pause menu, then other common keys. Returns what each
+    /// did, and the controls it could tell, for the notebook.
     private func learnControlsByTrying() async -> StepResult {
+        // Turning and menus here would put wrong views on the map.
+        let wasMapFeedingPaused = isMapFeedingPaused
+        isMapFeedingPaused = true
+        defer { isMapFeedingPaused = wasMapFeedingPaused }
         var findings: [String] = []
+        var learnedControls: [String: String] = [:]
         guard let startFrame = await captureFrame() else {
             return StepResult(isEvent: true, note: "Couldn't see the screen.")
         }
         var previousTextLines = Set(await Self.readTextOffMain(startFrame))
 
-        // 1. The default controls.
+        // 1. The default controls. A key that did nothing the first time
+        // gets one more try at the end, since the very first keys can land
+        // before the game is ready.
         onProgressLine?("Trying the default controls")
-        for defaultControl in Self.defaultControlsToTry {
-            guard !Task.isCancelled else { break }
-            if let finding = await tryKeys(defaultControl.keys, seconds: defaultControl.seconds, previousTextLines: &previousTextLines) {
-                findings.append("\(finding) (usually: \(defaultControl.usualAction))")
+        var defaultControlsToRetry: [(keys: String, seconds: Double, usualAction: String)] = []
+        for isRetryPass in [false, true] {
+            let controlsThisPass = isRetryPass ? defaultControlsToRetry : Self.defaultControlsToTry
+            for defaultControl in controlsThisPass {
+                guard !Task.isCancelled else { break }
+                guard let outcome = await tryKeys(defaultControl.keys, seconds: defaultControl.seconds, previousTextLines: &previousTextLines) else { continue }
+                switch outcome {
+                case .viewChanged:
+                    learnedControls[defaultControl.keys] = defaultControl.usualAction
+                    findings.append("\(defaultControl.keys): the view moved, so it works (\(defaultControl.usualAction))")
+                case .openedScreen(let textLines):
+                    learnedControls[defaultControl.keys] = "opens a screen: " + textLines.prefix(3).joined(separator: " | ")
+                    findings.append("\(defaultControl.keys): opened a screen showing " + textLines.prefix(5).joined(separator: " | "))
+                case .nothingVisible:
+                    if !isRetryPass {
+                        defaultControlsToRetry.append(defaultControl)
+                    } else {
+                        findings.append("\(defaultControl.keys): nothing visible, twice (usually: \(defaultControl.usualAction))")
+                    }
+                }
             }
         }
 
         // 2. Turning the camera: holding the right mouse button, then not.
         onProgressLine?("Trying the camera")
-        var cameraFindings: [String] = []
         var cameraButtonsThatTurn: [String] = []
         for buttonToTry in ["right", "none"] {
             guard !Task.isCancelled else { break }
@@ -689,11 +777,12 @@ final class DottieGameReflexes {
             if didTurn {
                 cameraButtonsThatTurn.append(buttonToTry)
                 worldMap.movement.learnCameraTurn(before: beforeFrame, after: afterFrame, turnedMousePoints: turnedMousePoints)
-                cameraFindings.append("\(buttonDescription): turns the camera")
+                learnedControls[buttonToTry == "right" ? "right mouse drag" : "mouse move"] = "turns the camera"
+                findings.append("\(buttonDescription): turns the camera")
                 // Turn back, so the view is where it started.
                 await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: -turnedMousePoints, deltaY: 0, button: buttonToTry, seconds: 0.5)
             } else {
-                cameraFindings.append("\(buttonDescription): the camera didn't turn")
+                findings.append("\(buttonDescription): the camera didn't turn")
             }
         }
         if cameraButtonsThatTurn.contains("none") {
@@ -701,7 +790,6 @@ final class DottieGameReflexes {
         } else if cameraButtonsThatTurn.contains("right") {
             cameraButton = "right"
         }
-        findings += cameraFindings
 
         // 3. The pause menu often lists the controls.
         _ = DottieScreenActionPerformer.press(keyCombination: "escape")
@@ -714,20 +802,36 @@ final class DottieGameReflexes {
         }
         _ = DottieScreenActionPerformer.press(keyCombination: "escape")
         try? await Task.sleep(nanoseconds: 600_000_000)
+        if let afterMenuFrame = await captureFrame() {
+            previousTextLines = Set(await Self.readTextOffMain(afterMenuFrame))
+        }
 
-        // 4. Other common keys.
+        // 4. Other common keys. Only what they visibly opened counts as
+        // learned; "something changed" is left for the brain to judge.
         onProgressLine?("Trying other keys")
         for keyName in Self.otherKeysToTry {
             guard !Task.isCancelled else { break }
-            if let finding = await tryKeys(keyName, seconds: 0.15, previousTextLines: &previousTextLines) {
-                findings.append(finding)
+            guard let outcome = await tryKeys(keyName, seconds: 0.15, previousTextLines: &previousTextLines) else { continue }
+            switch outcome {
+            case .openedScreen(let textLines):
+                learnedControls[keyName] = "opens a screen: " + textLines.prefix(3).joined(separator: " | ")
+                findings.append("\(keyName): opened a screen showing " + textLines.prefix(5).joined(separator: " | "))
+            case .viewChanged:
+                findings.append("\(keyName): something changed on screen")
+            case .nothingVisible:
+                findings.append("\(keyName): nothing visible")
             }
         }
-        return StepResult(isEvent: true, note: "Tried the default controls, the camera, the menu and other common keys. What each did:\n" + findings.joined(separator: "\n") + "\nWrite what you can tell into `controls`.")
+        let note = "Tried the default controls, the camera, the menu and other common keys. What each did:\n" + findings.joined(separator: "\n")
+            + (learnedControls.isEmpty
+                ? "\nNo key did anything visible: the game may not have been focused or ready, or a menu was in the way. Deal with that, then try learn_controls again."
+                : "\nThese are saved as the controls; add anything you can tell in `controls`.")
+        return StepResult(isEvent: true, note: note, learnedControls: learnedControls)
     }
 
-    /// Holds keys for a moment and says what changed on screen.
-    private func tryKeys(_ keyCombination: String, seconds: Double, previousTextLines: inout Set<String>) async -> String? {
+    /// Holds keys for a moment and says what it did. A key that opened a
+    /// screen is pressed again to close it, so the next key is tried in play.
+    private func tryKeys(_ keyCombination: String, seconds: Double, previousTextLines: inout Set<String>) async -> KeyTryOutcome? {
         guard let beforeFrame = await captureFrame(), let beforeThumbnail = DottieGameVision.thumbnail(of: beforeFrame) else { return nil }
         _ = await hold(keys: keyCombination, seconds: seconds)
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -736,21 +840,17 @@ final class DottieGameReflexes {
         let afterTextLines = await Self.readTextOffMain(afterFrame)
         let newTextLines = afterTextLines.filter { !previousTextLines.contains($0) }
         previousTextLines = Set(afterTextLines)
-        var finding = "\(keyCombination): "
-        if changedShare > 0.4 {
-            finding += "big change (a menu or screen opened)"
-            // Close whatever opened so the next key is tried in play.
+        // Walking changes the whole picture too, so a big change alone
+        // isn't a menu: a menu also brings several new lines of text.
+        if changedShare > 0.15, newTextLines.count >= 3 {
             _ = DottieScreenActionPerformer.press(keyCombination: keyCombination)
             try? await Task.sleep(nanoseconds: 400_000_000)
-        } else if changedShare > 0.05 {
-            finding += "the view moved or changed"
-        } else {
-            finding += "nothing visible"
+            if let closedFrame = await captureFrame() {
+                previousTextLines = Set(await Self.readTextOffMain(closedFrame))
+            }
+            return .openedScreen(textLines: newTextLines)
         }
-        if !newTextLines.isEmpty {
-            finding += ", new text: " + newTextLines.prefix(5).joined(separator: " | ")
-        }
-        return finding
+        return changedShare > 0.05 ? .viewChanged : .nothingVisible
     }
 
     static func readTextOffMain(_ image: CGImage) async -> [String] {
@@ -763,19 +863,36 @@ final class DottieGameReflexes {
 
     private var lastChangedShare = 1.0
 
+    /// The frame noticeEvent looked at last, to read its text when the
+    /// next one changes a lot.
+    private var previousNoticedFrame: CGImage?
+
     /// Something the brain should look at, or nil.
-    private func noticeEvent(in frame: CGImage, isTurning: Bool) -> String? {
+    private func noticeEvent(in frame: CGImage, isTurning: Bool) async -> String? {
         guard let thumbnail = DottieGameVision.thumbnail(of: frame) else { return nil }
-        defer { previousThumbnail = thumbnail }
+        let earlierFrame = previousNoticedFrame
+        defer {
+            previousThumbnail = thumbnail
+            previousNoticedFrame = frame
+        }
         let brightness = DottieGameVision.averageBrightness(of: thumbnail)
         defer { previousBrightness = brightness }
         guard let previousThumbnail else { return nil }
         lastChangedShare = DottieGameVision.changedShare(from: previousThumbnail, to: thumbnail)
         if let previousBrightness, previousBrightness > 40, brightness < 12 {
-            return "The screen went dark (a death, a loading screen or a cutscene?)."
+            // Loading screens, portals and respawns move her without walking.
+            worldMap.noteTeleport()
+            return "The screen went dark (a death, a loading screen, a teleport or a cutscene?)."
         }
-        if !isTurning && lastChangedShare > 0.6 {
-            return "The screen changed a lot at once (a new area, a menu or a cutscene?)."
+        // Walking and turning in a third-person game change most of the
+        // picture, so a big change only counts when a menu or a new screen
+        // came up with it: several new lines of text at once.
+        if !isTurning, lastChangedShare > 0.6, let earlierFrame {
+            let earlierTextLineSet = Set(await Self.readTextOffMain(earlierFrame))
+            let newTextLines = await Self.readTextOffMain(frame).filter { !earlierTextLineSet.contains($0) }
+            if newTextLines.count >= 3 {
+                return "A menu or new screen came up: " + newTextLines.prefix(8).joined(separator: " | ")
+            }
         }
         if let currentLoudness, currentLoudness() > 0.7 {
             return "A loud sound in the game."

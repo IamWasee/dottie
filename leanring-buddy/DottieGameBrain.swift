@@ -54,6 +54,11 @@ struct DottieGamePlan {
     var lessons: [String]
     /// The brain says the next decision needs the stronger model.
     var isHard: Bool
+    /// The user's task broken into parts ("go to the packager", "pick up
+    /// the boxes", "find the sell area", "sell them"), when it gave them.
+    var taskParts: [String]
+    /// Which of `taskParts` it's on, counted from 1.
+    var currentTaskPartNumber: Int?
 
     init?(jsonObject: [String: Any]) {
         let stepObjects = jsonObject["steps"] as? [[String: Any]] ?? []
@@ -91,6 +96,8 @@ struct DottieGamePlan {
         answer = jsonObject["answer"] as? String
         lessons = jsonObject["lessons"] as? [String] ?? []
         isHard = (jsonObject["hard"] as? Bool) ?? false
+        taskParts = (jsonObject["task_parts"] as? [String] ?? []).filter { !$0.isEmpty }
+        currentTaskPartNumber = (jsonObject["task_part_now"] as? NSNumber)?.intValue
     }
 
     private static func box(_ value: Any?) -> [Double]? {
@@ -135,6 +142,9 @@ struct DottieGameBrainRequest {
         let jpegData: Data
     }
     let referencePictures: [ReferencePicture]
+    /// The plan for the user's task from earlier looks, as lines like
+    /// "2. find the sell area  <- now".
+    var taskPlanText: String = ""
 }
 
 @MainActor
@@ -170,6 +180,8 @@ final class DottieGameBrain {
     /// Claude failed or was too slow: Gemini thinks until this time.
     private var claudeSkippedUntil: Date?
     private(set) var lastEngineName = "claude"
+    /// Why the last look got no plan, for the play log.
+    private(set) var lastProblem: String?
 
     private static let gamerBotIDDefaultsKey = "dottieGamerBotID"
     private static let gamerBotNameDefaultsKey = "dottieGamerBotName"
@@ -198,9 +210,26 @@ final class DottieGameBrain {
             print("⚠️ Game brain: Claude's reply had no plan: \(claudeReply.prefix(300))")
         }
         guard !Task.isCancelled else { return nil }
-        guard let geminiReply = await thinkWithGemini(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures) else { return nil }
-        lastEngineName = "gemini"
-        return DottieGamePlan.parse(fromReply: geminiReply)
+        // A timed-out or busy Gemini model gets one more try on another
+        // model before the look counts as failed.
+        var triedGeminiModels: Set<String> = []
+        for _ in 0..<2 {
+            guard !Task.isCancelled else { return nil }
+            let geminiModel = DottieModelPicker.shared.pick(.normal, avoiding: triedGeminiModels)
+            triedGeminiModels.insert(geminiModel)
+            guard let geminiReply = await thinkWithGemini(messageText: messageText, frameJPEGs: request.frameJPEGs, referencePictures: request.referencePictures, model: geminiModel) else {
+                lastProblem = "\(mayUseClaude ? "Claude (MausBot) wasn't open or didn't answer, then " : "")\(geminiModel) timed out or failed"
+                continue
+            }
+            lastEngineName = "gemini"
+            guard let plan = DottieGamePlan.parse(fromReply: geminiReply) else {
+                lastProblem = "\(geminiModel) answered without a plan"
+                continue
+            }
+            lastProblem = nil
+            return plan
+        }
+        return nil
     }
 
     // MARK: - Claude
@@ -315,7 +344,7 @@ final class DottieGameBrain {
 
     // MARK: - Gemini
 
-    private func thinkWithGemini(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture]) async -> String? {
+    private func thinkWithGemini(messageText: String, frameJPEGs: [Data], referencePictures: [DottieGameBrainRequest.ReferencePicture], model: String) async -> String? {
         var parts: [[String: Any]] = []
         for referencePicture in referencePictures {
             parts.append(["text": "The user's picture \"\(referencePicture.name)\"\(referencePicture.description.isEmpty ? "" : " (\(referencePicture.description))"); when the task mentions it, find that thing in the game by its look:"])
@@ -328,7 +357,7 @@ final class DottieGameBrain {
         }
         parts.append(["text": messageText])
         let requestBody: [String: Any] = [
-            "model": DottieModelPicker.shared.pick(.normal),
+            "model": model,
             "systemInstruction": ["parts": [["text": Self.gamerInstructions]]],
             "contents": [["role": "user", "parts": parts]],
             "generationConfig": [
@@ -336,13 +365,16 @@ final class DottieGameBrain {
                 "thinkingConfig": ["thinkingLevel": "low"]
             ]
         ]
-        return await DottieChat.send(requestBody, timeout: 40)
+        return await DottieChat.send(requestBody, timeout: 30)
     }
 
     // MARK: - Prompts
 
     static func messageText(for request: DottieGameBrainRequest) -> String {
         var sections = ["Task from the user: \(request.taskText)", "Why you're asked now: \(request.event)"]
+        sections.append(request.taskPlanText.isEmpty
+            ? "Your plan for the task: none yet. Break the task into its parts in `task_parts`."
+            : "Your plan for the task (keep it, move on when a part is done, change it when you learn better):\n" + request.taskPlanText)
         if !request.userCommands.isEmpty {
             sections.append("The user just said: " + request.userCommands.map { "\"\($0)\"" }.joined(separator: ", ") + ". Do what they say.")
         }
@@ -383,11 +415,20 @@ final class DottieGameBrain {
     4. Explore close by: walk to the things that stand out (signs, NPCs, glowing things, doors, shops), read what they say, and name the places in `place`.
     5. Then play: do what the game asks, step by step.
 
+    The user's task often has several parts ("take the boxes from the packager and sell them" = go to the packager, pick up the boxes, find the sell area, go there, sell). Write the parts in `task_parts` the first time and say which one you're on in `task_part_now`; your plan comes back to you every time. When a part is done, move to the next one yourself: don't wait to be told, and don't stop until every part is done.
+
+    Finding things that aren't on screen (the sell area, a shop, an NPC):
+    1. Check your 3D map's named places: if it's there, `go_to_place`.
+    2. Otherwise `look_around`: you get the views to the right (+90°), behind (180°) and left (-90°). If you see it in one, `turn` by that many degrees, then `go_to` it on your next look.
+    3. Not in any view: read signs, arrows, the minimap and quest text for where it is, and check "About this game" in your notebook. Then explore: walk to open paths, roads and signs, `look_around` again at each new spot, and name every place you pass in `place` so the map remembers it.
+    4. Still lost: `search_wiki` where it is, then `ask_user`.
+    When something you want is on screen but not straight ahead, `turn_to` its box turns the camera to face it exactly; guessing degrees for a plain `turn` loses things off the edge of the screen.
+
     While playing:
     - Look at everything: what moved between the pictures, the HUD (health, money, prompts like "Press E"), quest text, arrows and markers, the minimap. When lost, open the map (`open_map`) or read the minimap.
     - Remember what you learn in `learned` ("E opens doors", "selling gives coins"), keep ideas you haven't checked in `guesses` and move them to `tested` once checked, and say what killed you in `died_because`.
     - When something doesn't work, try something different (another key, another path, back up, jump, turn around) before trying the same thing again. If truly stuck, `search_wiki` the game, then `ask_user`.
-    - When you reach a place worth knowing, name it in `place` with directions by landmarks ("past the fountain, left at the red house"). Dottie puts it on her 3D map of the game; a `go_to` with a `name` puts its target on the map once reached. When the user names where you are ("this is the shop, remember it"), put that in `place` right away.
+    - Name places: whenever you're at or right next to something you could name that you or the game may need to come back to (a shop, a sell or collect point, a quest giver or other NPC, a portal, a checkpoint, a chest, a crafting station, a resource spot, a door, anything the game keeps pointing you to), and above all when your thought mentions it, put it in `place`, named from its sign or label on screen, or by a short description when it has none ("blue shop with a sword sign"), with directions by landmarks ("past the fountain, left at the red house"). This is the only way your map learns where things are; a place you don't name can't be walked back to with `go_to_place` later. Dottie puts it on her 3D map of the game; a `go_to` with a `name` puts its target on the map once reached. When the user names where you are ("this is the shop, remember it"), put that in `place` right away.
     - To get to a place already on the map, use `go_to_place`: Dottie walks the route from the map without stopping to look, jumping over low things and going around anything in the way. Use `go_to` for things not on the map yet.
     - Set `hard` to true when the next decision is beyond quick play (a puzzle, a tricky fight, being stuck): a stronger model then takes the next look.
     - Never spend real money or in-game premium currency, and never chat with other players.
@@ -406,6 +447,7 @@ final class DottieGameBrain {
         {"do": "press", "keys": "e"},
         {"do": "click", "target_box": [..]},
         {"do": "turn", "degrees": -90},
+        {"do": "turn_to", "target_box": [..]},
         {"do": "look_around"},
         {"do": "wait", "seconds": 2},
         {"do": "open_map", "keys": "m"},
@@ -417,6 +459,7 @@ final class DottieGameBrain {
       "controls": {"e": "interact"}, "controls_complete": false,
       "learned": [], "guesses": [], "tested": [], "died_because": null,
       "place": {"name": "...", "directions": "..."} or null,
+      "task_parts": ["go to the packager", "pick up the boxes", "find the sell area", "sell the boxes"], "task_part_now": 1,
       "say": null, "ask_user": null, "hard": false,
       "done": false, "answer": "what to tell the user when done"
     }

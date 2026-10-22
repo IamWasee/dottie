@@ -45,12 +45,17 @@ final class DottieGameNotebook {
         /// What the game is and how to play it, from the web.
         var guide: String?
         var guideWrittenAt: Date?
+        /// When looking the game up last found nothing, so it isn't
+        /// searched again at every start.
+        var guideLookupFailedAt: Date?
         /// Which version of the controls routine last ran for this game
-        /// (2: default controls first, then the right-click camera).
+        /// (2: default controls first, then the right-click camera; 3: only
+        /// counts once it actually learned something).
         var controlsRoutineVersion: Int?
     }
 
-    static let currentControlsRoutineVersion = 2
+    static let currentControlsRoutineVersion = 3
+    private static let secondsBeforeFailedLookupIsTriedAgain = 24.0 * 60 * 60
 
     /// True until the current controls routine has run for this game, so a
     /// game learned the old way (no shift, C or camera) is learned again.
@@ -58,6 +63,9 @@ final class DottieGameNotebook {
         (contents.controlsRoutineVersion ?? 0) < Self.currentControlsRoutineVersion
     }
 
+    /// Called only when trying the keys learned at least one control, so a
+    /// run that saw nothing (the game wasn't focused, a menu was open) is
+    /// tried again next time.
     func markControlsRoutineDone() {
         contents.controlsRoutineVersion = Self.currentControlsRoutineVersion
         contents.hasLearnedControls = true
@@ -188,6 +196,10 @@ final class DottieGameNotebook {
     /// True when the game has no guide yet, or it's old enough that the
     /// game may have changed.
     var needsGuide: Bool {
+        if let guideLookupFailedAt = contents.guideLookupFailedAt,
+           Date().timeIntervalSince(guideLookupFailedAt) < Self.secondsBeforeFailedLookupIsTriedAgain {
+            return false
+        }
         guard contents.guide != nil, let guideWrittenAt = contents.guideWrittenAt else { return true }
         return Date().timeIntervalSince(guideWrittenAt) > DottieGameResearch.secondsBeforeGuideIsLookedUpAgain
     }
@@ -195,6 +207,12 @@ final class DottieGameNotebook {
     func setGuide(_ guide: String) {
         contents.guide = guide
         contents.guideWrittenAt = Date()
+        contents.guideLookupFailedAt = nil
+        save()
+    }
+
+    func noteGuideLookupFailed() {
+        contents.guideLookupFailedAt = Date()
         save()
     }
 
