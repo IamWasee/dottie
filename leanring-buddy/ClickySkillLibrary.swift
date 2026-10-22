@@ -60,6 +60,7 @@ final class ClickySkillLibrary: ObservableObject {
     init(libraryURL: URL) {
         self.libraryURL = libraryURL
         try? FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
+        DottieStarterSkills.installMissingSkills(into: libraryURL)
         reload()
     }
 
