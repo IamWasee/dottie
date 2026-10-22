@@ -5,7 +5,8 @@
 //  Co-op while Dottie plays a video game: what the user says to the player
 //  mid-game ("go left", "jump", "grab that") reaches it right away. Quick
 //  calls act on the next frame; the rest go to the game brain. Also the
-//  saved game maps: list them, show one in Finder, or delete one.
+//  saved game maps (list them, show one in Finder, or delete one) and
+//  recording gameplay by voice.
 //
 
 import Foundation
@@ -15,7 +16,7 @@ enum DottieVideoGameTools: DottieToolModule {
         [
             DottieTool(
                 name: "game_command",
-                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', 'this is the shop, remember it', or 'done' to finish mapping. Everything the user says about the game while it's being played goes here, never to screenshots, notes or memory tools. Quick moves happen at once. Answer in two or three words, like 'on it'.",
+                description: "While you're playing a video game for the user, or mapping one while they play (a do_task_on_screen game job), pass what they tell the player, word for word: 'go left', 'jump', 'run', 'stop', 'grab that', 'go to the shop', 'this is the shop, remember it', 'in this game F opens the egg shop' (she presses the key to check and saves it), or 'done' to finish mapping. Everything the user says about the game while it's being played goes here, never to screenshots, notes or memory tools. Quick moves happen at once. Answer in two or three words, like 'on it'.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -30,6 +31,40 @@ enum DottieVideoGameTools: DottieToolModule {
                 }
                 gamePlayer.receiveUserCommand(arguments.dottieString("command") ?? "")
                 return "passed to the player."
+            },
+            DottieTool(
+                name: "gameplay_recording",
+                description: "Record the user playing a game: the screen plus every key, mouse button and mouse move, saved as gameplay data (the same as Record gameplay in the menu bar). start: when they say 'record this', 'record me playing', 'start recording'. stop: 'stop recording', 'that's it'. status: whether it's recording and how much it saved. open: show the recordings folder. Recordings are never deleted. Answer in a few words.",
+                parameters: [
+                    "type": "OBJECT",
+                    "properties": [
+                        "action": ["type": "STRING", "enum": ["start", "stop", "status", "open"], "description": "What to do."]
+                    ],
+                    "required": ["action"]
+                ],
+                audiences: [.voice]
+            ) { arguments in
+                let recorder = DottieGameplayRecorder.shared
+                switch arguments.dottieString("action") ?? "status" {
+                case "start":
+                    guard !recorder.isRecording else { return "already recording." }
+                    await recorder.startRecording()
+                    if let problemMessage = recorder.problemMessage {
+                        return "couldn't start: \(problemMessage)"
+                    }
+                    return recorder.isRecording ? "recording now. say stop recording when done." : "couldn't start recording."
+                case "stop":
+                    guard recorder.isRecording else { return "wasn't recording." }
+                    recorder.stopRecording()
+                    return "stopped. saved \(recorder.savedFrameCount) frames with the keys and mouse."
+                case "open":
+                    recorder.openGameDataFolder()
+                    return "opened the recordings folder in Finder."
+                default:
+                    return recorder.isRecording
+                        ? "recording: \(recorder.savedFrameCount) frames so far."
+                        : "not recording."
+                }
             },
             DottieTool(
                 name: "game_maps",

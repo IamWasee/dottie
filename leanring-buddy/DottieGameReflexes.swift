@@ -83,9 +83,13 @@ final class DottieGameReflexes {
 
     let displayFrame: CGRect
     /// The mouse button held to turn the camera ("right" for Roblox and
-    /// many third-person games, "none" when the mouse turns it freely).
-    /// Learning the controls finds out which one works.
+    /// many third-person games, "none" when the mouse turns it freely), or
+    /// "arrows" when only the arrow keys turn it. Learning the controls
+    /// finds out which one works.
     private var cameraButton: String
+    /// Set by Stop: every loop ends and nothing new is pressed, even where
+    /// a step is waiting on something that doesn't notice cancellation.
+    private(set) var isStopped = false
     private let worldMap: DottieGameWorldMap
     private var heldKeys: Set<String> = []
     /// Recent frames, newest last, for the brain's motion pictures.
@@ -102,8 +106,15 @@ final class DottieGameReflexes {
 
     init(displayFrame: CGRect, cameraButton: String, worldMap: DottieGameWorldMap) {
         self.displayFrame = displayFrame
-        self.cameraButton = cameraButton
+        // What the controls test found for this game beats the guess.
+        self.cameraButton = worldMap.movement.cameraControl ?? cameraButton
         self.worldMap = worldMap
+    }
+
+    /// Stop: lets go of every key and ends every loop at its next check.
+    func stopEverything() {
+        isStopped = true
+        releaseAllKeys()
     }
 
     /// Hands a frame to the 3D map without waiting for it: the map skips
@@ -120,6 +131,7 @@ final class DottieGameReflexes {
     /// Captures the game now, notes it in the recent frames and lets the
     /// 3D map see it, so every step maps as it goes.
     func captureFrame() async -> CGImage? {
+        guard !isStopped else { return nil }
         guard let image = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: Self.frameDimension) else {
             return nil
         }
@@ -161,7 +173,7 @@ final class DottieGameReflexes {
     // MARK: - Keys
 
     private func pressKeyDown(_ keyName: String) {
-        guard !heldKeys.contains(keyName) else { return }
+        guard !isStopped, !heldKeys.contains(keyName) else { return }
         if DottieScreenActionPerformer.setKey(keyName, isDown: true) {
             heldKeys.insert(keyName)
         }
@@ -190,15 +202,41 @@ final class DottieGameReflexes {
         heldKeys = []
     }
 
+    /// Holds keys that don't walk (an arrow key turning the camera, a key
+    /// being tried), so the map doesn't count them as steps.
+    private func holdWithoutMoving(keys keyCombination: String, seconds: Double) async {
+        guard !isStopped else { return }
+        let keyNames = Set(keyCombination.lowercased().replacingOccurrences(of: " ", with: "").split(separator: "+").map(String.init))
+        holdOnly(keyNames)
+        try? await Task.sleep(nanoseconds: UInt64(min(max(seconds, 0.05), 5) * 1_000_000_000))
+        releaseAllKeys()
+    }
+
     /// About a quarter second, like a person reacting.
     private func humanPause() async {
         try? await Task.sleep(nanoseconds: UInt64(Double.random(in: 0.2...0.3) * 1_000_000_000))
     }
 
     private func turnCamera(degrees: Double) async {
-        let mousePoints = worldMap.movement.mousePoints(forDegrees: degrees)
         let turnSeconds = 0.18 + min(abs(degrees), 180) / 180 * 0.35
-        await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: mousePoints, deltaY: 0, button: cameraButton, seconds: turnSeconds)
+        await turnCamera(degrees: degrees, seconds: turnSeconds)
+    }
+
+    /// Turns the camera with whatever turns it in this game: the mouse, or
+    /// an arrow key held for as long as the turn takes.
+    private func turnCamera(degrees: Double, seconds: Double) async {
+        guard !isStopped, degrees != 0 else { return }
+        if cameraButton == "arrows" {
+            let arrowKeyName = degrees > 0 ? "right" : "left"
+            let heldSeconds = min(abs(degrees) / max(worldMap.movement.arrowKeyDegreesPerSecond, 10), 3)
+            let keysHeldBefore = heldKeys
+            holdOnly(keysHeldBefore.union([arrowKeyName]))
+            try? await Task.sleep(nanoseconds: UInt64(heldSeconds * 1_000_000_000))
+            releaseKey(arrowKeyName)
+        } else {
+            let mousePoints = worldMap.movement.mousePoints(forDegrees: degrees)
+            await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: mousePoints, deltaY: 0, button: cameraButton, seconds: seconds)
+        }
         worldMap.noteCameraTurn(degrees: degrees)
     }
 
@@ -303,6 +341,7 @@ final class DottieGameReflexes {
     }
 
     private func hold(keys keyCombination: String, seconds: Double) async -> StepResult {
+        guard !isStopped else { return StepResult(isEvent: true, note: "Stopped.") }
         let keyNames = Set(keyCombination.lowercased().replacingOccurrences(of: " ", with: "").split(separator: "+").map(String.init))
         let beforeThumbnail = recentFrames.last.flatMap { DottieGameVision.thumbnail(of: $0.image) }
         holdOnly(keyNames)
@@ -349,7 +388,7 @@ final class DottieGameReflexes {
         var walkingKeys: Set<String> = sprint ? ["w", "shift"] : ["w"]
         var lastMovementNotedAt = Date()
 
-        while !Task.isCancelled {
+        while !(Task.isCancelled || isStopped) {
             guard Date().timeIntervalSince(startedAt) < 14 else {
                 return StepResult(isEvent: true, note: "Didn't reach the target in 14 seconds.")
             }
@@ -371,8 +410,7 @@ final class DottieGameReflexes {
                     _ = DottieScreenActionPerformer.press(keyCombination: tappedKey)
                 }
                 if move.cameraTurnMousePoints != 0 {
-                    await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: move.cameraTurnMousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
-                    worldMap.noteCameraTurn(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint)
+                    await turnCamera(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint, seconds: 0.1)
                 }
                 if move.isStepFinished {
                     return StepResult(isEvent: false, note: "Reached the target.")
@@ -403,9 +441,7 @@ final class DottieGameReflexes {
             holdOnly(walkingKeys)
             if abs(horizontalOffset) > 0.04 {
                 let turnDegrees = horizontalOffset * worldMap.movement.horizontalFieldOfViewDegrees * 0.6
-                let mousePoints = worldMap.movement.mousePoints(forDegrees: turnDegrees)
-                await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: mousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
-                worldMap.noteCameraTurn(degrees: turnDegrees)
+                await turnCamera(degrees: turnDegrees, seconds: 0.1)
             } else {
                 try? await Task.sleep(nanoseconds: UInt64(1 / Self.framesPerSecond * 1_000_000_000))
             }
@@ -441,7 +477,7 @@ final class DottieGameReflexes {
         let startedAt = Date()
         var walkingKeys: Set<String> = []
 
-        while !Task.isCancelled {
+        while !(Task.isCancelled || isStopped) {
             guard Date().timeIntervalSince(startedAt) < 14 else {
                 return StepResult(isEvent: true, note: "Didn't reach the target in 14 seconds.")
             }
@@ -561,7 +597,7 @@ final class DottieGameReflexes {
     /// press jump at the leg's jump spots and learn from how each jump went.
     private func walk(_ legs: [DottieGameNavigator.Leg], toPlaceNamed placeName: String, walkStartedAt: Date) async -> LegWalkEnding {
         for leg in legs {
-            guard !Task.isCancelled else { return .stopped(StepResult(isEvent: true, note: "Stopped.")) }
+            guard !(Task.isCancelled || isStopped) else { return .stopped(StepResult(isEvent: true, note: "Stopped.")) }
             guard Date().timeIntervalSince(walkStartedAt) < 90 else {
                 return .stopped(StepResult(isEvent: true, note: "Walking to \(placeName) took far longer than planned; look where you are."))
             }
@@ -578,7 +614,7 @@ final class DottieGameReflexes {
             var nextJumpIndex = 0
             /// The last jump pressed, until it's known whether it cleared.
             var jumpInTheAir: (jump: DottieGameNavigator.Jump, pressedAt: Date)?
-            while Date().timeIntervalSince(legStartedAt) < leg.holdSeconds, !Task.isCancelled {
+            while Date().timeIntervalSince(legStartedAt) < leg.holdSeconds, !(Task.isCancelled || isStopped) {
                 let secondsIntoLeg = Date().timeIntervalSince(legStartedAt)
                 var secondsToSleep = max(0.05, min(0.5, leg.holdSeconds - secondsIntoLeg))
                 // Wake up in time for the next jump.
@@ -610,8 +646,7 @@ final class DottieGameReflexes {
                         _ = DottieScreenActionPerformer.press(keyCombination: tappedKey)
                     }
                     if move.cameraTurnMousePoints != 0 {
-                        await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: move.cameraTurnMousePoints, deltaY: 0, button: cameraButton, seconds: 0.1)
-                        worldMap.noteCameraTurn(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint)
+                        await turnCamera(degrees: Double(move.cameraTurnMousePoints) * worldMap.movement.degreesPerMousePoint, seconds: 0.1)
                     }
                     if move.isStepFinished {
                         break
@@ -704,8 +739,6 @@ final class DottieGameReflexes {
         ("w+shift", 1.0, "sprint"),
         ("c", 0.4, "crouch")
     ]
-    /// Other keys games often use, tried after the defaults.
-    private static let otherKeysToTry = ["e", "f", "q", "r", "tab", "i", "m", "1"]
 
     /// What a key did when tried.
     private enum KeyTryOutcome {
@@ -720,8 +753,9 @@ final class DottieGameReflexes {
     /// Learns the controls like a person picking up a new game: the
     /// default controls first (WASD, space, shift to sprint, C), then
     /// turning the camera by holding the right mouse button (and without
-    /// it), then the pause menu, then other common keys. Returns what each
-    /// did, and the controls it could tell, for the notebook.
+    /// it, then the arrow keys), then the pause menu. Other keys come from
+    /// the user (`tryTaughtKey`). Returns what each did, and the controls it
+    /// could tell, for the notebook.
     private func learnControlsByTrying() async -> StepResult {
         // Turning and menus here would put wrong views on the map.
         let wasMapFeedingPaused = isMapFeedingPaused
@@ -742,15 +776,18 @@ final class DottieGameReflexes {
         for isRetryPass in [false, true] {
             let controlsThisPass = isRetryPass ? defaultControlsToRetry : Self.defaultControlsToTry
             for defaultControl in controlsThisPass {
-                guard !Task.isCancelled else { break }
+                guard !(Task.isCancelled || isStopped) else { break }
                 guard let outcome = await tryKeys(defaultControl.keys, seconds: defaultControl.seconds, previousTextLines: &previousTextLines) else { continue }
                 switch outcome {
                 case .viewChanged:
                     learnedControls[defaultControl.keys] = defaultControl.usualAction
                     findings.append("\(defaultControl.keys): the view moved, so it works (\(defaultControl.usualAction))")
                 case .openedScreen(let textLines):
-                    learnedControls[defaultControl.keys] = "opens a screen: " + textLines.prefix(3).joined(separator: " | ")
-                    findings.append("\(defaultControl.keys): opened a screen showing " + textLines.prefix(5).joined(separator: " | "))
+                    // Moving brings new text into view too (a leaderboard,
+                    // signs), so for these movement keys it still means the
+                    // key works; "a" was once read as opening a screen.
+                    learnedControls[defaultControl.keys] = defaultControl.usualAction
+                    findings.append("\(defaultControl.keys): the view changed, so it works (\(defaultControl.usualAction)); new text came into view: " + textLines.prefix(3).joined(separator: " | "))
                 case .nothingVisible:
                     if !isRetryPass {
                         defaultControlsToRetry.append(defaultControl)
@@ -765,7 +802,7 @@ final class DottieGameReflexes {
         onProgressLine?("Trying the camera")
         var cameraButtonsThatTurn: [String] = []
         for buttonToTry in ["right", "none"] {
-            guard !Task.isCancelled else { break }
+            guard !(Task.isCancelled || isStopped) else { break }
             guard let beforeFrame = await captureFrame() else { continue }
             let turnedMousePoints: CGFloat = 220
             await DottieScreenActionPerformer.turnCameraSmoothly(deltaX: turnedMousePoints, deltaY: 0, button: buttonToTry, seconds: 0.5)
@@ -789,6 +826,27 @@ final class DottieGameReflexes {
             cameraButton = "none"
         } else if cameraButtonsThatTurn.contains("right") {
             cameraButton = "right"
+        } else if !(Task.isCancelled || isStopped), let beforeFrame = await captureFrame() {
+            // Neither mouse way turned it (Roblox can ignore Dottie's mouse
+            // when it locks the pointer): its arrow keys turn the camera too.
+            let heldSeconds = 0.25
+            await holdWithoutMoving(keys: "right", seconds: heldSeconds)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if let afterFrame = await captureFrame(),
+               let shiftFraction = DottieGameMovement.horizontalShiftFraction(from: beforeFrame, to: afterFrame),
+               abs(shiftFraction) > 0.03 {
+                cameraButton = "arrows"
+                worldMap.movement.learnArrowKeyTurn(before: beforeFrame, after: afterFrame, heldSeconds: heldSeconds)
+                learnedControls["left/right arrows"] = "turn the camera"
+                findings.append("the left and right arrow keys: turn the camera")
+                await holdWithoutMoving(keys: "left", seconds: heldSeconds)
+            } else {
+                findings.append("the left and right arrow keys: the camera didn't turn either, so Dottie can't turn the camera in this game; look_around won't work, so explore by walking and ask the user how the camera turns")
+            }
+        }
+        // When nothing turned it, the guess stays but isn't remembered.
+        if !cameraButtonsThatTurn.isEmpty || cameraButton == "arrows" {
+            worldMap.movement.rememberCameraControl(cameraButton)
         }
 
         // 3. The pause menu often lists the controls.
@@ -802,31 +860,36 @@ final class DottieGameReflexes {
         }
         _ = DottieScreenActionPerformer.press(keyCombination: "escape")
         try? await Task.sleep(nanoseconds: 600_000_000)
-        if let afterMenuFrame = await captureFrame() {
-            previousTextLines = Set(await Self.readTextOffMain(afterMenuFrame))
-        }
 
-        // 4. Other common keys. Only what they visibly opened counts as
-        // learned; "something changed" is left for the brain to judge.
-        onProgressLine?("Trying other keys")
-        for keyName in Self.otherKeysToTry {
-            guard !Task.isCancelled else { break }
-            guard let outcome = await tryKeys(keyName, seconds: 0.15, previousTextLines: &previousTextLines) else { continue }
-            switch outcome {
-            case .openedScreen(let textLines):
-                learnedControls[keyName] = "opens a screen: " + textLines.prefix(3).joined(separator: " | ")
-                findings.append("\(keyName): opened a screen showing " + textLines.prefix(5).joined(separator: " | "))
-            case .viewChanged:
-                findings.append("\(keyName): something changed on screen")
-            case .nothingVisible:
-                findings.append("\(keyName): nothing visible")
-            }
-        }
-        let note = "Tried the default controls, the camera, the menu and other common keys. What each did:\n" + findings.joined(separator: "\n")
+        // Other keys are not guessed at: the user teaches them ("in this
+        // game F opens the shop"), and the brain can try one it reads about.
+        let note = "Tried the default controls, the camera and the menu. What each did:\n" + findings.joined(separator: "\n")
             + (learnedControls.isEmpty
                 ? "\nNo key did anything visible: the game may not have been focused or ready, or a menu was in the way. Deal with that, then try learn_controls again."
                 : "\nThese are saved as the controls; add anything you can tell in `controls`.")
         return StepResult(isEvent: true, note: note, learnedControls: learnedControls)
+    }
+
+    /// Presses a key the user taught ("F opens the egg shop") once and
+    /// says what it visibly did, so Dottie can confirm it or say what she
+    /// saw instead. A screen it opened is closed again.
+    func tryTaughtKey(_ keyCombination: String) async -> String {
+        let wasMapFeedingPaused = isMapFeedingPaused
+        isMapFeedingPaused = true
+        defer { isMapFeedingPaused = wasMapFeedingPaused }
+        guard let startFrame = await captureFrame() else { return "couldn't see the screen" }
+        var previousTextLines = Set(await Self.readTextOffMain(startFrame))
+        guard let outcome = await tryKeys(keyCombination, seconds: 0.15, previousTextLines: &previousTextLines) else {
+            return "couldn't see the screen"
+        }
+        switch outcome {
+        case .openedScreen(let textLines):
+            return "it opened a screen showing " + textLines.prefix(5).joined(separator: " | ")
+        case .viewChanged:
+            return "something changed on screen"
+        case .nothingVisible:
+            return "nothing visible happened"
+        }
     }
 
     /// Holds keys for a moment and says what it did. A key that opened a

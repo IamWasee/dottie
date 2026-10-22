@@ -49,6 +49,19 @@ final class DottieGamePlayer {
     var reflexModel: DottieGameReflexModel?
 
     private var pendingUserCommands: [String] = []
+    /// Keys the user taught by voice ("in this game F opens the shop"),
+    /// tried at the next look before the brain is asked.
+    private var pendingTaughtControls: [(keys: String, meaning: String)] = []
+    /// The reflexes and notebook of the game being played, so Stop and
+    /// taught keys reach them.
+    private var currentReflexes: DottieGameReflexes?
+    private var currentNotebook: DottieGameNotebook?
+    /// While mapping as the user plays, taught keys are saved without
+    /// trying them, since the user has the keyboard.
+    private var isMappingWhileUserPlays = false
+    /// Set by Stop, so every loop ends even if a step doesn't notice the
+    /// task being cancelled.
+    private(set) var isStopped = false
     /// The game being played, once it's been named.
     private(set) var currentGameName: String?
     private var brain: DottieGameBrain?
@@ -80,7 +93,67 @@ final class DottieGamePlayer {
         if let spokenPlaceName = Self.placeName(namedIn: trimmedCommand), let currentWorldMap {
             currentWorldMap.notePlace(name: spokenPlaceName)
         }
+        // "In this game F opens the egg shop": she tries F and says what
+        // happened, or just writes it down while the user has the keyboard.
+        if let taughtControl = Self.taughtControl(in: trimmedCommand) {
+            if isMappingWhileUserPlays || currentReflexes == nil {
+                currentNotebook?.teachControl(keys: taughtControl.keys, meaning: taughtControl.meaning)
+                currentNotebook?.log("The user taught: \(taughtControl.keys) = \(taughtControl.meaning) (saved without trying).")
+                onThinkAloud?("Got it, \(taughtControl.keys.uppercased()) \(taughtControl.meaning).")
+            } else {
+                pendingTaughtControls.append(taughtControl)
+            }
+            return
+        }
         pendingUserCommands.append(trimmedCommand)
+    }
+
+    /// A key (or modifiers plus a key) as people say it.
+    private static let spokenKeyPattern = #"((?:(?:shift|control|ctrl|option|alt|command|cmd)\s*(?:\+|plus|and)?\s*)*(?:f1[0-2]|f[1-9]|space\s?bar|space|tab|enter|return|escape|esc|backspace|(?:up|down|left|right)(?: arrow)?|[a-z0-9]))"#
+
+    /// The key and what it does when a remark teaches a control, like
+    /// ("f", "opens the egg shop") from "in this game F opens the egg shop"
+    /// or ("shift+e", "sell everything") from "press shift E to sell
+    /// everything", or nil.
+    static func taughtControl(in remark: String) -> (keys: String, meaning: String)? {
+        let keyPattern = spokenKeyPattern
+        // The verb stays in the meaning when it says what the key does
+        // ("opens the shop") and is dropped when it only links ("is for").
+        let patterns: [String] = [
+            (#"(?i)\b(?:press|hit|use|hold|tap)\s+(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:to|for)\s+(.+)"#,
+            (#"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?(?:is for|is to|is|does|means|=|:)\s+(.+)"#,
+            (#"(?i)(?:^|in this game,?\s+|and\s+|also\s+|so\s+|okay,?\s+|ok,?\s+)(?:the\s+)?"# + keyPattern + #"(?:\s+key|\s+button)?\s+(?:also\s+|too\s+)?((?:opens|open|closes|sells|buys|jumps|crouches|sprints|runs|attacks|picks|drops|throws|toggles|shows|uses|equips|interacts|lets you|makes you|will)\b.+)"#
+        ]
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: remark, range: NSRange(remark.startIndex..., in: remark)),
+                  let keyRange = Range(match.range(at: 1), in: remark),
+                  let meaningRange = Range(match.range(at: 2), in: remark) else { continue }
+            var meaning = String(remark[meaningRange])
+            for separator in [",", ".", "!", "?", " too", " as well", " try it", " remember"] {
+                if let separatorRange = meaning.range(of: separator, options: .caseInsensitive) {
+                    meaning = String(meaning[..<separatorRange.lowerBound])
+                }
+            }
+            meaning = meaning.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !meaning.isEmpty, meaning.count <= 80 else { continue }
+            return (keys: normalizedKeys(String(remark[keyRange])), meaning: meaning)
+        }
+        return nil
+    }
+
+    /// "Shift E", "ctrl plus 1", "space bar" → "shift+e", "control+1", "space".
+    private static func normalizedKeys(_ spokenKeys: String) -> String {
+        let spellings = ["ctrl": "control", "cmd": "command", "alt": "option", "esc": "escape", "spacebar": "space", "return": "enter"]
+        var keyNames = spokenKeys.lowercased()
+            .replacingOccurrences(of: "space bar", with: "spacebar")
+            .replacingOccurrences(of: " arrow", with: "")
+            .replacingOccurrences(of: "+", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0 != "plus" && $0 != "and" }
+        keyNames = keyNames.map { spellings[$0] ?? $0 }
+        return keyNames.joined(separator: "+")
     }
 
     /// The place a remark names, like "the sell area" from "this is the
@@ -123,14 +196,20 @@ final class DottieGamePlayer {
         onProgress?("Working out which game this is")
         let firstScreenText = await DottieGameReflexes.readTextOffMain(firstScreenshot.image)
         let gameName = await DottieGameResearch.identifyGame(taskText: taskText, windowGameName: windowGameName, screenText: firstScreenText)
-        guard !Task.isCancelled else { return .stopped }
+        guard !(Task.isCancelled || isStopped) else { return .stopped }
         currentGameName = gameName
         let notebook = DottieGameNotebook(gameName: gameName)
         let worldMap = DottieGameWorldMap(gameName: gameName, gameFolderURL: notebook.folderURL)
         currentWorldMap = worldMap
+        currentNotebook = notebook
+        notebook.createUserControlsFileIfMissing()
         let cameraButton = gameName.lowercased().contains("roblox") ? "right" : "none"
         let reflexes = DottieGameReflexes(displayFrame: firstScreenshot.displayFrame, cameraButton: cameraButton, worldMap: worldMap)
         reflexes.reflexModel = reflexModel
+        currentReflexes = reflexes
+        if isStopped {
+            reflexes.stopEverything()
+        }
         reflexes.onProgressLine = { [weak self] progressLine in
             self?.onProgress?(progressLine)
         }
@@ -150,6 +229,8 @@ final class DottieGamePlayer {
             gameHearing.stop()
             gameBrain.stop()
             currentWorldMap = nil
+            currentReflexes = nil
+            currentNotebook = nil
             if Self.current === self {
                 Self.current = nil
             }
@@ -216,7 +297,7 @@ final class DottieGamePlayer {
         // looks like, and on a known map it finds where she is.
         var lastMappingSweepAt = Date.distantPast
         for brainCallIndex in 0..<Self.maximumBrainCalls {
-            guard !Task.isCancelled else { return .stopped }
+            guard !(Task.isCancelled || isStopped) else { return .stopped }
 
             if !worldMap.isTopDownView, Date().timeIntervalSince(lastMappingSweepAt) > Self.secondsBetweenMappingSweeps {
                 lastMappingSweepAt = Date()
@@ -240,6 +321,10 @@ final class DottieGamePlayer {
             while !pendingUserCommands.isEmpty {
                 userCommands.append(pendingUserCommands.removeFirst())
             }
+            while !pendingTaughtControls.isEmpty, !isStopped {
+                let taughtControl = pendingTaughtControls.removeFirst()
+                extraNotes.append(await tryTaughtControl(taughtControl, notebook: notebook, reflexes: reflexes))
+            }
 
             let request = DottieGameBrainRequest(
                 taskText: taskText,
@@ -261,9 +346,11 @@ final class DottieGamePlayer {
             extraNotes = []
             extraFrameJPEGs = []
 
+            guard !(Task.isCancelled || isStopped) else { return .stopped }
+            onProgress?("Thinking about what to do next")
             notebook.log("Asked the brain\(needsStrongerModel ? " (stronger model)" : ""): \(nextEvent)")
             guard let plan = await gameBrain.think(request, needsStrongerModel: needsStrongerModel) else {
-                guard !Task.isCancelled else { return .stopped }
+                guard !(Task.isCancelled || isStopped) else { return .stopped }
                 failedBrainCallsInARow += 1
                 notebook.log("The brain didn't answer (\(failedBrainCallsInARow) in a row\(gameBrain.lastProblem.map { ": \($0)" } ?? "")).")
                 if failedBrainCallsInARow >= Self.maximumFailedBrainCallsInARow {
@@ -304,7 +391,7 @@ final class DottieGamePlayer {
             if let question = plan.askUser, !question.isEmpty {
                 onAskUser?(question)
                 let answer = await DottieScreenJobQuestions.shared.waitForAnswer(to: question, timeoutSeconds: 180)
-                guard !Task.isCancelled else { return .stopped }
+                guard !(Task.isCancelled || isStopped) else { return .stopped }
                 nextEvent = answer.map { "The user answered: \"\($0)\"." } ?? "The user didn't answer; carry on with your best guess."
                 continue
             }
@@ -315,7 +402,7 @@ final class DottieGamePlayer {
             let playStartedAt = Date()
             var hadTroubleThisRound = false
             for step in plan.steps.prefix(3) {
-                guard !Task.isCancelled else { return .stopped }
+                guard !(Task.isCancelled || isStopped) else { return .stopped }
                 let stepResult = await reflexes.perform(step, goal: plan.goal)
                 if step.kind == "learn_controls" {
                     // Written straight into the notebook, so the controls
@@ -357,8 +444,29 @@ final class DottieGamePlayer {
     }
 
     func stop() {
+        isStopped = true
+        currentReflexes?.stopEverything()
         brain?.stop()
         hearing?.stop()
+    }
+
+    /// Presses a key the user taught, says out loud what happened, and
+    /// saves it to the game's my-controls.txt. Returns a note for the brain.
+    private func tryTaughtControl(_ taughtControl: (keys: String, meaning: String), notebook: DottieGameNotebook, reflexes: DottieGameReflexes) async -> String {
+        onProgress?("Trying \(taughtControl.keys.uppercased()) like you said")
+        let whatHappened = await reflexes.tryTaughtKey(taughtControl.keys)
+        // What the user says is kept whatever the screen showed: a key can
+        // need the right spot (a shop counter) to do anything.
+        notebook.teachControl(keys: taughtControl.keys, meaning: taughtControl.meaning)
+        notebook.log("The user taught: \(taughtControl.keys) = \(taughtControl.meaning). Tried it: \(whatHappened).")
+        let spokenKeys = taughtControl.keys.uppercased()
+        if whatHappened.hasPrefix("it opened") || whatHappened.hasPrefix("something changed") {
+            onThinkAloud?("Okay, got it. \(spokenKeys) \(taughtControl.meaning).")
+        } else {
+            onThinkAloud?("I pressed \(spokenKeys) and nothing happened here, but I've saved it. I'll use it when it fits.")
+        }
+        lastThoughtAloudAt = Date()
+        return "The user taught you a control: \(taughtControl.keys) = \(taughtControl.meaning). Dottie pressed it once to check: \(whatHappened). It's saved in the notebook; use it when it fits."
     }
 
     /// The task's parts as numbered lines, marking done ones and the one
@@ -417,6 +525,8 @@ final class DottieGamePlayer {
     /// ("done", "stop mapping"), stops the job, or after half an hour.
     private func mapWhileUserPlays(worldMap: DottieGameWorldMap, reflexes: DottieGameReflexes, cameraButton: String) async -> DottieScreenTaskRunner.Outcome {
         onProgress?("Mapping while you play")
+        isMappingWhileUserPlays = true
+        defer { isMappingWhileUserPlays = false }
         thinkAloudIfItsBeenAWhile(worldMap.isFamiliar ? "Go ahead, I'll add to my map as you play." : "Go ahead and play, I'll map as you go.")
         let gameplayRecorder = DottieGameplayRecorder.shared
         let didStartRecording = !gameplayRecorder.isRecording
@@ -444,7 +554,7 @@ final class DottieGamePlayer {
         var previousFrame: CGImage?
         var turnsSeenOnlyInThePicture = 0
         var turnsFromTheMouse = 0
-        while !Task.isCancelled, Date().timeIntervalSince(mappingStartedAt) < Self.mapWhileUserPlaysSeconds {
+        while !(Task.isCancelled || isStopped), Date().timeIntervalSince(mappingStartedAt) < Self.mapWhileUserPlaysSeconds {
             try? await Task.sleep(nanoseconds: 250_000_000)
             // The user's own input moves Dottie's place on the map.
             let userInput = inputWatcher.takeInput()
@@ -484,7 +594,7 @@ final class DottieGamePlayer {
                 lastProgressShownAt = Date()
             }
         }
-        guard finishedByUser || !Task.isCancelled else { return .stopped }
+        guard finishedByUser || !(Task.isCancelled || isStopped) else { return .stopped }
         DottieGameNotebook.appendToPlayLog("Mapping while the user played: \(turnsFromTheMouse) camera turns from the mouse, \(turnsSeenOnlyInThePicture) seen only in the picture.", gameFolderURL: worldMap.mapFolderURL.deletingLastPathComponent())
         worldMap.save()
         let newSpotCount = worldMap.keyframes.count - spotsBefore
@@ -535,13 +645,13 @@ final class DottieGamePlayer {
         }
 
         var watchedFrameJPEGs: [Data] = []
-        while Date().timeIntervalSince(watchStartedAt) < Self.watchSeconds, !Task.isCancelled {
+        while Date().timeIntervalSince(watchStartedAt) < Self.watchSeconds, !(Task.isCancelled || isStopped) {
             if let frame = await reflexes.captureFrame(), let frameJPEG = DottieGameVision.jpegData(of: frame, quality: 0.6) {
                 watchedFrameJPEGs.append(frameJPEG)
             }
             try? await Task.sleep(nanoseconds: 6_000_000_000)
         }
-        guard !Task.isCancelled else { return .stopped }
+        guard !(Task.isCancelled || isStopped) else { return .stopped }
 
         let request = DottieGameBrainRequest(
             taskText: taskText,

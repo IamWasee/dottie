@@ -428,6 +428,9 @@ enum DottieScreenActionPerformer {
         if holdsButton {
             CGEvent(mouseEventSource: eventSource, mouseType: downType, mouseCursorPosition: startLocation, mouseButton: mouseButton)?
                 .post(tap: .cghidEventTap)
+            // Games like Roblox only start turning the camera a frame or
+            // two after the button goes down, so drags sent at once are lost.
+            try? await Task.sleep(nanoseconds: 60_000_000)
         }
         let clampedSeconds = min(max(seconds, 0.08), 2)
         let stepCount = max(6, Int(clampedSeconds * 90))
