@@ -25,10 +25,16 @@ For bigger work, pair with brainstorming-before-building (unclear goal), writing
 9. Run the checks from step 3 and read the output (verification-before-done).
 10. Stop when the checks pass. Do not keep polishing.
 
+A worked example. Request: "make the export skip empty rows".
+- Ambiguous? "Empty" could mean all cells blank, or the first cell blank. Ask: "Skip rows where every cell is blank, or where the name is blank?"
+- Success: `python3 export.py sample.csv` on a file with 2 blank rows out of 10 writes 8 rows; existing tests still pass.
+- Simplest change: one `if not any(cell.strip() for cell in row): continue` in the existing loop.
+- Not done: renaming `export_rows`, switching to pandas, adding a `--skip-empty` flag.
+
 ## Tools on a Mac
 
 - See what you changed: `git diff`, `git diff --stat`, `git status --short`.
-- Revert one stray hunk interactively is not available headless; instead restore a whole file you did not mean to change: `git restore path/to/file`.
+- Undo changes to a file you did not mean to touch: `git restore path/to/file` (only for files with no edits of the user's).
 - Check you did not reformat a file: `git diff --ignore-all-space --stat` compared with `git diff --stat`; a big gap means whitespace churn.
 - Find existing helpers before writing new ones: `grep -rn "def parse\|function parse\|func parse" .`
 - Check for an existing dependency: `grep -n '"dependencies"' -A 30 package.json`, `cat requirements.txt`, `python3 -m pip show <pkg>`.
@@ -54,5 +60,6 @@ For bigger work, pair with brainstorming-before-building (unclear goal), writing
 - Adding a settings option instead of making a decision.
 - Adding a library for something the standard library does in five lines.
 - Declaring done because the code compiles.
+- Fixing a neighboring bug you noticed without telling the user, so the change does more than they reviewed.
 
 Based on: forrestchang/andrej-karpathy-skills

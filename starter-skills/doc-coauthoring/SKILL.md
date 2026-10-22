@@ -24,6 +24,18 @@ Work in rounds. Each round ends with a short reply and one clear question, becau
 6. Reader test (last round). Reread the full draft as the target reader with no background. Check: can they say the main point after the first paragraph? Is every term defined? Is the ask clear? Is anything repeated? Write findings to `output/<slug>/reader-test.md` and fix the real ones.
 7. Finish: one clean file `output/<slug>/<slug>.md`, and the requested format via the matching skill.
 
+Folder layout for one document:
+
+```
+output/<slug>/
+  brief.md         reader, goal, length, deadline
+  notes.md         facts and sources gathered
+  outline.md       agreed headings, one sentence each
+  draft.md         the working text
+  changes.md       what changed each round
+  reader-test.md   gaps found by the cold read
+```
+
 ## Tools on a Mac
 
 - Files are plain Markdown; read with `cat`, search with `rg` (or `grep -rn`).

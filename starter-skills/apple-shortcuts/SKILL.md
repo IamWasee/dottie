@@ -37,6 +37,9 @@ description: Use when the user mentions their Shortcuts: "run my shortcut", "wha
 - Useful output types: `public.plain-text`, `public.png`, `public.jpeg`, `com.adobe.pdf`, `public.json`.
 - `open "shortcuts://run-shortcut?name=Log%20Water"` runs it through the app instead of the CLI (shows UI).
 - `pbpaste` / `pbcopy` when a shortcut reads from or writes to the clipboard.
+- `shortcuts list | grep -i water` to find a name when the user only remembers part of it.
+- Check the result type with `file tmp/out.txt` when you asked for one type and might have got another.
+- `shortcuts help run` prints the flags this macOS version supports.
 
 ## Quality checklist
 
@@ -56,7 +59,7 @@ One sentence on what ran and what came back, for example "I ran Log Water with 2
 - Shortcuts that show a result with "Show Result" print nothing to the CLI; use "Stop and Output" in the design for anything that should return text.
 - `--input-path` passes a file, so text must be written to a file first.
 - iCloud-synced shortcuts can be edited on the iPhone between runs; list again if a name fails.
-- Long-running shortcuts have no timeout from the CLI; wrap with `timeout 120` from coreutils only if installed, otherwise watch it.
+- Long-running shortcuts have no timeout from the CLI; macOS has no `timeout` command, so use `gtimeout 120` only if `coreutils` is already installed, otherwise run it in the background and check on it.
 - Don't invent action names. If unsure an action exists on this macOS version, say so in the recipe.
 
 Based on: written for Dottie

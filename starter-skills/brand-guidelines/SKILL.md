@@ -28,7 +28,7 @@ description: Use when the user wants to capture a brand (colors, fonts, logo rul
 
 1. Read `brand.md` fully before starting.
 2. Use only its colors (via tokens), its fonts (or the listed fallbacks), its logo files untouched, and its voice.
-3. For Office files, set theme colors and fonts in the template, not per text box (see the docx/pptx skills if present).
+3. For Office files, set theme colors and fonts in the template, not per text box (see `word-documents` and `slide-decks`).
 4. Before finishing, compare the result against the "Do and don't" list.
 
 ## Tools on a Mac

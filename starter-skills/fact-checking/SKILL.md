@@ -45,6 +45,7 @@ description: Use when the user wants a claim, quote, statistic or article checke
 - "Unclear" is used honestly instead of forcing a verdict.
 - The wording of each claim matches what the user gave; the check is not of a weaker or stronger version.
 - Opinion, prediction and satire are named as such, not rated true or false.
+- When the user's own draft is being checked, each fix suggests corrected wording they can paste in.
 
 ## Reply to the user
 
@@ -57,6 +58,7 @@ One to three sentences with the verdicts in plain words and the path, for exampl
 - Missing that a statistic is real but for a different country, year or group.
 - Quotes attributed to famous people are often invented; look for the original speech, book or recording.
 - Wikipedia is a starting point, not the evidence. Follow its footnotes.
+- Screenshots of posts or headlines are easy to fake; find the live post or article before rating what it says.
 - Do not post corrections or reply to anyone on the user's behalf; the report is the job.
 
 Based on: written for Dottie

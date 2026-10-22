@@ -30,7 +30,11 @@ description: Use when a task needs a command-line tool that isn't installed ("co
 - `brew uses --installed <formula>` before removing anything (shows what depends on it).
 - `brew uninstall <formula>`, `brew upgrade <formula>` (one at a time, with the user's yes).
 - `brew doctor` when installs fail; read its first warnings only.
+- `brew install --dry-run <formula>` (recent Homebrew) shows what would be pulled in without installing.
+- `brew deps --tree <formula>` to see how heavy an install will be.
 - `brew --prefix` to find where things live.
+- `brew outdated <formula>` to see if one tool is behind, without touching others.
+- `brew cleanup <formula>` frees space from old versions of that one formula.
 - For Python packages: `python3 -m pip install --user <package>` for well-known ones (requests, pillow, python-docx). If pip refuses with "externally managed", use `brew install pipx` then `pipx install <tool>` for CLI tools.
 - Well-known formulae by job: media `ffmpeg`; documents `pandoc`, `poppler` (pdftotext, pdftoppm), `qpdf`; images `imagemagick`, `exiftool`; OCR `tesseract`; data `jq`, `csvkit`, `sqlite`; web `wget`, `yt-dlp`; search `ripgrep`, `fd`.
 
@@ -52,6 +56,8 @@ One sentence: what you installed and why, for example "I installed ffmpeg with H
 - PATH: a fresh install may not be on the helper's PATH. Call it by full path (`/opt/homebrew/bin/ffmpeg`) if `command -v` fails right after install.
 - Name clashes: `brew install imagemagick` gives `magick`, not `convert` on newer versions; `poppler` gives `pdftotext`, not a `poppler` command.
 - Never use `sudo brew`. It breaks permissions.
+- `brew search` matches loosely; `brew info` on the exact name before installing avoids grabbing a fork or a cask by mistake.
+- A tool may already exist under another manager (pip, npm, a download in `~/bin`); check `which -a name` before adding a second copy.
 - Casks (`--cask`) install GUI apps and may ask for a password; leave those to the user.
 - Big installs (like `ffmpeg` with many dependencies) pull hundreds of MB; mention it if the user is on a slow connection.
 

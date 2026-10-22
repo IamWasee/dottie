@@ -125,6 +125,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieGameNotebook.swift` | ~450 | Per-game notebook in Application Support/Dottie/Games: controls, the user's own `my-controls.txt` (KEY = what it does, editable, read fresh at every decision), facts, guesses, deaths, lessons, genre starters, places by picture and landmark directions, place recognition with feature prints. |
 | `DottieVideoGameTools.swift` | ~130 | Voice tools: `game_command` for co-op calls and taught keys while a game is played, `gameplay_recording` (start with a name, stop, play back, list, status, open by voice), `game_maps`. |
 | `DottieBuiltInSkills.swift` | ~90 | Building, Mac-app and app-operating instructions as skills helpers load only when needed (Gemini CLI user skills; Claude bot skills). |
+| `DottieStarterSkills.swift` | ~50 | Copies the 50 bundled starter skills (`DottieStarterSkills.json`, packed from `starter-skills/<name>/SKILL.md` by `scripts/build-starter-skills.py`) into the skills library once; an edited or deleted one is left alone. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
 | `worker/src/index.ts` | ~230 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat`, `/tts`, `/dictate`, `/gemini/*`, `/config`. |

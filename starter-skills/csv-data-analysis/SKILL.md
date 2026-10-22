@@ -11,6 +11,7 @@ description: Use when the user gives a CSV, TSV or Excel file and wants it under
 - Questions like "which month sold most", "is there a trend", "are there duplicates or bad rows".
 - Not for making a polished chart or dashboard as the main deliverable: use `charts-and-dashboards` (this skill makes quick charts only).
 - Not for collecting the data from websites: use `web-scraping-politely` first.
+- Not for building or formatting a spreadsheet file as the deliverable: use `spreadsheets`.
 
 ## Steps
 

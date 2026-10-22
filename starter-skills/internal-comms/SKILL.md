@@ -22,7 +22,7 @@ description: Use when the user needs a message for their team or company: status
 4. Save to `output/comms/<yyyy-mm-dd>-<type>.md`. For Slack, also produce a plain-text version (Slack uses `*bold*`, not `**bold**`).
 5. Reread as the busiest person on the list: can they get the point from the first two lines?
 
-## Formats
+### Formats
 
 Status update or weekly report:
 ```

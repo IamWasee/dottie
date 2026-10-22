@@ -37,6 +37,7 @@ description: Use when a task means driving a Mac app by script: "add a reminder"
 - System Events: `tell application "System Events" to get name of every process whose background only is false`; UI scripting (`click menu item ...`) needs Accessibility and breaks easily, so use it last.
 - `sdef /Applications/App.app > tmp/app.sdef` to read a full dictionary.
 - `open -a "Notes"`, `open -b com.apple.iCal` to launch apps.
+- Get JSON out of JXA for parsing: `osascript -l JavaScript -e 'JSON.stringify(Application("Safari").windows[0].tabs.url())' > tmp/tabs.json`.
 
 ## Quality checklist
 
@@ -57,6 +58,7 @@ One or two sentences on what changed, for example "I added 5 reminders to your I
 - iCloud Notes and Reminders sync slowly; a just-made item may not show on the iPhone right away.
 - `display dialog` blocks a headless script waiting for a click nobody sees. Avoid it.
 - AppleScript lists start at 1, not 0.
+- Quoting: wrap one-liners in single quotes in the shell and use double quotes inside AppleScript; anything more complex goes in a file.
 - UI scripting depends on menu names in the user's language and app version.
 - Apps launched by a script steal focus; mention it if that may surprise the user.
 
