@@ -665,7 +665,12 @@ final class DottieGuide {
             }
             let marks: [Mark] = ((rawStep["marks"] as? [[String: Any]]) ?? []).prefix(3).compactMap { (rawMark: [String: Any]) -> Mark? in
                 guard let shape = (rawMark["shape"] as? String).flatMap({ DottieScreenAction.DrawingShape(rawValue: $0.lowercased()) }),
-                      let rect = (rawMark["box_2d"] as? [Any]).flatMap({ globalRect(fromBox: $0, screen: screen) }) else { return nil }
+                      let modelRect = (rawMark["box_2d"] as? [Any]).flatMap({ globalRect(fromBox: $0, screen: screen) }) else { return nil }
+                // A drawing around one control (a button, tab or menu item)
+                // goes around that control's real outline, not the model's
+                // estimate. Bigger boxes mean an area, so they stay as given.
+                let isAboutOneControl = modelRect.width <= 320 && modelRect.height <= 120
+                let rect = isAboutOneControl ? AccessibilitySnap.refinedFrame(modelRect) : modelRect
                 let note = (rawMark["note"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return Mark(shape: shape, rect: rect, note: note?.isEmpty == false ? note : nil)
             }
