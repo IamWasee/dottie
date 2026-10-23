@@ -91,7 +91,7 @@ enum DottieSkillFolderTools: DottieToolModule {
 
     /// A path ("~/Downloads/skills", "/Users/…") or a folder name the user
     /// said ("dottie skills", "Downloads"), looked for in the home folder,
-    /// Desktop, Downloads and Documents and one level inside them.
+    /// Desktop, Downloads and Documents and up to two levels inside them.
     private static func folderURL(matchingSaidFolder saidFolder: String) -> URL? {
         let expandedPath = (saidFolder as NSString).expandingTildeInPath
         if expandedPath.hasPrefix("/") {
@@ -120,6 +120,26 @@ enum DottieSkillFolderTools: DottieToolModule {
                 normalizedFolderName($0.lastPathComponent) == wantedFolderName && isExistingFolder(atPath: $0.path)
             }) {
                 return matchingChildFolderURL
+            }
+        }
+        // One level further down, for folders like ~/Dottie-claude-folder/dottie-skills.
+        for searchRootURL in searchRootURLs {
+            let childFolderURLs = (try? FileManager.default.contentsOfDirectory(
+                at: searchRootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            for childFolderURL in childFolderURLs where isExistingFolder(atPath: childFolderURL.path) {
+                let grandchildFolderURLs = (try? FileManager.default.contentsOfDirectory(
+                    at: childFolderURL,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+                if let matchingGrandchildFolderURL = grandchildFolderURLs.first(where: {
+                    normalizedFolderName($0.lastPathComponent) == wantedFolderName && isExistingFolder(atPath: $0.path)
+                }) {
+                    return matchingGrandchildFolderURL
+                }
             }
         }
         return nil
