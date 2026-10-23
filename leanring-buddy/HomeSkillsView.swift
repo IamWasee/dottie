@@ -150,8 +150,29 @@ struct HomeSkillsView: View {
         openPanel.canChooseFiles = false
         openPanel.allowsMultipleSelection = false
         openPanel.prompt = "Add Skill"
-        openPanel.message = "Choose a skill folder (one with a SKILL.md file in it)."
+        openPanel.message = "Choose a skill folder (one with a SKILL.md file in it), or a folder of skill folders to add them all."
         guard openPanel.runModal() == .OK, let chosenFolderURL = openPanel.url else { return }
+
+        // A folder of skills (no SKILL.md of its own): add every skill in it.
+        let isSingleSkillFolder = FileManager.default.fileExists(atPath: chosenFolderURL.appendingPathComponent("SKILL.md").path)
+        if !isSingleSkillFolder {
+            let folderInstallResult = skillLibrary.installSkills(fromFolder: chosenFolderURL)
+            for installedSkill in folderInstallResult.installedSkills {
+                clickyRoster.enableSkillForAllAgents(installedSkill.name)
+            }
+            if !folderInstallResult.installedSkills.isEmpty {
+                ClickyAnalytics.trackSkillChanged(action: "imported")
+                isCreatingSkill = false
+                selectedSkillName = folderInstallResult.installedSkills.first?.name
+            }
+            if folderInstallResult.installedSkills.isEmpty && folderInstallResult.alreadyInstalledSkillNames.isEmpty {
+                importErrorMessage = ClickySkillLibraryError.missingSkillFile.localizedDescription
+            } else if !folderInstallResult.failedSkillMessages.isEmpty {
+                importErrorMessage = folderInstallResult.failedSkillMessages.joined(separator: "\n")
+            }
+            return
+        }
+
         do {
             let importedSkill = try skillLibrary.importSkill(fromFolder: chosenFolderURL)
             clickyRoster.enableSkillForAllAgents(importedSkill.name)

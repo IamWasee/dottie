@@ -181,6 +181,48 @@ final class ClickySkillLibrary: ObservableObject {
         return importedSkill
     }
 
+    /// What installing a folder of skills did, for the voice tool and Home.
+    struct FolderInstallResult {
+        var installedSkills: [ClickySkill] = []
+        /// Skills already in the library under the same name; left as they are.
+        var alreadyInstalledSkillNames: [String] = []
+        /// Skills that couldn't be copied, with why.
+        var failedSkillMessages: [String] = []
+    }
+
+    /// Installs every skill in a folder: the folder itself when it holds a
+    /// SKILL.md, otherwise each folder inside it that holds one (like a
+    /// downloaded set of 50 skills). Skills already in the library are kept,
+    /// never overwritten.
+    func installSkills(fromFolder chosenFolderURL: URL) -> FolderInstallResult {
+        let fileManager = FileManager.default
+        var skillFolderURLs: [URL] = []
+        if fileManager.fileExists(atPath: chosenFolderURL.appendingPathComponent("SKILL.md").path) {
+            skillFolderURLs = [chosenFolderURL]
+        } else {
+            let childURLs = (try? fileManager.contentsOfDirectory(
+                at: chosenFolderURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            skillFolderURLs = childURLs
+                .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("SKILL.md").path) }
+                .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+        }
+
+        var folderInstallResult = FolderInstallResult()
+        for skillFolderURL in skillFolderURLs {
+            do {
+                folderInstallResult.installedSkills.append(try importSkill(fromFolder: skillFolderURL))
+            } catch ClickySkillLibraryError.nameTaken(let existingSkillName) {
+                folderInstallResult.alreadyInstalledSkillNames.append(existingSkillName)
+            } catch {
+                folderInstallResult.failedSkillMessages.append("\(skillFolderURL.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        return folderInstallResult
+    }
+
     /// Moves the skill's folder to the Trash.
     func deleteSkill(_ skill: ClickySkill) {
         try? FileManager.default.trashItem(at: skill.folderURL, resultingItemURL: nil)
