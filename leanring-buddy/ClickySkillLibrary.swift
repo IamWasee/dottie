@@ -208,6 +208,20 @@ final class ClickySkillLibrary: ObservableObject {
             skillFolderURLs = childURLs
                 .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("SKILL.md").path) }
                 .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+            if skillFolderURLs.isEmpty {
+                // A downloaded repo (like anthropics/skills) keeps its skills
+                // one level down, in skills/, so look there too.
+                let grandchildURLs = childURLs.flatMap { childURL in
+                    (try? fileManager.contentsOfDirectory(
+                        at: childURL,
+                        includingPropertiesForKeys: [.isDirectoryKey],
+                        options: [.skipsHiddenFiles]
+                    )) ?? []
+                }
+                skillFolderURLs = grandchildURLs
+                    .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("SKILL.md").path) }
+                    .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+            }
         }
 
         var folderInstallResult = FolderInstallResult()
