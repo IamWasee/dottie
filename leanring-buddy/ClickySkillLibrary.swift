@@ -190,28 +190,40 @@ final class ClickySkillLibrary: ObservableObject {
         var failedSkillMessages: [String] = []
     }
 
-    /// Installs every skill in a folder: the folder itself when it holds a
-    /// SKILL.md, otherwise each folder inside it that holds one (like a
-    /// downloaded set of 50 skills). Skills already in the library are kept,
-    /// never overwritten.
-    func installSkills(fromFolder chosenFolderURL: URL) -> FolderInstallResult {
+    /// The skill folders in a folder the user points to: the folder itself
+    /// when it holds a SKILL.md, otherwise each folder inside it that holds
+    /// one (like a downloaded set of 50 skills). When none do, looks one
+    /// level deeper, because downloaded repos like anthropics/skills keep
+    /// their skills in a skills/ folder.
+    nonisolated static func skillFolders(inFolder chosenFolderURL: URL) -> [URL] {
         let fileManager = FileManager.default
-        var skillFolderURLs: [URL] = []
-        if fileManager.fileExists(atPath: chosenFolderURL.appendingPathComponent("SKILL.md").path) {
-            skillFolderURLs = [chosenFolderURL]
-        } else {
+        func holdsSkillFile(_ folderURL: URL) -> Bool {
+            fileManager.fileExists(atPath: folderURL.appendingPathComponent("SKILL.md").path)
+        }
+        func subfolders(of folderURL: URL) -> [URL] {
             let childURLs = (try? fileManager.contentsOfDirectory(
-                at: chosenFolderURL,
+                at: folderURL,
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
-            skillFolderURLs = childURLs
-                .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("SKILL.md").path) }
-                .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+            return childURLs.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        }
+        func sortedByName(_ folderURLs: [URL]) -> [URL] {
+            folderURLs.sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
         }
 
+        if holdsSkillFile(chosenFolderURL) { return [chosenFolderURL] }
+        let directSkillFolderURLs = subfolders(of: chosenFolderURL).filter(holdsSkillFile)
+        if !directSkillFolderURLs.isEmpty { return sortedByName(directSkillFolderURLs) }
+        let nestedSkillFolderURLs = subfolders(of: chosenFolderURL).flatMap(subfolders(of:)).filter(holdsSkillFile)
+        return sortedByName(nestedSkillFolderURLs)
+    }
+
+    /// Installs every skill `skillFolders(inFolder:)` finds. Skills already
+    /// in the library are kept, never overwritten.
+    func installSkills(fromFolder chosenFolderURL: URL) -> FolderInstallResult {
         var folderInstallResult = FolderInstallResult()
-        for skillFolderURL in skillFolderURLs {
+        for skillFolderURL in Self.skillFolders(inFolder: chosenFolderURL) {
             do {
                 folderInstallResult.installedSkills.append(try importSkill(fromFolder: skillFolderURL))
             } catch ClickySkillLibraryError.nameTaken(let existingSkillName) {
