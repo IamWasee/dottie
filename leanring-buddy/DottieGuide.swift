@@ -297,6 +297,9 @@ final class DottieGuide {
                 displayFrame: screen.displayFrame
             )
             if let foundFrame, screen.displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: foundFrame.midX, y: foundFrame.midY)) {
+                // How far the model's own box was from the real control, so
+                // drift can be read in the log.
+                print("🧑‍🏫 Guide target \"\(targetLabel)\": model \(Int(targetRect.midX)),\(Int(targetRect.midY)) → found \(Int(foundFrame.midX)),\(Int(foundFrame.midY)) (\(Int(hypot(foundFrame.midX - targetRect.midX, foundFrame.midY - targetRect.midY))) points)")
                 step = Step(
                     kind: step.kind,
                     say: step.say,
@@ -589,7 +592,8 @@ final class DottieGuide {
         if let claudeAnswer = await DottieGuideBrain.shared.askClaude(
             systemInstruction: Self.systemInstruction,
             stepInstruction: stepInstruction,
-            screenshotJPEG: screen.jpegData
+            screenshotJPEG: screen.jpegData,
+            screenshotPixelSize: CGSize(width: screen.image.width, height: screen.image.height)
         ), let steps = Self.parseSteps(from: claudeAnswer, screen: screen), !steps.isEmpty {
             return steps
         }
@@ -661,7 +665,12 @@ final class DottieGuide {
             }
             let marks: [Mark] = ((rawStep["marks"] as? [[String: Any]]) ?? []).prefix(3).compactMap { (rawMark: [String: Any]) -> Mark? in
                 guard let shape = (rawMark["shape"] as? String).flatMap({ DottieScreenAction.DrawingShape(rawValue: $0.lowercased()) }),
-                      let rect = (rawMark["box_2d"] as? [Any]).flatMap({ globalRect(fromBox: $0, screen: screen) }) else { return nil }
+                      let modelRect = (rawMark["box_2d"] as? [Any]).flatMap({ globalRect(fromBox: $0, screen: screen) }) else { return nil }
+                // A drawing around one control (a button, tab or menu item)
+                // goes around that control's real outline, not the model's
+                // estimate. Bigger boxes mean an area, so they stay as given.
+                let isAboutOneControl = modelRect.width <= 320 && modelRect.height <= 120
+                let rect = isAboutOneControl ? AccessibilitySnap.refinedFrame(modelRect) : modelRect
                 let note = (rawMark["note"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return Mark(shape: shape, rect: rect, note: note?.isEmpty == false ? note : nil)
             }
