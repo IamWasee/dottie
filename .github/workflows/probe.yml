@@ -1,0 +1,25 @@
+name: Pointing probe
+on:
+  push:
+    branches: [pointing-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      W: https://dottie.vidershub.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe models
+        run: |
+          screencapture -x shot.png && sips -s format jpeg -Z 1280 shot.png --out shot.jpg >/dev/null && ls -la shot.jpg
+          curl -sS -A Dottie/1.0 "$W/config"; echo
+          for model in gemini-3.5-flash-lite gemini-3.5-flash gemini-3.6-flash gemini-3.7-flash; do
+            python3 make_body.py "$model" > body.json
+            start=$(date +%s)
+            code=$(curl -sS -A Dottie/1.0 -o resp.txt -w '%{http_code}' -H 'content-type: application/json' --data @body.json "$W/chat")
+            echo "== $model status=$code secs=$(( $(date +%s) - start ))"
+            head -c 1500 resp.txt | tr '\r' ' '; echo
+          done
