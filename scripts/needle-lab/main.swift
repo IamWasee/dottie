@@ -24,6 +24,14 @@ func run() async {
 
     let cases: [(String, String?)] = [
         ("open safari", "open safari"),
+        ("hey can you open up the notes app real quick", "open notes"),
+        ("skip", "next song"),
+        ("next video please", nil),
+        ("turn the volume all the way up", "volume up"),
+        ("make it quieter", "volume down"),
+        ("schedule dentist on thursday at 2 pm", "add_calendar_event"),
+        ("check my calendar for friday", nil),
+        ("remind me in 20 minutes to take the pizza out", "add_reminder"),
         ("could you pop safari open for me", "open safari"),
         ("fire up spotify", "open spotify"),
         ("get me into notes", "open notes"),
@@ -71,6 +79,7 @@ func run() async {
     var totalMilliseconds = 0.0
     var callCount = 0
     var right = 0
+    var wrongActs = 0
     for (text, expected) in cases {
         let request = normalized(text)
         let toolset = DottieNeedleToolset.toolset(forNormalizedRequest: request)
@@ -79,8 +88,10 @@ func run() async {
             print("FAIL call: \(text) -> \(failure)"); continue
         }
         totalMilliseconds += answer.milliseconds; callCount += 1
+        let actedCalls = DottieNeedleToolset.callsToActOn(answer, toolset: toolset, normalizedRequest: request) ?? []
+        let downCalls = DottieNeedleToolset.callsToActOn(answer, toolset: toolset, normalizedRequest: request, geminiIsDown: true) ?? []
         var gotParts: [String] = []
-        for call in answer.toolCalls {
+        for call in actedCalls {
             if let words = DottieNeedleToolset.instantCommandWords(for: call) { gotParts.append(words) }
             else if let step = DottieNeedleToolset.organizerStep(for: call, fullRequest: request) { gotParts.append("\(step.functionName) \(step.arguments) (needle said \(call.arguments))") }
             else { gotParts.append("?\(call.name) \(call.arguments)") }
@@ -92,8 +103,11 @@ func run() async {
         } else { ok = gotParts.isEmpty }
         if ok { right += 1 }
         let conf = answer.confidence.map { String(format: "%.2f", $0) } ?? "nil"
-        print("\(ok ? "OK  " : "MISS") [\(toolset.rawValue)] \(text) => \(got.isEmpty ? "(none)" : got) conf=\(conf) withheld=\(answer.withheldToolCalls.map { "\($0.name)\($0.arguments)" }) \(Int(answer.milliseconds))ms reason=\(answer.reasoning.prefix(80))")
+        let rawCalls = answer.toolCalls.map { "\($0.name)\($0.arguments)" }
+        if !ok && !gotParts.isEmpty { wrongActs += 1 }
+        print("\(ok ? "OK  " : (gotParts.isEmpty ? "LEFT" : "WRONG")) [\(toolset.rawValue)] down=\(downCalls.count) raw=\(rawCalls) \(text) => \(got.isEmpty ? "(none)" : got) conf=\(conf) withheld=\(answer.withheldToolCalls.map { "\($0.name)\($0.arguments)" }) \(Int(answer.milliseconds))ms reason=\(answer.reasoning.prefix(80))")
     }
+    print("acted wrongly: \(wrongActs)")
     print("tool calls: \(right)/\(cases.count) right, average \(Int(totalMilliseconds / Double(max(callCount, 1)))) ms")
 
     // Embeddings: paraphrases vs unrelated.

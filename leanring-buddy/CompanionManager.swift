@@ -95,6 +95,7 @@ final class CompanionManager: ObservableObject {
             let liveProvider = GeminiLiveCompanionTranscriptionProvider(
                 liveVoiceClient: liveVoiceClient,
                 onDeviceTranscriber: liveTurnOnDeviceTranscriber,
+                whistleRecorder: liveTurnWhistleRecorder,
                 beginLiveTurn: { [weak self] in
                     await self?.beginLiveTurnWithScreenFrame()
                 }
@@ -153,6 +154,9 @@ final class CompanionManager: ObservableObject {
     /// Apple's speech recognizer hearing each push-to-talk turn on the Mac,
     /// for the instant lane (DottieInstantLane).
     private let liveTurnOnDeviceTranscriber = DictationLiveTranscriber()
+    /// Keeps a short push-to-talk turn's audio for Whistle when Apple's
+    /// speech recognizer can't run (DottieNeedleRouter).
+    private let liveTurnWhistleRecorder = DottieWhistleTurnRecorder()
     /// What the Mac heard for the current voice turn, once released.
     private var currentLiveTurnOnDeviceText: String?
     /// Tool calls Gemini made in the current Live turn, with their results,
@@ -1171,9 +1175,13 @@ final class CompanionManager: ObservableObject {
             self.currentLiveTurnIsNarration = false
             self.liveVoiceClient.isAudioOutputMuted = false
             self.fireLiveTurnFinishedHandler()
-            self.speakConnectionErrorFallback()
+            let failedRequestText = self.currentLiveTurnTypedText ?? self.currentLiveTurnOnDeviceText ?? ""
             self.voiceState = .idle
             self.scheduleTransientHideIfNeeded()
+            self.doOnMacOrSpeakConnectionError(
+                requestText: failedRequestText,
+                inputKind: self.currentLiveTurnTypedText == nil ? .voice : .typed
+            )
         }
     }
 
@@ -3032,19 +3040,37 @@ final class CompanionManager: ObservableObject {
         // Open an app, move a window, a learned shortcut: done on the Mac,
         // with Gemini only if it turns out not to fit.
         if turnText == nil, let instantPlan = instantLanePlanIfAllowed(for: trimmedMessageText) {
+            runTypedInstantPlan(instantPlan, messageText: trimmedMessageText)
+            return
+        }
+        // Wording the strict lane doesn't know: Needle has a quick look
+        // (a fraction of a second) before Gemini.
+        if turnText == nil, isInstantLaneAllowedNow, DottieNeedleRouter.shared.isAvailable {
             Task { [weak self] in
                 guard let self else { return }
-                switch await DottieInstantLane.shared.run(instantPlan) {
-                case .done(let doneText):
-                    self.finishInstantLaneTurn(userText: trimmedMessageText, doneText: doneText, inputKind: .typed)
-                case .askGemini:
-                    self.sendTypedMessageToGemini(trimmedMessageText, turnText: nil)
+                if let needlePlan = await DottieNeedleRouter.shared.plan(for: trimmedMessageText) {
+                    self.runTypedInstantPlan(needlePlan, messageText: trimmedMessageText)
+                    return
                 }
+                self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: trimmedMessageText)?.name
+                self.sendTypedMessageToGemini(trimmedMessageText, turnText: nil)
             }
             return
         }
         if turnText == nil { currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: trimmedMessageText)?.name }
         sendTypedMessageToGemini(trimmedMessageText, turnText: turnText)
+    }
+
+    private func runTypedInstantPlan(_ instantPlan: DottieInstantLane.Plan, messageText: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            switch await DottieInstantLane.shared.run(instantPlan) {
+            case .done(let doneText):
+                self.finishInstantLaneTurn(userText: messageText, doneText: doneText, inputKind: .typed)
+            case .askGemini:
+                self.sendTypedMessageToGemini(messageText, turnText: nil)
+            }
+        }
     }
 
     private func sendTypedMessageToGemini(_ trimmedMessageText: String, turnText: String?) {
@@ -3085,7 +3111,13 @@ final class CompanionManager: ObservableObject {
     /// At release: whether what the Mac heard so far might be something it
     /// does itself, so Live's answer is held back while it checks.
     private func liveVoiceTurnCouldBeInstant() -> Bool {
-        guard liveTurnOnDeviceTranscriber.isRunning, isInstantLaneAllowedNow else { return false }
+        guard isInstantLaneAllowedNow else { return false }
+        // Heard by Whistle: there are no words yet, so a short turn is
+        // held (instant asks are short) and a long one never waits.
+        if !liveTurnOnDeviceTranscriber.isRunning {
+            return liveTurnWhistleRecorder.isRecording
+                && liveTurnWhistleRecorder.recordedSeconds <= DottieWhistleTurnRecorder.longestHeldTurnSeconds
+        }
         return DottieInstantLane.shared.couldBecomeInstant(partialText: liveTurnOnDeviceTranscriber.latestText)
     }
 
@@ -3094,22 +3126,37 @@ final class CompanionManager: ObservableObject {
     /// shortcut, Live's answer is silenced and the Mac does it; otherwise
     /// Live's held answer plays as usual.
     private func checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: Bool) {
-        guard liveTurnOnDeviceTranscriber.isRunning else {
+        let whistleAudio = liveTurnWhistleRecorder.takeRecording()
+        guard liveTurnOnDeviceTranscriber.isRunning || whistleAudio != nil else {
             liveVoiceClient.isHoldingModelAnswer = false
             return
         }
         let pressNumber = liveVoicePressCount
         Task { [weak self] in
             guard let self else { return }
-            // Short while Live's answer waits; longer otherwise, since then
-            // nothing is held up and the text is only for learning.
-            let heardText = await self.liveTurnOnDeviceTranscriber.finishAndWaitForFinalText(
-                timeoutSeconds: holdsLiveAnswer ? 0.6 : 1.5
-            )
+            let heardText: String
+            if let whistleAudio {
+                // No Apple speech recognition: Whistle hears the short
+                // turn on the Mac (tens of milliseconds).
+                heardText = await DottieNeedleRouter.shared.hear(pcm16AudioData: whistleAudio)
+            } else {
+                // Short while Live's answer waits; longer otherwise, since then
+                // nothing is held up and the text is only for learning.
+                heardText = await self.liveTurnOnDeviceTranscriber.finishAndWaitForFinalText(
+                    timeoutSeconds: holdsLiveAnswer ? 0.6 : 1.5
+                )
+            }
             guard self.liveVoicePressCount == pressNumber else { return }
             self.currentLiveTurnOnDeviceText = heardText.isEmpty ? nil : heardText
 
-            guard let instantPlan = self.instantLanePlanIfAllowed(for: heardText) else {
+            var instantPlanOrNil = self.instantLanePlanIfAllowed(for: heardText)
+            // Needle only while Live's answer is held: otherwise it's
+            // already playing and the Mac shouldn't do something else too.
+            if instantPlanOrNil == nil, holdsLiveAnswer, self.isInstantLaneAllowedNow {
+                instantPlanOrNil = await DottieNeedleRouter.shared.plan(for: heardText)
+                guard self.liveVoicePressCount == pressNumber else { return }
+            }
+            guard let instantPlan = instantPlanOrNil else {
                 self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: heardText)?.name
                 self.liveVoiceClient.isHoldingModelAnswer = false
                 return
@@ -3145,7 +3192,8 @@ final class CompanionManager: ObservableObject {
                 if !isBusy { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            if let instantPlan = self.instantLanePlanIfAllowed(for: followUpText),
+            if self.isInstantLaneAllowedNow,
+               let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: followUpText),
                case .done(let doneText) = await DottieInstantLane.shared.run(instantPlan) {
                 self.finishInstantLaneTurn(userText: "(after \(firedText)) \(followUpText)", doneText: doneText, inputKind: .typed)
                 return
@@ -3455,9 +3503,14 @@ final class CompanionManager: ObservableObject {
             voiceState = .idle
             return
         }
-        if inputKind == .voice, checksInstantLane, let instantPlan = instantLanePlanIfAllowed(for: transcript) {
+        if inputKind == .voice, checksInstantLane, isInstantLaneAllowedNow,
+           DottieInstantLane.shared.plan(for: transcript) != nil || DottieNeedleRouter.shared.isAvailable {
             Task { [weak self] in
                 guard let self else { return }
+                guard let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: transcript) else {
+                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
+                    return
+                }
                 switch await DottieInstantLane.shared.run(instantPlan) {
                 case .done(let doneText):
                     self.finishInstantLaneTurn(userText: transcript, doneText: doneText, inputKind: .voice)
@@ -3579,7 +3632,7 @@ final class CompanionManager: ObservableObject {
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakConnectionErrorFallback()
+                doOnMacOrSpeakConnectionError(requestText: transcript, inputKind: currentClassicTurnInputKind)
             }
 
             if !Task.isCancelled {
@@ -3675,6 +3728,26 @@ final class CompanionManager: ObservableObject {
     private func speakWithSystemVoice(_ text: String) {
         systemSpeechSynthesizer.startSpeaking(text)
         voiceState = .responding
+    }
+
+    /// Gemini couldn't answer. When the ask was a Mac action (open an app,
+    /// music, a reminder…), Needle does it anyway and says so; otherwise
+    /// the usual "try again" line.
+    private func doOnMacOrSpeakConnectionError(requestText: String, inputKind: ConversationEntry.InputKind) {
+        let trimmedRequestText = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRequestText.isEmpty, isInstantLaneAllowedNow, DottieInstantLane.areInstantCommandsEnabled else {
+            speakConnectionErrorFallback()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let doneText = await DottieNeedleRouter.shared.doWhileGeminiIsDown(trimmedRequestText) else {
+                self.speakConnectionErrorFallback()
+                return
+            }
+            self.speakWithSystemVoice("Gemini isn't answering, but I did that on the Mac. " + doneText)
+            self.finishInstantLaneTurn(userText: trimmedRequestText, doneText: doneText, inputKind: inputKind)
+        }
     }
 
     private func speakConnectionErrorFallback() {

@@ -304,3 +304,67 @@ private final class DeadlineGate {
         return true
     }
 }
+
+/// One push-to-talk turn's microphone audio (16 kHz mono PCM16), kept
+/// for Whistle when Apple's speech recognizer can't run. Only short turns
+/// are kept: instant asks are short, and a long turn never waits for it.
+final class DottieWhistleTurnRecorder: @unchecked Sendable {
+    static let longestHeldTurnSeconds: Double = 6
+    private static let bytesPerSecond = 32_000
+
+    private let lock = NSLock()
+    private var recordedAudio = Data()
+    private var isRecordingTurn = false
+    private var turnWasTooLong = false
+
+    var isRecording: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isRecordingTurn
+    }
+
+    var recordedSeconds: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return turnWasTooLong ? .infinity : Double(recordedAudio.count) / Double(Self.bytesPerSecond)
+    }
+
+    func start() {
+        lock.lock()
+        recordedAudio.removeAll(keepingCapacity: true)
+        isRecordingTurn = true
+        turnWasTooLong = false
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        recordedAudio.removeAll()
+        isRecordingTurn = false
+        lock.unlock()
+    }
+
+    /// Runs on the audio thread.
+    func append(_ pcm16AudioData: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isRecordingTurn, !turnWasTooLong else { return }
+        recordedAudio.append(pcm16AudioData)
+        if recordedAudio.count > Int(Self.longestHeldTurnSeconds) * Self.bytesPerSecond {
+            turnWasTooLong = true
+            recordedAudio.removeAll()
+        }
+    }
+
+    /// The turn's audio, or nil when nothing was recorded or it ran long.
+    /// Stops recording either way.
+    func takeRecording() -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        let wasUsable = isRecordingTurn && !turnWasTooLong && !recordedAudio.isEmpty
+        let takenAudio = recordedAudio
+        recordedAudio = Data()
+        isRecordingTurn = false
+        return wasUsable ? takenAudio : nil
+    }
+}

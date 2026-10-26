@@ -119,6 +119,117 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
     ]
     """
 
+    // MARK: Deciding whether to act
+
+    /// Needle's confidence needed to act, for each toolset. Measured on a
+    /// Mac with 44 everyday asks (scripts/needle-lab): right calls mostly
+    /// score 0.5 to 0.9, and the wrong ones that score as high are caught
+    /// by the word checks below. Reminders and events are checked so
+    /// closely against the user's words that Needle's own (low) score
+    /// barely matters.
+    static func minimumConfidence(for toolset: DottieNeedleToolset, geminiIsDown: Bool) -> Double {
+        switch toolset {
+        case .mac, .media, .search: return geminiIsDown ? 0.35 : 0.5
+        case .organizer: return 0
+        }
+    }
+
+    /// Questions are for Gemini, even when they name an app ("how do i
+    /// open a terminal").
+    static func isQuestion(_ normalizedRequest: String) -> Bool {
+        normalizedRequest.range(
+            of: #"^(?:how|what|what's|whats|why|where|when|who|which|whose|is|are|does|do i|do you|can i|should|could i|would|explain|tell me)\b"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    /// The calls to act on, or nil to leave the ask to Gemini. Every call
+    /// must be backed by the user's own words, not just Needle's score.
+    static func callsToActOn(
+        _ answer: DottieNeedleEngine.Answer,
+        toolset: DottieNeedleToolset,
+        normalizedRequest: String,
+        geminiIsDown: Bool = false
+    ) -> [DottieNeedleEngine.ToolCall]? {
+        guard !isQuestion(normalizedRequest) else { return nil }
+        let requestWords = Set(normalizedRequest.split(separator: " ").map(String.init))
+
+        if toolset == .organizer {
+            // Needle holds back low-scored calls; here the word checks
+            // decide, so a held-back reminder still counts.
+            let candidateCalls = answer.toolCalls.isEmpty ? answer.withheldToolCalls : answer.toolCalls
+            guard candidateCalls.count == 1, organizerCallIsBackedByWords(candidateCalls[0], normalizedRequest: normalizedRequest, requestWords: requestWords) else { return nil }
+            return candidateCalls
+        }
+
+        guard !answer.toolCalls.isEmpty,
+              let confidence = answer.confidence,
+              confidence >= minimumConfidence(for: toolset, geminiIsDown: geminiIsDown),
+              answer.toolCalls.allSatisfy({ callIsBackedByWords($0, normalizedRequest: normalizedRequest, requestWords: requestWords) }) else { return nil }
+        return answer.toolCalls
+    }
+
+    private static let playWords: Set<String> = ["play", "resume", "unpause", "on", "start", "continue"]
+    private static let pauseWords: Set<String> = ["pause", "stop", "hold", "freeze"]
+    private static let nextWords: Set<String> = ["next", "skip", "forward"]
+    private static let previousWords: Set<String> = ["previous", "back", "last", "before", "again", "rewind"]
+    private static let louderWords: Set<String> = ["up", "louder", "raise", "increase", "crank", "boost", "higher"]
+    private static let quieterWords: Set<String> = ["down", "quieter", "lower", "decrease", "softer", "reduce"]
+    private static let muteWords: Set<String> = ["mute", "off", "silence", "silent"]
+    /// Video and screen words mean the music tools are the wrong ones.
+    private static let screenMediaWords: Set<String> = ["video", "videos", "movie", "episode", "show", "clip", "reel", "reels", "short", "shorts", "tab", "page", "link"]
+
+    private static func callIsBackedByWords(_ toolCall: DottieNeedleEngine.ToolCall, normalizedRequest: String, requestWords: Set<String>) -> Bool {
+        let action = toolCall.arguments["action"] ?? ""
+        switch toolCall.name {
+        case "open_app", "quit_app":
+            // The name must be something the user said.
+            guard let spokenName = toolCall.arguments["name"]?.lowercased(), !spokenName.isEmpty else { return false }
+            return normalizedRequest.contains(spokenName)
+        case "move_window":
+            if let spokenApp = toolCall.arguments["app"]?.lowercased(), !spokenApp.isEmpty, !normalizedRequest.contains(spokenApp) { return false }
+            return true
+        case "control_music":
+            guard requestWords.isDisjoint(with: screenMediaWords) else { return false }
+            // The action has to be the one the words say, and only that one.
+            let wordsByAction: [String: Set<String>] = ["play": playWords, "pause": pauseWords, "next": nextWords, "previous": previousWords]
+            let saidActions = wordsByAction.filter { !$0.value.isDisjoint(with: requestWords) }.map(\.key)
+            return saidActions == [action]
+        case "change_volume":
+            if action == "set" { return normalizedRequest.range(of: #"\d"#, options: .regularExpression) != nil }
+            if action == "unmute" { return requestWords.contains("unmute") }
+            let wordsByAction: [String: Set<String>] = ["up": louderWords, "down": quieterWords, "mute": muteWords]
+            let saidActions = wordsByAction.filter { !$0.value.isDisjoint(with: requestWords) }.map(\.key)
+            return saidActions == [action]
+        case "search_web":
+            guard let query = toolCall.arguments["query"]?.lowercased(), !query.isEmpty else { return false }
+            let site = toolCall.arguments["site"] ?? "google"
+            return normalizedRequest.contains(query) && requestWords.contains(site == "youtube" ? "youtube" : "google") || (site == "google" && normalizedRequest.contains(query) && requestWords.contains("search") && !requestWords.contains("youtube"))
+        default:
+            return false
+        }
+    }
+
+    private static let eventMakingWords: Set<String> = ["put", "add", "schedule", "book", "create", "make", "set", "plan"]
+
+    private static func organizerCallIsBackedByWords(_ toolCall: DottieNeedleEngine.ToolCall, normalizedRequest: String, requestWords: Set<String>) -> Bool {
+        switch toolCall.name {
+        case "add_reminder":
+            guard requestWords.contains("remind"), let task = toolCall.arguments["task"]?.lowercased(), task.count >= 2 else { return false }
+            return normalizedRequest.contains(task)
+        case "add_calendar_event":
+            guard !requestWords.isDisjoint(with: eventMakingWords),
+                  let title = toolCall.arguments["title"]?.lowercased(), title.count >= 2 else { return false }
+            // Needle tidies titles ("Meeting with the design team"), so
+            // most of its words have to come from the request.
+            let titleWords = title.split(separator: " ").map(String.init)
+            let saidTitleWordCount = titleWords.filter { requestWords.contains($0) }.count
+            return saidTitleWordCount * 3 >= titleWords.count * 2
+        default:
+            return false
+        }
+    }
+
     // MARK: Turning calls into instant command words
 
     /// The instant command words for one Mac or search call, like
