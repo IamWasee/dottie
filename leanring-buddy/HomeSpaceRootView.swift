@@ -28,6 +28,15 @@ struct HomeSpaceRootView: View {
         case phone = "Phone"
         case profile = "Profile"
         case settings = "Settings"
+        /// The secret tab (DottieAdminMode). Left out of allCases so nothing
+        /// that lists Home's pages (Dottie's about_me, the walkthrough) can
+        /// give it away.
+        case admin = "Admin"
+
+        static var allCases: [HomeSection] {
+            [.conversation, .clickys, .projects, .pictures, .smartReplays, .smartHome, .skills,
+             .tools, .brain, .meetings, .phone, .profile, .settings]
+        }
 
         var id: String { rawValue }
 
@@ -46,6 +55,7 @@ struct HomeSpaceRootView: View {
             case .phone: return "iphone"
             case .profile: return "star.circle.fill"
             case .settings: return "gearshape.fill"
+            case .admin: return "testtube.2"
             }
         }
     }
@@ -60,7 +70,9 @@ struct HomeSpaceRootView: View {
             switch self {
             case .talk: return [.conversation, .clickys, .projects, .meetings, .phone]
             case .make: return [.pictures, .smartReplays, .skills, .tools, .smartHome]
-            case .you: return [.brain, .profile, .settings]
+            case .you:
+                // The Admin tab only shows once the secret phrase was said.
+                return DottieAdminMode.isUnlockedInDefaults ? [.brain, .profile, .settings, .admin] : [.brain, .profile, .settings]
             }
         }
     }
@@ -92,6 +104,7 @@ struct HomeSpaceRootView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var conversationStore: ConversationStore
     @ObservedObject var clickyRoster: ClickyRoster
+    @ObservedObject private var adminMode = DottieAdminMode.shared
     @State private var selectedSection: HomeSection = .conversation
     @State private var hoveredSidebarSection: HomeSection?
 
@@ -129,6 +142,8 @@ struct HomeSpaceRootView: View {
                     HomePhoneView(phoneBridge: companionManager.phoneBridge)
                 case .profile:
                     HomeProfileView(companionManager: companionManager)
+                case .admin:
+                    HomeAdminView(companionManager: companionManager)
                 case .settings:
                     HomeSettingsView(
                         companionManager: companionManager,
@@ -152,6 +167,10 @@ struct HomeSpaceRootView: View {
             guard let requestedSection else { return }
             selectedSection = requestedSection
             DottieHomeNavigator.shared.requestedSection = nil
+        }
+        .onChange(of: adminMode.isUnlocked) { _, isUnlocked in
+            // Locked again from its own page: step off the hidden tab.
+            if !isUnlocked && selectedSection == .admin { selectedSection = .profile }
         }
     }
 
