@@ -135,7 +135,7 @@ final class DottieNeedleRouter {
             phrase: normalizedRequest,
             otherPhrases: [],
             steps: savedSteps,
-            reply: "Done.",
+            reply: "Done: " + commandTexts.joined(separator: ", then ") + ".",
             isNamedByUser: false
         )
     }
@@ -255,7 +255,9 @@ final class DottieNeedleRouter {
     func hear(pcm16AudioData: Data) async -> String {
         guard canHearWithWhistle, !pcm16AudioData.isEmpty else { return "" }
         let samples: [Float] = pcm16AudioData.withUnsafeBytes { rawBytes in
-            rawBytes.bindMemory(to: Int16.self).map { Float(Int16(littleEndian: $0)) / 32768 }
+            stride(from: 0, to: rawBytes.count - 1, by: 2).map { byteOffset in
+                Float(Int16(littleEndian: rawBytes.loadUnaligned(fromByteOffset: byteOffset, as: Int16.self))) / 32768
+            }
         }
         let openAppNames = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
