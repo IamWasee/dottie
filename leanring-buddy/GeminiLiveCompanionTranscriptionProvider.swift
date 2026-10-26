@@ -28,9 +28,18 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
     /// Called when a push-to-talk session opens. CompanionManager uses it to
     /// grab a screenshot and call liveVoiceClient.beginUserTurn.
     private let beginLiveTurn: @MainActor () async -> Void
+    /// Hears the same audio on the Mac, so the instant lane knows the
+    /// words the moment the shortcut is released (Live's own transcript
+    /// only comes after its answer).
+    private let onDeviceTranscriber: DictationLiveTranscriber
 
-    init(liveVoiceClient: GeminiLiveVoiceClient, beginLiveTurn: @escaping @MainActor () async -> Void) {
+    init(
+        liveVoiceClient: GeminiLiveVoiceClient,
+        onDeviceTranscriber: DictationLiveTranscriber,
+        beginLiveTurn: @escaping @MainActor () async -> Void
+    ) {
         self.liveVoiceClient = liveVoiceClient
+        self.onDeviceTranscriber = onDeviceTranscriber
         self.beginLiveTurn = beginLiveTurn
     }
 
@@ -45,10 +54,20 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
                           userInfo: [NSLocalizedDescriptionKey: unavailableExplanation ?? "worker not configured"])
         }
 
+        let onDeviceTranscriber = self.onDeviceTranscriber
+        await MainActor.run {
+            if DottieInstantLane.areInstantCommandsEnabled || DottieInstantLane.isShortcutLearningEnabled {
+                onDeviceTranscriber.start(asksForPermission: false)
+            } else {
+                onDeviceTranscriber.stop()
+            }
+        }
+
         await beginLiveTurn()
 
         let session = GeminiLiveCompanionStreamingSession(
             liveVoiceClient: liveVoiceClient,
+            onDeviceAudioForwarder: onDeviceTranscriber.audioForwarder,
             onFinalTranscriptReady: onFinalTranscriptReady
         )
 
@@ -75,6 +94,7 @@ private final class GeminiLiveCompanionStreamingSession: BuddyStreamingTranscrip
     private static let minimumBytesPerSend = 3_200
 
     private let liveVoiceClient: GeminiLiveVoiceClient
+    private let onDeviceAudioForwarder: DictationLiveAudioForwarder
     private let onFinalTranscriptReady: (String) -> Void
     private let pcm16AudioConverter = BuddyPCM16AudioConverter(targetSampleRate: liveInputSampleRate)
 
@@ -83,14 +103,21 @@ private final class GeminiLiveCompanionStreamingSession: BuddyStreamingTranscrip
     private var isForwardingAudio = true
     var latestUserTranscript = ""
 
-    init(liveVoiceClient: GeminiLiveVoiceClient, onFinalTranscriptReady: @escaping (String) -> Void) {
+    init(
+        liveVoiceClient: GeminiLiveVoiceClient,
+        onDeviceAudioForwarder: DictationLiveAudioForwarder,
+        onFinalTranscriptReady: @escaping (String) -> Void
+    ) {
         self.liveVoiceClient = liveVoiceClient
+        self.onDeviceAudioForwarder = onDeviceAudioForwarder
         self.onFinalTranscriptReady = onFinalTranscriptReady
     }
 
     /// Runs on the audio render thread.
     func appendAudioBuffer(_ audioBuffer: AVAudioPCMBuffer) {
         guard let pcm16AudioData = pcm16AudioConverter.convertToPCM16Data(from: audioBuffer) else { return }
+        // Does nothing when the on-device transcriber isn't running.
+        onDeviceAudioForwarder.send(pcm16AudioData)
 
         stateLock.lock()
         guard isForwardingAudio else {

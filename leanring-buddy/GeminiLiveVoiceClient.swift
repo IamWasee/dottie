@@ -112,6 +112,9 @@ final class GeminiLiveVoiceClient {
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
     /// and meeting notes (DottieMacTools). Live waits for the result.
     var onMacTool: (@MainActor (_ functionName: String, _ arguments: [String: Any]) async -> String)?
+    /// A tool call got its answer (use_tool calls under the tool's own
+    /// name). The instant lane learns shortcuts from these.
+    var onFunctionCallFinished: (@MainActor (_ functionName: String, _ arguments: [String: Any], _ result: String) -> Void)?
 
     // MARK: - Configuration
 
@@ -132,6 +135,32 @@ final class GeminiLiveVoiceClient {
     /// Set for a turn the user typed in the notch: the answer shows as text
     /// (the caption still streams) and its audio isn't played.
     var isAudioOutputMuted = false
+
+    /// While true, the answer's audio and tool calls are kept back instead
+    /// of played and run: for the moment after release while the instant
+    /// lane decides whether the Mac does this ask itself. Setting it back
+    /// to false plays and runs what was kept; cancelCurrentModelResponse
+    /// drops it.
+    var isHoldingModelAnswer = false {
+        didSet {
+            guard oldValue, !isHoldingModelAnswer else { return }
+            let heldAudioChunks = heldModelAudioChunks
+            let heldToolCalls = heldModelToolCalls
+            heldModelAudioChunks = []
+            heldModelToolCalls = []
+            guard !isDiscardingModelAudioForCurrentTurn else { return }
+            if !isAudioOutputMuted {
+                for heldAudioChunk in heldAudioChunks {
+                    audioPlayer.enqueuePCM16Audio(heldAudioChunk)
+                }
+            }
+            for heldToolCall in heldToolCalls {
+                handleToolCall(heldToolCall)
+            }
+        }
+    }
+    private var heldModelAudioChunks: [Data] = []
+    private var heldModelToolCalls: [[String: Any]] = []
 
     // MARK: - State
 
@@ -201,6 +230,9 @@ final class GeminiLiveVoiceClient {
     /// Tool calls still being worked on (e.g. a higher-model request). The
     /// response watchdog stays quiet while any are pending.
     private var pendingFunctionCallTasks: [String: Task<Void, Never>] = [:]
+    /// The name and arguments of each tool call still waiting for its
+    /// answer, so onFunctionCallFinished can report the whole call.
+    private var functionCallsAwaitingResponse: [String: (functionName: String, arguments: [String: Any])] = [:]
     /// Calls made through use_tool that haven't been answered yet. Their
     /// response must carry use_tool's name, not the hidden tool's.
     private var useToolResponseNamesByFunctionCallID: [String: String] = [:]
@@ -235,6 +267,9 @@ final class GeminiLiveVoiceClient {
         pendingTurnContextTexts = []
         isDiscardingModelAudioForCurrentTurn = false
         cancelPendingFunctionCalls()
+        heldModelAudioChunks = []
+        heldModelToolCalls = []
+        isHoldingModelAnswer = false
         isUserTurnOpen = true
         isModelTurnInProgress = true
 
@@ -341,11 +376,14 @@ final class GeminiLiveVoiceClient {
     func cancelCurrentModelResponse() {
         isDiscardingModelAudioForCurrentTurn = true
         cancelPendingFunctionCalls()
+        heldModelAudioChunks = []
+        heldModelToolCalls = []
+        isHoldingModelAnswer = false
         audioPlayer.stopImmediately()
     }
 
     var isModelAudioPlaying: Bool {
-        audioPlayer.isPlaying
+        audioPlayer.isPlaying || !heldModelAudioChunks.isEmpty
     }
 
     func disconnect() {
@@ -998,7 +1036,9 @@ final class GeminiLiveVoiceClient {
                     }
                     onModelSpeechStarted?()
                 }
-                if !isAudioOutputMuted {
+                if isHoldingModelAnswer {
+                    heldModelAudioChunks.append(pcmAudioData)
+                } else if !isAudioOutputMuted {
                     audioPlayer.enqueuePCM16Audio(pcmAudioData)
                 }
             }
@@ -1027,6 +1067,10 @@ final class GeminiLiveVoiceClient {
     private func handleToolCall(_ toolCall: [String: Any]) {
         guard let functionCalls = toolCall["functionCalls"] as? [[String: Any]] else { return }
         markModelContentReceived()
+        if isHoldingModelAnswer {
+            heldModelToolCalls.append(toolCall)
+            return
+        }
 
         for functionCall in functionCalls {
             let functionName = functionCall["name"] as? String ?? ""
@@ -1086,6 +1130,7 @@ final class GeminiLiveVoiceClient {
     /// Runs one tool call by name. Live's own calls and use_tool's both go
     /// through here, so a tool behaves the same whichever way it's called.
     private func dispatchFunctionCall(functionName: String, functionCallID: String, functionArguments: [String: Any]) {
+        functionCallsAwaitingResponse[functionCallID] = (functionName: functionName, arguments: functionArguments)
         switch functionName {
         case "point_at_element":
             handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
@@ -1302,6 +1347,10 @@ final class GeminiLiveVoiceClient {
         // A hidden tool run through use_tool answers as use_tool, the call
         // Live actually made, even though its handler names itself.
         let respondingFunctionName = useToolResponseNamesByFunctionCallID.removeValue(forKey: functionCallID) ?? functionName
+        if let finishedFunctionCall = functionCallsAwaitingResponse.removeValue(forKey: functionCallID) {
+            let resultText = (response["result"] as? String) ?? (response["error"].map { "error: \($0)" } ?? "")
+            onFunctionCallFinished?(finishedFunctionCall.functionName, finishedFunctionCall.arguments, resultText)
+        }
         enqueueOrSend(message: [
             "toolResponse": [
                 "functionResponses": [[
@@ -1319,6 +1368,7 @@ final class GeminiLiveVoiceClient {
         }
         pendingFunctionCallTasks.removeAll()
         useToolResponseNamesByFunctionCallID.removeAll()
+        functionCallsAwaitingResponse.removeAll()
     }
 
     /// The model has started answering, so this turn can't be replayed any more.
@@ -1557,7 +1607,7 @@ enum GeminiLiveToolCatalog {
     /// One line for the voice prompt naming what the hidden tools cover, so
     /// the model knows to look for them. Keep it in step with what isn't in
     /// directFunctionNames.
-    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, and the user's connected apps"
+    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, and the user's connected apps"
 
     /// Extra words find_tool matches on, for asks that don't share words
     /// with the tool's description ("turn into a cat" → change_cursor).

@@ -292,7 +292,7 @@ enum EverydayTools: DottieToolModule {
     private static var watchTool: DottieTool {
         DottieTool(
             name: "watch",
-            description: "For \"tell me when…\" (a download finishes, a page changes, it says Done, a game loads): watches the screen in the background, even after you stop talking, and alerts the user (notch, sound, notification, phone) when it happens. Pick the cheapest kind: download_finishes for downloads, text_appears / text_disappears when they name words on screen, changes for 'when this page changes', stops_changing for 'when it's done loading', looks_like only for visual things words can't catch.",
+            description: "For \"tell me when…\" (a download finishes, a page changes, it says Done, a game loads): watches the screen in the background, even after you stop talking, and alerts the user (notch, sound, notification, phone) when it happens, then does then_do if they asked for something afterwards. Waiting is free: checks run on the Mac. For a terminal or coding agent ('tell me when codex is done'), use stops_changing on its window. Pick the cheapest kind: download_finishes for downloads, text_appears / text_disappears when they name words on screen, changes for 'when this page changes', stops_changing for 'when it's done loading', looks_like only for visual things words can't catch.",
             parameters: [
                 "type": "OBJECT",
                 "properties": [
@@ -311,6 +311,7 @@ enum EverydayTools: DottieToolModule {
                     ],
                     "app_name": ["type": "STRING", "description": "For target app: the app's name."],
                     "minutes": ["type": "NUMBER", "description": "Give up after this many minutes. Default 60, at most 480."],
+                    "then_do": ["type": "STRING", "description": "For start, only when they asked for something to happen afterwards ('…then run the tests', 'and open it'): that ask in their words. Dottie does it by herself when the watch fires."],
                     "watch": ["type": "STRING", "description": "For stop: which watch (words from what it watches), or all."]
                 ],
                 "required": ["action"]
@@ -326,6 +327,7 @@ enum EverydayTools: DottieToolModule {
                     text: arguments.dottieString("text"),
                     target: arguments.dottieString("target") ?? "front_window",
                     appName: arguments.dottieString("app_name"),
+                    thenDo: arguments.dottieString("then_do"),
                     minutes: arguments.dottieNumber("minutes") ?? 60
                 )
             case "stop":

@@ -37,10 +37,21 @@ final class DictationLiveTranscriber {
     private var recognitionTask: SFSpeechRecognitionTask?
     /// Results from a session that has since been stopped are ignored.
     private var currentSessionID = UUID()
+    /// A session is listening (speech recognition is allowed and started).
+    var isRunning: Bool { recognitionTask != nil }
+
+    /// The newest transcript of the current session, "" before any.
+    private(set) var latestText = ""
+    private var hasFinalText = false
+    /// Callers of finishAndWaitForFinalText still waiting.
+    private var finalTextWaiters: [CheckedContinuation<String, Never>] = []
 
     // MARK: - Session
 
-    func start() {
+    /// asksForPermission false: when speech recognition was never allowed,
+    /// quietly does nothing instead of showing macOS's prompt (talking to
+    /// Dottie works without it; only the instant lane needs it).
+    func start(asksForPermission: Bool = true) {
         stop()
 
         switch SFSpeechRecognizer.authorizationStatus() {
@@ -48,7 +59,9 @@ final class DictationLiveTranscriber {
             break
         case .notDetermined:
             // Ask once; the preview shows from the next dictation on.
-            SFSpeechRecognizer.requestAuthorization { _ in }
+            if asksForPermission {
+                SFSpeechRecognizer.requestAuthorization { _ in }
+            }
             return
         default:
             // Not allowed: no preview, dictation is unaffected.
@@ -67,12 +80,20 @@ final class DictationLiveTranscriber {
 
         let sessionID = UUID()
         currentSessionID = sessionID
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, _ in
-            guard let partialText = result?.bestTranscription.formattedString, !partialText.isEmpty else { return }
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            let partialText = result?.bestTranscription.formattedString ?? ""
+            let isFinalResult = (result?.isFinal ?? false) || error != nil
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.currentSessionID == sessionID else { return }
-                    self.onPartialText?(partialText)
+                    if !partialText.isEmpty {
+                        self.latestText = partialText
+                        self.onPartialText?(partialText)
+                    }
+                    if isFinalResult {
+                        self.hasFinalText = true
+                        self.resumeFinalTextWaiters()
+                    }
                 }
             }
         }
@@ -85,6 +106,39 @@ final class DictationLiveTranscriber {
         audioForwarder.detach()
         recognitionTask?.cancel()
         recognitionTask = nil
+        resumeFinalTextWaiters()
+        latestText = ""
+        hasFinalText = false
+    }
+
+    /// The recording ended: waits (at most timeoutSeconds) for the
+    /// recognizer's last word on it, then stops. Returns the transcript.
+    func finishAndWaitForFinalText(timeoutSeconds: Double) async -> String {
+        guard recognitionTask != nil else { return latestText }
+        // Ending the audio makes the recognizer finish up.
+        audioForwarder.detach()
+        if !hasFinalText {
+            let sessionID = currentSessionID
+            _ = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+                finalTextWaiters.append(continuation)
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    guard let self, self.currentSessionID == sessionID else { return }
+                    self.resumeFinalTextWaiters()
+                }
+            }
+        }
+        let finalText = latestText
+        stop()
+        return finalText
+    }
+
+    private func resumeFinalTextWaiters() {
+        let waitingContinuations = finalTextWaiters
+        finalTextWaiters = []
+        for waitingContinuation in waitingContinuations {
+            waitingContinuation.resume(returning: latestText)
+        }
     }
 
     /// A chunk of the recording (16kHz mono PCM16). Safe from the audio thread.
