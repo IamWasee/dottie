@@ -157,18 +157,6 @@ final class DottieLearnedShortcutStore: ObservableObject {
         return true
     }
 
-    /// Another wording that meant this shortcut (found by Needle), so it
-    /// matches word for word from now on.
-    func addOtherPhrase(_ normalizedPhrase: String, toShortcutWithID shortcutID: UUID) {
-        guard let shortcutIndex = shortcuts.firstIndex(where: { $0.id == shortcutID }),
-              !normalizedPhrase.isEmpty,
-              shortcuts[shortcutIndex].phrase != normalizedPhrase,
-              !shortcuts[shortcutIndex].otherPhrases.contains(normalizedPhrase),
-              shortcuts[shortcutIndex].otherPhrases.count < 20 else { return }
-        shortcuts[shortcutIndex].otherPhrases.append(normalizedPhrase)
-        write()
-    }
-
     func noteUsed(_ shortcutID: UUID) {
         guard let shortcutIndex = shortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
         shortcuts[shortcutIndex].lastUsedAt = Date()
@@ -282,7 +270,7 @@ final class DottieInstantLane {
     }
 
     /// plan(for:), then Needle (DottieNeedleRouter) for wording the strict
-    /// lane doesn't know, learned shortcuts by meaning, reminders and events.
+    /// lane doesn't know, reminders and events.
     func planIncludingNeedle(for requestText: String) async -> Plan? {
         if let strictPlan = plan(for: requestText) { return strictPlan }
         guard Self.areInstantCommandsEnabled else { return nil }
@@ -618,6 +606,9 @@ struct HomeInstantLaneSettings: View {
     @ObservedObject private var store = DottieLearnedShortcutStore.shared
     @AppStorage(DottieInstantLane.instantCommandsEnabledDefaultsKey) private var areInstantCommandsEnabled = true
     @AppStorage(DottieInstantLane.shortcutLearningEnabledDefaultsKey) private var isShortcutLearningEnabled = true
+    @AppStorage(DottieNeedleEngine.isEnabledDefaultsKey) private var isNeedleEnabled = true
+    @AppStorage(DottieNeedleEngine.isWhistleEnabledDefaultsKey) private var isWhistleEnabled = true
+    @State private var needleStatusText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -631,6 +622,41 @@ struct HomeInstantLaneSettings: View {
                     .toggleStyle(.switch)
             }
             Text("“Open Spotify”, “quit Slack”, “Terminal on the left”, “Chrome on my other screen”, “maximize Safari”, “next song”, “volume up”, “google …”. Your words are heard on your Mac, and Dottie does these before Gemini answers.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Text("Understand everyday wording with Needle")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Toggle("", isOn: $isNeedleEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!areInstantCommandsEnabled)
+            }
+            Text("A small model that runs on your Mac (Cactus Needle, no internet, about a tenth of a second) catches other ways of saying these, like “pop Safari open”, “kill Zoom” or “stop the song”, plus “remind me tomorrow at 7 pm to …” and “put lunch with Sam on my calendar Friday at noon”. It only acts when your words back it up; anything else goes to Gemini. When Gemini can't be reached, it still does these on the Mac.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !needleStatusText.isEmpty {
+                Text(needleStatusText)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+
+            HStack {
+                Text("Hear short asks on the Mac with Whistle")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Toggle("", isOn: $isWhistleEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!areInstantCommandsEnabled || !isNeedleEnabled)
+            }
+            Text("Only used when Speech Recognition isn't allowed for Dottie: a short push-to-talk ask is heard on your Mac (Cactus Whistle, in English) so the instant lane still works.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -685,6 +711,9 @@ struct HomeInstantLaneSettings: View {
                     .pointerCursor()
                 }
             }
+        }
+        .task(id: isNeedleEnabled) {
+            needleStatusText = "Needle: " + (await DottieNeedleEngine.shared.statusText())
         }
     }
 

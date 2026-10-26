@@ -5,25 +5,28 @@
 //  Everything Dottie does with Needle (DottieNeedleEngine), on top of the
 //  strict instant lane:
 //
-//    1. Loose wording: "pop safari open", "crank it up", "throw this on my
-//       other monitor" become instant commands without Gemini, when Needle
-//       is sure enough. Its call is turned into plain command words and
-//       parsed strictly, so the app still has to be real.
-//    2. Learned shortcuts by meaning: "check my email" replays the shortcut
-//       saved as "open my mail". The new wording is then remembered on the
-//       shortcut, so next time it matches word for word.
-//    3. Remembering: an ask Needle worked out once is saved as a learned
-//       shortcut, so the same words skip Needle too.
-//    4. Reminders and calendar: "remind me tomorrow at 7 to call mom" goes
-//       straight to Dottie's own add_reminder / add_calendar_event, with
-//       the time read by Apple's date detector.
-//    5. When Gemini is down or busy: the same, with a slightly lower bar,
+//    1. Loose wording: "pop safari open", "kill zoom", "stop the song",
+//       "find me cat videos on youtube" become instant commands without
+//       Gemini. Needle's call is only used when its confidence is high
+//       enough and the user's own words back it up
+//       (DottieNeedleToolset.callsToActOn); then it's turned into plain
+//       command words and parsed strictly, so the app still has to be real.
+//    2. Remembering: an ask Needle worked out once is saved as a learned
+//       shortcut, so the same words next time skip Needle as well.
+//    3. Reminders and calendar: "remind me tomorrow at 7 pm to call mom"
+//       goes straight to Dottie's own add_reminder / add_calendar_event,
+//       with the time read from the user's words by Apple's date detector.
+//    4. When Gemini is down or busy: the same, with a slightly lower bar,
 //       so Mac actions still work.
-//    6. Finding hidden tools by meaning for Live's find_tool.
-//    7. Sorting asks (simple or complex job, quick or careful question)
-//       on Macs without Apple's on-device model.
-//    8. Whistle: hearing a short push-to-talk turn on the Mac when Speech
+//    5. find_tool: hidden tools ranked by meaning, as a nudge on top of
+//       the word match.
+//    6. Whistle: hearing a short push-to-talk turn on the Mac when Speech
 //       Recognition isn't allowed, so the instant lane still works.
+//
+//  Tried and left out (scripts/needle-lab, on a Mac): matching learned
+//  shortcuts by meaning ("good morning routine" and "good night routine"
+//  came out nearly the same, "open my mail" and "check my email" far
+//  apart) and sorting asks into simple/complex (it never committed).
 //
 //  Everything returns nil quickly when Needle is off or not in the build,
 //  and callers carry on exactly as before.
@@ -38,23 +41,16 @@ final class DottieNeedleRouter {
 
     private let engine = DottieNeedleEngine.shared
 
-    /// Needle's own calibrated confidence needed to act without asking.
-    static let actConfidence = 0.8
-    /// When Gemini can't answer at all, a little less is enough: the
-    /// alternative is doing nothing.
-    static let geminiDownActConfidence = 0.6
-    /// How close in meaning a new ask must be to a saved phrase, and how
-    /// far ahead of the next-best shortcut, to replay it.
-    static let shortcutMeaningSimilarity: Float = 0.9
-    static let shortcutMeaningMargin: Float = 0.03
     /// Longer asks are rarely a single Mac action.
     private static let longestRoutedWordCount = 16
     /// Past this, Gemini's answer is better than waiting for Needle.
     private static let deadlineSeconds = 0.6
 
-    /// Vectors for saved phrases and tool descriptions, by their text. A
-    /// new ask's own vector isn't kept, so this only grows with what's saved.
+    /// Tool descriptions' vectors, by their text (centered, see
+    /// DottieNeedleMeaning). A new ask's own vector isn't kept.
     private var vectorsByText: [String: [Float]] = [:]
+    /// The average of DottieNeedleMeaning.referenceSentences' vectors.
+    private var meaningCenter: [Float]?
 
     private init() {}
 
@@ -62,51 +58,54 @@ final class DottieNeedleRouter {
         DottieNeedleEngine.isEnabled && engine.isBundled && DottieInstantLane.areInstantCommandsEnabled
     }
 
-    /// Loads the engine and the saved phrases' vectors in the background,
-    /// so the first ask doesn't pay for it.
+    /// Loads the engine and answers one ask in the background, so the
+    /// first real ask doesn't pay for it (about a second, once).
     func warmUp() {
         guard isAvailable else { return }
         Task {
-            _ = await engine.prepare()
-            for phrase in savedPhrases().map(\.phrase) {
-                _ = await vector(for: phrase)
-            }
+            _ = await engine.toolCalls(
+                for: "open notes",
+                toolsJSON: DottieNeedleToolset.mac.toolsJSON,
+                facts: DottieNeedleToolset.systemFacts()
+            )
         }
     }
 
-    // MARK: - Planning (1 to 5)
+    // MARK: - Planning (1 to 3)
 
     /// What to do with an ask the strict lane didn't recognize, or nil
     /// to ask Gemini. Never waits longer than deadlineSeconds.
-    func plan(for requestText: String, minimumConfidence: Double = actConfidence) async -> DottieInstantLane.Plan? {
+    func plan(for requestText: String, geminiIsDown: Bool = false) async -> DottieInstantLane.Plan? {
         guard isAvailable else { return nil }
         let normalizedRequest = DottieInstantText.normalized(requestText)
         let requestWordCount = normalizedRequest.split(separator: " ").count
         guard (1...Self.longestRoutedWordCount).contains(requestWordCount),
+              !DottieNeedleToolset.isQuestion(normalizedRequest),
               DottieInstantLane.shared.namedShortcutRequest(in: requestText) == nil else { return nil }
 
         return await withDeadline(seconds: Self.deadlineSeconds) {
-            if let learnedShortcut = await self.learnedShortcut(matchingMeaningOf: normalizedRequest) {
-                return .learnedShortcut(learnedShortcut)
-            }
-            return await self.toolCallPlan(for: normalizedRequest, minimumConfidence: minimumConfidence)
+            await self.toolCallPlan(for: normalizedRequest, geminiIsDown: geminiIsDown)
         }
     }
 
-    private func toolCallPlan(for normalizedRequest: String, minimumConfidence: Double) async -> DottieInstantLane.Plan? {
+    private func toolCallPlan(for normalizedRequest: String, geminiIsDown: Bool) async -> DottieInstantLane.Plan? {
         let toolset = DottieNeedleToolset.toolset(forNormalizedRequest: normalizedRequest)
         guard let answer = await engine.toolCalls(
             for: normalizedRequest,
             toolsJSON: toolset.toolsJSON,
             facts: DottieNeedleToolset.systemFacts()
-        ), !answer.toolCalls.isEmpty,
-              let confidence = answer.confidence, confidence >= minimumConfidence else { return nil }
+        ), let callsToActOn = DottieNeedleToolset.callsToActOn(
+            answer,
+            toolset: toolset,
+            normalizedRequest: normalizedRequest,
+            geminiIsDown: geminiIsDown
+        ) else { return nil }
 
         switch toolset {
-        case .mac, .search:
+        case .mac, .media, .search:
             var commandTexts: [String] = []
             var instantCommands: [DottieInstantCommand] = []
-            for toolCall in answer.toolCalls {
+            for toolCall in callsToActOn {
                 guard let commandWords = DottieNeedleToolset.instantCommandWords(for: toolCall),
                       let parsedCommands = DottieInstantCommands.parseAll(commandWords) else { return nil }
                 commandTexts.append(commandWords)
@@ -116,14 +115,12 @@ final class DottieNeedleRouter {
             return .instantCommands(instantCommands)
 
         case .organizer:
-            // One reminder or event at a time; anything more is Gemini's.
-            guard answer.toolCalls.count == 1,
-                  let organizerStep = DottieNeedleToolset.organizerStep(for: answer.toolCalls[0], fullRequest: normalizedRequest) else { return nil }
+            guard let organizerStep = DottieNeedleToolset.organizerStep(for: callsToActOn[0], fullRequest: normalizedRequest) else { return nil }
             return .toolSteps([DottieLearnedShortcut.Step(functionName: organizerStep.functionName, arguments: organizerStep.arguments)])
         }
     }
 
-    /// 3. The next time these exact words come, the strict lane replays it
+    /// 2. The next time these exact words come, the strict lane replays it
     /// without Needle. Asks that depend on the moment ("put this on the
     /// left") are left to Needle each time.
     private func rememberWorkedOutAsk(_ normalizedRequest: String, commandTexts: [String]) {
@@ -152,7 +149,7 @@ final class DottieNeedleRouter {
         "exit", "put", "move", "snap", "throw", "send", "make", "center", "centre", "maximize", "full", "fullscreen",
         "left", "right", "monitor", "screen", "display", "window", "play", "pause", "stop", "skip", "next", "previous",
         "song", "track", "music", "volume", "louder", "quieter", "softer", "mute", "unmute", "sound", "crank", "turn",
-        "google", "search", "youtube", "look", "remind", "reminder", "calendar", "schedule"
+        "google", "search", "youtube", "look", "remind", "reminder", "calendar", "schedule", "add"
     ]
 
     func mightHandle(normalizedPartialText: String) -> Bool {
@@ -162,47 +159,28 @@ final class DottieNeedleRouter {
         return partialWords.contains { Self.actionWords.contains($0) }
     }
 
-    // MARK: - Learned shortcuts by meaning (2)
-
-    private func savedPhrases() -> [(phrase: String, shortcut: DottieLearnedShortcut)] {
-        DottieLearnedShortcutStore.shared.shortcuts.flatMap { shortcut in
-            ([shortcut.phrase] + shortcut.otherPhrases).map { (phrase: $0, shortcut: shortcut) }
-        }
+    /// A centered vector for a tool description, kept.
+    private func meaningVector(forKeptText text: String) async -> [Float]? {
+        if let cachedVector = vectorsByText[text] { return cachedVector }
+        guard let center = await meaningCenterVector(), let rawVector = await engine.embedding(for: text) else { return nil }
+        let centeredVector = DottieNeedleMeaning.centered(rawVector, center: center)
+        vectorsByText[text] = centeredVector
+        return centeredVector
     }
 
-    private func learnedShortcut(matchingMeaningOf normalizedRequest: String) async -> DottieLearnedShortcut? {
-        let phrasesWithShortcuts = savedPhrases()
-        guard !phrasesWithShortcuts.isEmpty,
-              !DottieInstantText.containsMomentWord(normalizedRequest),
-              let requestVector = await engine.embedding(for: normalizedRequest) else { return nil }
-
-        var bestSimilarityByShortcutID: [UUID: (similarity: Float, shortcut: DottieLearnedShortcut)] = [:]
-        for (phrase, shortcut) in phrasesWithShortcuts {
-            guard let phraseVector = await vector(for: phrase) else { continue }
-            let similarity = DottieNeedleEngine.similarity(requestVector, phraseVector)
-            if similarity > (bestSimilarityByShortcutID[shortcut.id]?.similarity ?? -1) {
-                bestSimilarityByShortcutID[shortcut.id] = (similarity, shortcut)
+    private func meaningCenterVector() async -> [Float]? {
+        if let meaningCenter { return meaningCenter }
+        var referenceVectors: [[Float]] = []
+        for referenceSentence in DottieNeedleMeaning.referenceSentences {
+            if let referenceVector = await engine.embedding(for: referenceSentence) {
+                referenceVectors.append(referenceVector)
             }
         }
-        let rankedMatches = bestSimilarityByShortcutID.values.sorted { $0.similarity > $1.similarity }
-        guard let bestMatch = rankedMatches.first, bestMatch.similarity >= Self.shortcutMeaningSimilarity else { return nil }
-        // Two shortcuts that both fit ("open my mail" and "open my mail
-        // app on the left") is a guess, so Gemini decides.
-        if rankedMatches.count > 1, bestMatch.similarity - rankedMatches[1].similarity < Self.shortcutMeaningMargin {
-            return nil
-        }
-        DottieLearnedShortcutStore.shared.addOtherPhrase(normalizedRequest, toShortcutWithID: bestMatch.shortcut.id)
-        return bestMatch.shortcut
+        meaningCenter = DottieNeedleMeaning.centerVector(of: referenceVectors)
+        return meaningCenter
     }
 
-    private func vector(for text: String) async -> [Float]? {
-        if let cachedVector = vectorsByText[text] { return cachedVector }
-        guard let newVector = await engine.embedding(for: text) else { return nil }
-        vectorsByText[text] = newVector
-        return newVector
-    }
-
-    // MARK: - While Gemini is down (5)
+    // MARK: - While Gemini is down (4)
 
     /// Gemini couldn't answer this ask (no internet, busy, quota). Returns
     /// what was done on the Mac instead, or nil when nothing fit.
@@ -211,48 +189,62 @@ final class DottieNeedleRouter {
            case .done(let doneText) = await DottieInstantLane.shared.run(strictPlan) {
             return doneText
         }
-        guard let needlePlan = await plan(for: requestText, minimumConfidence: Self.geminiDownActConfidence),
+        guard let needlePlan = await plan(for: requestText, geminiIsDown: true),
               case .done(let doneText) = await DottieInstantLane.shared.run(needlePlan) else { return nil }
         return doneText
     }
 
-    // MARK: - find_tool by meaning (6)
+    // MARK: - find_tool by meaning (5)
 
     /// Hidden tool names in order of how close their descriptions are in
-    /// meaning to what the user wants, best first, with how close.
+    /// meaning to what the user wants, best first, with how close (about
+    /// 0.1 to 0.35 for a real match, near 0 for none).
     func hiddenToolsRankedByMeaning(for whatTheUserWants: String, amongHiddenDeclarations hiddenDeclarations: [[String: Any]]) async -> [(name: String, similarity: Float)] {
-        guard DottieNeedleEngine.isEnabled, engine.isBundled,
-              let queryVector = await engine.embedding(for: whatTheUserWants.lowercased()) else { return [] }
+        guard DottieNeedleEngine.isEnabled, engine.isBundled else { return [] }
+        let describingTextsByToolName = Self.describingTexts(of: hiddenDeclarations)
+        // The first time, the tools' vectors take a second or so: they're
+        // made in the background and this search goes on with words only.
+        guard describingTextsByToolName.values.allSatisfy({ vectorsByText[$0] != nil }) else {
+            fillToolVectorsInBackground(Array(describingTextsByToolName.values))
+            return []
+        }
+        guard let center = meaningCenter,
+              let rawQueryVector = await engine.embedding(for: whatTheUserWants.lowercased()) else { return [] }
+        let queryVector = DottieNeedleMeaning.centered(rawQueryVector, center: center)
         var rankedTools: [(name: String, similarity: Float)] = []
-        for declaration in hiddenDeclarations {
-            guard let toolName = declaration["name"] as? String else { continue }
-            let toolDescription = declaration["description"] as? String ?? ""
-            // The first sentence says what the tool is; the rest is how to use it.
-            let describingText = toolName.replacingOccurrences(of: "_", with: " ") + ": " + DottieInstantLane.firstSentence(of: toolDescription)
-            guard let toolVector = await vector(for: describingText) else { continue }
+        for (toolName, describingText) in describingTextsByToolName {
+            guard let toolVector = vectorsByText[describingText] else { continue }
             rankedTools.append((toolName, DottieNeedleEngine.similarity(queryVector, toolVector)))
         }
         return rankedTools.sorted { $0.similarity > $1.similarity }
     }
 
-    // MARK: - Sorting asks (7)
+    private var isFillingToolVectors = false
 
-    /// One of `labels` for the text, or nil when Needle isn't sure.
-    func classify(_ text: String, labels: [String], meaning: String) async -> String? {
-        guard DottieNeedleEngine.isEnabled, engine.isBundled, labels.count >= 2 else { return nil }
-        let labelsJSON = labels.map { "\"\($0)\"" }.joined(separator: ", ")
-        let escapedMeaning = meaning.replacingOccurrences(of: "\"", with: "'")
-        let sortingToolsJSON = """
-        [{"name": "sort_request", "description": "Sort the request.", "parameters": {"type": "object", "properties": {"kind": {"type": "string", "enum": [\(labelsJSON)], "description": "\(escapedMeaning)"}}, "required": ["kind"]}}]
-        """
-        guard let answer = await withDeadline(seconds: 1.0, operation: {
-            await self.engine.toolCalls(for: text, toolsJSON: sortingToolsJSON, facts: "")
-        }), let sortedKind = answer.toolCalls.first?.arguments["kind"], labels.contains(sortedKind),
-              (answer.confidence ?? 0) >= 0.6 else { return nil }
-        return sortedKind
+    private func fillToolVectorsInBackground(_ describingTexts: [String]) {
+        guard !isFillingToolVectors else { return }
+        isFillingToolVectors = true
+        Task {
+            for describingText in describingTexts {
+                _ = await meaningVector(forKeptText: describingText)
+            }
+            isFillingToolVectors = false
+        }
     }
 
-    // MARK: - Whistle (8)
+    /// "take screenshot: Save a screenshot of …" per tool: the name and the
+    /// first sentence, which says what the tool is (the rest is how to use it).
+    private static func describingTexts(of hiddenDeclarations: [[String: Any]]) -> [String: String] {
+        var describingTextsByToolName: [String: String] = [:]
+        for declaration in hiddenDeclarations {
+            guard let toolName = declaration["name"] as? String else { continue }
+            let toolDescription = declaration["description"] as? String ?? ""
+            describingTextsByToolName[toolName] = toolName.replacingOccurrences(of: "_", with: " ") + ": " + DottieInstantLane.firstSentence(of: toolDescription)
+        }
+        return describingTextsByToolName
+    }
+
+    // MARK: - Whistle (6)
 
     var canHearWithWhistle: Bool {
         isAvailable && engine.isWhistleBundled && DottieNeedleEngine.isWhistleEnabled

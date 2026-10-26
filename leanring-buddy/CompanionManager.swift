@@ -361,6 +361,9 @@ final class CompanionManager: ObservableObject {
         bindShortcutTransitions()
         bindDictation()
         configureLiveVoiceClient()
+        // Needle answers its first ask in about a second; later ones take
+        // a tenth of that. Pay the first one now, off to the side.
+        DottieNeedleRouter.shared.warmUp()
         // Eagerly touch the Gemini API so its TLS warmup handshake completes
         // well before the onboarding demo fires.
         _ = geminiAPI

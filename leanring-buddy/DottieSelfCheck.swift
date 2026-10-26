@@ -77,6 +77,7 @@ final class DottieSelfCheck: ObservableObject {
         add(contentsOf: await toolItems)
         add(checkTelegram())
         add(checkOnDeviceModel())
+        add(await checkNeedle())
         add(Item(id: "models", title: "Gemini models", level: .off, detail: DottieModelPicker.shared.summary()))
         return summary
     }
@@ -395,6 +396,34 @@ final class DottieSelfCheck: ObservableObject {
                         detail: "Set up, but not connected right now. \(phoneBridge.statusText)")
         }
         return Item(id: "telegram", title: "Phone (Telegram)", level: .off, detail: "Not set up (optional).")
+    }
+
+    /// Cactus Needle: loads it and has it answer one everyday ask.
+    private func checkNeedle() async -> Item {
+        let engine = DottieNeedleEngine.shared
+        guard DottieNeedleEngine.isEnabled else {
+            return Item(id: "needle", title: "Needle (on-Mac commands)", level: .off,
+                        detail: "Off in Settings → Instant commands.")
+        }
+        guard engine.isBundled else {
+            return Item(id: "needle", title: "Needle (on-Mac commands)", level: .off,
+                        detail: "Not included in this build (it was made offline). Dottie works without it.")
+        }
+        let answer = await engine.toolCalls(
+            for: "could you pop safari open",
+            toolsJSON: DottieNeedleToolset.mac.toolsJSON,
+            facts: DottieNeedleToolset.systemFacts()
+        )
+        guard let answer else {
+            let failureReason = await engine.lastFailureReason
+            return Item(id: "needle", title: "Needle (on-Mac commands)", level: .warning,
+                        detail: (failureReason ?? "It didn't start.") + " Dottie works without it.")
+        }
+        let understood = answer.toolCalls.first?.name == "open_app"
+        return Item(id: "needle", title: "Needle (on-Mac commands)", level: understood ? .good : .warning,
+                    detail: understood
+                        ? "Ready: understood a test ask in \(Int(answer.milliseconds.rounded())) ms, with no internet."
+                        : "Started, but misread a test ask. Dottie still checks every Needle call against your words.")
     }
 
     private func checkOnDeviceModel() -> Item {

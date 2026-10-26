@@ -1,6 +1,9 @@
 name: Needle lab
 
-# Temporary: runs Dottie's Needle code against the real engine on a Mac.
+# Runs Dottie's own Needle code (DottieNeedleEngine and DottieNeedleToolsets)
+# against the real engine on a Mac with everyday asks, and prints the
+# checksums scripts/embed-needle.sh pins. Run it by hand (Actions → Needle
+# lab) after changing the toolsets or bumping the Needle version.
 on:
   push:
     branches: [claude/project-thread-7je5ze]

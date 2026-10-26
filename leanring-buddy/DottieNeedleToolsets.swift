@@ -203,8 +203,10 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
             return saidActions == [action]
         case "search_web":
             guard let query = toolCall.arguments["query"]?.lowercased(), !query.isEmpty else { return false }
-            let site = toolCall.arguments["site"] ?? "google"
-            return normalizedRequest.contains(query) && requestWords.contains(site == "youtube" ? "youtube" : "google") || (site == "google" && normalizedRequest.contains(query) && requestWords.contains("search") && !requestWords.contains("youtube"))
+            // YouTube only when the user said it; Google otherwise.
+            let saidYouTube = requestWords.contains("youtube")
+            let isYouTubeSearch = toolCall.arguments["site"] == "youtube"
+            return normalizedRequest.contains(query) && saidYouTube == isYouTubeSearch
         default:
             return false
         }
@@ -321,8 +323,29 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
         }
     }
 
+    /// "in 20 minutes", "in an hour", "in half an hour", "in 2 hours",
+    /// which Apple's date detector doesn't read.
+    static func relativeDate(in text: String, now: Date) -> Date? {
+        let lowercasedText = text.lowercased()
+        if lowercasedText.range(of: #"\bin (?:a )?half an? hour\b"#, options: .regularExpression) != nil {
+            return now.addingTimeInterval(30 * 60)
+        }
+        guard let matchRange = lowercasedText.range(of: #"\bin (\d+|an?|one|two|three|four|five|ten|fifteen|twenty|thirty|forty five) (minute|minutes|min|mins|hour|hours)\b"#, options: .regularExpression) else { return nil }
+        let matchWords = lowercasedText[matchRange].split(separator: " ").map(String.init)
+        guard matchWords.count == 3 || matchWords.count == 4 else { return nil }
+        let amountWords = matchWords.dropFirst().dropLast().joined(separator: " ")
+        let amountsBySpokenWord: [String: Double] = [
+            "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "ten": 10,
+            "fifteen": 15, "twenty": 20, "thirty": 30, "forty five": 45
+        ]
+        guard let amount = Double(amountWords) ?? amountsBySpokenWord[amountWords], amount > 0 else { return nil }
+        let unitSeconds: Double = matchWords.last!.hasPrefix("h") ? 3600 : 60
+        return now.addingTimeInterval(amount * unitSeconds)
+    }
+
     /// Apple's own date reading ("tomorrow at 7 pm", "next friday at noon").
     static func detectedDate(in text: String, now: Date) -> (date: Date, hasTime: Bool)? {
+        if let relativeMoment = relativeDate(in: text, now: now) { return (relativeMoment, true) }
         guard !text.isEmpty, let dateDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
         let wholeRange = NSRange(text.startIndex..., in: text)
         guard let firstMatch = dateDetector.firstMatch(in: text, options: [], range: wholeRange), let matchedDate = firstMatch.date else { return nil }
