@@ -10,6 +10,9 @@ on:
     paths: ["scripts/needle-lab/**", "leanring-buddy/DottieNeedle*.swift", ".github/workflows/needle-lab.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   lab:
     runs-on: macos-15
