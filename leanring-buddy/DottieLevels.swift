@@ -99,6 +99,9 @@ final class DottieLevels: ObservableObject {
     @Published private(set) var counts: [String: Int] = [:]
     @Published private(set) var celebration: Celebration?
     @Published private(set) var notchEffect: DottieNotchEffect = .off
+    /// Home → Admin's "unlock every cosmetic": every shape and notch effect
+    /// can be worn whatever the level.
+    @Published private(set) var isEveryUnlockOpenedByAdmin = UserDefaults.standard.bool(forKey: "dottieAdminOpensEveryUnlock")
 
     private static let defaultsKey = "dottieLevelsState"
     private var lastActiveDay: String?
@@ -181,7 +184,23 @@ final class DottieLevels: ObservableObject {
 
     var xpToNextLevel: Int { Self.xpNeeded(forLevel: level + 1) - totalXP }
 
-    func isUnlocked(_ unlockable: Unlockable) -> Bool { level >= unlockable.level }
+    func isUnlocked(_ unlockable: Unlockable) -> Bool { isEveryUnlockOpenedByAdmin || level >= unlockable.level }
+
+    func setEveryUnlockOpenedByAdmin(_ isOpened: Bool) {
+        isEveryUnlockOpenedByAdmin = isOpened
+        UserDefaults.standard.set(isOpened, forKey: "dottieAdminOpensEveryUnlock")
+        // Taking the unlocks back takes off a notch effect that isn't earned.
+        if !isOpened, let wornEffect = Self.unlockables.first(where: { $0.kind == .notchEffect(notchEffect) }), !isUnlocked(wornEffect) {
+            notchEffect = .off
+            save()
+        }
+    }
+
+    /// Home → Admin: jumps straight to the next level, with its card and
+    /// confetti.
+    func adminGrantNextLevel() {
+        addXP(max(xpToNextLevel, 1))
+    }
 
     /// The special shape with this name, if it's one of the unlockables.
     static func unlockableShape(named name: String) -> Unlockable? {

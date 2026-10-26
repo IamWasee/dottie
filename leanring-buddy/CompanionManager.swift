@@ -2075,7 +2075,11 @@ final class CompanionManager: ObservableObject {
             DottieScreenJobQuestions.shared.answer(userTranscript)
         }
 
-        if !isNarrationTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
+        // The secret phrase opens Home → Admin and stays out of history.
+        let isSecretPhraseTurn = !isNarrationTurn
+            && DottieAdminMode.shared.handleSecretPhraseIfSaid(userTranscript, companionManager: self)
+
+        if !isNarrationTurn && !isSecretPhraseTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
             brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")
             conversationStore.append(
                 userText: userTranscript,
@@ -2945,6 +2949,10 @@ final class CompanionManager: ObservableObject {
         let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedMessageText.isEmpty else { return }
         guard !buddyDictationManager.isDictationInProgress else { return }
+        // A typed secret phrase opens Home → Admin without ever reaching Gemini.
+        if turnText == nil && DottieAdminMode.shared.handleSecretPhraseIfSaid(trimmedMessageText, companionManager: self) {
+            return
+        }
         if turnText == nil { currentTurnImageFileNames = [] }
 
         transientHideTask?.cancel()
@@ -3212,6 +3220,11 @@ final class CompanionManager: ObservableObject {
         transcript: String,
         inputKind: ConversationEntry.InputKind = .voice
     ) {
+        // Typed turns were already checked in sendTypedMessage.
+        if inputKind == .voice && DottieAdminMode.shared.handleSecretPhraseIfSaid(transcript, companionManager: self) {
+            voiceState = .idle
+            return
+        }
         currentClassicTurnInputKind = inputKind
         notchPresenter.updateLiveCaption("")
         currentResponseTask?.cancel()
