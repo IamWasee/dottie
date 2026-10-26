@@ -1,0 +1,22 @@
+name: Search probe
+on:
+  push:
+    branches: [claude/project-thread-gqnwg6]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Worker /search
+        run: |
+          W=https://dottie.vidershub.workers.dev
+          UA="Dottie/1.0"
+          echo "== /config"; curl -sS -m 20 -A "$UA" -w '\nHTTP %{http_code}\n' "$W/config" | head -c 600
+          for q in "weather in london today" "who won the 2025 world series" "latest iphone model" "what is the capital of france"; do
+            echo; echo "== $q"
+            curl -sS -m 40 -A "$UA" -o out.json -w 'HTTP %{http_code} time %{time_total}s\n' -G --data-urlencode "q=$q" "$W/search"
+            python3 -c "import json;d=json.load(open('out.json'));print('source',d.get('source'),'results',len(d.get('results',[])),'topPage',bool(d.get('topPage')));[print(' -',r['title'][:80],r['url'][:80]) for r in d.get('results',[])[:3]]" || head -c 800 out.json
+          done
+          echo; echo "== no UA (like URLSession?)"; curl -sS -m 40 -o out.json -w 'HTTP %{http_code}\n' -G --data-urlencode "q=test" -H "User-Agent:" "$W/search"; head -c 300 out.json
+          echo; echo "== CFNetwork-like UA"; curl -sS -m 40 -o out.json -w 'HTTP %{http_code}\n' -G --data-urlencode "q=test" -A "Dottie/1 CFNetwork/1568.100.1 Darwin/24.0.0" "$W/search"; head -c 300 out.json
