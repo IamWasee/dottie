@@ -19,7 +19,10 @@
 import Foundation
 
 enum DottieNeedleToolset: String, CaseIterable, Sendable {
+    /// Apps and windows.
     case mac
+    /// Music and volume.
+    case media
     case search
     case organizer
 
@@ -31,12 +34,17 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
     private static let searchWords: Set<String> = [
         "google", "googling", "search", "youtube", "lookup", "bing"
     ]
+    private static let mediaWords: Set<String> = [
+        "music", "song", "songs", "track", "tune", "tunes", "playlist", "skip", "volume", "sound", "louder", "quieter",
+        "softer", "mute", "unmute", "crank", "play", "pause", "resume", "loud", "quiet"
+    ]
 
     /// The one toolset this ask belongs to, by its words.
     static func toolset(forNormalizedRequest normalizedRequest: String) -> DottieNeedleToolset {
         let requestWords = Set(normalizedRequest.split(separator: " ").map(String.init))
         if !requestWords.isDisjoint(with: organizerWords) { return .organizer }
         if !requestWords.isDisjoint(with: searchWords) || normalizedRequest.contains("look up") { return .search }
+        if !requestWords.isDisjoint(with: mediaWords) || normalizedRequest.hasPrefix("turn it") { return .media }
         return .mac
     }
 
@@ -45,6 +53,7 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
     var toolsJSON: String {
         switch self {
         case .mac: return Self.macToolsJSON
+        case .media: return Self.mediaToolsJSON
         case .search: return Self.searchToolsJSON
         case .organizer: return Self.organizerToolsJSON
         }
@@ -54,11 +63,11 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
 
     private static let macToolsJSON = """
     [
-      {"name": "open_app", "description": "Open an app or a website on the Mac.",
+      {"name": "open_app", "description": "Open, launch or start an app or a website on the Mac.",
        "parameters": {"type": "object", "properties": {
          "name": {"type": "string", "description": "the app or website, as the user said it"}},
          "required": ["name"]}},
-      {"name": "quit_app", "description": "Quit or close an app.",
+      {"name": "quit_app", "description": "Quit, close or kill an app.",
        "parameters": {"type": "object", "properties": {
          "name": {"type": "string", "description": "the app, as the user said it"}},
          "required": ["name"]}},
@@ -66,8 +75,13 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
        "parameters": {"type": "object", "properties": {
          "app": {"type": "string", "description": "the app whose window moves; leave out for the window in front"},
          "place": {"type": "string", "enum": ["left", "right", "full screen", "center", "other screen", "laptop screen", "big screen"]}},
-         "required": ["place"]}},
-      {"name": "control_music", "description": "Play, pause or skip the music.",
+         "required": ["place"]}}
+    ]
+    """
+
+    private static let mediaToolsJSON = """
+    [
+      {"name": "control_music", "description": "Play, pause, skip to the next song or go back to the previous song.",
        "parameters": {"type": "object", "properties": {
          "action": {"type": "string", "enum": ["play", "pause", "next", "previous"]}},
          "required": ["action"]}},
@@ -173,7 +187,8 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
             guard let task = toolCall.arguments["task"]?.trimmingCharacters(in: .whitespacesAndNewlines), !task.isEmpty else { return nil }
             var stepArguments = ["title": task]
             if !whenText.isEmpty {
-                guard let dueDate = detectedDate(in: whenText, now: now) ?? detectedDate(in: fullRequest, now: now) else { return nil }
+                // The user's own words first: Needle sometimes drops "tomorrow".
+                guard let dueDate = detectedDate(in: fullRequest, now: now) ?? detectedDate(in: whenText, now: now) else { return nil }
                 // A day with no time ("remind me friday") pops up at 9 am,
                 // not at midnight.
                 let dueMoment = dueDate.hasTime
@@ -184,7 +199,7 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
             return ("add_reminder", stepArguments)
         case "add_calendar_event":
             guard let title = toolCall.arguments["title"]?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
-                  let startDate = detectedDate(in: whenText, now: now) ?? detectedDate(in: fullRequest, now: now) else { return nil }
+                  let startDate = detectedDate(in: fullRequest, now: now) ?? detectedDate(in: whenText, now: now) else { return nil }
             var stepArguments = ["title": title, "start": isoLocalText(for: startDate.date, includesTime: startDate.hasTime)]
             if let place = toolCall.arguments["place"]?.trimmingCharacters(in: .whitespacesAndNewlines), !place.isEmpty {
                 stepArguments["location"] = place
@@ -228,5 +243,41 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd EEE HH:mm"
         return "date: \(formatter.string(from: now)); locale: \(Locale.current.identifier.replacingOccurrences(of: "_", with: "-")); device: mac"
+    }
+}
+
+/// Needle's sentence vectors all point roughly the same way (unrelated
+/// asks score 0.9 and up), so on their own they can't tell asks apart.
+/// Taking away the average of many everyday sentences leaves what makes
+/// each one different, which is what matching by meaning needs.
+enum DottieNeedleMeaning {
+    static let referenceSentences = [
+        "open safari", "quit slack", "put chrome on the left", "play some music", "turn the volume down",
+        "what's the weather today", "remind me to call mom", "tell me a joke", "what's on my screen",
+        "write an email to my boss", "search youtube for cooking videos", "how do i fix this error",
+        "move this window to my other screen", "take a screenshot", "start my focus playlist",
+        "summarize this article", "translate this to spanish", "set a timer for ten minutes",
+        "turn off the living room lights", "what time is it in tokyo", "open my downloads folder",
+        "send this file to my phone", "click the blue button", "scroll down", "who won the game last night",
+        "add lunch with sam to my calendar", "pause the video", "explain this code", "book a flight to paris",
+        "show me my reminders", "close all my tabs", "make the text bigger"
+    ]
+
+    /// The average of the reference vectors (not normalized).
+    static func centerVector(of referenceVectors: [[Float]]) -> [Float]? {
+        guard let dimension = referenceVectors.first?.count, dimension > 0 else { return nil }
+        var sum = [Float](repeating: 0, count: dimension)
+        for referenceVector in referenceVectors where referenceVector.count == dimension {
+            for index in 0..<dimension { sum[index] += referenceVector[index] }
+        }
+        return sum.map { $0 / Float(referenceVectors.count) }
+    }
+
+    /// The vector minus the center, back to unit length.
+    static func centered(_ vector: [Float], center: [Float]) -> [Float] {
+        guard vector.count == center.count else { return vector }
+        let difference = zip(vector, center).map { $0 - $1 }
+        let length = sqrt(difference.reduce(0) { $0 + $1 * $1 })
+        return length > 0 ? difference.map { $0 / length } : difference
     }
 }

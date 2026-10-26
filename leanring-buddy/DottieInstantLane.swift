@@ -157,6 +157,18 @@ final class DottieLearnedShortcutStore: ObservableObject {
         return true
     }
 
+    /// Another wording that meant this shortcut (found by Needle), so it
+    /// matches word for word from now on.
+    func addOtherPhrase(_ normalizedPhrase: String, toShortcutWithID shortcutID: UUID) {
+        guard let shortcutIndex = shortcuts.firstIndex(where: { $0.id == shortcutID }),
+              !normalizedPhrase.isEmpty,
+              shortcuts[shortcutIndex].phrase != normalizedPhrase,
+              !shortcuts[shortcutIndex].otherPhrases.contains(normalizedPhrase),
+              shortcuts[shortcutIndex].otherPhrases.count < 20 else { return }
+        shortcuts[shortcutIndex].otherPhrases.append(normalizedPhrase)
+        write()
+    }
+
     func noteUsed(_ shortcutID: UUID) {
         guard let shortcutIndex = shortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
         shortcuts[shortcutIndex].lastUsedAt = Date()
@@ -201,6 +213,8 @@ final class DottieInstantLane {
         case learnedShortcut(DottieLearnedShortcut)
         case replayPhrase(DottieReplay)
         case saveNamedShortcut(name: String, commandTexts: [String])
+        /// Dottie's own tools, worked out by Needle (a reminder, an event).
+        case toolSteps([DottieLearnedShortcut.Step])
     }
 
     enum Outcome {
@@ -267,6 +281,14 @@ final class DottieInstantLane {
         return nil
     }
 
+    /// plan(for:), then Needle (DottieNeedleRouter) for wording the strict
+    /// lane doesn't know, learned shortcuts by meaning, reminders and events.
+    func planIncludingNeedle(for requestText: String) async -> Plan? {
+        if let strictPlan = plan(for: requestText) { return strictPlan }
+        guard Self.areInstantCommandsEnabled else { return nil }
+        return await DottieNeedleRouter.shared.plan(for: requestText)
+    }
+
     /// First words of the instant commands. A transcript that starts with
     /// one of these (or a saved phrase's first word) may still turn into
     /// an instant command once its last words come in.
@@ -297,7 +319,8 @@ final class DottieInstantLane {
             DottieLearnedShortcutStore.shared.shortcuts.flatMap { [$0.phrase] + $0.otherPhrases }
                 .compactMap { $0.split(separator: " ").first.map(String.init) }
         )
-        return savedPhraseFirstWords.contains(firstWord)
+        if savedPhraseFirstWords.contains(firstWord) { return true }
+        return DottieNeedleRouter.shared.mightHandle(normalizedPartialText: normalizedPartial)
     }
 
     func run(_ plan: Plan) async -> Outcome {
@@ -331,6 +354,20 @@ final class DottieInstantLane {
                 isNamedByUser: true
             )
             return .done("Saved: say “\(shortcutName)” any time. " + doneText)
+
+        case .toolSteps(let toolSteps):
+            guard let runSavedToolStep else { return .askGemini }
+            var resultLines: [String] = []
+            for (stepIndex, toolStep) in toolSteps.enumerated() {
+                let stepResult = await runSavedToolStep(toolStep.functionName, toolStep.arguments)
+                // Nothing done yet: Gemini can still try it its own way.
+                if stepIndex == 0 && Self.looksLikeFailure(stepResult) {
+                    return .askGemini
+                }
+                resultLines.append(Self.firstSentence(of: stepResult))
+            }
+            let doneText = resultLines.joined(separator: " ")
+            return .done(doneText.prefix(1).uppercased() + doneText.dropFirst())
         }
     }
 

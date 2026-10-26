@@ -108,6 +108,14 @@ actor DottieNeedleEngine {
         UserDefaults.standard.object(forKey: isEnabledDefaultsKey) as? Bool ?? true
     }
 
+    /// Settings → Instant commands → "Hear short asks with Whistle" (only
+    /// used when Speech Recognition isn't allowed). On by default.
+    nonisolated static let isWhistleEnabledDefaultsKey = "dottieWhistleEnabled"
+
+    nonisolated static var isWhistleEnabled: Bool {
+        UserDefaults.standard.object(forKey: isWhistleEnabledDefaultsKey) as? Bool ?? true
+    }
+
     /// Whether this build carries the engine and weights at all.
     nonisolated var isBundled: Bool {
         libraryURL != nil && needleWeightsURL != nil

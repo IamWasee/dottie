@@ -36,6 +36,9 @@ func run() async {
         ("make safari take up the whole screen", "put safari full screen"),
         ("center the window", "put this window in the center"),
         ("stop the song", "pause"),
+        ("pause my tunes", "pause"),
+        ("skip to the next song", "next song"),
+        ("play the previous track again", "previous song"),
         ("skip this one", "next song"),
         ("go back to the last track", "previous song"),
         ("put the music back on", "play"),
@@ -79,7 +82,7 @@ func run() async {
         var gotParts: [String] = []
         for call in answer.toolCalls {
             if let words = DottieNeedleToolset.instantCommandWords(for: call) { gotParts.append(words) }
-            else if let step = DottieNeedleToolset.organizerStep(for: call, fullRequest: request) { gotParts.append("\(step.functionName) \(step.arguments)") }
+            else if let step = DottieNeedleToolset.organizerStep(for: call, fullRequest: request) { gotParts.append("\(step.functionName) \(step.arguments) (needle said \(call.arguments))") }
             else { gotParts.append("?\(call.name) \(call.arguments)") }
         }
         let got = gotParts.joined(separator: "|")
@@ -95,15 +98,24 @@ func run() async {
 
     // Embeddings: paraphrases vs unrelated.
     let pairs: [(String, String)] = [
+        ("start focus mode", "focus mode please"), ("open my work apps", "open work apps"), ("play my gym playlist", "put on the gym playlist"),
+        ("good morning routine", "start my morning routine"), ("good morning routine", "good night routine"), ("open my mail", "close my mail"),
         ("open my mail", "check my email"), ("open my mail", "open my email"), ("focus mode", "focus time"),
         ("start my work setup", "set up my work stuff"), ("play my chill playlist", "put on my relaxing music"),
         ("open my mail", "play my chill playlist"), ("focus mode", "open my mail"), ("start my work setup", "turn off the lights"),
         ("open spotify", "open safari"), ("quit slack", "open slack"),
     ]
+    var referenceVectors: [[Float]] = []
+    for sentence in DottieNeedleMeaning.referenceSentences { if let vector = await engine.embedding(for: sentence) { referenceVectors.append(vector) } }
+    let center = DottieNeedleMeaning.centerVector(of: referenceVectors)!
+    func meaningVector(_ text: String) async -> [Float]? {
+        guard let vector = await engine.embedding(for: text) else { return nil }
+        return DottieNeedleMeaning.centered(vector, center: center)
+    }
     for (first, second) in pairs {
-        let embedStart = Date()
         guard let firstVector = await engine.embedding(for: first), let secondVector = await engine.embedding(for: second) else { print("embed failed"); break }
-        print(String(format: "embed %.3f  %@  ~  %@  (%d ms for two, dim %d)", DottieNeedleEngine.similarity(firstVector, secondVector), first, second, Int(Date().timeIntervalSince(embedStart) * 1000), firstVector.count))
+        let centeredSimilarity = DottieNeedleEngine.similarity(DottieNeedleMeaning.centered(firstVector, center: center), DottieNeedleMeaning.centered(secondVector, center: center))
+        print(String(format: "embed raw %.3f centered %.3f  %@  ~  %@", DottieNeedleEngine.similarity(firstVector, secondVector), centeredSimilarity, first, second))
     }
 
     // find_tool style ranking.
@@ -118,20 +130,20 @@ func run() async {
         "install_skills": "Install skills for Dots from a folder.",
     ]
     var describedVectors: [(String, [Float])] = []
-    for (name, description) in toolDescriptions { if let vector = await engine.embedding(for: description) { describedVectors.append((name, vector)) } }
+    for (name, description) in toolDescriptions { if let vector = await meaningVector(name.replacingOccurrences(of: "_", with: " ") + ": " + description) { describedVectors.append((name, vector)) } }
     for query in ["capture what's on my display", "dim the bedroom lamp", "type this essay for me", "get this pdf onto my phone", "you clicked the wrong menu in figma, it's under view", "show me the map of minecraft"] {
-        guard let queryVector = await engine.embedding(for: query) else { continue }
+        guard let queryVector = await meaningVector(query) else { continue }
         let ranked = describedVectors.map { ($0.0, DottieNeedleEngine.similarity(queryVector, $0.1)) }.sorted { $0.1 > $1.1 }
         print("find_tool \(query) -> " + ranked.prefix(3).map { String(format: "%@ %.2f", $0.0, $0.1) }.joined(separator: ", "))
     }
 
     // Sorting asks (model picker) as extraction into an enum.
     let sortTools = """
-    [{"name": "sort_task", "description": "Say how hard a job on the Mac screen is.", "parameters": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["simple", "complex"], "description": "simple: one or two obvious actions in one app. complex: several steps, searching, reading, comparing, forms."}}, "required": ["kind"]}}]
+    [{"name": "record_job_size", "description": "Record how big the user's job is. Always call this.", "parameters": {"type": "object", "properties": {"size": {"type": "string", "enum": ["simple", "complex"], "description": "simple: one or two obvious actions in one app. complex: several steps, searching, reading, comparing, forms."}}, "required": ["size"]}}]
     """
     for task in ["open spotify", "pause the video", "click the subscribe button", "find the cheapest flight to tokyo next month and book it", "fill in this form with my details", "compare these two laptops and tell me which is better"] {
-        let answer = await engine.toolCalls(for: task, toolsJSON: sortTools, facts: "")
-        print("sort \(task) -> \(answer?.toolCalls.first?.arguments["kind"] ?? "(none)") conf=\(answer?.confidence ?? -1) \(Int(answer?.milliseconds ?? -1))ms")
+        let answer = await engine.toolCalls(for: "job: " + task, toolsJSON: sortTools, facts: "")
+        print("sort \(task) -> \(answer?.toolCalls.first?.arguments["size"] ?? "(none)") withheld=\(answer?.withheldToolCalls.first?.arguments ?? [:]) conf=\(answer?.confidence ?? -1) \(Int(answer?.milliseconds ?? -1))ms")
     }
 
     // Whistle.
