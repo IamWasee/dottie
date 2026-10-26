@@ -94,6 +94,7 @@ final class CompanionManager: ObservableObject {
         case .live:
             let liveProvider = GeminiLiveCompanionTranscriptionProvider(
                 liveVoiceClient: liveVoiceClient,
+                onDeviceTranscriber: liveTurnOnDeviceTranscriber,
                 beginLiveTurn: { [weak self] in
                     await self?.beginLiveTurnWithScreenFrame()
                 }
@@ -149,6 +150,22 @@ final class CompanionManager: ObservableObject {
     /// Text the user typed for the current live turn, if it was typed rather
     /// than spoken. Live only transcribes audio, so we remember it ourselves.
     private var currentLiveTurnTypedText: String?
+    /// Apple's speech recognizer hearing each push-to-talk turn on the Mac,
+    /// for the instant lane (DottieInstantLane).
+    private let liveTurnOnDeviceTranscriber = DictationLiveTranscriber()
+    /// What the Mac heard for the current voice turn, once released.
+    private var currentLiveTurnOnDeviceText: String?
+    /// Tool calls Gemini made in the current Live turn, with their results,
+    /// so a turn that worked can become a learned shortcut.
+    private var currentLiveTurnFinishedToolCalls: [DottieInstantLane.FinishedToolCall] = []
+    /// "when I say X, …" in the current turn: what Gemini does is saved as X.
+    private var currentLiveTurnNamedShortcutName: String?
+    /// The Mac did the current voice turn itself, so Live's (silenced)
+    /// answer to it is ignored when it finishes.
+    private var currentLiveTurnWasHandledInstantly = false
+    /// Counts talk-shortcut presses, so a slow instant-lane check can't act
+    /// on a newer turn.
+    private var liveVoicePressCount = 0
     /// Saved pictures sent with the current typed turn, for its conversation
     /// entry.
     private var currentTurnImageFileNames: [String] = []
@@ -803,6 +820,10 @@ final class CompanionManager: ObservableObject {
                 liveTurnPlaybackDrainTask?.cancel()
                 isLiveTurnInFlight = true
                 voiceState = .idle
+                liveVoicePressCount += 1
+                currentLiveTurnOnDeviceText = nil
+                currentLiveTurnNamedShortcutName = nil
+                currentLiveTurnWasHandledInstantly = false
             }
 
             // Dismiss the onboarding prompt if it's showing
@@ -852,9 +873,16 @@ final class CompanionManager: ObservableObject {
             if voiceMode == .live, let currentTurnAnnotation {
                 sendAnnotationToLiveTurn(currentTurnAnnotation)
             }
+            let couldBeInstant = voiceMode == .live && liveVoiceTurnCouldBeInstant()
+            if couldBeInstant {
+                // Before the turn closes, so none of Live's answer plays
+                // while the Mac checks what was said.
+                liveVoiceClient.isHoldingModelAnswer = true
+            }
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
             if voiceMode == .live {
                 clearLiveTurnIfItNeverStarted()
+                checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: couldBeInstant)
             }
         case .none:
             break
@@ -1046,6 +1074,12 @@ final class CompanionManager: ObservableObject {
             self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript)
         }
 
+        liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
+            self?.currentLiveTurnFinishedToolCalls.append(
+                DottieInstantLane.FinishedToolCall(functionName: functionName, arguments: arguments, result: result)
+            )
+        }
+
         liveVoiceClient.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
@@ -1146,6 +1180,7 @@ final class CompanionManager: ObservableObject {
     /// Called by the live transcription provider when push-to-talk opens.
     /// Grabs the screen frame and opens the user's turn on the Live session.
     private func beginLiveTurnWithScreenFrame(includesScreenFrame: Bool = true) async {
+        currentLiveTurnFinishedToolCalls = []
         // So a web page's elements can be found by name if Dottie points.
         PointingRefiner.prepareFrontmostApplicationForSearch()
         var compositeScreenFrame: CompanionCompositeScreenFrame?
@@ -2061,6 +2096,14 @@ final class CompanionManager: ObservableObject {
     /// before returning the cursor to idle.
     private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
         liveVoiceClient.isAudioOutputMuted = false
+        // The Mac already did this one and showed it; Live's answer was
+        // silenced.
+        if currentLiveTurnWasHandledInstantly {
+            currentLiveTurnWasHandledInstantly = false
+            currentLiveTurnTypedText = nil
+            currentLiveTurnIsNarration = false
+            return
+        }
         let typedTextForThisTurn = currentLiveTurnTypedText
         currentLiveTurnTypedText = nil
         let isNarrationTurn = currentLiveTurnIsNarration
@@ -2098,6 +2141,15 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackAIResponseReceived(response: modelTranscript)
         }
 
+        let savedShortcutNote = (isNarrationTurn || isSecretPhraseTurn) ? nil : learnShortcutFromFinishedLiveTurn(
+            userTranscript: userTranscript,
+            typedText: typedTextForThisTurn,
+            modelTranscript: modelTranscript
+        )
+        currentLiveTurnFinishedToolCalls = []
+        currentLiveTurnNamedShortcutName = nil
+        currentLiveTurnOnDeviceText = nil
+
         liveTurnPlaybackDrainTask?.cancel()
         liveTurnPlaybackDrainTask = Task { [weak self] in
             while self?.liveVoiceClient.isModelAudioPlaying == true {
@@ -2113,7 +2165,9 @@ final class CompanionManager: ObservableObject {
                     // The guide's step stays in the notch instead.
                     self.notchPresenter.collapse()
                 } else {
-                    self.notchPresenter.showFinishedResponse(modelTranscript)
+                    self.notchPresenter.showFinishedResponse(
+                        savedShortcutNote.map { modelTranscript + "\n\n" + $0 } ?? modelTranscript
+                    )
                 }
                 self.scheduleTransientHideIfNeeded()
             }
@@ -2559,6 +2613,27 @@ final class CompanionManager: ObservableObject {
             guard let self else { return "Dottie isn't ready yet." }
             return self.startScreenTask(ScreenJob(text: replay.taskText, replayID: replay.id))
         }
+        // A learned shortcut's steps run exactly as Gemini's calls did.
+        DottieInstantLane.shared.runSavedToolStep = { [weak self] functionName, arguments in
+            guard let self else { return "couldn't do that right now." }
+            if DottieScreenAction.functionNames.contains(functionName) {
+                guard let screenAction = DottieScreenAction(functionName: functionName, arguments: arguments) else {
+                    return "couldn't do that right now."
+                }
+                return await self.performScreenAction(screenAction)
+            }
+            if DottieToolRegistry.handles(functionName, for: .voice) {
+                return await DottieToolRegistry.run(functionName, arguments: arguments, for: .voice) ?? "couldn't do that right now."
+            }
+            guard let onMacTool = self.liveVoiceClient.onMacTool else { return "couldn't do that right now." }
+            return await onMacTool(functionName, arguments)
+        }
+        // Starts listening for Spotify and Music playing or pausing, so
+        // "pause" knows whether there's music to pause.
+        _ = DottieInstalledApps.shared
+        DottieEveryday.shared.watches.onFollowUpDue = { [weak self] followUpText, firedText in
+            self?.runWatchFollowUp(followUpText, firedText: firedText)
+        }
         DottieSmartReplayTools.startSmartReplayJob = { [weak self] smartReplay, details in
             guard let self else { return "Dottie isn't ready yet." }
             DottieSmartReplayStore.shared.noteRun(smartReplay.id)
@@ -2954,7 +3029,25 @@ final class CompanionManager: ObservableObject {
             return
         }
         if turnText == nil { currentTurnImageFileNames = [] }
+        // Open an app, move a window, a learned shortcut: done on the Mac,
+        // with Gemini only if it turns out not to fit.
+        if turnText == nil, let instantPlan = instantLanePlanIfAllowed(for: trimmedMessageText) {
+            Task { [weak self] in
+                guard let self else { return }
+                switch await DottieInstantLane.shared.run(instantPlan) {
+                case .done(let doneText):
+                    self.finishInstantLaneTurn(userText: trimmedMessageText, doneText: doneText, inputKind: .typed)
+                case .askGemini:
+                    self.sendTypedMessageToGemini(trimmedMessageText, turnText: nil)
+                }
+            }
+            return
+        }
+        if turnText == nil { currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: trimmedMessageText)?.name }
+        sendTypedMessageToGemini(trimmedMessageText, turnText: turnText)
+    }
 
+    private func sendTypedMessageToGemini(_ trimmedMessageText: String, turnText: String?) {
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -2970,6 +3063,142 @@ final class CompanionManager: ObservableObject {
         case .live:
             startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: turnText ?? trimmedMessageText)
         }
+    }
+
+    // MARK: - Instant lane (no AI)
+
+    /// Not while a screen job, guide or drawing lesson is listening for
+    /// the user's words ("next", "pause" mean something else there).
+    private var isInstantLaneAllowedNow: Bool {
+        hasCompletedOnboarding
+            && !screenTaskRunner.isRunning
+            && !guide.isActive
+            && teachingTask == nil
+            && !DottieScreenJobQuestions.shared.wasAskedAloud
+    }
+
+    private func instantLanePlanIfAllowed(for requestText: String) -> DottieInstantLane.Plan? {
+        guard isInstantLaneAllowedNow else { return nil }
+        return DottieInstantLane.shared.plan(for: requestText)
+    }
+
+    /// At release: whether what the Mac heard so far might be something it
+    /// does itself, so Live's answer is held back while it checks.
+    private func liveVoiceTurnCouldBeInstant() -> Bool {
+        guard liveTurnOnDeviceTranscriber.isRunning, isInstantLaneAllowedNow else { return false }
+        return DottieInstantLane.shared.couldBecomeInstant(partialText: liveTurnOnDeviceTranscriber.latestText)
+    }
+
+    /// After a voice turn is released: waits a moment for the Mac's
+    /// transcript of it. When it's an instant command or a learned
+    /// shortcut, Live's answer is silenced and the Mac does it; otherwise
+    /// Live's held answer plays as usual.
+    private func checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: Bool) {
+        guard liveTurnOnDeviceTranscriber.isRunning else {
+            liveVoiceClient.isHoldingModelAnswer = false
+            return
+        }
+        let pressNumber = liveVoicePressCount
+        Task { [weak self] in
+            guard let self else { return }
+            // Short while Live's answer waits; longer otherwise, since then
+            // nothing is held up and the text is only for learning.
+            let heardText = await self.liveTurnOnDeviceTranscriber.finishAndWaitForFinalText(
+                timeoutSeconds: holdsLiveAnswer ? 0.6 : 1.5
+            )
+            guard self.liveVoicePressCount == pressNumber else { return }
+            self.currentLiveTurnOnDeviceText = heardText.isEmpty ? nil : heardText
+
+            guard let instantPlan = self.instantLanePlanIfAllowed(for: heardText) else {
+                self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: heardText)?.name
+                self.liveVoiceClient.isHoldingModelAnswer = false
+                return
+            }
+
+            // Only a turn still running on the server will finish later;
+            // its (silenced) end must then be ignored.
+            self.currentLiveTurnWasHandledInstantly = self.liveVoiceClient.isModelTurnInProgress
+            self.liveVoiceClient.cancelCurrentModelResponse()
+            self.liveTurnPlaybackDrainTask?.cancel()
+            self.voiceState = .processing
+            switch await DottieInstantLane.shared.run(instantPlan) {
+            case .done(let doneText):
+                self.finishInstantLaneTurn(userText: heardText, doneText: doneText, inputKind: .voice)
+            case .askGemini:
+                guard self.liveVoicePressCount == pressNumber else { return }
+                self.currentLiveTurnWasHandledInstantly = false
+                self.startLiveTextTurn(recordedUserText: heardText, turnText: heardText)
+            }
+        }
+    }
+
+    /// "Tell me when the tests finish, then open the report": the watch
+    /// fired, so do the "then" part, on the Mac when it's instant, else
+    /// through Gemini.
+    private func runWatchFollowUp(_ followUpText: String, firedText: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            // Don't talk over the user: wait (up to a minute) for a turn in
+            // progress to end.
+            for _ in 0..<120 {
+                let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle || self.buddyDictationManager.isDictationInProgress
+                if !isBusy { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if let instantPlan = self.instantLanePlanIfAllowed(for: followUpText),
+               case .done(let doneText) = await DottieInstantLane.shared.run(instantPlan) {
+                self.finishInstantLaneTurn(userText: "(after \(firedText)) \(followUpText)", doneText: doneText, inputKind: .typed)
+                return
+            }
+            self.sendTypedMessage(
+                "(watch fired) \(followUpText)",
+                turnText: "[a watch the user set just fired: \(firedText). they asked you to do this once it did, so do it now with your tools and tell them in a few words:] \(followUpText)"
+            )
+        }
+    }
+
+    /// Shows and remembers an ask the Mac did itself, like any other turn.
+    private func finishInstantLaneTurn(userText: String, doneText: String, inputKind: ConversationEntry.InputKind) {
+        isLiveTurnInFlight = false
+        voiceState = .idle
+        lastTranscript = userText
+        brain.record(.chat, "user: \(userText)\ndottie: \(doneText)")
+        conversationStore.append(userText: userText, clickyText: doneText, inputKind: inputKind)
+        conversationHistory.append((userTranscript: userText, assistantResponse: doneText))
+        if conversationHistory.count > Self.rememberedExchangeCount {
+            conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
+        }
+        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
+            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
+        }
+        NSSound(named: "Pop")?.play()
+        notchPresenter.showFinishedResponse(doneText)
+        fireLiveTurnFinishedHandler()
+        scheduleTransientHideIfNeeded()
+    }
+
+    /// Saves what Gemini did this turn as a shortcut when it can be done
+    /// again the same way. Returns a line for the answer card when the
+    /// user named the shortcut.
+    private func learnShortcutFromFinishedLiveTurn(userTranscript: String, typedText: String?, modelTranscript: String) -> String? {
+        guard !currentLiveTurnFinishedToolCalls.isEmpty, !userTranscript.hasPrefix("(") else { return nil }
+        var requestTexts: [String] = []
+        // The Mac's own transcript first: it's what future asks are
+        // matched against.
+        for candidateText in [typedText, currentLiveTurnOnDeviceText, userTranscript] {
+            let trimmedCandidate = (candidateText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedCandidate.isEmpty && !requestTexts.contains(trimmedCandidate) {
+                requestTexts.append(trimmedCandidate)
+            }
+        }
+        let namedShortcutName = currentLiveTurnNamedShortcutName
+        guard let savedPhrase = DottieInstantLane.shared.learnFromFinishedTurn(
+            requestTexts: requestTexts,
+            finishedToolCalls: currentLiveTurnFinishedToolCalls,
+            modelReply: modelTranscript,
+            namedShortcutName: namedShortcutName
+        ), namedShortcutName != nil else { return nil }
+        return "Saved: say “\(savedPhrase)” any time."
     }
 
     /// A Live turn from text instead of the mic, with a fresh screen frame.
@@ -3218,11 +3447,24 @@ final class CompanionManager: ObservableObject {
     /// the buddy to fly to that element on screen.
     private func sendTranscriptToGeminiWithScreenshot(
         transcript: String,
-        inputKind: ConversationEntry.InputKind = .voice
+        inputKind: ConversationEntry.InputKind = .voice,
+        checksInstantLane: Bool = true
     ) {
         // Typed turns were already checked in sendTypedMessage.
         if inputKind == .voice && DottieAdminMode.shared.handleSecretPhraseIfSaid(transcript, companionManager: self) {
             voiceState = .idle
+            return
+        }
+        if inputKind == .voice, checksInstantLane, let instantPlan = instantLanePlanIfAllowed(for: transcript) {
+            Task { [weak self] in
+                guard let self else { return }
+                switch await DottieInstantLane.shared.run(instantPlan) {
+                case .done(let doneText):
+                    self.finishInstantLaneTurn(userText: transcript, doneText: doneText, inputKind: .voice)
+                case .askGemini:
+                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
+                }
+            }
             return
         }
         currentClassicTurnInputKind = inputKind

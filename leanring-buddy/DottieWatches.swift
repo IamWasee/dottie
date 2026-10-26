@@ -49,6 +49,9 @@ final class DottieWatches {
         let text: String?
         let target: Target
         let targetName: String
+        /// What to do when it fires ("then run the tests"), or nil to only
+        /// tell the user.
+        let thenDo: String?
         let startedAt = Date()
         let endsAt: Date
         var baselineThumbnail: DottieWatchThumbnail?
@@ -65,8 +68,9 @@ final class DottieWatches {
         var isChecking = false
         var downloadsSeenInProgress: Set<String> = []
 
-        init(what: String, kind: Kind, text: String?, target: Target, targetName: String, minutes: Double) {
+        init(what: String, kind: Kind, text: String?, target: Target, targetName: String, thenDo: String?, minutes: Double) {
             self.what = what
+            self.thenDo = thenDo
             self.kind = kind
             self.text = text
             self.target = target
@@ -101,7 +105,10 @@ final class DottieWatches {
 
     // MARK: - Starting and stopping
 
-    func start(what: String, kind: Kind, text: String?, target targetName: String, appName: String?, minutes: Double) async -> String {
+    /// Runs a watch's "then …" once it fired. Set by CompanionManager.
+    var onFollowUpDue: ((_ followUpText: String, _ firedText: String) -> Void)?
+
+    func start(what: String, kind: Kind, text: String?, target targetName: String, appName: String?, thenDo: String? = nil, minutes: Double) async -> String {
         guard watches.count < Self.maximumWatchCount else {
             return "already watching \(watches.count) things. stop one first (watch action stop)."
         }
@@ -117,7 +124,7 @@ final class DottieWatches {
             return "couldn't find a window to watch. ask them to bring it to the front."
         }
 
-        let watch = Watch(what: what, kind: kind, text: text, target: target, targetName: resolvedName, minutes: minutes)
+        let watch = Watch(what: what, kind: kind, text: text, target: target, targetName: resolvedName, thenDo: thenDo, minutes: minutes)
         var startNote = ""
 
         if kind == .downloadFinishes {
@@ -295,7 +302,11 @@ final class DottieWatches {
 
     private func fire(_ watch: Watch, note: String) {
         let what = watch.what.prefix(1).uppercased() + watch.what.dropFirst()
+        let isStillWatched = watches.contains { $0.id == watch.id }
         end(watch, title: "Heads up!", text: "\(what): \(note)", isAlert: true)
+        if isStillWatched, let followUpText = watch.thenDo {
+            onFollowUpDue?(followUpText, "\(what): \(note)")
+        }
     }
 
     private func timeRanOut(_ watch: Watch) {

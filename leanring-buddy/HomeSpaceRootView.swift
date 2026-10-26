@@ -593,6 +593,10 @@ private struct HomeSettingsView: View {
                     HomeSelfCheckSettings()
                 }
 
+                settingsGroup(title: "Instant commands") {
+                    HomeInstantLaneSettings()
+                }
+
                 settingsGroup(title: "Instant replays") {
                     HomeReplaySettings()
                 }
@@ -809,6 +813,7 @@ private struct HomeSettingsView: View {
         "Helpers: Claude via MausBot": "claude mausbot helper anthropic model subscription bot",
         "Usage": "usage tokens cost gemini claude count speed",
         "Check everything": "check test diagnose self-check problems broken working",
+        "Instant commands": "instant fast speed quick no ai learn learned shortcut shortcuts open app window snap music volume when i say",
         "Instant replays": "replay record recording clip video save",
         "Voice": "voice personality speak sound live classic mode tone talk",
         "Shortcuts": "shortcut hotkey keyboard key talk dictate circle annotate cursor ctrl option",

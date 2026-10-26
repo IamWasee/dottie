@@ -16,7 +16,7 @@ enum DottieToolModules {
         DottieGameTools.self, DottieVideoGameTools.self, DottieLevelTools.self, DottieKeepWorkingTools.self,
         DottieConnectedTools.self,
         EverydayTools.self,
-        DottieSpeedTools.self, DottieAppLessonTools.self, DottieSmartReplayTools.self,
+        DottieSpeedTools.self, DottieInstantLaneTools.self, DottieAppLessonTools.self, DottieSmartReplayTools.self,
         DottieSkillFolderTools.self,
         DottieSelfKnowledge.self,
         DottieToolInstallTools.self,
