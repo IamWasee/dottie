@@ -46,8 +46,16 @@ enum DottieWebSearch {
         guard let workerPayload else {
             return "the search didn't work. tell the user you couldn't look it up right now."
         }
+        guard workerCoverage >= weakResultsCoverage || workerResults.isEmpty else {
+            // Dictionary pages for "won" shouldn't be read out as the answer.
+            return "these results barely match the question, so the search engine probably misread it. if they don't answer it, say the search didn't find it and answer from what you know, saying it may be out of date.\n\n"
+                + formatResults(workerPayload)
+        }
         return formatResults(workerPayload)
     }
+
+    /// Below this, the results are flagged to the model as probably off.
+    private static let weakResultsCoverage = 0.34
 
     private static func searchThroughWorker(_ query: String) async -> [String: Any]? {
         var urlComponents = URLComponents(url: ClickyWorkerConfiguration.url(forRoute: "/search"), resolvingAgainstBaseURL: false)
