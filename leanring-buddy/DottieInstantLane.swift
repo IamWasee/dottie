@@ -298,7 +298,11 @@ final class DottieInstantLane {
         "put", "move", "snap", "send", "throw", "place", "drag", "make", "show", "maximize", "maximise", "center", "centre",
         "play", "pause", "resume", "unpause", "keep", "stop", "next", "skip", "previous", "last", "back",
         "volume", "turn", "louder", "quieter", "lower", "raise", "increase", "decrease", "mute", "unmute", "set",
-        "google", "search", "look", "find", "when", "whenever", "from"
+        "google", "search", "look", "find", "when", "whenever", "from",
+        // Keyboard shortcuts by name, keys said out loud, and teaching one.
+        "minimize", "minimise", "hide", "new", "reopen", "reload", "refresh", "undo", "redo", "save", "select",
+        "copy", "paste", "cut", "print", "zoom", "reset", "actual", "enter", "leave", "toggle", "full", "spotlight",
+        "mission", "emoji", "lock", "press", "hit", "remember"
     ]
 
     /// Window moves can start with the app's name ("terminal on the left").
@@ -438,7 +442,9 @@ final class DottieInstantLane {
             .replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let leadPattern = #"^(?:(?:hey|ok|okay|so|dottie)[,\s]+)*(?:from now on[,\s]+)?when(?:ever)? i say\s+"#
-        guard let leadRange = lowercasedRequest.range(of: leadPattern, options: .regularExpression) else { return nil }
+        guard let leadRange = lowercasedRequest.range(of: leadPattern, options: .regularExpression) else {
+            return keyboardShortcutTeaching(in: requestText)
+        }
         let afterLead = String(lowercasedRequest[leadRange.upperBound...])
 
         var shortcutName = ""
@@ -469,6 +475,31 @@ final class DottieInstantLane {
         return (shortcutName, taskText)
     }
 
+    /// Teaching a key without "when I say": "minimize means command M",
+    /// "remember that minimize is cmd m", "to minimize press command M".
+    /// Becomes ("minimize", "press cmd+m"). Only for keys with a modifier
+    /// or a named key, so "safari is f" isn't taken as a shortcut.
+    private func keyboardShortcutTeaching(in requestText: String) -> (name: String, task: String)? {
+        let normalizedRequest = DottieInstantText.normalized(requestText)
+            .replacingOccurrences(of: #"^remember (?:that )?"#, with: "", options: .regularExpression)
+        let teachingPatterns = [
+            #"^(?:the (?:keyboard )?shortcut (?:for|to) )?(.+?) (?:means|is) (?:pressing |press |hitting |hit )?(.+)$"#,
+            #"^to (.+?),? (?:press|hit|you press|you hit) (.+)$"#
+        ]
+        for teachingPattern in teachingPatterns {
+            guard let teachingRegex = try? NSRegularExpression(pattern: teachingPattern),
+                  let match = teachingRegex.firstMatch(in: normalizedRequest, range: NSRange(normalizedRequest.startIndex..., in: normalizedRequest)),
+                  let nameRange = Range(match.range(at: 1), in: normalizedRequest),
+                  let keysRange = Range(match.range(at: 2), in: normalizedRequest) else { continue }
+            let shortcutName = String(normalizedRequest[nameRange])
+            guard (2...40).contains(shortcutName.count),
+                  let keyCombination = DottieInstantCommands.keyCombination(fromSpokenKeys: String(normalizedRequest[keysRange])),
+                  keyCombination.contains("+") || keyCombination.count > 1 else { continue }
+            return (shortcutName, "press " + keyCombination)
+        }
+        return nil
+    }
+
     // MARK: Learning
 
     /// After Gemini finished a turn: when everything it did can be done
@@ -494,10 +525,13 @@ final class DottieInstantLane {
             primaryPhrase = DottieInstantText.normalized(namedShortcutName)
         } else {
             // "close this" depends on the moment, and instant commands are
-            // already instant.
+            // already instant. Keys always go to the window in front, so a
+            // turn that only pressed keys ("minimize this") is learned
+            // anyway, even from one word.
+            let onlyPressedKeys = actionToolCalls.allSatisfy { $0.functionName == "press_keys" }
             guard let firstRequest = normalizedRequests.first,
-                  normalizedRequests.allSatisfy({ !DottieInstantText.containsMomentWord($0) }),
-                  (2...Self.longestLearnedPhraseWordCount).contains(firstRequest.split(separator: " ").count),
+                  onlyPressedKeys || normalizedRequests.allSatisfy({ !DottieInstantText.containsMomentWord($0) }),
+                  ((onlyPressedKeys ? 1 : 2)...Self.longestLearnedPhraseWordCount).contains(firstRequest.split(separator: " ").count),
                   DottieInstantCommands.parseAll(firstRequest) == nil else { return nil }
             primaryPhrase = firstRequest
         }
@@ -683,7 +717,7 @@ struct HomeInstantLaneSettings: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
-            Text("When Dottie gets an ask done with direct actions (a page, keys, an Apple shortcut, a script, a smart home device), saying the same words again redoes it instantly. Say “when I say focus mode, quit Slack and open Notes” to name one yourself.")
+            Text("When Dottie gets an ask done with direct actions (a page, keys, an Apple shortcut, a script, a smart home device), saying the same words again redoes it instantly. Say “when I say focus mode, quit Slack and open Notes” to name one yourself, or “minimize means command M” to teach a key.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
