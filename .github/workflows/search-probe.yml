@@ -17,7 +17,7 @@ jobs:
           npm ci --silent
           (npx wrangler dev --port 8787 --var GEMINI_API_KEY:unused > dev.log 2>&1 &)
           for i in $(seq 1 30); do curl -s localhost:8787/config >/dev/null && break; sleep 1; done
-          for q in "weather in london today" "who won the 2025 world series" "bitcoin price" "how do i download releases on github"; do
+          for q in "weather in london today" "who won the 2025 world series" "bitcoin price" "how do i download releases on github" "who won the 2025 world series" "what is the tallest building in the world" "latest macos version" "how to turn on subtitles in vlc"; do
             curl -sS -m 60 -G --data-urlencode "q=$q" --data-urlencode "debug=1" localhost:8787/search | python3 -c "import json,sys;d=json.load(sys.stdin);print('==',d['query'],'->',d['source'],'topPage',bool(d.get('topPage')));[print('  ',e) for e in d.get('engines',[])]"
           done
           echo "== live Worker, for comparison"

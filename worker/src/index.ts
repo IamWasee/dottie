@@ -578,6 +578,9 @@ function queryWordCoverage(queryWords: string[], results: SearchResult[]): numbe
 const BROWSER_HEADERS = {
   "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36",
   "accept-language": "en-US,en;q=0.9",
+  // Without a browser's accept header, Bing often searches for just one
+  // word of the query.
+  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
 async function searchBing(query: string): Promise<SearchResult[]> {

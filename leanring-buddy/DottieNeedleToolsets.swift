@@ -203,10 +203,14 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
             return saidActions == [action]
         case "search_web":
             guard let query = toolCall.arguments["query"]?.lowercased(), !query.isEmpty else { return false }
-            // YouTube only when the user said it; Google otherwise.
+            // Opening a results page only when the user named the site.
+            // "search for the weather in london" is a question for Gemini,
+            // which looks it up and says the answer.
             let saidYouTube = requestWords.contains("youtube")
+            let saidGoogle = requestWords.contains("google") || requestWords.contains("googling")
             let isYouTubeSearch = toolCall.arguments["site"] == "youtube"
-            return normalizedRequest.contains(query) && saidYouTube == isYouTubeSearch
+            guard isYouTubeSearch ? saidYouTube : (saidGoogle && !saidYouTube) else { return false }
+            return normalizedRequest.contains(query)
         default:
             return false
         }

@@ -70,6 +70,8 @@ func run() async {
         ("google how tall is mount everest", "google how tall is mount everest"),
         ("find me cat videos on youtube", "search youtube for cat videos"),
         ("search my files for the tax pdf", nil),
+        ("search for the weather in london", nil),
+        ("search up who won the world series", nil),
         ("remind me tomorrow at 7 pm to call mom", "add_reminder"),
         ("remind me to buy milk", "add_reminder"),
         ("put lunch with sam on my calendar friday at noon", "add_calendar_event"),
