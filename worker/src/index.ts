@@ -207,7 +207,8 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     env,
     modelsToTry(requestedModel, env.GEMINI_FALLBACK_MODELS),
     "streamGenerateContent?alt=sse",
-    JSON.stringify(requestBody)
+    JSON.stringify(requestBody),
+    attemptTimeoutMilliseconds(request)
   );
 
   if (BUSY_STATUSES.includes(response.status) && env.NVIDIA_API_KEY && canUseNim(requestBody)) {
@@ -757,17 +758,52 @@ function modelsToTry(model: string, fallbackModels?: string): string[] {
  * limit (429) while others are fine, so a busy model moves on to the next.
  * Any other error is returned as is.
  */
-async function fetchGeminiWithFallback(env: Env, models: string[], method: string, body: string): Promise<Response> {
+/**
+ * `x-dottie-attempt-seconds`: how long one model may take to start
+ * answering before the next one is tried. The app sends it for quick
+ * lookups (a box on a screenshot), where a model that's slow to start
+ * would otherwise use up the whole wait before a fallback gets a turn
+ * (Oct 2026: busy models took 30-160 s to fail). Without it, each model
+ * gets as long as it needs.
+ */
+function attemptTimeoutMilliseconds(request: Request): number | undefined {
+  const attemptSeconds = Number(request.headers.get("x-dottie-attempt-seconds"));
+  if (!Number.isFinite(attemptSeconds) || attemptSeconds <= 0) return undefined;
+  return Math.min(attemptSeconds, 60) * 1000;
+}
+
+async function fetchGeminiWithFallback(
+  env: Env,
+  models: string[],
+  method: string,
+  body: string,
+  attemptTimeoutMs?: number
+): Promise<Response> {
   let response: Response | undefined;
   for (const [index, model] of models.entries()) {
-    response = await fetch(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${method}`, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": env.GEMINI_API_KEY,
-        "content-type": "application/json",
-      },
-      body,
-    });
+    const isLastModel = index === models.length - 1;
+    // Only waiting for the answer to start is timed: once it streams, it
+    // runs to the end. The last model gets as long as it needs, since
+    // there's nothing left to try.
+    const attemptAbort = attemptTimeoutMs && !isLastModel ? new AbortController() : undefined;
+    const attemptTimer = attemptAbort ? setTimeout(() => attemptAbort.abort(), attemptTimeoutMs) : undefined;
+    try {
+      response = await fetch(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${method}`, {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": env.GEMINI_API_KEY,
+          "content-type": "application/json",
+        },
+        body,
+        signal: attemptAbort?.signal,
+      });
+    } catch (error) {
+      if (!attemptAbort?.signal.aborted) throw error;
+      console.warn(`${model} didn't start answering within ${attemptTimeoutMs} ms; trying ${models[index + 1]}`);
+      continue;
+    } finally {
+      clearTimeout(attemptTimer);
+    }
     const isBusy = BUSY_STATUSES.includes(response.status);
     if (!isBusy || index === models.length - 1) break;
     console.warn(`${model} answered ${response.status}; trying ${models[index + 1]}`);

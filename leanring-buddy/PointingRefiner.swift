@@ -57,14 +57,16 @@ enum PointingRefiner {
         userQuestion: String,
         roughPoint: CGPoint,
         displayFrame: CGRect,
-        referenceImageJPEG: Data? = nil
+        referenceImageJPEG: Data? = nil,
+        timeoutSeconds: TimeInterval = refinementTimeoutSeconds
     ) async -> CGPoint? {
         let elementFrame = await refineFrame(
             elementLabel: elementLabel,
             userQuestion: userQuestion,
             roughPoint: roughPoint,
             displayFrame: displayFrame,
-            referenceImageJPEG: referenceImageJPEG
+            referenceImageJPEG: referenceImageJPEG,
+            timeoutSeconds: timeoutSeconds
         )
         return elementFrame.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
@@ -78,7 +80,8 @@ enum PointingRefiner {
         userQuestion: String,
         roughPoint: CGPoint,
         displayFrame: CGRect,
-        referenceImageJPEG: Data? = nil
+        referenceImageJPEG: Data? = nil,
+        timeoutSeconds: TimeInterval = refinementTimeoutSeconds
     ) async -> CGRect? {
         let refinementStart = Date()
         // A saved picture means "the thing that looks like this": its name
@@ -107,7 +110,7 @@ enum PointingRefiner {
             return snappedFrame
         }
 
-        let deadline = refinementStart.addingTimeInterval(refinementTimeoutSeconds)
+        let deadline = refinementStart.addingTimeInterval(timeoutSeconds)
         let visionFrame = await withTimeout(seconds: max(0.5, deadline.timeIntervalSinceNow)) {
             await VisionElementLocator.locate(
                 elementLabel: elementLabel,
@@ -415,14 +418,49 @@ private enum VisionElementLocator {
         )
     }
 
+    /// Asks the quickest box model, and a second one too when the first
+    /// hasn't answered within a moment; the first readable box wins. On a
+    /// busy day the free models take 10-150 s instead of about one
+    /// (seen Oct 2026), so waiting on one model meant pointing never got
+    /// past Live's rough guess.
     private static func askForBox(jpegData: Data, prompt: String, referenceImageJPEG: Data? = nil) async -> Box? {
+        let firstModel = DottieModelPicker.shared.pick(.tiny)
+        let secondModel = DottieModelPicker.shared.pick(.tiny, avoiding: [firstModel])
+        let secondModelDelayNanoseconds = UInt64(secondModelDelaySeconds * 1_000_000_000)
+        return await withTaskGroup(of: Box?.self) { boxRequests in
+            boxRequests.addTask {
+                await askOneModelForBox(model: firstModel, jpegData: jpegData, prompt: prompt, referenceImageJPEG: referenceImageJPEG)
+            }
+            if secondModel != firstModel {
+                boxRequests.addTask {
+                    try? await Task.sleep(nanoseconds: secondModelDelayNanoseconds)
+                    guard !Task.isCancelled else { return nil }
+                    return await askOneModelForBox(model: secondModel, jpegData: jpegData, prompt: prompt, referenceImageJPEG: referenceImageJPEG)
+                }
+            }
+            for await answeredBox in boxRequests {
+                if let answeredBox {
+                    boxRequests.cancelAll()
+                    return answeredBox
+                }
+            }
+            return nil
+        }
+    }
+
+    /// The quickest model answers in about a second on a normal day.
+    private static let secondModelDelaySeconds: TimeInterval = 1.5
+    /// How long the Worker lets one model take to start answering before it
+    /// tries its next fallback model.
+    private static let workerAttemptSeconds = 4
+
+    private static func askOneModelForBox(model: String, jpegData: Data, prompt: String, referenceImageJPEG: Data?) async -> Box? {
         var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = PointingRefiner.refinementTimeoutSeconds + 2
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(workerAttemptSeconds), forHTTPHeaderField: "x-dottie-attempt-seconds")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-        // The quickest box model that isn't busy right now.
-        let model = DottieModelPicker.shared.pick(.tiny)
         let requestBody: [String: Any] = [
             "model": model,
             "contents": [[
@@ -465,13 +503,20 @@ private enum VisionElementLocator {
     }
 
     private static func parseBox(from answerText: String) -> Box? {
-        guard let boxRange = answerText.range(of: #"\[\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*\]"#, options: .regularExpression) else {
+        // The quickest model sometimes drops the brackets
+        // ({"box_2d": 19, 21, 25, 33}), so after "box_2d" they're optional.
+        let boxPatterns = [
+            #"\[\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*\]"#,
+            #"box_2d"\s*:\s*\[?\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+"#
+        ]
+        guard let boxRange = boxPatterns.lazy.compactMap({ answerText.range(of: $0, options: .regularExpression) }).first else {
             return nil
         }
         let numbers = answerText[boxRange]
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+            .replacingOccurrences(of: "box_2d\"", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]:").union(.whitespacesAndNewlines))
             .split(separator: ",")
-            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            .compactMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         guard numbers.count == 4 else { return nil }
         let (ymin, xmin, ymax, xmax) = (numbers[0], numbers[1], numbers[2], numbers[3])
         guard (0...1000).contains(ymin), (0...1000).contains(xmin), (0...1000).contains(ymax), (0...1000).contains(xmax),
