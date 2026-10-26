@@ -32,14 +32,19 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
     /// words the moment the shortcut is released (Live's own transcript
     /// only comes after its answer).
     private let onDeviceTranscriber: DictationLiveTranscriber
+    /// When Apple's recognizer can't run, keeps the turn's audio so Whistle
+    /// (on the Mac) can hear a short instant ask instead.
+    private let whistleRecorder: DottieWhistleTurnRecorder
 
     init(
         liveVoiceClient: GeminiLiveVoiceClient,
         onDeviceTranscriber: DictationLiveTranscriber,
+        whistleRecorder: DottieWhistleTurnRecorder,
         beginLiveTurn: @escaping @MainActor () async -> Void
     ) {
         self.liveVoiceClient = liveVoiceClient
         self.onDeviceTranscriber = onDeviceTranscriber
+        self.whistleRecorder = whistleRecorder
         self.beginLiveTurn = beginLiveTurn
     }
 
@@ -55,11 +60,17 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
         }
 
         let onDeviceTranscriber = self.onDeviceTranscriber
+        let whistleRecorder = self.whistleRecorder
         await MainActor.run {
             if DottieInstantLane.areInstantCommandsEnabled || DottieInstantLane.isShortcutLearningEnabled {
                 onDeviceTranscriber.start(asksForPermission: false)
             } else {
                 onDeviceTranscriber.stop()
+            }
+            if !onDeviceTranscriber.isRunning && DottieNeedleRouter.shared.canHearWithWhistle {
+                whistleRecorder.start()
+            } else {
+                whistleRecorder.stop()
             }
         }
 
@@ -68,6 +79,7 @@ final class GeminiLiveCompanionTranscriptionProvider: BuddyTranscriptionProvider
         let session = GeminiLiveCompanionStreamingSession(
             liveVoiceClient: liveVoiceClient,
             onDeviceAudioForwarder: onDeviceTranscriber.audioForwarder,
+            whistleRecorder: whistleRecorder,
             onFinalTranscriptReady: onFinalTranscriptReady
         )
 
@@ -95,6 +107,7 @@ private final class GeminiLiveCompanionStreamingSession: BuddyStreamingTranscrip
 
     private let liveVoiceClient: GeminiLiveVoiceClient
     private let onDeviceAudioForwarder: DictationLiveAudioForwarder
+    private let whistleRecorder: DottieWhistleTurnRecorder
     private let onFinalTranscriptReady: (String) -> Void
     private let pcm16AudioConverter = BuddyPCM16AudioConverter(targetSampleRate: liveInputSampleRate)
 
@@ -106,10 +119,12 @@ private final class GeminiLiveCompanionStreamingSession: BuddyStreamingTranscrip
     init(
         liveVoiceClient: GeminiLiveVoiceClient,
         onDeviceAudioForwarder: DictationLiveAudioForwarder,
+        whistleRecorder: DottieWhistleTurnRecorder,
         onFinalTranscriptReady: @escaping (String) -> Void
     ) {
         self.liveVoiceClient = liveVoiceClient
         self.onDeviceAudioForwarder = onDeviceAudioForwarder
+        self.whistleRecorder = whistleRecorder
         self.onFinalTranscriptReady = onFinalTranscriptReady
     }
 
@@ -118,6 +133,8 @@ private final class GeminiLiveCompanionStreamingSession: BuddyStreamingTranscrip
         guard let pcm16AudioData = pcm16AudioConverter.convertToPCM16Data(from: audioBuffer) else { return }
         // Does nothing when the on-device transcriber isn't running.
         onDeviceAudioForwarder.send(pcm16AudioData)
+        // Does nothing unless Whistle is standing in for it.
+        whistleRecorder.append(pcm16AudioData)
 
         stateLock.lock()
         guard isForwardingAudio else {

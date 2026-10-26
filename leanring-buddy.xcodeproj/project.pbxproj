@@ -110,6 +110,7 @@
 				28F22CBC2F56440300A0FC59 /* Frameworks */,
 				28F22CBD2F56440300A0FC59 /* Resources */,
 				AA00CC012F7000010039DA55 /* Embed cua-driver */,
+				AA00CC022F7000010039DA55 /* Embed Needle */,
 			);
 			buildRules = (
 			);
@@ -265,6 +266,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "/bin/bash \"$SRCROOT/scripts/embed-cua-driver.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		AA00CC022F7000010039DA55 /* Embed Needle */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/embed-needle.sh",
+			);
+			name = "Embed Needle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Frameworks/libneedle3.dylib",
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/Needle/needle3.cact",
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/Needle/whistle.cact",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "/bin/bash \"$SRCROOT/scripts/embed-needle.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */

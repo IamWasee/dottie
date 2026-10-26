@@ -1092,12 +1092,21 @@ final class GeminiLiveVoiceClient {
     /// with their descriptions and argument schemas, for use_tool.
     private func handleFindToolCall(functionCallID: String, functionArguments: [String: Any]) {
         let whatTheUserWants = (functionArguments["what"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let matchingToolsText = GeminiLiveToolCatalog.matchingToolsText(
-            for: whatTheUserWants,
-            amongHiddenDeclarations: Self.hiddenFunctionDeclarations
-        )
-        sendFunctionResponse(functionCallID: functionCallID, functionName: GeminiLiveToolCatalog.findToolFunctionName,
-                             response: ["result": matchingToolsText])
+        Task { [weak self] in
+            // Needle's sense of meaning nudges the word match (a few ms;
+            // nothing when Needle isn't there).
+            let toolsRankedByMeaning = await DottieNeedleRouter.shared.hiddenToolsRankedByMeaning(
+                for: whatTheUserWants,
+                amongHiddenDeclarations: Self.hiddenFunctionDeclarations
+            )
+            let matchingToolsText = GeminiLiveToolCatalog.matchingToolsText(
+                for: whatTheUserWants,
+                amongHiddenDeclarations: Self.hiddenFunctionDeclarations,
+                toolsRankedByMeaning: toolsRankedByMeaning
+            )
+            self?.sendFunctionResponse(functionCallID: functionCallID, functionName: GeminiLiveToolCatalog.findToolFunctionName,
+                                       response: ["result": matchingToolsText])
+        }
     }
 
     /// use_tool: runs a hidden tool through exactly the dispatch it would
@@ -1656,6 +1665,9 @@ enum GeminiLiveToolCatalog {
     ]
 
     private static let maximumToolsPerSearch = 3
+    /// Needle's centered similarity (DottieNeedleRouter) below which a
+    /// tool isn't really related. Measured: right tools 0.13 to 0.34.
+    private static let leastMeaningSimilarityForBonus: Float = 0.1
 
     /// Words too common to tell tools apart.
     private static let ignoredSearchWords: Set<String> = [
@@ -1717,9 +1729,19 @@ enum GeminiLiveToolCatalog {
     /// find_tool's answer: the best few hidden tools for the ask, each with
     /// its name, description and argument schema. When nothing matches, the
     /// names of every hidden tool, so the model can try again.
-    static func matchingToolsText(for whatTheUserWants: String, amongHiddenDeclarations hiddenDeclarations: [[String: Any]]) -> String {
+    static func matchingToolsText(
+        for whatTheUserWants: String,
+        amongHiddenDeclarations hiddenDeclarations: [[String: Any]],
+        toolsRankedByMeaning: [(name: String, similarity: Float)] = []
+    ) -> String {
         let queryWords = searchWords(in: whatTheUserWants)
         let normalizedQuery = whatTheUserWants.lowercased().replacingOccurrences(of: " ", with: "_")
+        // Needle's closest three by meaning get a nudge (3, 2, 1), but only
+        // when they're a real match: unrelated tools score near 0.
+        var meaningBonusByToolName: [String: Int] = [:]
+        for (rankIndex, rankedTool) in toolsRankedByMeaning.prefix(3).enumerated() where rankedTool.similarity >= Self.leastMeaningSimilarityForBonus {
+            meaningBonusByToolName[rankedTool.name] = 3 - rankIndex
+        }
 
         var scoredDeclarations: [(declaration: [String: Any], score: Int)] = []
         for declaration in hiddenDeclarations {
@@ -1740,6 +1762,7 @@ enum GeminiLiveToolCatalog {
                     score += 1
                 }
             }
+            score += meaningBonusByToolName[toolName] ?? 0
             if score > 0 {
                 scoredDeclarations.append((declaration: declaration, score: score))
             }

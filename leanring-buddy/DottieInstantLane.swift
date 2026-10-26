@@ -201,6 +201,8 @@ final class DottieInstantLane {
         case learnedShortcut(DottieLearnedShortcut)
         case replayPhrase(DottieReplay)
         case saveNamedShortcut(name: String, commandTexts: [String])
+        /// Dottie's own tools, worked out by Needle (a reminder, an event).
+        case toolSteps([DottieLearnedShortcut.Step])
     }
 
     enum Outcome {
@@ -267,6 +269,14 @@ final class DottieInstantLane {
         return nil
     }
 
+    /// plan(for:), then Needle (DottieNeedleRouter) for wording the strict
+    /// lane doesn't know, reminders and events.
+    func planIncludingNeedle(for requestText: String) async -> Plan? {
+        if let strictPlan = plan(for: requestText) { return strictPlan }
+        guard Self.areInstantCommandsEnabled else { return nil }
+        return await DottieNeedleRouter.shared.plan(for: requestText)
+    }
+
     /// First words of the instant commands. A transcript that starts with
     /// one of these (or a saved phrase's first word) may still turn into
     /// an instant command once its last words come in.
@@ -297,7 +307,8 @@ final class DottieInstantLane {
             DottieLearnedShortcutStore.shared.shortcuts.flatMap { [$0.phrase] + $0.otherPhrases }
                 .compactMap { $0.split(separator: " ").first.map(String.init) }
         )
-        return savedPhraseFirstWords.contains(firstWord)
+        if savedPhraseFirstWords.contains(firstWord) { return true }
+        return DottieNeedleRouter.shared.mightHandle(normalizedPartialText: normalizedPartial)
     }
 
     func run(_ plan: Plan) async -> Outcome {
@@ -331,6 +342,20 @@ final class DottieInstantLane {
                 isNamedByUser: true
             )
             return .done("Saved: say “\(shortcutName)” any time. " + doneText)
+
+        case .toolSteps(let toolSteps):
+            guard let runSavedToolStep else { return .askGemini }
+            var resultLines: [String] = []
+            for (stepIndex, toolStep) in toolSteps.enumerated() {
+                let stepResult = await runSavedToolStep(toolStep.functionName, toolStep.arguments)
+                // Nothing done yet: Gemini can still try it its own way.
+                if stepIndex == 0 && Self.looksLikeFailure(stepResult) {
+                    return .askGemini
+                }
+                resultLines.append(Self.firstSentence(of: stepResult))
+            }
+            let doneText = resultLines.joined(separator: " ")
+            return .done(doneText.prefix(1).uppercased() + doneText.dropFirst())
         }
     }
 
@@ -581,6 +606,9 @@ struct HomeInstantLaneSettings: View {
     @ObservedObject private var store = DottieLearnedShortcutStore.shared
     @AppStorage(DottieInstantLane.instantCommandsEnabledDefaultsKey) private var areInstantCommandsEnabled = true
     @AppStorage(DottieInstantLane.shortcutLearningEnabledDefaultsKey) private var isShortcutLearningEnabled = true
+    @AppStorage(DottieNeedleEngine.isEnabledDefaultsKey) private var isNeedleEnabled = true
+    @AppStorage(DottieNeedleEngine.isWhistleEnabledDefaultsKey) private var isWhistleEnabled = true
+    @State private var needleStatusText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -594,6 +622,41 @@ struct HomeInstantLaneSettings: View {
                     .toggleStyle(.switch)
             }
             Text("“Open Spotify”, “quit Slack”, “Terminal on the left”, “Chrome on my other screen”, “maximize Safari”, “next song”, “volume up”, “google …”. Your words are heard on your Mac, and Dottie does these before Gemini answers.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Text("Understand everyday wording with Needle")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Toggle("", isOn: $isNeedleEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!areInstantCommandsEnabled)
+            }
+            Text("A small model that runs on your Mac (Cactus Needle, no internet, about a tenth of a second) catches other ways of saying these, like “pop Safari open”, “kill Zoom” or “stop the song”, plus “remind me tomorrow at 7 pm to …” and “put lunch with Sam on my calendar Friday at noon”. It only acts when your words back it up; anything else goes to Gemini. When Gemini can't be reached, it still does these on the Mac.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !needleStatusText.isEmpty {
+                Text(needleStatusText)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+
+            HStack {
+                Text("Hear short asks on the Mac with Whistle")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Toggle("", isOn: $isWhistleEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!areInstantCommandsEnabled || !isNeedleEnabled)
+            }
+            Text("Only used when Speech Recognition isn't allowed for Dottie: a short push-to-talk ask is heard on your Mac (Cactus Whistle, in English) so the instant lane still works.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -648,6 +711,9 @@ struct HomeInstantLaneSettings: View {
                     .pointerCursor()
                 }
             }
+        }
+        .task(id: isNeedleEnabled) {
+            needleStatusText = "Needle: " + (await DottieNeedleEngine.shared.statusText())
         }
     }
 

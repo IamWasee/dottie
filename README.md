@@ -58,6 +58,8 @@ Dots are helpers that work on their own in a folder on your Mac and report back 
 
 Dots click and type in your apps through the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver), which the build puts inside Dottie.app for you (a build phase downloads a pinned release once, checks its checksum and caches it). It runs under Dottie's own Accessibility and Screen Recording permissions, so there's nothing extra to install or allow. If the build was offline, Settings says the driver is missing; rebuild online, or install it yourself with `/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"`.
 
+Everyday asks worded loosely ("pop Safari open", "kill Zoom", "stop the song", "remind me tomorrow at 7 pm to call mom") are understood on your Mac by [Cactus Needle](https://github.com/cactus-compute/needle), a 35 MB model that answers in about a tenth of a second with no internet. The build puts it inside Dottie.app the same way (pinned, checksum-checked, cached); without it, Dottie works as before. Turn it off in Settings → Instant commands.
+
 Dots can always look at your apps, but they ask before they click or type: an Allow / Always / Not now card appears in the notch. You can let them act without asking in Home → Settings.
 
 To have a Dot repeat a task, just say how often ("check my repos for new issues every morning"). It does the task once and sets up a routine; each later run's answer lands in its chat and the notch. Routines run while your Mac is awake and Dottie is open, and you can run, pause or delete them from the Dot's chat.
@@ -96,4 +98,4 @@ The full technical breakdown is in [AGENTS.md](AGENTS.md).
 
 ## Credits
 
-Built on [farzaa/clicky](https://github.com/farzaa/clicky) by Farza, MIT licensed; see [LICENSE](LICENSE). Bundles [cua-driver](https://github.com/trycua/cua) by Cua, MIT licensed; its license and third-party notices are copied into the app's Resources. Not affiliated with Farza, Human Songs, or HeyClicky.
+Built on [farzaa/clicky](https://github.com/farzaa/clicky) by Farza, MIT licensed; see [LICENSE](LICENSE). Bundles [cua-driver](https://github.com/trycua/cua) by Cua, MIT licensed; its license and third-party notices are copied into the app's Resources. Bundles [Needle and Whistle](https://github.com/cactus-compute/needle) by Cactus Compute, Apache-2.0 licensed, which run on your Mac with their telemetry turned off; the license is copied into the app's Resources/Needle. Not affiliated with Farza, Human Songs, or HeyClicky.
