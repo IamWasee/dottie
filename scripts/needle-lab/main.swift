@@ -18,7 +18,8 @@ func normalized(_ text: String) -> String {
 func run() async {
     let loadStart = Date()
     let prepared = await engine.prepare()
-    print("prepare: \(prepared) in \(Int(Date().timeIntervalSince(loadStart) * 1000)) ms, reason: \(await engine.lastFailureReason ?? "-")")
+    let prepareFailure = await engine.lastFailureReason ?? "-"
+    print("prepare: \(prepared) in \(Int(Date().timeIntervalSince(loadStart) * 1000)) ms, reason: \(prepareFailure)")
     guard prepared else { exit(1) }
 
     let cases: [(String, String?)] = [
@@ -71,7 +72,8 @@ func run() async {
         let request = normalized(text)
         let toolset = DottieNeedleToolset.toolset(forNormalizedRequest: request)
         guard let answer = await engine.toolCalls(for: request, toolsJSON: toolset.toolsJSON, facts: DottieNeedleToolset.systemFacts()) else {
-            print("FAIL call: \(text) -> \(await engine.lastFailureReason ?? "?")"); continue
+            let failure = await engine.lastFailureReason ?? "?"
+            print("FAIL call: \(text) -> \(failure)"); continue
         }
         totalMilliseconds += answer.milliseconds; callCount += 1
         var gotParts: [String] = []
@@ -136,11 +138,13 @@ func run() async {
     for clip in arguments.dropFirst(2) {
         guard let samples = readWav(clip) else { print("no wav \(clip)"); continue }
         let transcript = await engine.transcribe(samples: samples, keywords: ["Safari", "Spotify", "Slack", "Notes", "Chrome"])
-        print("whistle \(URL(fileURLWithPath: clip).lastPathComponent) (\(String(format: "%.1f", Double(samples.count) / 16000)) s) -> \(transcript?.text ?? "nil: \(await engine.lastFailureReason ?? "")") \(Int(transcript?.milliseconds ?? -1))ms")
+        let failure = await engine.lastFailureReason ?? ""
+        print("whistle \(URL(fileURLWithPath: clip).lastPathComponent) (\(String(format: "%.1f", Double(samples.count) / 16000)) s) -> \(transcript?.text ?? "nil: \(failure)") \(Int(transcript?.milliseconds ?? -1))ms")
     }
     // Needle still works after Whistle loaded?
     let after = await engine.toolCalls(for: "fire up spotify", toolsJSON: DottieNeedleToolset.mac.toolsJSON, facts: DottieNeedleToolset.systemFacts())
-    print("after whistle: \(after?.toolCalls ?? []) \(await engine.lastFailureReason ?? "")")
+    let failureAfter = await engine.lastFailureReason ?? ""
+    print("after whistle: \(after?.toolCalls ?? []) \(failureAfter)")
     print(await engine.statusText())
 }
 
