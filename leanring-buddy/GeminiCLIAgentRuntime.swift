@@ -338,6 +338,10 @@ final class GeminiCLIAgentRuntime {
 
     It returns JSON: `results` (title, url, snippet) and `topPage` (the text of the first result). To read any other page, use `web_fetch` or `curl` on its URL. Cite the pages you used.
 
+    Search engines sometimes give that search results for only one word of the question (dictionary pages for "won" when you asked who won something). When the results don't match what you asked, search DuckDuckGo from this Mac instead and read the result links from the page:
+
+        curl -s -A "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/141.0 Safari/537.36" --data-urlencode "q=<your query>" https://html.duckduckgo.com/html/
+
     """
 
     /// So Dots take on real builds (a website, an app, a script) instead of

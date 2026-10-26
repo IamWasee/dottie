@@ -107,7 +107,20 @@ final class DottieLearnedShortcutStore: ObservableObject {
               let savedShortcuts = try? decoder.decode([DottieLearnedShortcut].self, from: savedData) else { return }
         let oldestKeptDate = Date().addingTimeInterval(-Self.unusedLearnedShortcutLifetime)
         shortcuts = savedShortcuts.filter { shortcut in
-            shortcut.isNamedByUser || (shortcut.lastUsedAt ?? shortcut.createdAt) > oldestKeptDate
+            shortcut.isNamedByUser
+                || ((shortcut.lastUsedAt ?? shortcut.createdAt) > oldestKeptDate && !Self.opensGoogleForAnUnnamedSearch(shortcut))
+        }
+    }
+
+    /// Needle used to learn "search for the weather" as opening a Google
+    /// page, so Dottie never answered it again. Those are dropped so the
+    /// ask goes back to Gemini, which looks it up and says the answer.
+    private static func opensGoogleForAnUnnamedSearch(_ shortcut: DottieLearnedShortcut) -> Bool {
+        let phraseWords = Set(shortcut.phrase.split(separator: " ").map(String.init))
+        guard !phraseWords.contains("google"), !phraseWords.contains("googling") else { return false }
+        return shortcut.steps.contains { step in
+            step.functionName == DottieInstantCommand.savedStepFunctionName
+                && (step.arguments.dottieString("text") ?? "").hasPrefix("google ")
         }
     }
 

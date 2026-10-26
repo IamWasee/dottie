@@ -17,8 +17,9 @@
  *                      returns the cleaned-up text to type, in one Gemini
  *                      call (transcription and cleanup together).
  *   GET  /search?q=  → web search without Google Search grounding (free-tier
- *                      keys can't use it): Bing's results page, then
- *                      DuckDuckGo, then Wikipedia, plus the top page's text. Used by the voice
+ *                      keys can't use it): Bing and DuckDuckGo at once, the
+ *                      one covering the query best (Wikipedia when neither
+ *                      does), plus the top page's text. Used by the voice
  *                      model's search_web tool and by Dots.
  *   GET  /config     → non-secret model names, for debugging.
  *   ANY  /gemini/*   → transparent Gemini API passthrough for the background
@@ -472,11 +473,16 @@ interface SearchResult {
 
 /**
  * Web search for a free-tier key, which gets "You exceeded your current
- * quota" for Gemini's Google Search tool. Reads Bing's results page, then
- * DuckDuckGo's (it often answers servers with a 202 challenge page), then
- * Wikipedia's search, adds Roblox's own search for Roblox games, and adds
- * the readable text of the first result so a short answer needs no second
- * call.
+ * quota" for Gemini's Google Search tool. Asks Bing (its results page and
+ * its RSS feed) and DuckDuckGo at once and keeps the answer that covers
+ * the most of the query's words, falling back to Wikipedia when none
+ * does. Bing often answers server addresses with results for one word
+ * of the query ("weather in london today" gave Detroit's
+ * weather, "who won the 2025 world series" gave dictionary pages for
+ * "won"), so the first engine with any results isn't trusted on its own.
+ * Adds Roblox's own search for Roblox games, and the readable text of the
+ * first result so a short answer needs no second call. `debug=1` adds
+ * what each engine returned.
  */
 async function handleSearch(url: URL): Promise<Response> {
   const query = (url.searchParams.get("q") ?? "").trim().slice(0, 300);
@@ -484,17 +490,32 @@ async function handleSearch(url: URL): Promise<Response> {
     return jsonResponse({ error: "missing q" }, 400);
   }
 
-  let results: SearchResult[] = [];
-  let source = "";
-  for (const [engineName, searchEngine] of [
-    ["bing", searchBing],
-    ["duckduckgo", searchDuckDuckGo],
-    ["wikipedia", searchWikipedia],
-  ] as const) {
-    results = await searchEngine(query).catch(() => [] as SearchResult[]);
-    source = engineName;
-    if (results.length > 0) break;
+  const queryWords = meaningfulQueryWords(query);
+  const engineAnswers: { engineName: string; results: SearchResult[]; coverage: number }[] = [];
+  async function askEngine(engineName: string, searchEngine: (query: string) => Promise<SearchResult[]>) {
+    const engineResults = await searchEngine(query).catch(() => [] as SearchResult[]);
+    engineAnswers.push({ engineName, results: engineResults, coverage: queryWordCoverage(queryWords, engineResults) });
   }
+
+  await Promise.all([
+    askEngine("bing", searchBing),
+    askEngine("bing-rss", searchBingFeed),
+    askEngine("duckduckgo", searchDuckDuckGo),
+  ]);
+  if (!engineAnswers.some((answer) => answer.coverage >= GOOD_QUERY_COVERAGE)) {
+    await askEngine("wikipedia", searchWikipedia);
+  }
+
+  // The answer covering the most of the query wins; on a tie, the engine
+  // asked first (Bing's page has the best snippets).
+  const engineOrder = ["bing", "bing-rss", "duckduckgo", "wikipedia"];
+  const bestAnswer = engineAnswers
+    .filter((answer) => answer.results.length > 0)
+    .sort((first, second) =>
+      second.coverage - first.coverage || engineOrder.indexOf(first.engineName) - engineOrder.indexOf(second.engineName)
+    )[0];
+  let results = bestAnswer?.results ?? [];
+  let source = bestAnswer?.engineName ?? "";
 
   // Roblox experiences are often too new or small for the web engines, but
   // Roblox's own search has the game and its description.
@@ -515,12 +536,51 @@ async function handleSearch(url: URL): Promise<Response> {
     }
   }
 
-  return jsonResponse({ query, source, results, topPage });
+  const searchAnswer: Record<string, unknown> = { query, source, results, topPage };
+  if (url.searchParams.get("debug") === "1") {
+    searchAnswer.engines = engineAnswers.map((answer) => ({
+      engine: answer.engineName,
+      count: answer.results.length,
+      coverage: Math.round(answer.coverage * 100) / 100,
+      titles: answer.results.slice(0, 3).map((result) => result.title),
+    }));
+  }
+  return jsonResponse(searchAnswer);
+}
+
+/** Share of the query's words an engine's results must mention to be trusted without asking Wikipedia. */
+const GOOD_QUERY_COVERAGE = 0.6;
+
+const QUERY_FILLER_WORDS = new Set([
+  "a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or", "is", "are", "was", "were", "be",
+  "what", "whats", "who", "whos", "when", "where", "why", "how", "which", "does", "do", "did", "can",
+  "me", "my", "i", "you", "it", "this", "that", "tell", "about", "please", "now", "today", "current", "latest",
+]);
+
+function meaningfulQueryWords(query: string): string[] {
+  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  const meaningfulWords = words.filter((word) => !QUERY_FILLER_WORDS.has(word));
+  return [...new Set(meaningfulWords.length > 0 ? meaningfulWords : words)];
+}
+
+/** How many of the query's words (0 to 1) show up in the first three results' titles and snippets. */
+function queryWordCoverage(queryWords: string[], results: SearchResult[]): number {
+  if (queryWords.length === 0 || results.length === 0) return 0;
+  const resultText = results
+    .slice(0, 3)
+    .map((result) => `${result.title} ${result.snippet} ${result.url}`)
+    .join(" ")
+    .toLowerCase();
+  const mentionedWordCount = queryWords.filter((word) => resultText.includes(word)).length;
+  return mentionedWordCount / queryWords.length;
 }
 
 const BROWSER_HEADERS = {
   "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36",
   "accept-language": "en-US,en;q=0.9",
+  // Without a browser's accept header, Bing often searches for just one
+  // word of the query.
+  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
 async function searchBing(query: string): Promise<SearchResult[]> {
@@ -549,6 +609,28 @@ async function searchBing(query: string): Promise<SearchResult[]> {
     if (!resultURL.startsWith("http")) continue;
     const snippet = resultBlock.match(/<p[^>]*>([\s\S]*?)<\/p>/);
     results.push({ title: htmlToText(titleLink[2]), url: resultURL, snippet: snippet ? htmlToText(snippet[1]) : "" });
+    if (results.length === 6) break;
+  }
+  return results;
+}
+
+/** Bing's RSS feed of the same search: plain links, served even when the results page is cut down. */
+async function searchBingFeed(query: string): Promise<SearchResult[]> {
+  const response = await fetch(
+    `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}&setlang=en&mkt=en-US`,
+    { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) }
+  );
+  if (!response.ok) return [];
+  const feed = await response.text();
+
+  const results: SearchResult[] = [];
+  for (const item of feed.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const title = item[1].match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? "";
+    const link = item[1].match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? "";
+    const description = item[1].match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? "";
+    const resultURL = decodeHTMLEntities(link.trim());
+    if (!resultURL.startsWith("http")) continue;
+    results.push({ title: htmlToText(title), url: resultURL, snippet: htmlToText(decodeHTMLEntities(description)) });
     if (results.length === 6) break;
   }
   return results;
@@ -594,8 +676,12 @@ async function searchRobloxGame(query: string): Promise<SearchResult | undefined
 }
 
 async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
-  const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-    headers: BROWSER_HEADERS,
+  // A form post, like the page's own search box; plain GETs from servers
+  // get a 202 challenge page more often.
+  const response = await fetch("https://html.duckduckgo.com/html/", {
+    method: "POST",
+    headers: { ...BROWSER_HEADERS, "content-type": "application/x-www-form-urlencoded" },
+    body: `q=${encodeURIComponent(query)}&kl=us-en`,
     signal: AbortSignal.timeout(6000),
   });
   if (!response.ok) return [];

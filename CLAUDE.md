@@ -40,6 +40,7 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 | `POST /dictate` | `…/models/{dictation model}:generateContent` | Hold-to-dictate: a WAV recording in, cleaned-up text out, in one call |
 | `POST /tts` | `…/models/{tts model}:generateContent` | Gemini TTS, returned as raw 24kHz PCM (classic mode) |
 | `* /gemini/*` | `generativelanguage.googleapis.com/*` | Passthrough for Gemini CLI (agents). The CLI sends the shared secret as its API key; the Worker swaps in the real one |
+| `GET /search?q=` | Bing, DuckDuckGo, Wikipedia | Free web search (Google Search grounding is quota-blocked on free keys): asks Bing and DuckDuckGo at once and keeps the results covering the most of the question; `debug=1` shows each engine |
 | `GET /config` | none | Echoes the configured model names |
 
 Worker secrets: `GEMINI_API_KEY`, optional `APP_SHARED_SECRET` (checked against the `x-clicky-secret` header)
@@ -76,6 +77,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `GeminiLiveVoiceClient.swift` | ~1725 | Gemini Live WebSocket client: ephemeral-token connect, setup (voice, tools, manual activity detection, transcription, context compression), queued sends, turn API (`beginUserTurn`/`sendMicrophoneAudio`/`endUserTurn`), tool calls, idle close, watchdog. Also `GeminiLivePCMPlayer` for streamed 24kHz playback and `GeminiLiveToolCatalog` (which tools are declared directly, `find_tool`/`use_tool` for the rest). |
 | `GeminiLiveCompanionTranscriptionProvider.swift` | ~150 | Bridges `BuddyDictationManager`'s mic pipeline into the Live session. |
 | `GeminiAPI.swift` | ~210 | Gemini vision chat with SSE streaming via Worker `/chat`. Same call shape as v0's ClaudeAPI. |
+| `DottieWebSearch.swift` | ~240 | `search_web` for voice and screen jobs: the Worker's `/search`, and when its results miss the question's words (engines often answer server addresses for one word of it), DuckDuckGo and Bing asked from the Mac itself. |
 | `GeminiTTSClient.swift` | ~75 | Gemini TTS via Worker `/tts` (classic mode). |
 | `NotchPresenter.swift` | ~440 | State of the notch surface (compact, listening, thinking, speaking, text input, text response), how open the island is (`IslandPresentation`: closed, wings, expanded), the answer card's auto-dismiss, and the Dot summaries for the badge and hover peek. |
 | `NotchWindowManager.swift` | ~360 | Borderless dark-appearance panel pinned over the notch (or a top-center pill), resized per surface (wings beside the notch, or a card below it) so it never blocks more of the menu bar than needed. |
