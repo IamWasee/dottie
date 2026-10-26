@@ -202,29 +202,54 @@ enum DottieTeaching {
         \(itemList)
         Reply with only JSON: {"items": [{"name": "...", "box_2d": [ymin, xmin, ymax, xmax]}]}, coordinates normalized 0-1000 across the image, one entry per thing, tight around the thing itself. For a point or dot, a small box around the dot itself, not its label. For the end of a line, a small box at that end. For a circle or shape, the box around the whole shape. Leave out anything you can't see.
         """
-        // The normal model thinks a little first; the quickest one is the
-        // backup. Both skip models that are busy right now.
+        // The normal model thinks a little first; the quickest one joins in
+        // when it's slow, and the first answer wins. Waiting for one, then
+        // the other, left the drawing stuck on "finding it on your screen"
+        // for most of a minute when the free models were busy, and then
+        // drew without its anchors. Both skip models that are busy right now.
         let normalModel = DottieModelPicker.shared.pick(.normal)
         let quickModel = DottieModelPicker.shared.pick(.tiny)
-        for model in [normalModel, quickModel] {
-            if let boxes = await requestBoxes(jpegData: jpegData, prompt: prompt, model: model,
-                                              thinksFirst: model == normalModel), !boxes.isEmpty {
-                var frames: [String: CGRect] = [:]
-                for (name, box) in boxes {
-                    frames[name.lowercased()] = CGRect(
-                        x: displayFrame.minX + box[1] / 1000 * displayFrame.width,
-                        y: displayFrame.maxY - box[2] / 1000 * displayFrame.height,
-                        width: (box[3] - box[1]) / 1000 * displayFrame.width,
-                        height: (box[2] - box[0]) / 1000 * displayFrame.height
-                    )
-                }
-                print("✏️ Found \(frames.count) of \(anchors.count) anchors with \(model)")
-                return frames
+        let quickModelDelayNanoseconds = UInt64(quickModelDelaySeconds * 1_000_000_000)
+        let foundBoxes: (model: String, boxes: [(String, [Double])])? = await withTaskGroup(
+            of: (model: String, boxes: [(String, [Double])])?.self
+        ) { boxRequests in
+            boxRequests.addTask {
+                await requestBoxes(jpegData: jpegData, prompt: prompt, model: normalModel, thinksFirst: true)
+                    .map { (model: normalModel, boxes: $0) }
             }
+            boxRequests.addTask {
+                try? await Task.sleep(nanoseconds: quickModelDelayNanoseconds)
+                guard !Task.isCancelled else { return nil }
+                return await requestBoxes(jpegData: jpegData, prompt: prompt, model: quickModel, thinksFirst: false)
+                    .map { (model: quickModel, boxes: $0) }
+            }
+            for await answer in boxRequests {
+                if let answer, !answer.boxes.isEmpty {
+                    boxRequests.cancelAll()
+                    return answer
+                }
+            }
+            return nil
         }
-        print("✏️ Couldn't find the anchors")
-        return [:]
+        guard let foundBoxes else {
+            print("✏️ Couldn't find the anchors")
+            return [:]
+        }
+        var frames: [String: CGRect] = [:]
+        for (name, box) in foundBoxes.boxes {
+            frames[name.lowercased()] = CGRect(
+                x: displayFrame.minX + box[1] / 1000 * displayFrame.width,
+                y: displayFrame.maxY - box[2] / 1000 * displayFrame.height,
+                width: (box[3] - box[1]) / 1000 * displayFrame.width,
+                height: (box[2] - box[0]) / 1000 * displayFrame.height
+            )
+        }
+        print("✏️ Found \(frames.count) of \(anchors.count) anchors with \(foundBoxes.model)")
+        return frames
     }
+
+    /// The normal model usually answers in a few seconds.
+    private static let quickModelDelaySeconds: TimeInterval = 4
 
     @MainActor
     private static func requestBoxes(jpegData: Data, prompt: String, model: String, thinksFirst: Bool) async -> [(String, [Double])]? {
@@ -232,6 +257,8 @@ enum DottieTeaching {
         request.httpMethod = "POST"
         request.timeoutInterval = 14
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The Worker moves on to its next model when one is slow to start.
+        request.setValue("6", forHTTPHeaderField: "x-dottie-attempt-seconds")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         var generationConfig: [String: Any] = ["maxOutputTokens": 4096, "responseMimeType": "application/json"]
         if thinksFirst {
@@ -256,7 +283,9 @@ enum DottieTeaching {
         guard let start = answerText.firstIndex(of: "{"), let end = answerText.lastIndex(of: "}"),
               let jsonData = String(answerText[start...end]).data(using: .utf8),
               let answer = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let items = answer["items"] as? [Any] else { return nil }
+              let items = answer["items"] as? [Any] else {
+            return boxesFromMalformedAnswer(answerText)
+        }
         return items.compactMap { item in
             guard let fields = item as? [String: Any], let name = fields["name"] as? String,
                   let box = (fields["box_2d"] as? [Any])?.compactMap({ ($0 as? NSNumber)?.doubleValue }),
@@ -264,6 +293,27 @@ enum DottieTeaching {
                   box.allSatisfy({ (0...1000).contains($0) }) else { return nil }
             return (name, box)
         }
+    }
+
+    /// The quickest model sometimes writes a box without its brackets
+    /// ({"name": "A", "box_2d": 19, 21, 25, 33}), which isn't JSON; read
+    /// each name and the four numbers after it anyway.
+    private static func boxesFromMalformedAnswer(_ answerText: String) -> [(String, [Double])]? {
+        let number = #"\s*(-?[\d.]+)\s*"#
+        let itemPattern = #""name"\s*:\s*"([^"]+)"[^{}]*?"box_2d"\s*:\s*\[?"# + [number, number, number, number].joined(separator: ",")
+        guard let itemExpression = try? NSRegularExpression(pattern: itemPattern) else { return nil }
+        let wholeAnswer = NSRange(answerText.startIndex..., in: answerText)
+        let boxes = itemExpression.matches(in: answerText, range: wholeAnswer).compactMap { match -> (String, [Double])? in
+            let capturedTexts = (1...5).compactMap { captureIndex in
+                Range(match.range(at: captureIndex), in: answerText).map { String(answerText[$0]) }
+            }
+            guard capturedTexts.count == 5 else { return nil }
+            let box = capturedTexts.dropFirst().compactMap(Double.init)
+            guard box.count == 4, box[2] >= box[0], box[3] >= box[1],
+                  box.allSatisfy({ (0...1000).contains($0) }) else { return nil }
+            return (capturedTexts[0], box)
+        }
+        return boxes.isEmpty ? nil : boxes
     }
 
     // MARK: - Drawing a step

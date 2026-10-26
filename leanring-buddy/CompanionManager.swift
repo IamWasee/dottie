@@ -2069,24 +2069,62 @@ final class CompanionManager: ObservableObject {
         // Live's guess comes from a small frame; take a second, sharper look
         // before the cursor flies, so it lands on the thing itself.
         livePointingRefinementTask?.cancel()
-        let userQuestion = currentLiveTurnTypedText ?? ""
+        // What the Mac heard is the best description of what's wanted (Live's
+        // own transcript only comes after its answer).
+        let userQuestion = currentLiveTurnTypedText ?? currentLiveTurnOnDeviceText ?? ""
         let referenceImageJPEG = savedPictureJPEG(named: pointRequest.elementLabel)
         livePointingRefinementTask = Task { [weak self] in
-            let refinedScreenLocation = await PointingRefiner.refine(
-                elementLabel: pointRequest.elementLabel,
-                userQuestion: userQuestion,
-                roughPoint: roughScreenLocation,
-                displayFrame: displayFrame,
-                referenceImageJPEG: referenceImageJPEG
-            )
+            // When the sharper look is slow (a busy day for the free models),
+            // the cursor doesn't wait any longer than usual: it flies to Live's
+            // guess, and hops over to the real spot if that's found while it's
+            // still pointing.
+            let roughGuessFlight = Task { [weak self] () -> Bool in
+                try? await Task.sleep(nanoseconds: UInt64(PointingRefiner.refinementTimeoutSeconds * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return false }
+                self.detectedElementScreenLocation = roughScreenLocation
+                self.detectedElementDisplayFrame = displayFrame
+                return true
+            }
+            // A newer point request cancels this one, and its flight with it.
+            let refinedScreenLocation = await withTaskCancellationHandler {
+                await PointingRefiner.refine(
+                    elementLabel: pointRequest.elementLabel,
+                    userQuestion: userQuestion,
+                    roughPoint: roughScreenLocation,
+                    displayFrame: displayFrame,
+                    referenceImageJPEG: referenceImageJPEG,
+                    timeoutSeconds: Self.livePointingLateRefinementSeconds
+                )
+            } onCancel: {
+                roughGuessFlight.cancel()
+            }
+            roughGuessFlight.cancel()
+            let didFlyToRoughGuess = await roughGuessFlight.value
             guard let self, !Task.isCancelled else { return }
             // Still on the display the guess was on, or the guess wins.
-            let finalScreenLocation = refinedScreenLocation.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
-                ?? roughScreenLocation
-            self.detectedElementScreenLocation = finalScreenLocation
-            self.detectedElementDisplayFrame = displayFrame
+            let foundScreenLocation = refinedScreenLocation.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
+            guard didFlyToRoughGuess else {
+                self.detectedElementScreenLocation = foundScreenLocation ?? roughScreenLocation
+                self.detectedElementDisplayFrame = displayFrame
+                return
+            }
+            // Only while the cursor is still pointing at the guess (flying
+            // back clears it), and only for a real correction.
+            guard self.detectedElementScreenLocation == roughScreenLocation,
+                  let foundScreenLocation,
+                  hypot(foundScreenLocation.x - roughScreenLocation.x, foundScreenLocation.y - roughScreenLocation.y) > Self.livePointingSmallestCorrection else { return }
+            print("🎯 Pointing corrected after the rough guess: \(Int(roughScreenLocation.x)),\(Int(roughScreenLocation.y)) → \(Int(foundScreenLocation.x)),\(Int(foundScreenLocation.y))")
+            self.detectedElementScreenLocation = foundScreenLocation
         }
     }
+
+    /// How long a sharper look at a pointing target may run in all. The
+    /// cursor flies to Live's guess after the usual wait
+    /// (PointingRefiner.refinementTimeoutSeconds) and is still pointing
+    /// there until about this long after the ask.
+    private static let livePointingLateRefinementSeconds: TimeInterval = 9
+    /// A late find closer than this to Live's guess isn't worth a hop.
+    private static let livePointingSmallestCorrection: CGFloat = 24
 
     /// A press released before the mic session opened never reaches Gemini,
     /// so no answer will come to clear the spinner. Check shortly after
