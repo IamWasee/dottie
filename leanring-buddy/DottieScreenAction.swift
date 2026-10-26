@@ -87,7 +87,7 @@ enum DottieScreenAction {
     private static var pressKeysDeclaration: [String: Any] {
         [
             "name": "press_keys",
-            "description": "Press a key or keyboard shortcut on the user's Mac. Prefer a shortcut over clicking whenever one exists; it never misses: close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close window cmd+shift+w, zoom cmd+= and cmd+-, plus enter, escape and tab. To switch apps, open them instead." + onlyWhenAskedNote,
+            "description": "Press a key or keyboard shortcut on the user's Mac. Prefer a shortcut over clicking whenever one exists; it never misses: minimize window cmd+m, hide app cmd+h, full screen ctrl+cmd+f, new window cmd+n, undo cmd+z, save cmd+s, close tab cmd+w, new tab cmd+t, reopen closed tab cmd+shift+t, next tab ctrl+tab, previous tab ctrl+shift+tab, address bar cmd+l, reload cmd+r, back cmd+[, forward cmd+], find on page cmd+f, close window cmd+shift+w, zoom cmd+= and cmd+-, plus enter, escape and tab. To switch apps, open them instead." + onlyWhenAskedNote,
             "parameters": [
                 "type": "OBJECT",
                 "properties": [

@@ -56,6 +56,9 @@ enum DottieInstantCommand: Equatable {
     case media(MediaAction)
     case volume(VolumeAction)
     case openSearch(url: URL, description: String)
+    /// A keyboard shortcut pressed in the app in front, like "cmd+m" for
+    /// "minimize". doneText is the short line shown when it's pressed.
+    case pressKeys(keyCombination: String, doneText: String)
 
     /// What a learned or named shortcut saves for an instant command: the
     /// words, parsed again when it's replayed, so "open Notes" still works
@@ -105,12 +108,119 @@ enum DottieInstantCommands {
 
     /// One command from already-normalized words, or nil.
     static func parse(_ normalizedRequest: String) -> DottieInstantCommand? {
-        parseMedia(normalizedRequest)
+        parseKeyboardShortcut(normalizedRequest)
+            ?? parsePressKeys(normalizedRequest)
+            ?? parseMedia(normalizedRequest)
             ?? parseVolume(normalizedRequest)
             ?? parseSearch(normalizedRequest)
             ?? parseWindowPlacement(normalizedRequest)
             ?? parseQuit(normalizedRequest)
             ?? parseOpen(normalizedRequest)
+    }
+
+    /// Everyday Mac keyboard shortcuts by what they do. The whole request
+    /// has to be one of these phrases, so "minimize" and "minimize this
+    /// window" match but "minimize the spotify window" goes to Gemini.
+    private static let keyboardShortcutPhrases: [(phrasePattern: String, keyCombination: String, doneText: String)] = [
+        (#"minimi[sz]e(?: (?:this|the|that|my|current|this current))?(?: window| app)?|minimi[sz]e it|send (?:this|it) to the dock"#, "cmd+m", "Minimized the window."),
+        (#"hide (?:this|the|that|current)(?: app| window)?|hide it"#, "cmd+h", "Hid the app."),
+        (#"hide (?:all )?(?:the )?other (?:apps|windows)|hide everything else|hide others"#, "cmd+option+h", "Hid the other apps."),
+        (#"close (?:this|the|that|current) tab|close tab"#, "cmd+w", "Closed the tab."),
+        (#"close (?:this|the|that|current) window|close window"#, "cmd+w", "Closed the window."),
+        (#"(?:open )?(?:a )?new tab"#, "cmd+t", "Opened a new tab."),
+        (#"reopen (?:the |that |my )?(?:last )?(?:closed )?tab|undo close tab|bring (?:back )?(?:the|that) (?:last )?(?:closed )?tab(?: back)?"#, "cmd+shift+t", "Reopened the last tab."),
+        (#"(?:open )?(?:a )?new window"#, "cmd+n", "Opened a new window."),
+        (#"(?:go to )?(?:the )?next tab"#, "ctrl+tab", "Next tab."),
+        (#"(?:go to )?(?:the )?previous tab"#, "ctrl+shift+tab", "Previous tab."),
+        (#"reload|refresh|(?:reload|refresh) (?:this|the|that) (?:page|tab|site)"#, "cmd+r", "Reloaded."),
+        (#"find on (?:this |the )?page|search (?:this|the) page"#, "cmd+f", "Find is open."),
+        (#"undo(?: that| it| this)?"#, "cmd+z", "Undone."),
+        (#"redo(?: that| it| this)?"#, "cmd+shift+z", "Redone."),
+        (#"save(?: (?:it|the file|my work|the document))?"#, "cmd+s", "Saved."),
+        (#"select all|select everything"#, "cmd+a", "Selected all."),
+        (#"copy(?: (?:this|that|it))?"#, "cmd+c", "Copied."),
+        (#"paste(?: (?:this|that|it))?"#, "cmd+v", "Pasted."),
+        (#"cut(?: (?:this|that|it))?"#, "cmd+x", "Cut."),
+        (#"print(?: (?:this|it|that|the page))?"#, "cmd+p", "Print is open."),
+        (#"zoom in"#, "cmd+=", "Zoomed in."),
+        (#"zoom out"#, "cmd+-", "Zoomed out."),
+        (#"reset (?:the )?zoom|actual size"#, "cmd+0", "Zoom reset."),
+        (#"(?:enter|exit|leave|toggle) full ?screen(?: mode)?|full ?screen mode"#, "ctrl+cmd+f", "Toggled full screen."),
+        (#"(?:open )?spotlight"#, "cmd+space", "Spotlight is open."),
+        (#"(?:open |show )?mission control"#, "ctrl+up", "Mission Control."),
+        (#"(?:open )?(?:the )?emoji (?:picker|keyboard|menu)"#, "ctrl+cmd+space", "Emoji picker is open."),
+        (#"lock (?:the |my )?(?:screen|mac|computer)"#, "ctrl+cmd+q", "Locked.")
+    ]
+
+    private static func parseKeyboardShortcut(_ normalizedRequest: String) -> DottieInstantCommand? {
+        for keyboardShortcutPhrase in keyboardShortcutPhrases
+        where normalizedRequest.range(of: "^(?:" + keyboardShortcutPhrase.phrasePattern + ")$", options: .regularExpression) != nil {
+            return .pressKeys(keyCombination: keyboardShortcutPhrase.keyCombination, doneText: keyboardShortcutPhrase.doneText)
+        }
+        return nil
+    }
+
+    /// "press command m", "hit cmd shift t", "press escape": the keys said
+    /// out loud. This is also what "when I say minimize, press command M"
+    /// saves, so a taught shortcut is replayed with no AI.
+    private static func parsePressKeys(_ normalizedRequest: String) -> DottieInstantCommand? {
+        guard let pressVerbRange = normalizedRequest.range(of: #"^(?:press|hit)\s+"#, options: .regularExpression),
+              let keyCombination = keyCombination(fromSpokenKeys: String(normalizedRequest[pressVerbRange.upperBound...])) else { return nil }
+        return .pressKeys(keyCombination: keyCombination, doneText: "Pressed \(keyCombination).")
+    }
+
+    private static let spokenModifierNames: [String: String] = [
+        "command": "cmd", "cmd": "cmd", "⌘": "cmd",
+        "shift": "shift",
+        "option": "option", "opt": "option", "alt": "option",
+        "control": "ctrl", "ctrl": "ctrl",
+        "fn": "fn", "function": "fn"
+    ]
+
+    private static let spokenKeyNames: [String: String] = [
+        "escape": "escape", "esc": "escape", "enter": "enter", "return": "enter", "tab": "tab",
+        "space": "space", "spacebar": "space", "delete": "delete", "backspace": "delete",
+        "up": "up", "down": "down", "left": "left", "right": "right", "home": "home", "end": "end",
+        "comma": ",", "period": ".", "dot": ".", "minus": "-", "dash": "-", "hyphen": "-",
+        "equals": "=", "equal": "=", "slash": "/", "backslash": "\\", "semicolon": ";",
+        "quote": "'", "backtick": "`", "grave": "`"
+    ]
+
+    /// "command shift t" → "cmd+shift+t", or nil unless it's modifiers and
+    /// exactly one key Dottie can press.
+    static func keyCombination(fromSpokenKeys spokenKeys: String) -> String? {
+        var spokenWords = spokenKeys.lowercased()
+            .replacingOccurrences(of: "+", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+            .filter { !["the", "key", "keys", "button", "arrow", "together", "at", "once"].contains($0) }
+        // "command plus" is the zoom-in shortcut; "plus" between keys just joins them.
+        if spokenWords.count >= 2, spokenWords.last == "plus" { spokenWords[spokenWords.count - 1] = "=" }
+        spokenWords.removeAll { $0 == "plus" }
+        // "page up" and "page down" are one key.
+        if let pageIndex = spokenWords.firstIndex(of: "page"), pageIndex + 1 < spokenWords.count,
+           ["up", "down"].contains(spokenWords[pageIndex + 1]) {
+            spokenWords[pageIndex] = "page" + spokenWords[pageIndex + 1]
+            spokenWords.remove(at: pageIndex + 1)
+        }
+
+        var modifierNames: [String] = []
+        var keyNames: [String] = []
+        for spokenWord in spokenWords {
+            if let modifierName = spokenModifierNames[spokenWord] {
+                if !modifierNames.contains(modifierName) { modifierNames.append(modifierName) }
+            } else if let keyName = spokenKeyNames[spokenWord] {
+                keyNames.append(keyName)
+            } else if ["pageup", "pagedown"].contains(spokenWord)
+                        || spokenWord.range(of: #"^(?:[a-z0-9]|f(?:[1-9]|1[0-2]))$"#, options: .regularExpression) != nil
+                        || ["=", "-", ",", ".", "/", ";", "'", "`", "[", "]"].contains(spokenWord) {
+                keyNames.append(spokenWord)
+            } else {
+                return nil
+            }
+        }
+        guard keyNames.count == 1 else { return nil }
+        return (modifierNames + keyNames).joined(separator: "+")
     }
 
     private static func parseOpen(_ normalizedRequest: String) -> DottieInstantCommand? {
@@ -340,6 +450,12 @@ enum DottieInstantCommands {
             return await controlMusic(mediaAction)
         case .volume(let volumeAction):
             return await changeVolume(volumeAction)
+        case .pressKeys(let keyCombination, let doneText):
+            // Posting key presses needs Accessibility, like press_keys.
+            guard DottieScreenActionPerformer.canPostEvents else {
+                return .failed("I need Accessibility permission to press \(keyCombination). Turn it on in Settings, then ask again.")
+            }
+            return DottieScreenActionPerformer.press(keyCombination: keyCombination) ? .done(doneText) : .failed("I couldn't press \(keyCombination).")
         }
     }
 
