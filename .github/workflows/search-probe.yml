@@ -8,34 +8,17 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Compare engines
+      - name: Run the Worker locally and search
+        working-directory: worker
         run: |
-          cat > probe.mjs <<'JS'
-          const UA = {"user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36","accept-language":"en-US,en;q=0.9","accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"};
-          const queries = ["weather in london today","who won the 2025 world series","who is the president of the united states","bitcoin price"];
-          const engines = {
-            bing: q=>`https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en&cc=US`,
-            bing_plain: q=>`https://www.bing.com/search?q=${encodeURIComponent(q)}`,
-            bing_form: q=>`https://www.bing.com/search?q=${encodeURIComponent(q)}&form=QBLH&mkt=en-US`,
-            ddg_html: q=>`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
-            ddg_lite: q=>`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`,
-            yahoo: q=>`https://search.yahoo.com/search?p=${encodeURIComponent(q)}`,
-            mojeek: q=>`https://www.mojeek.com/search?q=${encodeURIComponent(q)}`,
-            startpage: q=>`https://www.startpage.com/do/search?q=${encodeURIComponent(q)}`,
-            brave: q=>`https://search.brave.com/search?q=${encodeURIComponent(q)}`,
-          };
-          for (const q of queries) for (const [n,f] of Object.entries(engines)) {
-            try {
-              const r = await fetch(f(q),{headers:UA,signal:AbortSignal.timeout(8000)});
-              const h = await r.text();
-              const text = h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g," ").replace(/<[^>]+>/g," ").replace(/\s+/g," ");
-              const bingBlocks = h.split('<li class="b_algo"').length-1;
-              const firstTitles = [...h.matchAll(/<h[23][^>]*>([\s\S]{0,300}?)<\/h[23]>/g)].slice(0,4).map(m=>m[1].replace(/<[^>]+>/g,"").trim().slice(0,70));
-              console.log(`[${q}] ${n} ${r.status} len=${h.length} algo=${bingBlocks} | ${firstTitles.join(" || ")}`);
-              if (n==="bing") console.log("   bing text sample:", text.slice(0,300));
-            } catch(e) { console.log(`[${q}] ${n} ERR ${e.message}`); }
-          }
-          JS
-          node probe.mjs
+          npm ci --silent
+          (npx wrangler dev --port 8787 --var GEMINI_API_KEY:unused > dev.log 2>&1 &)
+          for i in $(seq 1 30); do curl -s localhost:8787/config >/dev/null && break; sleep 1; done
+          for q in "weather in london today" "who won the 2025 world series" "bitcoin price" "how do i download releases on github"; do
+            curl -sS -m 60 -G --data-urlencode "q=$q" --data-urlencode "debug=1" localhost:8787/search | python3 -c "import json,sys;d=json.load(sys.stdin);print('==',d['query'],'->',d['source'],'topPage',bool(d.get('topPage')));[print('  ',e) for e in d.get('engines',[])]"
+          done
+          echo "== live Worker, for comparison"
+          curl -sS -m 60 -A Dottie/1.0 -G --data-urlencode "q=who won the 2025 world series" https://dottie.vidershub.workers.dev/search | head -c 400
