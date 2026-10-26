@@ -16,24 +16,28 @@ jobs:
           const H = {"user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36","accept-language":"en-US,en;q=0.9","accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"};
           const e = encodeURIComponent;
           const hex = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b=>b.toString(16).padStart(2,"0")).join("").toUpperCase();
+          const kw = q => q.toLowerCase().split(" ").filter(w=>!["how","do","i","to","on","in","the","who","what","is","today"].includes(w));
+          const EDGE = {...H, "user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "sec-ch-ua":"\"Microsoft Edge\";v=\"141\", \"Chromium\";v=\"141\", \"Not=A?Brand\";v=\"24\"", "sec-ch-ua-mobile":"?0", "sec-ch-ua-platform":"\"macOS\"", "sec-fetch-dest":"document", "sec-fetch-mode":"navigate", "sec-fetch-site":"none", "sec-fetch-user":"?1", "upgrade-insecure-requests":"1"};
+          const MOB = {...H, "user-agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"};
           const V = {
-            current: q => `https://www.bing.com/search?q=${e(q)}&setlang=en&cc=US`,
-            plus: q => `https://www.bing.com/search?q=${q.split(" ").map(e).join("+")}&setlang=en&cc=US`,
-            quoted: q => `https://www.bing.com/search?q=${e('"'+q+'"')}&setlang=en&cc=US`,
-            browserform: q => `https://www.bing.com/search?q=${e(q)}&form=QBLH&sp=-1&lq=0&pq=${e(q)}&sc=10-${q.length}&qs=n&sk=&cvid=${hex()}&ghsh=0&ghacc=0&ghpl=`,
-            ddg_get: q => `https://html.duckduckgo.com/html/?q=${e(q)}`,
-            google_lynx: q => `https://www.google.com/search?q=${e(q)}&gbv=1&hl=en`,
-            yahoo2: q => `https://search.yahoo.com/search?p=${e(q)}&fr=yfp-t&ei=UTF-8`,
-            ddg_api: q => `https://api.duckduckgo.com/?q=${e(q)}&format=json&no_html=1`,
-            qwant: q => `https://api.qwant.com/v3/search/web?q=${e(q)}&count=10&locale=en_US&offset=0&device=desktop`,
+            current: [q => `https://www.bing.com/search?q=${e(q)}&setlang=en&cc=US`, H],
+            hyphen: [q => `https://www.bing.com/search?q=${e(kw(q).join("-"))}&setlang=en&cc=US`, H],
+            andop: [q => `https://www.bing.com/search?q=${e(kw(q).join(" AND "))}&setlang=en&cc=US`, H],
+            plusop: [q => `https://www.bing.com/search?q=${e(kw(q).map(w=>"+"+w).join(" "))}&setlang=en&cc=US`, H],
+            edge: [q => `https://www.bing.com/search?q=${e(q)}&form=QBLH`, EDGE],
+            mobile: [q => `https://www.bing.com/search?q=${e(q)}`, MOB],
+            ddg_lite_post: [q => `https://lite.duckduckgo.com/lite/`, H, q => `q=${e(q)}`],
+            startpage: [q => `https://www.startpage.com/sp/search?query=${e(q)}&cat=web&language=english`, H],
+            marginalia: [q => `https://api.marginalia.nu/public/search/${e(q)}?count=5`, H],
           };
           const qs = ["who won the 2025 world series","how do i download releases on github","how to turn on subtitles in vlc","weather in london today"];
-          for (let round=0; round<3; round++) for (const q of qs) for (const [n,f] of Object.entries(V)) {
+          for (let round=0; round<2; round++) for (const q of qs) for (const [n,f] of Object.entries(V)) {
             try {
-              const init = {headers: n==="google_lynx" ? {"user-agent":"Lynx/2.9.0 libwww-FM/2.14 SSL-MM/1.4.1","accept-language":"en"} : H, signal: AbortSignal.timeout(8000)};
-              const r = await fetch(f(q), init); const h = await r.text();
-              const t = [...h.matchAll(/<h[23][^>]*>([\s\S]{0,400}?)<\/h[23]>/g)].map(m=>m[1].replace(/<[^>]+>/g,"").trim()).filter(Boolean).slice(0,2).map(x=>x.slice(0,60));
-              const extra = n==="ddg_api" ? h.slice(0,120) : n==="qwant" ? h.slice(0,120) : "";
+              const [mk, hd, body] = f;
+              const init = {headers: body ? {...hd, "content-type":"application/x-www-form-urlencoded"} : hd, method: body ? "POST" : "GET", body: body ? body(q) : undefined, signal: AbortSignal.timeout(8000)};
+              const r = await fetch(mk(q), init); const h = await r.text();
+              const t = [...h.matchAll(/<h[23][^>]*>([\s\S]{0,400}?)<\/h[23]>|class=.result-link.[^>]*>([\s\S]{0,200}?)<\/a>|"title":"([^"]{3,80})"|class="result-title[^"]*"[^>]*>([\s\S]{0,200}?)<\/a>/g)].map(m=>m[1]||m[2]||m[3]||m[4]||"").map(x=>x.replace(/<[^>]+>/g,"").trim()).filter(Boolean).slice(0,2).map(x=>x.slice(0,60));
+              const extra = n==="marginalia" ? h.slice(0,100) : "";
               console.log(`r${round} [${q.slice(0,22)}] ${n} ${r.status} | ${t.join(" || ")} ${extra}`);
             } catch(err) { console.log(`r${round} [${q}] ${n} ERR ${err.message}`); }
           }
