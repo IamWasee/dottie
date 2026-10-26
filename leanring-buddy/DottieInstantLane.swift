@@ -485,6 +485,17 @@ final class DottieInstantLane {
             let scriptText = finishedToolCall.arguments.dottieString("script") ?? ""
             return !scriptText.isEmpty && !DottieMacActions.isRisky(scriptText)
         }
+        if finishedToolCall.functionName == "control_device" {
+            // Unlocking, opening (a garage door is "open" too) and alarms
+            // need the user's yes each time, so a call that carried one is
+            // never saved. "look" answers a question, which needs a fresh
+            // look every time.
+            let deviceAction = finishedToolCall.arguments.dottieString("action")?.lowercased() ?? ""
+            let neverSavedDeviceActions: Set<String> = ["unlock", "open", "look", "disarm", "alarm_off"]
+            return finishedToolCall.arguments.dottieBool("confirmed") != true
+                && !neverSavedDeviceActions.contains(deviceAction)
+                && !deviceAction.contains("alarm")
+        }
         return true
     }
 
