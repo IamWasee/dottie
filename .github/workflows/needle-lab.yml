@@ -1,0 +1,41 @@
+name: Needle lab
+
+# Temporary: runs Dottie's Needle code against the real engine on a Mac.
+on:
+  push:
+    branches: [claude/project-thread-7je5ze]
+    paths: ["scripts/needle-lab/**", "leanring-buddy/DottieNeedle*.swift", ".github/workflows/needle-lab.yml"]
+  workflow_dispatch:
+
+jobs:
+  lab:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      NEEDLE_TELEMETRY: "0"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Needle
+        run: scripts/needle-lab/fetch.sh "$RUNNER_TEMP/needle"
+      - name: Build the lab
+        run: |
+          swiftc -O -o "$RUNNER_TEMP/needle-lab" scripts/needle-lab/main.swift leanring-buddy/DottieNeedleEngine.swift leanring-buddy/DottieNeedleToolsets.swift
+      - name: Make speech clips
+        run: |
+          mkdir -p "$RUNNER_TEMP/clips"
+          i=0
+          while IFS= read -r line; do
+            i=$((i+1))
+            say -o "$RUNNER_TEMP/clips/$i.wav" --data-format=LEI16@16000 "$line"
+          done <<'LINES'
+          open safari
+          could you put chrome on the left side
+          turn the volume down a bit
+          remind me tomorrow at 7 pm to call mom
+          what's the weather like in Lagos and should I bring an umbrella today
+          LINES
+      - name: Run the lab
+        run: |
+          sysctl -n machdep.cpu.brand_string
+          "$RUNNER_TEMP/needle-lab" "$RUNNER_TEMP/needle" "$RUNNER_TEMP"/clips/*.wav
