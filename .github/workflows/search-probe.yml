@@ -8,17 +8,34 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Run the Worker locally and search
-        working-directory: worker
+      - name: Bing variants
         run: |
-          npm ci --silent
-          (npx wrangler dev --port 8787 --var GEMINI_API_KEY:unused > dev.log 2>&1 &)
-          for i in $(seq 1 30); do curl -s localhost:8787/config >/dev/null && break; sleep 1; done
-          for q in "weather in london today" "who won the 2025 world series" "bitcoin price" "how do i download releases on github" "who won the 2025 world series" "what is the tallest building in the world" "latest macos version" "how to turn on subtitles in vlc"; do
-            curl -sS -m 60 -G --data-urlencode "q=$q" --data-urlencode "debug=1" localhost:8787/search | python3 -c "import json,sys;d=json.load(sys.stdin);print('==',d['query'],'->',d['source'],'topPage',bool(d.get('topPage')));[print('  ',e) for e in d.get('engines',[])]"
-          done
-          echo "== live Worker, for comparison"
-          curl -sS -m 60 -A Dottie/1.0 -G --data-urlencode "q=who won the 2025 world series" https://dottie.vidershub.workers.dev/search | head -c 400
+          cat > probe.mjs <<'JS'
+          const H = {"user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36","accept-language":"en-US,en;q=0.9","accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"};
+          const e = encodeURIComponent;
+          const hex = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b=>b.toString(16).padStart(2,"0")).join("").toUpperCase();
+          const V = {
+            current: q => `https://www.bing.com/search?q=${e(q)}&setlang=en&cc=US`,
+            plus: q => `https://www.bing.com/search?q=${q.split(" ").map(e).join("+")}&setlang=en&cc=US`,
+            quoted: q => `https://www.bing.com/search?q=${e('"'+q+'"')}&setlang=en&cc=US`,
+            browserform: q => `https://www.bing.com/search?q=${e(q)}&form=QBLH&sp=-1&lq=0&pq=${e(q)}&sc=10-${q.length}&qs=n&sk=&cvid=${hex()}&ghsh=0&ghacc=0&ghpl=`,
+            ddg_get: q => `https://html.duckduckgo.com/html/?q=${e(q)}`,
+            google_lynx: q => `https://www.google.com/search?q=${e(q)}&gbv=1&hl=en`,
+            yahoo2: q => `https://search.yahoo.com/search?p=${e(q)}&fr=yfp-t&ei=UTF-8`,
+            ddg_api: q => `https://api.duckduckgo.com/?q=${e(q)}&format=json&no_html=1`,
+            qwant: q => `https://api.qwant.com/v3/search/web?q=${e(q)}&count=10&locale=en_US&offset=0&device=desktop`,
+          };
+          const qs = ["who won the 2025 world series","how do i download releases on github","how to turn on subtitles in vlc","weather in london today"];
+          for (let round=0; round<3; round++) for (const q of qs) for (const [n,f] of Object.entries(V)) {
+            try {
+              const init = {headers: n==="google_lynx" ? {"user-agent":"Lynx/2.9.0 libwww-FM/2.14 SSL-MM/1.4.1","accept-language":"en"} : H, signal: AbortSignal.timeout(8000)};
+              const r = await fetch(f(q), init); const h = await r.text();
+              const t = [...h.matchAll(/<h[23][^>]*>([\s\S]{0,400}?)<\/h[23]>/g)].map(m=>m[1].replace(/<[^>]+>/g,"").trim()).filter(Boolean).slice(0,2).map(x=>x.slice(0,60));
+              const extra = n==="ddg_api" ? h.slice(0,120) : n==="qwant" ? h.slice(0,120) : "";
+              console.log(`r${round} [${q.slice(0,22)}] ${n} ${r.status} | ${t.join(" || ")} ${extra}`);
+            } catch(err) { console.log(`r${round} [${q}] ${n} ERR ${err.message}`); }
+          }
+          JS
+          node probe.mjs
