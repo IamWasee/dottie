@@ -476,8 +476,8 @@ interface SearchResult {
  * quota" for Gemini's Google Search tool. Asks Bing (its results page and
  * its RSS feed) and DuckDuckGo at once and keeps the answer that covers
  * the most of the query's words, falling back to Wikipedia when none
- * does. Bing sometimes answers Cloudflare's addresses with results for
- * only part of the query ("weather in london today" gave Detroit's
+ * does. Bing often answers server addresses with results for one word
+ * of the query ("weather in london today" gave Detroit's
  * weather, "who won the 2025 world series" gave dictionary pages for
  * "won"), so the first engine with any results isn't trusted on its own.
  * Adds Roblox's own search for Roblox games, and the readable text of the
@@ -492,12 +492,8 @@ async function handleSearch(url: URL): Promise<Response> {
 
   const queryWords = meaningfulQueryWords(query);
   const engineAnswers: { engineName: string; results: SearchResult[]; coverage: number }[] = [];
-  async function askEngine(
-    engineName: string,
-    searchEngine: (query: string) => Promise<SearchResult[]>,
-    engineQuery: string = query
-  ) {
-    const engineResults = await searchEngine(engineQuery).catch(() => [] as SearchResult[]);
+  async function askEngine(engineName: string, searchEngine: (query: string) => Promise<SearchResult[]>) {
+    const engineResults = await searchEngine(query).catch(() => [] as SearchResult[]);
     engineAnswers.push({ engineName, results: engineResults, coverage: queryWordCoverage(queryWords, engineResults) });
   }
 
@@ -507,18 +503,12 @@ async function handleSearch(url: URL): Promise<Response> {
     askEngine("duckduckgo", searchDuckDuckGo),
   ]);
   if (!engineAnswers.some((answer) => answer.coverage >= GOOD_QUERY_COVERAGE)) {
-    // Bing tends to keep one word of a "how do i …" question ("do",
-    // "turn"), but answers the same ask as plain keywords.
-    const keywordQuery = queryWords.join(" ");
-    await Promise.all([
-      keywordQuery !== query.toLowerCase() ? askEngine("bing-keywords", searchBing, keywordQuery) : Promise.resolve(),
-      askEngine("wikipedia", searchWikipedia),
-    ]);
+    await askEngine("wikipedia", searchWikipedia);
   }
 
   // The answer covering the most of the query wins; on a tie, the engine
   // asked first (Bing's page has the best snippets).
-  const engineOrder = ["bing", "bing-rss", "duckduckgo", "bing-keywords", "wikipedia"];
+  const engineOrder = ["bing", "bing-rss", "duckduckgo", "wikipedia"];
   const bestAnswer = engineAnswers
     .filter((answer) => answer.results.length > 0)
     .sort((first, second) =>
