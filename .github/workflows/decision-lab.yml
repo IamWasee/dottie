@@ -59,7 +59,11 @@ jobs:
       - name: Set up and start Ollama with Tev1 0.8B
         if: matrix.model == 'tev1'
         run: |
-          brew install ollama
+          # Decision models need Ollama 0.35 or newer; Homebrew lags behind.
+          curl -fsSL -o "$RUNNER_TEMP/ollama.tgz" https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.tgz
+          mkdir -p "$RUNNER_TEMP/ollama" && tar -xzf "$RUNNER_TEMP/ollama.tgz" -C "$RUNNER_TEMP/ollama"
+          export PATH="$RUNNER_TEMP/ollama:$PATH" && echo "$RUNNER_TEMP/ollama" >> "$GITHUB_PATH"
+          ls "$RUNNER_TEMP/ollama"
           ollama --version
           nohup ollama serve > "$RUNNER_TEMP/server.log" 2>&1 &
           for attempt in $(seq 1 60); do
