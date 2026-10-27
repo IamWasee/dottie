@@ -24,7 +24,6 @@ jobs:
     env:
       HF_HUB_DISABLE_TELEMETRY: "1"
       DO_NOT_TRACK: "1"
-      DECISION_LAB_OUTPUT: ${{ runner.temp }}/result.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
