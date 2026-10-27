@@ -7,7 +7,8 @@ question. We record whether it picked an acceptable answer, its confidence,
 how long each answer took, and the most memory the model used.
 
 Usage: python run.py <model> <cases.json>
-Models: laya, laya-typed, bosun, kev (server on :8009), tev1 (Ollama on :11434)
+Models: laya, laya-typed, bosun, kev and kev4b (Kev's server on :8009),
+tev1 and kev4b-q4 (Ollama on :11434), clef-flash (llama-server on :8097)
 """
 
 import json
@@ -184,10 +185,14 @@ def make_model(model_key):
         return LayaModel("typed-decisions"), None
     if model_key == "bosun":
         return BosunModel(), None
-    if model_key == "kev":
+    if model_key in ("kev", "kev4b"):
         return SystemOneServerModel("http://127.0.0.1:8009", "kev-latest", "kev.serve"), "kev.serve"
     if model_key == "tev1":
         return SystemOneServerModel("http://127.0.0.1:11434", "tev1:0.8b", "ollama"), "ollama"
+    if model_key == "kev4b-q4":
+        return SystemOneServerModel("http://127.0.0.1:11434", "turintech/kev-4b-artemis:2.0gb", "ollama"), "ollama"
+    if model_key == "clef-flash":
+        return SystemOneServerModel("http://127.0.0.1:8097", "clef-flash", "llama-server"), "llama-server"
     raise SystemExit(f"unknown model {model_key}")
 
 

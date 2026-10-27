@@ -1,6 +1,6 @@
 name: Decision lab
 
-# Times small (under 1B) Jev-style decision models on Dottie's screen-job
+# Times Jev-style decision models on Dottie's screen-job
 # steps (scripts/decision-lab/cases.json) on a Mac runner: right answers,
 # confidence, milliseconds per answer and peak memory. Each model runs in its
 # own job; the summary is the RESULT_JSON line in each job's log.
@@ -20,7 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: [laya, laya-typed, bosun, kev, tev1]
+        # Every model run.py knows: laya, laya-typed, bosun, kev, tev1, kev4b, kev4b-q4, clef-flash.
+        # The runner has 7 GB of memory, so the bigger ones run quantized (kev4b full size is tried anyway).
+        model: [kev4b, kev4b-q4, clef-flash]
     env:
       HF_HUB_DISABLE_TELEMETRY: "1"
       DO_NOT_TRACK: "1"
@@ -42,22 +44,27 @@ jobs:
         if: matrix.model == 'bosun'
         run: python -m pip install torch transformers peft safetensors accelerate
 
-      - name: Set up and start Kev 0.8B
-        if: matrix.model == 'kev'
+      - name: Set up and start Kev
+        if: matrix.model == 'kev' || matrix.model == 'kev4b'
+        env:
+          KEV_CHECKPOINT: ${{ matrix.model == 'kev4b' && 'jaredpalmer/kev-4b' || 'jaredpalmer/kev-0.8b' }}
         run: |
           python -m pip install uv
           git clone --depth 1 https://github.com/jaredpalmer/kev.git "$RUNNER_TEMP/kev"
           cd "$RUNNER_TEMP/kev"
           uv sync --extra serve
-          nohup uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b --port 8009 > "$RUNNER_TEMP/server.log" 2>&1 &
+          nohup uv run --extra serve python -m kev.serve --run "$KEV_CHECKPOINT" --port 8009 > "$RUNNER_TEMP/server.log" 2>&1 &
           for attempt in $(seq 1 180); do
             if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8009/; then echo "Kev is up after ~$((attempt * 5)) s"; break; fi
+            if ! pgrep -f kev.serve > /dev/null; then echo "Kev's server stopped"; break; fi
             sleep 5
           done
           tail -n 40 "$RUNNER_TEMP/server.log"
 
-      - name: Set up and start Ollama with Tev1 0.8B
-        if: matrix.model == 'tev1'
+      - name: Set up and start Ollama
+        if: matrix.model == 'tev1' || matrix.model == 'kev4b-q4'
+        env:
+          OLLAMA_MODEL: ${{ matrix.model == 'kev4b-q4' && 'turintech/kev-4b-artemis:2.0gb' || 'tev1:0.8b' }}
         run: |
           # Decision models need Ollama 0.35 or newer; Homebrew lags behind.
           curl -fsSL -o "$RUNNER_TEMP/ollama.tgz" https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.tgz
@@ -70,12 +77,43 @@ jobs:
             if curl -s -o /dev/null --max-time 2 http://127.0.0.1:11434/; then break; fi
             sleep 2
           done
-          ollama pull tev1:0.8b
+          ollama pull "$OLLAMA_MODEL"
           ollama list
+
+      - name: Set up and start Clef-Flash 9B (Q4_0) on llama.cpp
+        if: matrix.model == 'clef-flash'
+        run: |
+          # Clef needs llama.cpp b11430 or newer (the GGUF was made with it).
+          llama_url=$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest \
+            | python -c 'import json,sys; print(next(a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "bin-macos-arm64" in a["name"]))')
+          echo "$llama_url"
+          curl -fsSL -o "$RUNNER_TEMP/llama.tar.gz" "$llama_url"
+          mkdir -p "$RUNNER_TEMP/llama" && tar -xzf "$RUNNER_TEMP/llama.tar.gz" -C "$RUNNER_TEMP/llama"
+          llama_server=$(find "$RUNNER_TEMP/llama" -name llama-server -type f | head -n 1)
+          "$llama_server" --version || true
+          # Q4_0 (5.6 GB): the largest 4-bit file that leaves the 7 GB runner some room. The decision head stays Q8_0.
+          curl -fsSL -o "$RUNNER_TEMP/clef-flash.gguf" https://huggingface.co/bartowski/Cloudflare_clef-flash-GGUF/resolve/main/Cloudflare_clef-flash-Q4_0.gguf
+          start_server() {
+            nohup "$llama_server" -m "$RUNNER_TEMP/clef-flash.gguf" --host 127.0.0.1 --port 8097 \
+              --ctx-size 4096 --batch-size 4096 --ubatch-size 4096 --parallel 1 --no-webui -ngl "$1" \
+              > "$RUNNER_TEMP/server.log" 2>&1 &
+            for attempt in $(seq 1 120); do
+              if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8097/health; then echo "Clef-Flash is up with -ngl $1"; return 0; fi
+              if ! pgrep -f llama-server > /dev/null; then break; fi
+              sleep 2
+            done
+            tail -n 40 "$RUNNER_TEMP/server.log"
+            pkill -INT -f llama-server || true
+            sleep 5
+            return 1
+          }
+          # The GPU first; if the model doesn't fit there, the CPU.
+          start_server 99 || start_server 0
+          tail -n 25 "$RUNNER_TEMP/server.log"
 
       - name: Run the cases
         run: python scripts/decision-lab/run.py "${{ matrix.model }}" scripts/decision-lab/cases.json
 
       - name: Server log
-        if: always() && (matrix.model == 'kev' || matrix.model == 'tev1')
+        if: always() && !startsWith(matrix.model, 'laya') && matrix.model != 'bosun'
         run: tail -n 80 "$RUNNER_TEMP/server.log" || true
