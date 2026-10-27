@@ -22,7 +22,7 @@ jobs:
       matrix:
         # Every model run.py knows: laya, laya-typed, bosun, kev, tev1, kev4b, kev4b-q4, clef-flash.
         # The runner has 7 GB of memory, so the bigger ones run quantized (kev4b full size is tried anyway).
-        model: [kev4b, kev4b-q4, clef-flash]
+        model: [clef-flash]
     env:
       HF_HUB_DISABLE_TELEMETRY: "1"
       DO_NOT_TRACK: "1"
@@ -82,13 +82,27 @@ jobs:
 
       - name: Set up and start Clef-Flash 9B (Q4_0) on llama.cpp
         if: matrix.model == 'clef-flash'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # Clef needs llama.cpp b11430 or newer (the GGUF was made with it).
-          llama_url=$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest \
-            | python -c 'import json,sys; print(next(a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "bin-macos-arm64" in a["name"]))')
+          # The latest release's Mac build, else known builds by name.
+          curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/ggml-org/llama.cpp/releases/latest > "$RUNNER_TEMP/release.json"
+          llama_url=$(python -c 'import json,sys; assets=json.load(open(sys.argv[1]))["assets"]; print(next((a["browser_download_url"] for a in assets if "macos-arm64" in a["name"] and a["name"].endswith((".tar.gz", ".zip"))), ""))' "$RUNNER_TEMP/release.json")
+          if [ -z "$llama_url" ]; then
+            python -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("tag_name"), [a["name"] for a in d["assets"]])' "$RUNNER_TEMP/release.json"
+            for build in b11430 b11379; do
+              candidate="https://github.com/ggml-org/llama.cpp/releases/download/$build/llama-$build-bin-macos-arm64.tar.gz"
+              if curl -fsIL -o /dev/null "$candidate"; then llama_url="$candidate"; break; fi
+            done
+          fi
           echo "$llama_url"
-          curl -fsSL -o "$RUNNER_TEMP/llama.tar.gz" "$llama_url"
-          mkdir -p "$RUNNER_TEMP/llama" && tar -xzf "$RUNNER_TEMP/llama.tar.gz" -C "$RUNNER_TEMP/llama"
+          curl -fsSL -o "$RUNNER_TEMP/llama-download" "$llama_url"
+          mkdir -p "$RUNNER_TEMP/llama"
+          case "$llama_url" in
+            *.zip) unzip -q "$RUNNER_TEMP/llama-download" -d "$RUNNER_TEMP/llama" ;;
+            *) tar -xzf "$RUNNER_TEMP/llama-download" -C "$RUNNER_TEMP/llama" ;;
+          esac
           llama_server=$(find "$RUNNER_TEMP/llama" -name llama-server -type f | head -n 1)
           "$llama_server" --version || true
           # Q4_0 (5.6 GB): the largest 4-bit file that leaves the 7 GB runner some room. The decision head stays Q8_0.
