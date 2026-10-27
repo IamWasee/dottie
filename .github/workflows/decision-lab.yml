@@ -109,7 +109,7 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/clef-flash.gguf" https://huggingface.co/bartowski/Cloudflare_clef-flash-GGUF/resolve/main/Cloudflare_clef-flash-Q4_0.gguf
           start_server() {
             nohup "$llama_server" -m "$RUNNER_TEMP/clef-flash.gguf" --host 127.0.0.1 --port 8097 \
-              --ctx-size 4096 --batch-size 4096 --ubatch-size 4096 --parallel 1 --no-webui -ngl "$1" \
+              --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --parallel 1 --no-webui --no-warmup -ngl "$1" \
               > "$RUNNER_TEMP/server.log" 2>&1 &
             for attempt in $(seq 1 120); do
               if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8097/health; then echo "Clef-Flash is up with -ngl $1"; return 0; fi
