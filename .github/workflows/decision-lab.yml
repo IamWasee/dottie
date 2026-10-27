@@ -121,8 +121,8 @@ jobs:
             sleep 5
             return 1
           }
-          # The GPU first; if the model doesn't fit there, the CPU.
-          start_server 99 || start_server 0
+          # CPU only: on the GPU it loads past macOS's recommended memory and crashes on its first answer.
+          start_server 0
           tail -n 25 "$RUNNER_TEMP/server.log"
 
       - name: Run the cases
