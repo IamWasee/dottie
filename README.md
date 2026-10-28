@@ -2,16 +2,16 @@
 
 An AI buddy that lives next to your cursor on macOS. Hold **ctrl + option** (or a shortcut you pick in Settings), talk, and it sees your screen, answers out loud, and can fly a little blue cursor to the thing you're asking about. While you hold it, circle something with the cursor and Dottie knows that's what you mean.
 
-Dottie is a clone of [HeyClicky](https://www.heyclicky.com/), built on top of Farza's open-source [Clicky v0](https://github.com/farzaa/clicky) (MIT). v0 is the April 2026 version he open-sourced; the app he ships today is closed. This repo starts from v0 and rebuilds the newer features, with every AI call moved to **Google Gemini's free tier**, so the only key you need is one from [Google AI Studio](https://aistudio.google.com/apikey).
+Every AI call runs on **Google Gemini's free tier**, so the only key you need is one from [Google AI Studio](https://aistudio.google.com/apikey).
 
-| | v0 (upstream) | Dottie |
-|---|---|---|
-| Voice companion | AssemblyAI speech-to-text → Claude → ElevenLabs | **Gemini Live**: voice in, screen frame in, voice out, in one stream |
-| Pointing | `[POINT:x,y]` text tags | `point_at_element` tool call (Live), tags still used in classic mode |
-| Keys needed | Anthropic, AssemblyAI, ElevenLabs | **one Gemini key** |
-| Fallback mode | none | `classic`: Apple Speech → Gemini Flash → Gemini TTS |
+| | Dottie |
+|---|---|
+| Voice companion | **Gemini Live**: voice in, screen frame in, voice out, in one stream |
+| Pointing | `point_at_element` tool call (Live), `[POINT:x,y]` tags in classic mode |
+| Keys needed | **one Gemini key** |
+| Fallback mode | `classic`: Apple Speech → Gemini Flash → Gemini TTS |
 
-See [ROADMAP.md](ROADMAP.md) for which shipped-Clicky features are done and what's next.
+See [ROADMAP.md](ROADMAP.md) for which features are done and what's next.
 
 ## Install
 
@@ -74,7 +74,7 @@ Skills are saved instructions a Dot follows when a task calls for them, like you
 open leanring-buddy.xcodeproj
 ```
 
-1. Select the `leanring-buddy` scheme (the typo is inherited from v0 and kept on purpose).
+1. Select the `leanring-buddy` scheme (the typo is kept on purpose).
 2. Under Signing & Capabilities, pick your own team. Change the bundle identifier if you like.
 3. Press **Cmd + R**.
 
@@ -96,6 +96,6 @@ Longer jobs go to background Dots. Each one has its own folder (`~/Library/Appli
 
 The full technical breakdown is in [AGENTS.md](AGENTS.md).
 
-## Credits
+## Third-party software
 
-Built on [farzaa/clicky](https://github.com/farzaa/clicky) by Farza, MIT licensed; see [LICENSE](LICENSE). Bundles [cua-driver](https://github.com/trycua/cua) by Cua, MIT licensed; its license and third-party notices are copied into the app's Resources. Bundles [Needle and Whistle](https://github.com/cactus-compute/needle) by Cactus Compute, Apache-2.0 licensed, which run on your Mac with their telemetry turned off; the license is copied into the app's Resources/Needle. Not affiliated with Farza, Human Songs, or HeyClicky.
+Bundles [cua-driver](https://github.com/trycua/cua) by Cua, MIT licensed; its license and third-party notices are copied into the app's Resources. Bundles [Needle and Whistle](https://github.com/cactus-compute/needle) by Cactus Compute, Apache-2.0 licensed, which run on your Mac with their telemetry turned off; the license is copied into the app's Resources/Needle.

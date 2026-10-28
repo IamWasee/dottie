@@ -2,8 +2,6 @@
 //  leanring_buddyTests.swift
 //  leanring-buddyTests
 //
-//  Created by thorfinn on 3/2/26.
-//
 
 import Testing
 @testable import leanring_buddy

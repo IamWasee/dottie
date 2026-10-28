@@ -2,9 +2,9 @@
 //  ClickyHotkeys.swift
 //  leanring-buddy
 //
-//  Custom shortcuts for talking to Dottie and for dictation. Shipped Clicky
-//  lets you record your own (ClickyHotkeyRecorder); v0 had the talk shortcut
-//  hard-coded to ctrl + option.
+//  Custom shortcuts for talking to Dottie and for dictation. You can
+//  record your own (ClickyHotkeyRecorder); the talk shortcut defaults to
+//  ctrl + option.
 //
 //  A shortcut is either modifier keys held on their own (ctrl + option,
 //  right option, fn) or modifiers plus one key (cmd + shift + space). Both

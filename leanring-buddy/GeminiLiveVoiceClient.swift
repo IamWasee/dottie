@@ -3,10 +3,8 @@
 //  leanring-buddy
 //
 //  The voice companion's brain: one Gemini Live WebSocket session that takes
-//  the user's voice and a screenshot in, and streams spoken audio back. This
-//  is the clone's stand-in for shipped Clicky's OpenAI Realtime client
-//  (RealtimeVoiceClient), and it replaces v0's three-hop chain of
-//  AssemblyAI speech-to-text → Claude → ElevenLabs text-to-speech.
+//  the user's voice and a screenshot in, and streams spoken audio back, in
+//  one hop instead of separate speech-to-text, chat and text-to-speech.
 //
 //  How a push-to-talk turn flows:
 //    1. Hotkey pressed → beginUserTurn(): connect if needed, then send one
@@ -601,7 +599,7 @@ final class GeminiLiveVoiceClient {
         ]
     ]
 
-    /// Mirrors shipped Clicky's send_to_higher_model: the fast voice model
+    /// send_to_higher_model: the fast voice model
     /// hands off questions that need careful reading or reasoning.
     private static let sendToHigherModelFunctionDeclaration: [String: Any] = [
         "name": "send_to_higher_model",
@@ -618,8 +616,7 @@ final class GeminiLiveVoiceClient {
         ]
     ]
 
-    /// Hands longer jobs to a background agent (see ClickyRoster), like
-    /// shipped Clicky's voice delegation to its Clickys.
+    /// Hands longer jobs to a background agent (see ClickyRoster).
     private static let startClickyTaskFunctionDeclaration: [String: Any] = [
         "name": "start_helper",
         "description": "Start a task with one of the user's background helpers (also called Dots). Helpers work on their own on the user's Mac with a shell, files, Node.js and the web, and report back when done. They can research, write documents, organize files, write code, and build complete websites or small apps. Use it whenever the user asks for real work beyond answering, or asks a helper to do something. After calling, say briefly that it's started.",

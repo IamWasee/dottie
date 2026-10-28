@@ -2,13 +2,12 @@
 //  DictationCorrectionLearner.swift
 //  leanring-buddy
 //
-//  Learns your spellings from the fixes you make. Shipped Clicky watches the
-//  text field after it types (DictationCorrectionLearner), and when you
-//  retype a word it got wrong, it adds your spelling to a personal
-//  dictionary (DictationLearnedCorrection) and says "Added … to your
-//  dictionary" in the notch. Later dictation is told those spellings.
+//  Learns your spellings from the fixes you make. When you retype a word
+//  dictation got wrong, your spelling goes into a personal dictionary and
+//  the notch says "Added … to your dictionary". Later dictation is told
+//  those spellings.
 //
-//  The clone does the same through Accessibility: for a little while after
+//  It works through Accessibility: for a little while after
 //  pasting, it reads the field's text, and once the text has been still for
 //  a moment it compares it to what was there right after the paste. A word
 //  from the dictated text replaced by a similar-looking one (a name, a

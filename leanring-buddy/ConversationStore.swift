@@ -3,9 +3,8 @@
 //  leanring-buddy
 //
 //  Keeps the companion's conversation so the Home window can show it and it
-//  survives relaunches. Shipped Clicky keeps a conversation transcript on
-//  Home; this is the clone's equivalent, stored as a small JSON file in
-//  Application Support.
+//  survives relaunches, stored as a small JSON file in Application
+//  Support.
 //
 
 import Combine

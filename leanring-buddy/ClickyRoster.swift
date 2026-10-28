@@ -2,10 +2,9 @@
 //  ClickyRoster.swift
 //  leanring-buddy
 //
-//  Background agents ("Clickys"). Shipped Clicky lets you spin up named
-//  agents that work on a task in their own folder while you keep going, and
-//  report back in the notch when they finish (ClickyAgentsRuntime,
-//  CodexAgentSession). The clone runs each turn on Claude through
+//  Background agents ("Clickys"). You can spin up named agents that work on
+//  a task in their own folder while you keep going, and report back in the
+//  notch when they finish. Each turn runs on Claude through
 //  OpenMausBot when it's set up (DottieMausBotRuntime, each helper is a
 //  MausBot bot), and on Gemini CLI (GeminiCLIAgentRuntime) otherwise or
 //  when Claude's plan runs out. This file owns the list of agents, their
@@ -1074,9 +1073,8 @@ final class ClickyRoster: ObservableObject {
         }
     }
 
-    /// The standing instructions every agent gets. Written for the clone;
-    /// the shape (identity, how to work, where output goes) follows what
-    /// shipped Clicky gives its agents.
+    /// The standing instructions every agent gets: identity, how to work,
+    /// and where output goes.
     private static func agentInstructions(for agent: ClickyAgent) -> String {
         if agent.isBrain == true {
             return brainInstructions

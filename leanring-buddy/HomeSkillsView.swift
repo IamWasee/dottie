@@ -4,8 +4,7 @@
 //
 //  The Skills page in Home: the skill library on the left, and the selected
 //  skill on the right with its instructions and which Clickys use it.
-//  Shipped Clicky has a skills library page in Home too
-//  (HomeSpaceSkillsLibrary). Skills are stored by ClickySkillLibrary.
+//  Skills are stored by ClickySkillLibrary.
 //
 
 import AppKit

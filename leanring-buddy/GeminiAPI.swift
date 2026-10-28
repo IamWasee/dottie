@@ -2,9 +2,8 @@
 //  GeminiAPI.swift
 //  leanring-buddy
 //
-//  Gemini vision chat with streaming, via the Worker's /chat route. Replaces
-//  v0's ClaudeAPI and keeps its call shape (labeled images + system prompt +
-//  history + user prompt) so callers barely change.
+//  Gemini vision chat with streaming, via the Worker's /chat route. Callers
+//  pass labeled images, a system prompt, history and the user prompt.
 //
 //  Used by the onboarding demo and by the classic (non-Live) voice mode. The
 //  main voice companion talks to Gemini Live instead (GeminiLiveVoiceClient).

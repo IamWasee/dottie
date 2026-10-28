@@ -33,8 +33,8 @@ protocol BuddyTranscriptionProvider {
 /// The Live voice mode doesn't use this: it hands BuddyDictationManager a
 /// GeminiLiveCompanionTranscriptionProvider directly.
 ///
-/// v0 offered AssemblyAI and OpenAI here too. Both needed their own paid keys,
-/// so the clone keeps only Apple's on-device Speech framework, which is free.
+/// Only Apple's on-device Speech framework is offered, because it is free
+/// and needs no key of its own.
 enum BuddyTranscriptionProviderFactory {
     static func makeDefaultProvider() -> any BuddyTranscriptionProvider {
         let provider = AppleSpeechTranscriptionProvider()

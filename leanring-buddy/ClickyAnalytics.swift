@@ -14,8 +14,7 @@ enum ClickyAnalytics {
     // MARK: - Setup
 
     /// Analytics are off unless you add your own PostHog project key as
-    /// PostHogAPIKey in Info.plist (and optionally PostHogHost). v0 shipped
-    /// Farza's key here; the clone never sends events to his project.
+    /// PostHogAPIKey in Info.plist (and optionally PostHogHost).
     private static var isEnabled = false
 
     static func configure() {
@@ -136,7 +135,7 @@ enum ClickyAnalytics {
         ])
     }
 
-    // MARK: - Clone additions
+    // MARK: - Companion events
 
     /// User pressed Escape to cut the companion off mid-answer.
     static func trackEscapeInterrupt() {

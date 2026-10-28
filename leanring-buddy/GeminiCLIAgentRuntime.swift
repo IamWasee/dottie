@@ -3,10 +3,8 @@
 //  leanring-buddy
 //
 //  Runs one turn of a background Clicky agent with Google's open-source
-//  Gemini CLI in headless mode. Shipped Clicky drives a bundled OpenAI Codex
-//  CLI for this (CodexRuntimeBridge); Gemini's API doesn't speak the
-//  Responses protocol current Codex needs, so the clone uses Gemini CLI,
-//  which has the same kind of tools (shell, files, web, skills, MCP).
+//  Gemini CLI in headless mode, which has the tools an agent needs (shell,
+//  files, web, skills, MCP).
 //
 //  Each turn is one process:
 //    gemini -m <model> -p <message> -o stream-json --approval-mode yolo
@@ -16,7 +14,7 @@
 //  events (init, message, tool_use, tool_result, error, result) are parsed
 //  into GeminiCLIAgentEvent values.
 //
-//  GEMINI_CLI_HOME points the CLI at a home folder the clone owns, so its
+//  GEMINI_CLI_HOME points the CLI at a home folder Dottie owns, so its
 //  settings and saved sessions stay apart from any Gemini CLI setup the user
 //  has in ~/.gemini (and Gemini CLI only reads the auth type from there).
 //
@@ -261,7 +259,7 @@ final class GeminiCLIAgentRuntime {
         return allowedServerNames.flatMap { ["--allowed-mcp-server-names", $0] }
     }
 
-    /// Writes the CLI's user settings into the clone's own CLI home: API-key
+    /// Writes the CLI's user settings into Dottie's own CLI home: API-key
     /// auth (the worker supplies the real key), AGENTS.md as the context
     /// file, and cua-driver as the computer-use MCP server when it's
     /// installed. Gemini CLI ignores the auth type in workspace settings.

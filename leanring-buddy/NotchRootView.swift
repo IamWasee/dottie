@@ -4,9 +4,7 @@
 //
 //  The black island that grows out of the notch, and every surface inside
 //  it: Clicky's eyes, the listening waveform, the live caption while it
-//  speaks, a text box for typing, and the finished answer as a card. Mirrors
-//  the surfaces shipped Clicky has (NotchRootView, NotchEyeView,
-//  NotchTextInputSurface, NotchTextResponseSurface).
+//  speaks, a text box for typing, and the finished answer as a card.
 //
 //  It behaves like the iPhone's Dynamic Island: short states (listening,
 //  thinking, a Dot working) grow sideways into the menu bar with something

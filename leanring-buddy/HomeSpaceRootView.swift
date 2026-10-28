@@ -3,9 +3,7 @@
 //  leanring-buddy
 //
 //  Clicky's Home window: the conversation so far, background Clickys, their
-//  skills and settings, in one place. Shipped Clicky's Home
-//  (HomeSpaceRootView) also holds suggestions; those arrive with a later
-//  phase (see ROADMAP.md).
+//  skills and settings, in one place.
 //  HomeWindowManager at the bottom owns the NSWindow.
 //
 

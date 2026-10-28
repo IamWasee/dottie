@@ -9,8 +9,8 @@
 //  Two voice modes (Info.plist key CompanionVoiceMode):
 //    live    (default) Gemini Live: mic audio + one screenshot frame stream in,
 //            spoken audio streams back, pointing arrives as a tool call.
-//    classic v0's original chain with Gemini swapped in: Apple Speech →
-//            Gemini Flash vision → Gemini TTS, pointing via [POINT:] tags.
+//    classic Apple Speech → Gemini Flash vision → Gemini TTS, pointing via
+//            [POINT:] tags.
 //
 
 import AVFoundation
@@ -337,7 +337,6 @@ final class CompanionManager: ObservableObject {
     @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
 
     /// Records the user's email locally (and in analytics, if configured).
-    /// v0 also posted it to Farza's FormSpark form; the clone doesn't.
     func submitEmail(_ email: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { return }
@@ -984,8 +983,8 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Live Voice Pipeline (Gemini Live)
 
-    /// Live mode's system prompt. Same personality as v0's, but pointing is a
-    /// tool call instead of a text tag, because the model's output is audio.
+    /// Live mode's system prompt. Pointing is a tool call instead of a text
+    /// tag, because the model's output is audio.
     /// Lines that only explain a rarely used tool live in that tool's
     /// description instead, which find_tool returns when it's needed.
     private static let companionLiveVoiceSystemPrompt = """
@@ -3860,8 +3859,7 @@ final class CompanionManager: ObservableObject {
     /// Sets up the onboarding video player, starts playback, and schedules
     /// the demo interaction at 40s. Called by BlueCursorView when onboarding starts.
     ///
-    /// v0 streamed Farza's own intro video from Mux. The clone reads the URL
-    /// from Info.plist (OnboardingVideoURL); with none set, it skips the video
+    /// The video URL comes from Info.plist (OnboardingVideoURL); with none set, it skips the video
     /// and runs the pointing demo and the "try talking" prompt straight away.
     func setupOnboardingVideo() {
         guard let videoURLString = AppBundleConfiguration.stringValue(forKey: "OnboardingVideoURL"),

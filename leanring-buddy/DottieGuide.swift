@@ -6,10 +6,7 @@
 //  Premiere, how do I add a sound effect?", "where do I go for effects?",
 //  "give me a rundown of everything here". Voice Dottie hands the goal to
 //  the guide (guide_user), and the user does the clicking while Dottie
-//  shows the way. Modeled on shipped Clicky's guided walkthrough
-//  (CompanionManager+Annotation: [TARGET]/[HIGHLIGHT]/[SHAPE] beats, "Guided
-//  target hit", "Guided follow-up: screen settled", off-target clicks end
-//  the guide without nagging).
+//  shows the way. Off-target clicks end the guide without nagging.
 //
 //  Two modes:
 //  - steps: one step at a time. A screenshot and the goal go to Gemini

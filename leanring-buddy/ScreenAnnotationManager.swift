@@ -4,9 +4,7 @@
 //
 //  Circle to ask. While the talk shortcut is held, the cursor leaves a blue
 //  trail on screen; circle something and Dottie sees exactly what you
-//  marked. Shipped Clicky does this with ScreenAnnotationManager,
-//  ScreenAnnotationOverlay and ScreenAnnotationCanvasView ("Hold the keys,
-//  circle something on your screen with the cursor, and ask about it").
+//  marked.
 //
 //  The trail is sampled from the mouse position, so no click or drag is
 //  needed. When the shortcut is released, the trail is checked for a loop

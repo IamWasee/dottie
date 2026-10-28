@@ -4,8 +4,7 @@
 //
 //  Things voice Dottie can do on the screen herself when the user asks:
 //  click, type, press keys, scroll, open a page, and draw on the screen.
-//  Shipped Clicky leaves acting to its background agents; here the voice
-//  companion can also do quick, single steps directly, so "click sign in",
+//  Besides the background agents, the voice companion can do quick, single steps directly, so "click sign in",
 //  "go back" or "circle the error" happen right away. Jobs with several
 //  steps go to DottieScreenTaskRunner (do_task_on_screen).
 //
