@@ -6,8 +6,7 @@
 # of cua-driver (MIT, https://github.com/trycua/cua), checks it against the
 # release's SHA256SUMS, and copies the universal binary to
 # Dottie.app/Contents/Helpers/cua-driver, where ClickyComputerUse looks
-# first. Shipped Clicky bundles the driver the same way, so Dots can click
-# and type without the user installing anything.
+# first, so Dots can click and type without the user installing anything.
 #
 # The download is cached in ~/Library/Caches/Dottie-build, so only the first
 # build after a version bump touches the network. If the download fails

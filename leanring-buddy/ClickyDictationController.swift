@@ -2,11 +2,9 @@
 //  ClickyDictationController.swift
 //  leanring-buddy
 //
-//  Hold-to-dictate into any app. Shipped Clicky streams to Deepgram, runs an
-//  LLM cleanup pass, then types the result into the focused field
-//  (ClickyDictationController, DictationInsertion, DictationFocusContext).
-//  The clone keeps one free key, so the Worker's /dictate route has Gemini
-//  hear the recording and clean it up in a single call.
+//  Hold-to-dictate into any app. Dottie keeps one free key, so the Worker's
+//  /dictate route has Gemini hear the recording and clean it up in a single
+//  call, and the result is typed into the focused field.
 //
 //  Flow: hold right Option → remember which field has focus and record →
 //  let go → send the WAV to /dictate → paste the text into that field, or

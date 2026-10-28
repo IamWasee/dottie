@@ -2,9 +2,7 @@
 //  DictationLiveTranscriber.swift
 //  leanring-buddy
 //
-//  Shows your words in the notch while you're still dictating. Shipped
-//  Clicky streams the recording to Deepgram and shows its interim results
-//  (DictationStreamedTranscript); the clone has no Deepgram key, so it runs
+//  Shows your words in the notch while you're still dictating. It runs
 //  Apple's speech recognizer on the Mac (on-device when available) next to
 //  the recording and shows its partial results.
 //

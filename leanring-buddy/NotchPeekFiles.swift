@@ -3,8 +3,7 @@
 //  leanring-buddy
 //
 //  The newest files your Dots made, as a row of thumbnails in the notch's
-//  hover peek. Shipped Clicky has the same "file pile" (NotchAgentPeekFilePile,
-//  NotchAgentPeekFileTile, NotchAgentPeekFileDragSource): click a file to
+//  hover peek: click a file to
 //  open it, or drag it straight into Mail, Slack, Finder or any other app.
 //
 

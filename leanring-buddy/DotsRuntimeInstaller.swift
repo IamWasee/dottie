@@ -2,8 +2,8 @@
 //  DotsRuntimeInstaller.swift
 //  leanring-buddy
 //
-//  Gets Dots ready with no Terminal. Shipped Clicky puts its agent CLI
-//  (Codex) inside the app; Dots run on Gemini CLI, which needs Node.js, so
+//  Gets Dots ready with no Terminal. Dots run on Gemini CLI, which needs
+//  Node.js, so
 //  Dottie downloads pinned copies of both the first time they're needed:
 //
 //    ~/Library/Application Support/Dottie/Runtime/

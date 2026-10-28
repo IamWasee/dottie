@@ -2,9 +2,8 @@
 //  NotchPresenter.swift
 //  leanring-buddy
 //
-//  What the notch is showing right now. Shipped Clicky's main surface lives
-//  around the MacBook notch (NotchPresenter / NotchRootView); this is the
-//  clone's version of that state. CompanionManager pushes voice state and
+//  What the notch is showing right now. Dottie's main surface lives around
+//  the MacBook notch, and this holds its state. CompanionManager pushes voice state and
 //  transcripts in; NotchRootView renders it; NotchWindowManager resizes the
 //  window to fit.
 //
@@ -329,8 +328,8 @@ final class NotchPresenter: ObservableObject {
         onStopStatusLine?(statusLineID)
     }
 
-    /// Dictation learned a word from a fix the user made. Shipped Clicky
-    /// shows the same "Added to your dictionary" card, with a Remove button.
+    /// Dictation learned a word from a fix the user made. Shows an "Added to
+    /// your dictionary" card with a Remove button.
     func showLearnedDictionaryWord(_ word: String, replacing originalText: String) {
         // A newer word replaces one that hasn't been shown yet.
         pendingAgentUpdates.removeAll { $0.learnedDictionaryWord != nil }

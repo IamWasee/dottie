@@ -606,8 +606,7 @@ struct CompanionPanelView: View {
 
     // MARK: - Voice Picker
 
-    /// v0 picked between Claude models here. The clone picks the Gemini Live
-    /// voice instead; the model itself is set on the Worker.
+    /// Picks the Gemini Live voice; the model itself is set on the Worker.
     private var modelPickerRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {

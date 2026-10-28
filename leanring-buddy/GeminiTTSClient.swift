@@ -2,9 +2,8 @@
 //  GeminiTTSClient.swift
 //  leanring-buddy
 //
-//  Text-to-speech for the classic (non-Live) voice mode. Replaces v0's
-//  ElevenLabsTTSClient with the same surface (speakText / isPlaying /
-//  stopPlayback). The Worker's /tts route returns raw 24kHz PCM, which we
+//  Text-to-speech for the classic (non-Live) voice mode (speakText /
+//  isPlaying / stopPlayback). The Worker's /tts route returns raw 24kHz PCM, which we
 //  wrap in a WAV header so AVAudioPlayer can play it.
 //
 

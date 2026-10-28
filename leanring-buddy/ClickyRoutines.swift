@@ -4,15 +4,14 @@
 //
 //  Routines: a Clicky re-runs a task on a schedule ("every morning, check
 //  my repos for new issues") and posts each answer in its chat and the
-//  notch. Shipped Clicky does this in CompanionManager+ClickyRoutines:
-//  agents have no scheduling tool; when the user asks for something on a
+//  notch. Agents have no scheduling tool; when the user asks for something on a
 //  cadence, the agent does it once and appends a block like
 //
 //    <ROUTINE>{"action":"create","every_minutes":60,"title":"Repo Issues",
 //              "task":"Check my repos for new issues and summarize them"}</ROUTINE>
 //
-//  and the app keeps the schedule. The clone uses the same block, actions
-//  (create, update, delete, pause, resume) and run prompts. Routines only
+//  and the app keeps the schedule. The block's actions are create, update,
+//  delete, pause and resume. Routines only
 //  run while the Mac is awake and the app is open.
 //
 //  24/7 jobs ("keep working on this all night") are routines too, with a
@@ -525,8 +524,7 @@ enum ClickyRoutinePrompts {
         return (remainingReply.trimmingCharacters(in: .whitespacesAndNewlines), routineActions)
     }
 
-    /// The part of every agent's global AGENTS.md about routines. Adapted
-    /// from shipped Clicky's RECURRING REQUESTS instructions.
+    /// The part of every agent's global AGENTS.md about routines.
     static let globalAgentInstructions = """
     # Routines
 
@@ -571,8 +569,7 @@ enum ClickyRoutinePrompts {
         return "Earlier runs of this routine aren't in this conversation. The last run that found something reported:\n\"\"\"\n\(lastRunReport)\n\"\"\""
     }
 
-    /// The message for a scheduled run. Adapted from shipped Clicky's run
-    /// prompts. Runs keep their own conversation, separate from the chat
+    /// The message for a scheduled run. Runs keep their own conversation, separate from the chat
     /// with the user; `isFreshSession` means this run starts a new one.
     static func runMessage(for routine: ClickyRoutine, runNumber: Int, previousRunStartedAt: Date, previousRunFailed: Bool, isFreshSession: Bool) -> String {
         let earlierRunsLine = isFreshSession

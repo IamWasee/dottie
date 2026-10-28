@@ -3,12 +3,12 @@
 //  leanring-buddy
 //
 //  Lets background Clickys operate apps on the Mac: click, type, open apps
-//  and use a browser. Shipped Clicky embeds cua-driver (MIT, trycua/cua) as
+//  and use a browser. Dottie embeds cua-driver (MIT, trycua/cua) as
 //  a local "computer-use" MCP server and puts a consent gate in front of it
 //  (ClickyComputerUseGate): agents can always look, but they may only click
 //  or type in a turn the user allowed, or after "Always allow".
 //
-//  The clone does the same. The build bundles cua-driver into
+//  The build bundles cua-driver into
 //  Contents/Helpers (scripts/embed-cua-driver.sh); an installed copy is the
 //  fallback:
 //  - Gemini CLI starts `cua-driver mcp --direct` as an MCP server, so the

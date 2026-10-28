@@ -2,8 +2,6 @@
 //  leanring_buddyUITests.swift
 //  leanring-buddyUITests
 //
-//  Created by thorfinn on 3/2/26.
-//
 
 import XCTest
 

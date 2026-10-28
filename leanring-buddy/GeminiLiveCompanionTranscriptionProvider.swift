@@ -2,7 +2,7 @@
 //  GeminiLiveCompanionTranscriptionProvider.swift
 //  leanring-buddy
 //
-//  Plugs Gemini Live into v0's push-to-talk machinery. BuddyDictationManager
+//  Plugs Gemini Live into the push-to-talk machinery. BuddyDictationManager
 //  already owns the microphone, permissions, waveform levels and the
 //  press/release lifecycle; it just expects a "transcription provider" to feed
 //  audio into. This provider forwards that audio to the Live session instead

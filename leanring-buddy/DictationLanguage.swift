@@ -2,8 +2,7 @@
 //  DictationLanguage.swift
 //  leanring-buddy
 //
-//  Which language dictation listens for. Shipped Clicky has the same
-//  setting (DictationLanguage, DictationLanguageCatalog): auto-detect is on
+//  Which language dictation listens for. Auto-detect is on
 //  by default and follows you across languages mid-sentence; pinning one
 //  language gives the most accurate results when you only speak that one.
 //

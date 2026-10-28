@@ -2,9 +2,8 @@
 //  ClickyNotifications.swift
 //  leanring-buddy
 //
-//  macOS notifications for Dots. Shipped Clicky posts one when a background
-//  agent finishes or needs the user (its CompanionManager notifications
-//  extension); the clone does the same with UserNotifications, so a Dot's
+//  macOS notifications for Dots. One is posted with UserNotifications when a
+//  background agent finishes or needs the user, so a Dot's
 //  reply still reaches you when you're in another app and the notch card
 //  has folded away.
 //

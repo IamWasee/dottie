@@ -4,11 +4,10 @@
 //
 //  Skills: reusable instructions a Clicky pulls in when a task calls for
 //  them (how to make a report in the user's style, how to use some CLI,
-//  a checklist for a recurring chore). Shipped Clicky keeps a skills
-//  library and turns skills on per Clicky (ClickySkillLibraryBackend,
-//  HermesSkillCatalog).
+//  a checklist for a recurring chore). Skills live in one library and are
+//  turned on per Clicky.
 //
-//  The clone uses Gemini CLI's own skills support. A skill is a folder with
+//  Dottie uses Gemini CLI's own skills support. A skill is a folder with
 //  a SKILL.md (YAML front matter with `name` and `description`, then the
 //  instructions). The library lives in
 //  ~/Library/Application Support/Dottie/Skills/<name>/SKILL.md, and a
@@ -54,7 +53,7 @@ final class ClickySkillLibrary: ObservableObject {
 
     let libraryURL: URL
 
-    /// Gemini CLI built-in skills the clone hides from agents.
+    /// Gemini CLI built-in skills Dottie hides from agents.
     nonisolated static let hiddenBuiltInSkillNames = ["antigravity-support"]
 
     init(libraryURL: URL) {
