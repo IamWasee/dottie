@@ -524,13 +524,14 @@ final class DottieScreenTaskRunner {
                 if functionName == "click", !isGameMode,
                    recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
-                } else if functionName == "click", !isGameMode, DottieAwayMode.shared.questionsGoToPhone,
+                } else if functionName == "click", !isGameMode, DottieAwayMode.shared.isAway,
                           DottieAwayMode.isRiskyLabel(clickLabel), !approvedRiskyLabels.contains(clickLabel.lowercased()),
-                          !(await confirmRiskyClickOnPhone(label: clickLabel, taskText: taskText, screen: screen, stepNumber: stepNumber)) {
+                          !(await confirmRiskyClickWhileAway(label: clickLabel, taskText: taskText, screen: screen, stepNumber: stepNumber)) {
                     // Away, nothing that pays, sends, posts or deletes is
-                    // clicked without a yes from the user's phone.
+                    // clicked without a yes from the user's phone. With no
+                    // phone to ask, it waits for the user at the Mac.
                     if Task.isCancelled { return .stopped }
-                    result = "not clicked: the user said no (or didn't answer) to clicking \"\(clickLabel)\". Don't click it or anything that does the same. Finish now, saying what's done and that this step is waiting for them."
+                    result = "not clicked: the user said no, didn't answer, or can't be asked right now about clicking \"\(clickLabel)\". Don't click it or anything that does the same. Finish now, saying what's done and that this step is waiting for them."
                 } else {
                     // What it takes to do this step again without Gemini.
                     // Passwords and codes the user gave are never saved.
@@ -793,8 +794,15 @@ final class DottieScreenTaskRunner {
     }
 
     /// Away mode: asks the phone, with the screenshot, before clicking a
-    /// button that pays, sends, posts or deletes. True when allowed.
-    private func confirmRiskyClickOnPhone(label: String, taskText: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> Bool {
+    /// button that pays, sends, posts or deletes. True when allowed. False
+    /// when no phone is paired or it can't be reached, so the click waits
+    /// for the user at the Mac instead of going ahead.
+    private func confirmRiskyClickWhileAway(label: String, taskText: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> Bool {
+        guard DottieAwayMode.shared.questionsGoToPhone else {
+            onProgress?(stepNumber, "leaving \"\(label)\" for you: no phone to ask")
+            DottieAwayMode.shared.record(.asked, title: "Waiting for you at the Mac", detail: "For \"\(taskText.prefix(160))\", didn't click \"\(label)\" because no phone could be asked.", screenshotJPEG: screen.jpegData)
+            return false
+        }
         onProgress?(stepNumber, "asking your phone before \"\(label)\"")
         let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
             "For \"\(taskText.prefix(160))\", I'm about to click \"\(label)\". Go ahead?",
