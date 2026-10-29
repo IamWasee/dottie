@@ -1,0 +1,84 @@
+name: Tools lab
+
+# Runs Dottie's own connector code from a release (DottieToolsStore,
+# DottieMCPClient, DottieConnectedTools, DottieCLITools, DotsRuntimeInstaller)
+# on a Mac against the real apps in Home → Tools, then gives a Gemini CLI
+# helper the settings Dottie writes and checks it uses a connected app and
+# command-line tools. Run it by hand (Actions → Tools lab) after changing
+# connectors or bumping the Dots runtime.
+on:
+  push:
+    branches: [claude/project-thread-7ihqhr]
+    paths: ["scripts/tools-lab/**", ".github/workflows/tools-lab.yml"]
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: "Tag or branch whose app code to test"
+        default: "v1.0.44"
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP_REF: ${{ inputs.app_ref || 'v1.0.44' }}
+      WORKER_URL: https://dottie.vidershub.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use the app code from the release
+        run: |
+          git checkout "$APP_REF" -- leanring-buddy
+          git log -1 --format='%h %s' "$APP_REF"
+      - name: Install Claude Code (to check Dottie adds its apps there)
+        run: npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && command -v claude
+      - name: Build the lab
+        run: |
+          cd leanring-buddy
+          swiftc -O -o "$RUNNER_TEMP/tools-lab" ../scripts/tools-lab/main.swift ../scripts/tools-lab/Stubs.swift \
+            DottieMCPClient.swift DottieToolsConfig.swift DottieCommandLocator.swift DottieMCPPresets.swift \
+            DottieToolsStore.swift DottieCLITools.swift DottieConnectedTools.swift DottieToolRegistry.swift \
+            DotsRuntimeInstaller.swift
+      - name: Run the lab like an app opened from the Dock
+        run: |
+          mkdir -p "$RUNNER_TEMP/files" "$RUNNER_TEMP/cli-home"
+          echo "Budget: 120 dollars for snacks." > "$RUNNER_TEMP/files/notes.txt"
+          # Apps started from the Dock get launchd's short PATH, not Terminal's.
+          env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL=/bin/zsh TMPDIR="$TMPDIR" \
+            PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            "$RUNNER_TEMP/tools-lab" "$RUNNER_TEMP/files" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/cli-home"
+      - name: Claude Code sees Dottie's apps
+        run: |
+          claude mcp list 2>&1 | head -40 || true
+      - name: A Gemini CLI helper uses a connected app and command-line tools
+        env:
+          APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+        run: |
+          runtime="$HOME/Library/Application Support/Dottie/Runtime"
+          node_bin=$(ls -d "$runtime"/node-v*/bin | head -1)
+          login_path=$(/bin/zsh -lc 'echo $PATH')
+          mkdir -p "$RUNNER_TEMP/dot" && cd "$RUNNER_TEMP/dot"
+          # The same command line and environment GeminiCLIAgentRuntime.runTurn uses.
+          env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" SHELL=/bin/zsh \
+            PATH="$login_path:$node_bin" \
+            GOOGLE_GEMINI_BASE_URL="$WORKER_URL/gemini" \
+            GEMINI_API_KEY="${APP_SECRET:-clicky-worker}" \
+            GEMINI_CLI_HOME="$RUNNER_TEMP/cli-home" \
+            NO_COLOR=1 \
+            "$runtime/bin/gemini" -m gemini-3.6-flash \
+              -p "Do these three things and report each result in one short line: 1) use the connected time app's tool to get the current time in Asia/Tokyo; 2) use the connected Wikipedia app to search for Roblox Studio; 3) in the shell, run jq --version and git --version." \
+              -o stream-json --approval-mode yolo --skip-trust \
+              --session-id "$(uuidgen | tr 'A-Z' 'a-z')" > "$RUNNER_TEMP/turn.jsonl" 2> "$RUNNER_TEMP/turn.err" || echo "exit code $?"
+          echo "--- tool calls and results ---"
+          jq -rc 'select(.type=="tool_use") | "USE \(.tool_name) \(.parameters|tostring|.[0:160])"' "$RUNNER_TEMP/turn.jsonl" || true
+          jq -rc 'select(.type=="tool_result") | "RESULT \(.status) \((.output // .error // "")|tostring|.[0:200])"' "$RUNNER_TEMP/turn.jsonl" || true
+          echo "--- answer ---"
+          jq -rj 'select(.type=="message" and .role=="assistant") | .content' "$RUNNER_TEMP/turn.jsonl" || true
+          echo
+          jq -rc 'select(.type=="result")' "$RUNNER_TEMP/turn.jsonl" | cut -c1-400 || true
+          echo "--- stderr tail ---"
+          tail -20 "$RUNNER_TEMP/turn.err"
