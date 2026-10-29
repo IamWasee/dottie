@@ -306,13 +306,69 @@ enum DottieMCPPresets {
                 symbolName: "shippingbox",
                 config: uvx("mcp-server-docker")
             ),
+            // Games
+            DottieMCPPreset(
+                id: "roblox-studio", title: "Roblox Studio",
+                summary: "Builds and scripts your Roblox game in Studio: reads the place, adds parts, writes Luau, runs play tests. In Studio, open Assistant → … → Manage MCP Servers and turn on Enable Studio as MCP server.",
+                symbolName: "gamecontroller",
+                config: DottieMCPServerConfig(command: "/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP")
+            ),
             DottieMCPPreset(
                 id: "kubernetes", title: "Kubernetes",
                 summary: "Your Kubernetes clusters, using your kubectl setup.",
                 symbolName: "circle.hexagongrid",
                 config: npx("mcp-server-kubernetes")
             )
+        ] + signInConnectors
+    }
+
+    /// Connectors like Claude's: the maker's own hosted server, signed into
+    /// in the browser the first time it connects (OAuth), with no key to
+    /// copy. Dottie reaches them through mcp-remote, which opens the
+    /// sign-in page, keeps the sign-in in ~/.mcp-auth and speaks plain
+    /// stdio to Dottie and her helpers. Addresses from each maker's docs,
+    /// cross-checked against github.com/jaw9c/awesome-remote-mcp-servers
+    /// (Oct 2026).
+    static var signInConnectors: [DottieMCPPreset] {
+        [
+            signIn("notion-connector", "Notion", "Pages and databases in your Notion.", "doc.richtext", "https://mcp.notion.com/mcp"),
+            signIn("atlassian-connector", "Jira and Confluence", "Issues, boards and pages in Atlassian.", "square.stack.3d.up", "https://mcp.atlassian.com/v1/sse"),
+            signIn("asana-connector", "Asana", "Your tasks and projects in Asana.", "checkmark.circle", "https://mcp.asana.com/sse"),
+            signIn("linear-connector", "Linear", "Issues and projects in Linear.", "line.3.horizontal.decrease", "https://mcp.linear.app/sse"),
+            signIn("monday-connector", "monday.com", "Boards and items in monday.com.", "calendar", "https://mcp.monday.com/sse"),
+            signIn("airtable-connector", "Airtable", "Bases, tables and records in Airtable.", "tablecells", "https://mcp.airtable.com/mcp"),
+            signIn("canva-connector", "Canva", "Make and edit designs in your Canva.", "paintbrush", "https://mcp.canva.com/mcp"),
+            signIn("intercom-connector", "Intercom", "Conversations and customers in Intercom.", "bubble.left.and.bubble.right", "https://mcp.intercom.com/sse"),
+            signIn("hubspot-connector", "HubSpot", "Contacts, companies and deals in HubSpot.", "person.2", "https://app.hubspot.com/mcp/v1/http"),
+            signIn("attio-connector", "Attio", "Your CRM records in Attio.", "person.crop.rectangle.stack", "https://mcp.attio.com/mcp"),
+            signIn("box-connector", "Box", "Files and folders in your Box.", "shippingbox", "https://mcp.box.com"),
+            signIn("fireflies-connector", "Fireflies", "Meeting notes and transcripts from Fireflies.", "waveform", "https://api.fireflies.ai/mcp"),
+            signIn("paypal-connector", "PayPal", "Invoices, orders and payments in PayPal. Dottie asks before paying anything.", "dollarsign.circle", "https://mcp.paypal.com/sse"),
+            signIn("square-connector", "Square", "Orders, items and customers in Square.", "square", "https://mcp.squareup.com/sse"),
+            signIn("stripe-connector", "Stripe", "Payments, customers and invoices in Stripe.", "creditcard", "https://mcp.stripe.com"),
+            signIn("github-connector", "GitHub", "Repositories, issues and pull requests.", "chevron.left.forwardslash.chevron.right", "https://api.githubcopilot.com/mcp"),
+            signIn("vercel-connector", "Vercel", "Your Vercel projects and deployments.", "triangle", "https://mcp.vercel.com"),
+            signIn("netlify-connector", "Netlify", "Your Netlify sites and deploys.", "globe", "https://netlify-mcp.netlify.app/mcp"),
+            signIn("cloudflare-connector", "Cloudflare", "Workers, storage and databases in your Cloudflare account.", "cloud", "https://bindings.mcp.cloudflare.com/sse"),
+            signIn("supabase-connector", "Supabase", "Your Supabase projects and databases.", "bolt.horizontal", "https://mcp.supabase.com/mcp"),
+            signIn("neon-connector", "Neon", "Your Neon Postgres databases.", "cylinder", "https://mcp.neon.tech/mcp"),
+            signIn("sentry-connector", "Sentry", "Errors and crashes from your apps.", "exclamationmark.triangle", "https://mcp.sentry.dev/sse"),
+            signIn("webflow-connector", "Webflow", "Your Webflow sites and CMS.", "w.square", "https://mcp.webflow.com/sse"),
+            signIn("wix-connector", "Wix", "Your Wix sites, store and bookings.", "globe.americas", "https://mcp.wix.com/sse"),
+            signIn("stackoverflow-connector", "Stack Overflow", "Search Stack Overflow questions and answers.", "text.bubble", "https://mcp.stackoverflow.com"),
+            signIn("huggingface-connector", "Hugging Face", "Models, datasets and Spaces on Hugging Face.", "face.smiling", "https://hf.co/mcp"),
+            signIn("deepwiki-connector", "DeepWiki", "Ask about any public GitHub repo's code.", "book", "https://mcp.deepwiki.com/sse")
         ]
+    }
+
+    private static func signIn(_ id: String, _ title: String, _ summary: String, _ symbolName: String, _ url: String) -> DottieMCPPreset {
+        DottieMCPPreset(
+            id: id,
+            title: title,
+            summary: summary + " Sign in once in your browser, no key needed.",
+            symbolName: symbolName,
+            config: DottieMCPServerConfig(command: "npx", args: ["-y", "mcp-remote@latest", url], env: [:])
+        )
     }
 
     static func preset(withID presetID: String) -> DottieMCPPreset? {

@@ -1427,9 +1427,10 @@ extension ClickyRoster {
             """
             # Using the Mac
 
-            You don't click or type on the screen yourself; Dottie does that. When a task needs an app or a website rather than files, use the command-line ways below (AppleScript, Shortcuts, `open`, fetching pages). If it truly needs clicking on screen, finish everything else and say exactly which on-screen steps are left, so Dottie can do them.
+            You don't click or type on the screen yourself; Dottie does that. When a task needs an app or a website rather than files, use the command-line ways below (AppleScript, Shortcuts, `open`, fetching pages). If it truly needs clicking on screen, finish everything else and end your reply with a <SCREEN_JOB> block (see "Getting it done"); Dottie does those steps and sends you the result.
 
             """,
+            DottieWorkRoutes.helperInstructions,
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibrary.libraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
             DottieBrowser.agentInstructions,

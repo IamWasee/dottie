@@ -14,6 +14,7 @@ import SwiftUI
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var gameplayRecorder = DottieGameplayRecorder.shared
+    @ObservedObject private var awayMode = DottieAwayMode.shared
     @State private var emailInput: String = ""
 
     var body: some View {
@@ -38,6 +39,9 @@ struct CompanionPanelView: View {
                     .frame(height: 8)
 
                 gameplayRecordingRow
+                    .padding(.horizontal, 16)
+
+                awayModeToggleRow
                     .padding(.horizontal, 16)
             }
 
@@ -578,6 +582,43 @@ struct CompanionPanelView: View {
             .labelsHidden()
             .tint(DS.Colors.accent)
             .scaleEffect(0.8)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Away Mode Toggle
+
+    /// Away mode (DottieAwayMode): Dottie keeps working while the user is
+    /// gone and asks their phone before anything risky.
+    private var awayModeToggleRow: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: awayMode.isAway ? "figure.walk.departure" : "figure.walk")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(awayMode.isAway ? DS.Colors.accentText : DS.Colors.textTertiary)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("I'm away")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                    Text(awayMode.isAway ? "Risky steps go to your phone" : "Keep working, ask my phone first")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { awayMode.isAway },
+                set: { awayMode.setAway($0, from: "the menu bar") }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.accent)
+            .scaleEffect(0.8)
+            .pointerCursor()
         }
         .padding(.vertical, 4)
     }

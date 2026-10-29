@@ -801,6 +801,12 @@ final class CompanionManager: ObservableObject {
             // Don't register push-to-talk while the onboarding video is playing
             guard !showOnboardingVideo else { return }
 
+            // Someone pressing the talk shortcut is at the Mac, so away mode
+            // ends and the notch shows what happened meanwhile.
+            if DottieAwayMode.shared.isAway {
+                DottieAwayMode.shared.setAway(false, from: "the talk shortcut")
+            }
+
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
             transientHideTask = nil
@@ -1501,6 +1507,9 @@ final class CompanionManager: ObservableObject {
         /// A commercial smart replay is being filmed: the cursor moves at a
         /// calm pace the viewer can follow.
         var isCommercial = false
+        /// A helper asked for these on-screen steps (<SCREEN_JOB>): the
+        /// result goes back to it instead of being said out loud.
+        var returnsToHelperAgentID: UUID?
     }
 
     /// Jobs asked for while another was running, oldest first. Each starts
@@ -1629,8 +1638,8 @@ final class CompanionManager: ObservableObject {
         screenTaskRunner.onPlanChanged = { [weak self] steps, currentStepIndex in
             self?.notchPresenter.showScreenTaskPlan(steps, currentStepIndex: currentStepIndex)
         }
-        screenTaskRunner.onAskUser = { [weak self] question in
-            self?.askUserForScreenJob(question, repliesToPhone: job.repliesToPhone)
+        screenTaskRunner.onAskUser = { [weak self] question, kind in
+            self?.askUserForScreenJob(question, kind: kind, repliesToPhone: job.repliesToPhone)
         }
         screenTaskRunner.onThinkAloud = { [weak self] line in
             guard !job.repliesToPhone else { return }
@@ -1675,16 +1684,31 @@ final class CompanionManager: ObservableObject {
             }
         }
         screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
-            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone, closingMessage: job.closingMessage)
+            self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone, closingMessage: job.closingMessage, returnsToHelperAgentID: job.returnsToHelperAgentID)
         }
     }
 
     /// A running job needs one thing from the user: Dottie asks it out
     /// loud (or by text for a job from the phone). The answer comes back
     /// through answer_screen_job, or the user's next turn (finishLiveTurn).
-    private func askUserForScreenJob(_ question: String, repliesToPhone: Bool) {
-        if repliesToPhone {
-            Task { await phoneBridge.send(question) }
+    /// Marks a job's second try in away mode, so it isn't retried again.
+    private static let awayRetryMarker = "(second try while the user is away:"
+
+    private func askUserForScreenJob(_ question: String, kind: String = "missing_info", repliesToPhone: Bool) {
+        if repliesToPhone || DottieAwayMode.shared.questionsGoToPhone {
+            // Passwords never go over Telegram: the job waits for the user
+            // at the Mac instead, and the phone just hears why.
+            if kind == "password" || kind == "do_it_yourself" {
+                Task { await phoneBridge.send("A job needs you at the Mac for this, so it's waiting: \(question)") }
+                DottieAwayMode.shared.record(.asked, title: "Waiting for you at the Mac", detail: question)
+                return
+            }
+            Task {
+                let answer = await DottieAwayMode.shared.askOnPhone(question, choices: kind == "confirm" ? ["Allow", "Deny"] : [])
+                if let answer {
+                    DottieScreenJobQuestions.shared.answer(answer)
+                }
+            }
             return
         }
         speakWhenFree(
@@ -1843,7 +1867,7 @@ final class CompanionManager: ObservableObject {
         return lines.isEmpty ? "no jobs running or waiting." : lines.joined(separator: "\n")
     }
 
-    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false, closingMessage: String? = nil) {
+    private func finishScreenTask(taskText: String, outcome: DottieScreenTaskRunner.Outcome, repliesToPhone: Bool = false, closingMessage: String? = nil, returnsToHelperAgentID: UUID? = nil) {
         currentScreenTaskText = nil
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
@@ -1859,6 +1883,25 @@ final class CompanionManager: ObservableObject {
             }
         case .failed(let reason):
             print("🧭 Screen task failed: \(reason)")
+            // Away, nobody is there to say "try again", so a job that
+            // failed gets one more go, told what went wrong, before the
+            // failure is reported.
+            if DottieAwayMode.shared.isAway, !taskText.contains(Self.awayRetryMarker) {
+                let failedJob = (currentScreenJob?.text == taskText ? currentScreenJob : nil) ?? ScreenJob(text: taskText, repliesToPhone: repliesToPhone)
+                let retryJob = ScreenJob(
+                    text: taskText + "\n\n" + Self.awayRetryMarker + " the last try stopped because: \(reason). look at the screen first, keep what's already done, and take a different route this time (another menu, a keyboard shortcut, the app's search, a direct link, or closing whatever popup is in the way).",
+                    isGame: failedJob.isGame,
+                    referenceImageNames: failedJob.referenceImageNames,
+                    repliesToPhone: failedJob.repliesToPhone,
+                    restart: true,
+                    closingMessage: failedJob.closingMessage,
+                    returnsToHelperAgentID: failedJob.returnsToHelperAgentID
+                )
+                DottieAwayMode.shared.record(.note, title: "Trying again", detail: "\(taskText.prefix(200)) (stopped because: \(reason))")
+                queuedScreenTasks.insert(retryJob, at: 0)
+                startNextQueuedScreenTask()
+                return
+            }
             resultText = "it couldn't be finished: \(reason)"
         case .stopped:
             scheduleTransientHideIfNeeded()
@@ -1867,7 +1910,27 @@ final class CompanionManager: ObservableObject {
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
         var jobSucceeded = false
         if case .finished = outcome { jobSucceeded = true }
+        if DottieAwayMode.shared.isAway {
+            let jobTitle = "On screen: " + String(taskText.components(separatedBy: Self.awayRetryMarker)[0].prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let succeeded = jobSucceeded
+            Task {
+                // A picture of where it got stuck says more than the reason.
+                let failureScreenshot = succeeded ? nil : await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1280)?.jpegData
+                DottieAwayMode.shared.noteResult(title: jobTitle, detail: resultText, succeeded: succeeded, screenshotJPEG: failureScreenshot, alreadyTextedToPhone: repliesToPhone)
+            }
+        }
         DottieEpisodicMemory.shared.recordScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded)
+        // The on-screen part a helper asked for: the helper gets the result
+        // and finishes the task (its own reply comes back as usual).
+        if let returnsToHelperAgentID, let requestingHelper = clickyRoster.agent(withID: returnsToHelperAgentID) {
+            startNextQueuedScreenTask()
+            scheduleTransientHideIfNeeded()
+            let handBackText = jobSucceeded
+                ? "Dottie did the on-screen part you asked for (\(taskText.prefix(300))). Result: \(resultText)\nCarry on and finish the task."
+                : "Dottie tried the on-screen part you asked for (\(taskText.prefix(300))) and \(resultText). Try another route if there is one, otherwise finish with what you have and say what's missing."
+            _ = clickyRoster.sendOrQueueMessage(handBackText, to: requestingHelper)
+            return
+        }
         // A smart replay's closing line only follows a run that worked.
         let closingMessageToSay = jobSucceeded ? closingMessage : nil
         if repliesToPhone {
@@ -2536,7 +2599,9 @@ final class CompanionManager: ObservableObject {
         clickyRoster.brainFolderURLsProvider = { [weak self] in
             self?.brain.folderURLs ?? []
         }
-        clickyRoster.sharedFolderURLs = [projects.rootFolderURL]
+        // Projects first (ClickyRoster reads the first as the projects
+        // folder); then the user's own folders, when they let helpers in.
+        clickyRoster.sharedFolderURLs = [projects.rootFolderURL] + DottieWorkRoutes.homeFolderURLs
         // Pictures, projects and smart home devices edited in Home reach
         // voice Dottie on her next connection.
         Publishers.Merge3(
@@ -2701,6 +2766,19 @@ final class CompanionManager: ObservableObject {
         phoneBridge.onMessage = { [weak self] text in
             self?.handlePhoneMessage(text)
         }
+        DottieAwayMode.shared.phoneBridge = phoneBridge
+        DottieAwayMode.shared.onCameBack = { [weak self] reportText in
+            self?.notchPresenter.showAgentUpdate(title: "While you were away", text: reportText)
+        }
+        DottieWatchAndLearn.shared.onStatus = { [weak self] title, text in
+            self?.notchPresenter.showAgentUpdate(title: title, text: text)
+        }
+        phoneBridge.onAwayCommand = { isAway in
+            DottieAwayMode.shared.setAway(isAway, from: "phone")
+        }
+        phoneBridge.reportProvider = {
+            DottieAwayMode.shared.report()
+        }
         phoneFiles.sendText = { [weak self] text in
             await self?.phoneBridge.send(text)
         }
@@ -2801,9 +2879,37 @@ final class CompanionManager: ObservableObject {
             guard !turnResult.foundNothingNew else { return }
             let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
             let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
-            if let computerUseRequest = turnResult.computerUseRequest {
+            // The helper did what it could in the background and left the
+            // on-screen steps to Dottie (DottieWorkRoutes).
+            if turnResult.succeeded, let screenJobRequest = DottieWorkRoutes.screenJobRequest(in: turnResult.finalReply) {
+                print("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
+                let status = self.startScreenTask(ScreenJob(text: screenJobRequest.steps, returnsToHelperAgentID: turnResult.agent.id))
+                let progressText = screenJobRequest.replyWithoutBlock.isEmpty ? "Doing the on-screen part now." : screenJobRequest.replyWithoutBlock
+                self.notchPresenter.showAgentUpdate(title: updateTitle, text: progressText)
                 if isPhoneHelper {
-                    Task { await self.phoneBridge.send("I need to use your Mac's screen for this: \(computerUseRequest)\nReply allow or deny.") }
+                    Task { await self.phoneBridge.send("Doing the on-screen part on your Mac now (\(status.prefix(80))).") }
+                }
+                return
+            }
+            if let computerUseRequest = turnResult.computerUseRequest {
+                // From the phone, or while the user is away: asked on the
+                // phone with Allow / Deny buttons, as well as in the notch.
+                if isPhoneHelper || DottieAwayMode.shared.questionsGoToPhone {
+                    let requestingAgent = turnResult.agent
+                    Task { [weak self] in
+                        let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
+                            "\(updateTitle) needs to use your Mac's screen for this: \(computerUseRequest)",
+                            screenshotJPEG: nil
+                        )
+                        guard let self, self.clickyRoster.pendingComputerUseRequest(for: requestingAgent) != nil else { return }
+                        self.notchPresenter.dropComputerUseRequest(forAgentID: requestingAgent.id)
+                        self.dotNotifications.removeNotification(forAgentID: requestingAgent.id)
+                        if isAllowed {
+                            self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
+                        } else {
+                            self.clickyRoster.declineComputerUse(for: requestingAgent)
+                        }
+                    }
                 }
                 // Ask in the notch and in a notification; the answer comes
                 // back through onAnswerComputerUseRequest below.
@@ -2824,6 +2930,14 @@ final class CompanionManager: ObservableObject {
                 : turnResult.finalReply
             if isPhoneHelper {
                 Task { await self.phoneBridge.send(updateText) }
+            }
+            if DottieAwayMode.shared.isAway {
+                DottieAwayMode.shared.noteResult(
+                    title: updateTitle,
+                    detail: updateText,
+                    succeeded: turnResult.succeeded,
+                    alreadyTextedToPhone: isPhoneHelper
+                )
             }
             let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
             self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")

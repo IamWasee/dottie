@@ -21,5 +21,6 @@ enum DottieToolModules {
         DottieSelfKnowledge.self,
         DottieToolInstallTools.self,
         DottieAdminTools.self, DottieAutoTyperTools.self,
+        DottieAwayModeTools.self, DottieWatchAndLearnTools.self, DottieWorkRouteTools.self, DottieCodeEditorTools.self,
     ]
 }

@@ -305,6 +305,7 @@ final class GeminiCLIAgentRuntime {
         // Gemini CLI reads AGENTS.md from its home folder for every agent.
         let globalAgentInstructions = [
             ClickyComputerUse.globalAgentInstructions(isCuaDriverInstalled: cuaDriverURL != nil),
+            DottieWorkRoutes.helperInstructions,
             ClickySkillLibrary.globalAgentInstructions(libraryURL: skillLibraryURL),
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,

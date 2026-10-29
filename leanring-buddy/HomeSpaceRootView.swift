@@ -16,6 +16,7 @@ struct HomeSpaceRootView: View {
         case conversation = "Conversation"
         case clickys = "Dots"
         case projects = "Projects"
+        case code = "Code"
         case pictures = "Pictures"
         case smartReplays = "Smart Replays"
         case smartHome = "Smart Home"
@@ -32,7 +33,7 @@ struct HomeSpaceRootView: View {
         case admin = "Admin"
 
         static var allCases: [HomeSection] {
-            [.conversation, .clickys, .projects, .pictures, .smartReplays, .smartHome, .skills,
+            [.conversation, .clickys, .projects, .code, .pictures, .smartReplays, .smartHome, .skills,
              .tools, .brain, .meetings, .phone, .profile, .settings]
         }
 
@@ -43,6 +44,7 @@ struct HomeSpaceRootView: View {
             case .conversation: return "bubble.left.and.bubble.right.fill"
             case .clickys: return "person.2.fill"
             case .projects: return "folder.fill"
+            case .code: return "chevron.left.forwardslash.chevron.right"
             case .pictures: return "photo.on.rectangle.angled"
             case .smartReplays: return "play.rectangle.on.rectangle"
             case .smartHome: return "house.fill"
@@ -67,7 +69,7 @@ struct HomeSpaceRootView: View {
         var sections: [HomeSection] {
             switch self {
             case .talk: return [.conversation, .clickys, .projects, .meetings, .phone]
-            case .make: return [.pictures, .smartReplays, .skills, .tools, .smartHome]
+            case .make: return [.code, .pictures, .smartReplays, .skills, .tools, .smartHome]
             case .you:
                 // The Admin tab only shows once the secret phrase was said.
                 return DottieAdminMode.isUnlockedInDefaults ? [.brain, .profile, .settings, .admin] : [.brain, .profile, .settings]
@@ -122,6 +124,8 @@ struct HomeSpaceRootView: View {
                     HomeClickysView(clickyRoster: clickyRoster)
                 case .projects:
                     HomeProjectsView(projects: companionManager.projects, clickyRoster: clickyRoster)
+                case .code:
+                    HomeCodeView()
                 case .pictures:
                     HomePicturesView(imageMemory: companionManager.imageMemory)
                 case .smartReplays:
@@ -599,6 +603,10 @@ private struct HomeSettingsView: View {
                     HomeReplaySettings()
                 }
 
+                settingsGroup(title: "Working on its own") {
+                    HomeWorkingAloneSettings()
+                }
+
                 settingsGroup(title: "Voice") {
                     HomeVoiceChooser(companionManager: companionManager)
                     DottiePersonalitySettings(companionManager: companionManager)
@@ -813,6 +821,7 @@ private struct HomeSettingsView: View {
         "Check everything": "check test diagnose self-check problems broken working",
         "Instant commands": "instant fast speed quick no ai learn learned shortcut shortcuts open app window snap music volume when i say",
         "Instant replays": "replay record recording clip video save",
+        "Working on its own": "away mode phone approve allow deny claude sonnet screen jobs guess folders documents desktop downloads background report",
         "Voice": "voice personality speak sound live classic mode tone talk",
         "Shortcuts": "shortcut hotkey keyboard key talk dictate circle annotate cursor ctrl option",
         "Everyday": "everyday focus shortcuts habits",
