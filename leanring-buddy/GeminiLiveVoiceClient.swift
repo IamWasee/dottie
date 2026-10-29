@@ -619,7 +619,7 @@ final class GeminiLiveVoiceClient {
     /// Hands longer jobs to a background agent (see ClickyRoster).
     private static let startClickyTaskFunctionDeclaration: [String: Any] = [
         "name": "start_helper",
-        "description": "Start a task with one of the user's background helpers (also called Dots). Helpers work on their own on the user's Mac with a shell, files, Node.js and the web, and report back when done. They can research, write documents, organize files, write code, and build complete websites or small apps. Use it whenever the user asks for real work beyond answering, or asks a helper to do something. After calling, say briefly that it's started.",
+        "description": "Start a task with one of the user's background helpers (also called Dots). Helpers work on their own in the background on the user's Mac, like Claude: the user's connected apps and APIs (for example Roblox Studio, Notion, Gmail), command-line tools and scripts, the user's own signed-in browser, and Dottie's cursor for the on-screen parts; when one way fails they try the next. They can research, collect things from websites, make Word and Excel files, organize files, write code, build complete websites, small apps or a Roblox game, and they save what they figured out as skills for next time. Use it whenever the user asks for real work beyond answering, work that spans several apps or sources, or asks a helper to do something. After calling, say briefly that it's started.",
         "parameters": [
             "type": "OBJECT",
             "properties": [

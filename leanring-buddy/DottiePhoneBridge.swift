@@ -37,6 +37,24 @@ final class DottiePhoneBridge: ObservableObject {
     var screenshotProvider: (() async -> Data?)?
     /// "allow" / "deny" for a helper waiting to use the Mac.
     var onPermissionAnswer: ((Bool) -> String)?
+    /// "away" / "I'm out" (true) and "back" / "I'm back" (false).
+    var onAwayCommand: ((Bool) -> String)?
+    /// "report": what happened while the user was away.
+    var reportProvider: (() -> String)?
+
+    /// A question sent with ask(_:choices:…), waiting for a button tap or,
+    /// with no choices, the next text from the paired chat.
+    private struct PendingQuestion {
+        let questionID: String
+        let choices: [String]
+        let messageID: Int?
+        let continuation: CheckedContinuation<String?, Never>
+    }
+    private var pendingQuestion: PendingQuestion?
+    private var pendingQuestionTimeoutTask: Task<Void, Never>?
+
+    /// True while a question sent to the phone waits for its answer.
+    var isWaitingForAnswer: Bool { pendingQuestion != nil }
 
     private static let pairedChatDefaultsKey = "phonePairedChatID"
     private static let updateOffsetDefaultsKey = "phoneUpdateOffset"
@@ -150,7 +168,89 @@ final class DottiePhoneBridge: ObservableObject {
         return nil
     }
 
-    private func sendPhoto(_ jpegData: Data, caption: String) async {
+    /// Asks the paired phone one question and waits for the answer. With
+    /// choices, they show as buttons under the message (Allow / Deny) and
+    /// the tapped one comes back; without, the next text they send is the
+    /// answer. A screenshot goes first when given. nil when the phone isn't
+    /// paired, a newer question replaced this one, or time ran out.
+    func ask(_ question: String, choices: [String] = [], screenshotJPEG: Data? = nil, timeoutSeconds: Double = 1800) async -> String? {
+        guard let botToken, let pairedChatID else { return nil }
+        resolvePendingQuestion(with: nil)
+        if let screenshotJPEG {
+            await sendPhoto(screenshotJPEG, caption: "What's on the screen now")
+        }
+        let questionID = String(UUID().uuidString.prefix(8))
+        var parameters: [String: Any] = ["chat_id": pairedChatID, "text": question]
+        if !choices.isEmpty {
+            // callback_data may be at most 64 bytes, so it carries the
+            // choice's position, not its words.
+            let buttons = choices.enumerated().map { index, choice in
+                ["text": choice, "callback_data": "dq:\(questionID):\(index)"]
+            }
+            parameters["reply_markup"] = ["inline_keyboard": [buttons]]
+        }
+        appendLog(isFromPhone: false, question + (choices.isEmpty ? "" : " [\(choices.joined(separator: " / "))]"))
+        let sentMessage = await callTelegram(token: botToken, method: "sendMessage", parameters: parameters) as? [String: Any]
+        let messageID = sentMessage?["message_id"] as? Int
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            pendingQuestion = PendingQuestion(questionID: questionID, choices: choices, messageID: messageID, continuation: continuation)
+            pendingQuestionTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.resolvePendingQuestion(with: nil)
+            }
+        }
+    }
+
+    /// Ends the waiting question (nil when it got no answer).
+    func resolvePendingQuestion(with answer: String?) {
+        guard let question = pendingQuestion else { return }
+        pendingQuestion = nil
+        pendingQuestionTimeoutTask?.cancel()
+        pendingQuestionTimeoutTask = nil
+        question.continuation.resume(returning: answer)
+        // The buttons go away once answered, so an old question can't be
+        // tapped later, and the message says what was picked.
+        if let botToken, let pairedChatID, let messageID = question.messageID, !question.choices.isEmpty {
+            Task {
+                _ = await callTelegram(token: botToken, method: "editMessageReplyMarkup", parameters: [
+                    "chat_id": pairedChatID,
+                    "message_id": messageID,
+                    "reply_markup": ["inline_keyboard": [[[String: Any]]]()]
+                ])
+                if let answer {
+                    _ = await callTelegram(token: botToken, method: "sendMessage", parameters: [
+                        "chat_id": pairedChatID,
+                        "text": "→ \(answer)",
+                        "reply_to_message_id": messageID
+                    ])
+                }
+            }
+        }
+    }
+
+    /// A button under a question was tapped.
+    private func handleButtonTap(_ callbackQuery: [String: Any]) async {
+        guard let botToken else { return }
+        if let callbackQueryID = callbackQuery["id"] as? String {
+            _ = await callTelegram(token: botToken, method: "answerCallbackQuery", parameters: ["callback_query_id": callbackQueryID])
+        }
+        let fromUser = callbackQuery["from"] as? [String: Any]
+        let tappedByChatID = (fromUser?["id"] as? NSNumber)?.int64Value
+        // Only the paired person can answer (in a private chat their user
+        // id is the chat id).
+        guard let pairedChatID, tappedByChatID == pairedChatID,
+              let callbackData = callbackQuery["data"] as? String else { return }
+        let dataParts = callbackData.split(separator: ":").map(String.init)
+        guard dataParts.count == 3, dataParts[0] == "dq",
+              let question = pendingQuestion, question.questionID == dataParts[1],
+              let choiceIndex = Int(dataParts[2]), question.choices.indices.contains(choiceIndex) else { return }
+        let choice = question.choices[choiceIndex]
+        appendLog(isFromPhone: true, choice)
+        resolvePendingQuestion(with: choice)
+    }
+
+    func sendPhoto(_ jpegData: Data, caption: String) async {
         guard let botToken, let pairedChatID,
               let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendPhoto") else { return }
         let boundary = "dottie-\(UUID().uuidString)"
@@ -183,7 +283,7 @@ final class DottiePhoneBridge: ObservableObject {
                 let updates = await self.callTelegram(
                     token: token,
                     method: "getUpdates",
-                    parameters: ["timeout": 50, "offset": offset, "allowed_updates": ["message"]],
+                    parameters: ["timeout": 50, "offset": offset, "allowed_updates": ["message", "callback_query"]],
                     timeout: 65
                 ) as? [[String: Any]]
                 if Task.isCancelled { return }
@@ -197,6 +297,9 @@ final class DottiePhoneBridge: ObservableObject {
                     }
                     if let message = update["message"] as? [String: Any] {
                         await self.handle(message)
+                    }
+                    if let callbackQuery = update["callback_query"] as? [String: Any] {
+                        await self.handleButtonTap(callbackQuery)
                     }
                 }
             }
@@ -228,10 +331,41 @@ final class DottiePhoneBridge: ObservableObject {
         guard chatID == pairedChatID, !text.isEmpty else { return }
         appendLog(isFromPhone: true, text)
 
-        let command = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ ."))
+        let command = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ .!"))
+            .replacingOccurrences(of: "’", with: "'")
+        // A question Dottie asked is waiting: a typed answer (or yes/no to
+        // one with buttons) answers it instead of starting a new job.
+        if let question = pendingQuestion {
+            if question.choices.isEmpty, !["status", "screenshot", "screen", "help", "report"].contains(command) {
+                resolvePendingQuestion(with: text)
+                return
+            }
+            let yesWords = ["allow", "yes", "y", "ok", "okay", "go", "go ahead", "do it"]
+            let noWords = ["deny", "no", "n", "don't", "dont", "stop", "skip"]
+            if !question.choices.isEmpty {
+                if let typedChoice = question.choices.first(where: { $0.lowercased() == command }) {
+                    resolvePendingQuestion(with: typedChoice)
+                    return
+                }
+                if yesWords.contains(command), let firstChoice = question.choices.first {
+                    resolvePendingQuestion(with: firstChoice)
+                    return
+                }
+                if noWords.contains(command), question.choices.count > 1, let lastChoice = question.choices.last {
+                    resolvePendingQuestion(with: lastChoice)
+                    return
+                }
+            }
+        }
         switch command {
+        case "away", "i'm out", "im out", "i'm away", "im away", "away mode", "away on", "leaving":
+            await send(onAwayCommand?(true) ?? "Away mode isn't available.")
+        case "back", "i'm back", "im back", "away off", "home":
+            await send(onAwayCommand?(false) ?? "Away mode isn't available.")
+        case "report", "what happened", "summary":
+            await send(reportProvider?() ?? "Nothing to report.")
         case "start", "help":
-            await send("Text me a job and a helper on your Mac does it, then replies here. You can also ask for files: \"find my howto presentation\", \"send it to me\", \"put it on my Google Drive\". Commands: status, screenshot, allow, deny.")
+            await send("Text me a job and a helper on your Mac does it, then replies here. You can also ask for files: \"find my howto presentation\", \"send it to me\", \"put it on my Google Drive\". Commands: status, screenshot, allow, deny, away (I'll text you before anything risky), back, report.")
         case "status":
             await send(statusProvider?() ?? "Dottie is running.")
         case "screenshot", "screen":

@@ -121,8 +121,10 @@ actor DottieMCPServerSession {
                 environment: environment,
                 workingDirectory: workingDirectory
             )
-            // npx and uvx download the server the first time it runs.
-            handshakeTimeout = 120
+            // npx and uvx download the server the first time it runs. A
+            // sign-in connector (mcp-remote) also waits for the user to sign
+            // in on the page it opens, so it gets longer.
+            handshakeTimeout = arguments.contains(where: { $0.hasPrefix("mcp-remote") }) ? 300 : 120
         case .web(let url, let headers):
             webTransport = DottieMCPHTTPTransport(url: url, headers: headers)
             handshakeTimeout = 25

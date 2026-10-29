@@ -268,6 +268,40 @@ final class DottieToolsStore: ObservableObject {
         return nil
     }
 
+    /// Brings in the connectors already set up in the Claude apps on this
+    /// Mac: Claude Desktop's claude_desktop_config.json and Claude Code's
+    /// ~/.claude.json (its user-wide servers). Servers Dottie already has,
+    /// and the ones Dottie itself put into Claude Code, are skipped.
+    @discardableResult
+    func importFromClaudeApps() -> String? {
+        let homeURL = FileManager.default.homeDirectoryForCurrentUser
+        let configURLs = [
+            homeURL.appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json"),
+            homeURL.appendingPathComponent(".claude.json")
+        ]
+        let namesDottieSyncedIntoClaudeCode = Set(file.dottie.claudeCodeSynced.keys)
+        var newServers: [String: Any] = [:]
+        for configURL in configURLs {
+            guard let configData = try? Data(contentsOf: configURL),
+                  let configObject = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+                  let serverObjects = configObject["mcpServers"] as? [String: Any] else { continue }
+            for (rawName, serverObject) in serverObjects {
+                let serverName = Self.cleanServerName(rawName)
+                guard !serverName.isEmpty,
+                      file.mcpServers[serverName] == nil,
+                      !namesDottieSyncedIntoClaudeCode.contains(serverName),
+                      !namesDottieSyncedIntoClaudeCode.contains(rawName) else { continue }
+                newServers[rawName] = serverObject
+            }
+        }
+        guard !newServers.isEmpty,
+              let serversData = try? JSONSerialization.data(withJSONObject: ["mcpServers": newServers]) else {
+            message = "No new connectors in Claude Desktop or Claude Code on this Mac."
+            return nil
+        }
+        return importJSON(String(decoding: serversData, as: UTF8.self))
+    }
+
     /// Keeps a typed value in the Keychain and returns the ${NAME} that
     /// stands in for it. Values that are already ${…} stay as they are.
     private func storeSecret(_ value: String, server: String, placeholder: String) -> String {

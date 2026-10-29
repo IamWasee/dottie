@@ -121,7 +121,9 @@ final class DottieScreenTaskRunner {
     /// The job needs something only the user knows (which account, a code,
     /// okay to pay). Says and shows the question; the answer comes back
     /// through DottieScreenJobQuestions.
-    var onAskUser: (@MainActor (_ question: String) -> Void)?
+    /// kind is ask_user's kind: missing_info, password, code, confirm or
+    /// do_it_yourself (away mode asks a confirm with Allow / Deny buttons).
+    var onAskUser: (@MainActor (_ question: String, _ kind: String) -> Void)?
     /// The job's goal, "done when" and plan. Nil for quick jobs.
     private(set) var currentGoal: DottieTaskGoal?
     /// A long job gets a plan and a done check before it may finish.
@@ -138,6 +140,17 @@ final class DottieScreenTaskRunner {
     private var lastTypedIntoSecureField = false
     /// How long a question waits for the user before the job stops.
     private static let answerWaitSeconds: Double = 180
+    /// Risky buttons the user allowed from their phone during this job, so
+    /// a second click on the same one doesn't ask again.
+    private var approvedRiskyLabels: Set<String> = []
+    /// Claude (DottieScreenJobClaudeBrain) thinks for this job until it
+    /// misses a step; then Gemini does the rest.
+    private var usesClaudeForThisJob = false
+    private var claudeHasSeenThisJob = false
+    /// The newest screenshot's size in pixels, for Claude's pixel boxes.
+    private var lastScreenshotPixelSize: CGSize = .zero
+    /// Who answered the last step, for the notch ("waiting on Claude…").
+    private var stepEngineName: String { usesClaudeForThisJob ? "Claude" : "Gemini" }
 
     var isRunning: Bool { runTask != nil }
     /// Game jobs play through DottieGamePlayer (think, then play).
@@ -164,6 +177,10 @@ final class DottieScreenTaskRunner {
         isLongJob = false
         finishRejectionCount = 0
         userSecrets = [:]
+        approvedRiskyLabels = []
+        usesClaudeForThisJob = !isGameMode && DottieScreenJobClaudeBrain.shared.isWorthTrying
+        claudeHasSeenThisJob = false
+        lastScreenshotPixelSize = .zero
         lastTypedIntoSecureField = false
         pendingExtraImageParts = []
         referenceImageParts = referenceImages.enumerated().flatMap { index, referenceImage -> [[String: Any]] in
@@ -183,7 +200,7 @@ final class DottieScreenTaskRunner {
                 self?.onThinkAloud?(line)
             }
             player.onAskUser = { [weak self] question in
-                self?.onAskUser?(question)
+                self?.onAskUser?(question, "missing_info")
             }
             gamePlayer = player
             let windowGameName = Self.currentGameName()
@@ -214,6 +231,8 @@ final class DottieScreenTaskRunner {
         let stoppedPlayback = DottieGameplayPlayback.shared.stop()
         guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
+        DottieScreenJobClaudeBrain.shared.stop()
+        DottieScreenJobGuesser.shared.stop()
         gamePlayer?.stop()
         gamePlayer = nil
         runTask.cancel()
@@ -277,6 +296,31 @@ final class DottieScreenTaskRunner {
                 }
             }
         }
+        // What the user showed Dottie about this kind of job (watch and
+        // learn) helps both the guess and the screenshot steps.
+        let watchedHowTo = DottieWatchAndLearn.shared.howToText(forTask: taskText, appName: jobContext.appName)
+        if !watchedHowTo.isEmpty {
+            lessonsText += "\n" + watchedHowTo
+        }
+        // Guess first: most apps are laid out the way everyone knows, so
+        // the steps are tried by name (menus, shortcuts, controls) before
+        // any screenshot goes to a model. A miss hands over to the loop.
+        if !isGameMode, referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short {
+            let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: lessonsText) { [weak self] progressLine in
+                self?.onProgress?(0, progressLine)
+            }
+            if Task.isCancelled { return .stopped }
+            switch guessOutcome {
+            case .finished(let answer, let steps):
+                DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: true)
+                lastReplayReport = "🔮 done from memory of the app in \(steps.count) step\(steps.count == 1 ? "" : "s"), no screenshots"
+                return .finished(answer: answer)
+            case .handedOver(let note):
+                lessonsText += "\n" + note
+            case .notTried:
+                break
+            }
+        }
         // How hard the job is decides the model; asked while the first
         // screenshot is taken.
         let isGameJob = isGameMode
@@ -301,6 +345,7 @@ final class DottieScreenTaskRunner {
             guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: screenshotDimension) else {
                 return .failed(reason: "I couldn't see the screen. Dottie needs Screen Recording permission.")
             }
+            lastScreenshotPixelSize = CGSize(width: screen.image.width, height: screen.image.height)
             var screenNote = "Step \(stepNumber). " + Self.describeFrontmostWindow()
             if let windowChangeNote {
                 screenNote += "\n" + windowChangeNote
@@ -351,7 +396,8 @@ final class DottieScreenTaskRunner {
             let slowAnswerNotice = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 while !Task.isCancelled {
-                    self?.onProgress?(stepNumber, "waiting on Gemini… \(Int(Date().timeIntervalSince(waitingStartedAt))) s")
+                    guard let self else { return }
+                    self.onProgress?(stepNumber, "waiting on \(self.stepEngineName)… \(Int(Date().timeIntervalSince(waitingStartedAt))) s")
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                 }
             }
@@ -474,9 +520,17 @@ final class DottieScreenTaskRunner {
                 // Clicking the same thing over and over (a link that opens a
                 // new tab each time) piles up tabs, so the third click in a
                 // row is refused.
+                let clickLabel = arguments.dottieString("label") ?? ""
                 if functionName == "click", !isGameMode,
                    recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
+                } else if functionName == "click", !isGameMode, DottieAwayMode.shared.questionsGoToPhone,
+                          DottieAwayMode.isRiskyLabel(clickLabel), !approvedRiskyLabels.contains(clickLabel.lowercased()),
+                          !(await confirmRiskyClickOnPhone(label: clickLabel, taskText: taskText, screen: screen, stepNumber: stepNumber)) {
+                    // Away, nothing that pays, sends, posts or deletes is
+                    // clicked without a yes from the user's phone.
+                    if Task.isCancelled { return .stopped }
+                    result = "not clicked: the user said no (or didn't answer) to clicking \"\(clickLabel)\". Don't click it or anything that does the same. Finish now, saying what's done and that this step is waiting for them."
                 } else {
                     // What it takes to do this step again without Gemini.
                     // Passwords and codes the user gave are never saved.
@@ -720,8 +774,10 @@ final class DottieScreenTaskRunner {
         let kind = arguments.dottieString("kind")?.lowercased() ?? "missing_info"
         print("🙋 Screen job asks: \(question)")
         onProgress?(stepNumber, "waiting for you: \(question)")
-        onAskUser?(question)
-        guard let answer = await DottieScreenJobQuestions.shared.waitForAnswer(to: question, timeoutSeconds: Self.answerWaitSeconds),
+        onAskUser?(question, kind)
+        // Away, the question is on the user's phone and may take a while.
+        let answerWaitSeconds = DottieAwayMode.shared.questionsGoToPhone ? DottieAwayMode.phoneAnswerWaitSeconds : Self.answerWaitSeconds
+        guard let answer = await DottieScreenJobQuestions.shared.waitForAnswer(to: question, timeoutSeconds: answerWaitSeconds),
               !Task.isCancelled else { return nil }
         onProgress?(stepNumber, "got it, carrying on")
         switch kind {
@@ -734,6 +790,20 @@ final class DottieScreenTaskRunner {
         default:
             return "the user answered: \(answer). Carry on with that; don't ask again."
         }
+    }
+
+    /// Away mode: asks the phone, with the screenshot, before clicking a
+    /// button that pays, sends, posts or deletes. True when allowed.
+    private func confirmRiskyClickOnPhone(label: String, taskText: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> Bool {
+        onProgress?(stepNumber, "asking your phone before \"\(label)\"")
+        let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
+            "For \"\(taskText.prefix(160))\", I'm about to click \"\(label)\". Go ahead?",
+            screenshotJPEG: screen.jpegData
+        )
+        if isAllowed {
+            approvedRiskyLabels.insert(label.lowercased())
+        }
+        return isAllowed
     }
 
     /// Why a finish can't count yet, or nil when it can: the done-when has
@@ -1467,6 +1537,24 @@ final class DottieScreenTaskRunner {
             }
         }
         lastRequestStartedAt = Date()
+        if usesClaudeForThisJob, !isGameMode, let newestTurnParts = contents.last?["parts"] as? [[String: Any]] {
+            if let claudeParts = await DottieScreenJobClaudeBrain.shared.nextActions(
+                newestTurnParts: newestTurnParts,
+                isFirstStepOfJob: !claudeHasSeenThisJob,
+                systemInstruction: Self.systemInstruction,
+                functionDeclarations: Self.functionDeclarations,
+                screenshotPixelSize: lastScreenshotPixelSize,
+                referenceImageParts: referenceImageParts
+            ) {
+                claudeHasSeenThisJob = true
+                return claudeParts
+            }
+            if Task.isCancelled { throw CancellationError() }
+            // Claude would be missing this step from now on, so Gemini,
+            // which reads the whole conversation, does the rest of the job.
+            print("⚠️ Screen task: Claude didn't answer, Gemini carries on")
+            usesClaudeForThisJob = false
+        }
         do {
             return try await requestNextActionsOnce(contents: contents)
         } catch let error as NSError where error.code == 400 && error.localizedDescription.localizedCaseInsensitiveContains("signature") {

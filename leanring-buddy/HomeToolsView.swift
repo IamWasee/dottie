@@ -278,8 +278,19 @@ private struct HomeConnectedAppsSection: View {
 
     private var catalogCard: some View {
         HomeCard(title: "Add an app") {
-            TextField("Search apps", text: $catalogSearch)
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                TextField("Search apps", text: $catalogSearch)
+                    .textFieldStyle(.roundedBorder)
+                // Connectors already set up in Claude Desktop or Claude Code
+                // come over in one click, keys and all.
+                Button("Bring in my Claude connectors") {
+                    customProblem = store.importFromClaudeApps()
+                }
+                .controlSize(.small)
+                .pointerCursor()
+                .help("Adds the connectors from Claude Desktop and Claude Code on this Mac")
+            }
+            HomeHint("Apps marked \u{201C}sign in once\u{201D} work like Claude's connectors: the first time, your browser opens the app's own sign-in page.")
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10, alignment: .top)], alignment: .leading, spacing: 10) {
                 ForEach(filteredPresets) { preset in
                     presetTile(preset)
