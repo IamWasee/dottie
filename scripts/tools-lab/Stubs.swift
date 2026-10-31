@@ -19,3 +19,9 @@ enum DottieToolInstaller {
     static let helperToolLines = ""
     static let helperInstallPolicy = "(install policy left out in the lab)"
 }
+
+/// The Brain's own MCP servers, which DottieToolsStore also hands to the
+/// helpers. The lab has none.
+enum DottieBrain {
+    static func userMCPServers() -> [String: Any] { [:] }
+}

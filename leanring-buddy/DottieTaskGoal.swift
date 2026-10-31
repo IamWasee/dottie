@@ -55,10 +55,6 @@ struct DottieTaskGoal {
     /// The lesson this plan came from, so the job's outcome can score it.
     var learnedLessonID: UUID?
 
-    var currentStepText: String? {
-        steps.indices.contains(currentStepIndex) ? steps[currentStepIndex] : nil
-    }
-
     /// The goal and plan for the model, with ticks for done steps.
     var promptText: String {
         var lines = ["Goal: \(goal)"]

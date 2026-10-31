@@ -26,6 +26,10 @@ final class DottiePhoneBridge: ObservableObject {
     @Published private(set) var botUsername: String?
     @Published private(set) var pairedChatID: Int64?
     @Published private(set) var pairingCode = DottiePhoneBridge.newPairingCode()
+    /// Wrong pairing codes per Telegram chat since the code was made.
+    private var failedPairingAttemptsByChatID: [Int64: Int] = [:]
+    private static let maximumPairingAttemptsPerChat = 5
+    private static let maximumPairingAttemptsOverall = 20
     @Published private(set) var statusText = ""
     @Published private(set) var log: [LogEntry] = []
 
@@ -104,6 +108,7 @@ final class DottiePhoneBridge: ObservableObject {
         pairedChatID = nil
         UserDefaults.standard.removeObject(forKey: Self.pairedChatDefaultsKey)
         pairingCode = Self.newPairingCode()
+        failedPairingAttemptsByChatID = [:]
         statusText = isConnected ? "Waiting for the pairing code." : ""
     }
 
@@ -314,12 +319,29 @@ final class DottiePhoneBridge: ObservableObject {
         guard let botToken else { return }
 
         guard let pairedChatID else {
-            if text.contains(pairingCode) {
+            // The code has to be the whole message (digits only), and each
+            // chat gets a few tries: a message holding thousands of digits
+            // could otherwise contain every possible code.
+            let sentDigits = text.filter(\.isNumber)
+            let failedAttempts = failedPairingAttemptsByChatID[chatID, default: 0]
+            guard failedAttempts < Self.maximumPairingAttemptsPerChat else { return }
+            if sentDigits == pairingCode, text.count <= 12 {
+                failedPairingAttemptsByChatID = [:]
                 self.pairedChatID = chatID
                 UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
                 statusText = "Paired with your phone."
                 await send("Paired! Text me anything and a helper on your Mac will do it. Try: status, screenshot, or \"check my calendar for tomorrow\".")
             } else {
+                if !sentDigits.isEmpty {
+                    failedPairingAttemptsByChatID[chatID] = failedAttempts + 1
+                    // Many wrong codes overall: a new code, so guessing
+                    // across chats doesn't add up either.
+                    if failedPairingAttemptsByChatID.values.reduce(0, +) >= Self.maximumPairingAttemptsOverall {
+                        pairingCode = Self.newPairingCode()
+                        failedPairingAttemptsByChatID = [:]
+                        statusText = "Too many wrong pairing codes, so there's a new one."
+                    }
+                }
                 _ = await callTelegram(token: botToken, method: "sendMessage", parameters: [
                     "chat_id": chatID,
                     "text": "Send the 6-digit pairing code shown in Dottie → Home → Phone."

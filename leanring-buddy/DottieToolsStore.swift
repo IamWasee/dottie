@@ -387,6 +387,12 @@ final class DottieToolsStore: ObservableObject {
             // the session here would kill that one too and show
             // "CancellationError" as the problem.
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                // Never leave the spinner up when nothing replaced this attempt.
+                if connectTasks[serverName] == nil, case .starting = status(for: serverName) {
+                    stopRunningSession(serverName)
+                    statuses[serverName] = nil
+                    refreshStatuses()
+                }
                 return nil
             }
             let detail = await sessions[serverName]?.errorOutputTail ?? ""
@@ -395,7 +401,7 @@ final class DottieToolsStore: ObservableObject {
             if !lastLine.isEmpty, !(error is DottieMCPError && reason.contains(lastLine)) {
                 reason += " " + lastLine
             }
-            stopSession(serverName)
+            stopRunningSession(serverName)
             statuses[serverName] = .failed(String(reason.prefix(300)))
             return nil
         }
@@ -456,7 +462,11 @@ final class DottieToolsStore: ObservableObject {
         if let existing = sessions[serverName], sessionFingerprints[serverName] == fingerprint {
             return existing
         }
-        stopSession(serverName)
+        // Only the old program or connection stops here. stopSession also
+        // cancels the server's connect attempt, and that attempt is usually
+        // the one asking: cancelling itself left every failed or web
+        // connect spinning on "Starting…" forever, with no error shown.
+        stopRunningSession(serverName)
 
         let endpoint = try await endpoint(for: filledConfig)
         let session = DottieMCPServerSession(serverName: serverName, endpoint: endpoint)
@@ -486,12 +496,18 @@ final class DottieToolsStore: ObservableObject {
     }
 
     private func stopSession(_ serverName: String) {
+        stopRunningSession(serverName)
+        connectTasks[serverName]?.cancel()
+        connectTasks[serverName] = nil
+    }
+
+    /// Stops the server's program or connection, leaving any connect
+    /// attempt running.
+    private func stopRunningSession(_ serverName: String) {
         if let session = sessions.removeValue(forKey: serverName) {
             Task { await session.stop() }
         }
         sessionFingerprints[serverName] = nil
-        connectTasks[serverName]?.cancel()
-        connectTasks[serverName] = nil
     }
 
     private func saveToolCache() {
@@ -593,6 +609,16 @@ final class DottieToolsStore: ObservableObject {
         for (serverName, config) in file.enabledServers {
             let (filledConfig, missing) = config.filledIn(serverName: serverName)
             if missing.isEmpty { readyServers[serverName] = filledConfig }
+        }
+        // Servers added as JSON in Home → Brain. Gemini CLI already reads
+        // them from its settings; Claude helpers only see what's synced
+        // here. A Tools server of the same name wins.
+        for (serverName, serverObject) in DottieBrain.userMCPServers() where readyServers[serverName] == nil {
+            if let serverData = try? JSONSerialization.data(withJSONObject: serverObject),
+               let config = try? JSONDecoder().decode(DottieMCPServerConfig.self, from: serverData),
+               config.command != nil || config.url != nil {
+                readyServers[serverName] = config
+            }
         }
         let previousClaudeCode = file.dottie.claudeCodeSynced
         let previousOpenMausBot = file.dottie.openMausBotSynced
@@ -768,6 +794,13 @@ enum DottieHelperMCPSync {
             if exitCode == 0 {
                 synced[externalName] = entryFingerprint
             }
+        }
+        // Claude Code keeps servers' keys in this file as written, so only
+        // the user may read it (Claude Code makes it that way, but a file
+        // copied in from elsewhere may not be).
+        let claudeConfigPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json").path
+        if !servers.isEmpty, FileManager.default.fileExists(atPath: claudeConfigPath) {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: claudeConfigPath)
         }
         return synced
     }

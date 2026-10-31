@@ -128,6 +128,10 @@ private let gettingStartedToolID = "dottie-getting-started"
 final class ClickyRoster: ObservableObject {
     @Published private(set) var agents: [ClickyAgent] = []
     @Published private(set) var transcriptsByAgentID: [UUID: [ClickyAgentTranscriptItem]] = [:]
+    /// projects.json, read again only when it changed (see projectIndex).
+    /// The Dots page asks for the teams every time it redraws, which is
+    /// many times a second while a Dot is answering.
+    private var cachedProjectIndex: (modifiedAt: Date, projects: [DottieProjects.Project])?
     @Published private(set) var runningAgentIDs: Set<UUID> = []
     /// Set when something (the notch) asks Home to show a Dot's chat; Home
     /// clears it once it has.
@@ -179,7 +183,7 @@ final class ClickyRoster: ObservableObject {
         try? FileManager.default.createDirectory(at: rosterDirectoryURL, withIntermediateDirectories: true)
         skillLibrary = ClickySkillLibrary(libraryURL: cloneDirectoryURL.appendingPathComponent("Skills", isDirectory: true))
         routineStore = ClickyRoutineStore(routinesFileURL: rosterDirectoryURL.appendingPathComponent("routines.json"))
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
         loadRoster()
         startRoutineScheduler()
         DottieMausBot.shared.warmUpAfterLaunch()
@@ -202,7 +206,16 @@ final class ClickyRoster: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSpokenName.isEmpty else { return nil }
         return agents.first { $0.name.lowercased() == normalizedSpokenName }
-            ?? agents.first { $0.name.lowercased().contains(normalizedSpokenName) || normalizedSpokenName.contains($0.name.lowercased()) }
+            ?? agents.first { Self.containsAsWholeWords(normalizedSpokenName, $0.name.lowercased()) || Self.containsAsWholeWords($0.name.lowercased(), normalizedSpokenName) }
+    }
+
+    /// True when `phrase` appears in `text` as whole words ("research" in
+    /// "research bot", not "art" in "start"). Names under three letters only
+    /// match exactly, so a Dot called "Al" isn't found inside every ask.
+    private static func containsAsWholeWords(_ text: String, _ phrase: String) -> Bool {
+        guard phrase.count >= 3 else { return false }
+        let pattern = "(^|[^\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: phrase) + "($|[^\\p{L}\\p{N}])"
+        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// The Brain agent, made the first time it's needed.
@@ -257,10 +270,6 @@ final class ClickyRoster: ObservableObject {
         saveRoster()
         // Move the folder to the Trash rather than deleting the agent's work.
         try? FileManager.default.trashItem(at: workspaceURL(for: agent), resultingItemURL: nil)
-    }
-
-    var unreadAgentCount: Int {
-        agents.filter { $0.hasUnreadReply == true }.count
     }
 
     func markRead(agentID: UUID) {
@@ -453,8 +462,9 @@ final class ClickyRoster: ObservableObject {
         let fullMessageForAgent = isTurnApprovedForComputerUse
             ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
             : messageForAgent
+        refreshAgentInstructions(for: agent)
         // Picks up a cua-driver installed since launch.
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
         skillLibrary.reload()
         skillLibrary.linkSkills(named: Set(agent.enabledSkillNames ?? []), intoWorkspace: agentWorkspaceURL)
         skillFolderNamesBeforeTurnByAgentID[agentID] = skillLibrary.skillFolderNamesOnDisk()
@@ -464,10 +474,14 @@ final class ClickyRoster: ObservableObject {
         // Something on screen right away, whichever engine picks it up.
         appendTranscriptItem(.tool, text: "Getting started…", to: agentID, toolID: gettingStartedToolID, persist: false)
 
-        let additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
-            + (agent.isBrain == true
-                ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
-                : [])
+        var additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
+        if agent.isBrain == true {
+            additionalDirectoryURLs += [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
+        }
+        // The Coder helper edits files in any folder opened in Home → Code.
+        if agent.name == DottieCodeWorkspace.coderHelperName {
+            additionalDirectoryURLs += DottieCodeWorkspace.shared.roots.map(\.url)
+        }
         let claudeSpec = mausBotSpec(for: agent, extraFolderURLs: additionalDirectoryURLs)
         // What was said before, for an engine that didn't hear it.
         let conversationContext = recentConversationContext(forAgentID: agentID)
@@ -628,6 +642,11 @@ final class ClickyRoster: ObservableObject {
 
     private func handleRuntimeEvent(_ event: GeminiCLIAgentEvent, agentID: UUID) {
         markGettingStartedDone(agentID: agentID)
+        if case .assistantTextDelta = event {} else {
+            // Anything else (a tool, the end of the turn) comes after the
+            // words before it, so those go in first.
+            flushPendingAssistantText(for: agentID)
+        }
         switch event {
         case .sessionStarted:
             // Not saved yet: Gemini CLI only writes the session once a turn
@@ -635,13 +654,11 @@ final class ClickyRoster: ObservableObject {
             // nothing to resume. It's marked on a successful finish instead.
             break
         case .assistantTextDelta(let textDelta):
-            var transcript = transcriptsByAgentID[agentID] ?? []
-            if let lastItem = transcript.last, lastItem.kind == .assistant {
-                transcript[transcript.count - 1].text += textDelta
-                transcriptsByAgentID[agentID] = transcript
-            } else {
-                appendTranscriptItem(.assistant, text: textDelta, to: agentID, persist: false)
-            }
+            // Gathered for a tenth of a second instead of written straight
+            // in: every write copied the whole chat and redrew the Dots
+            // page, a few times for each word on a long chat.
+            pendingAssistantTextByAgentID[agentID, default: ""] += textDelta
+            scheduleAssistantTextFlush()
         case .toolStarted(let toolID, let toolName, let parametersSummary):
             let toolLine = parametersSummary.isEmpty ? toolName : "\(toolName) · \(parametersSummary)"
             appendTranscriptItem(.tool, text: toolLine, to: agentID, toolID: toolID, persist: false)
@@ -1001,6 +1018,35 @@ final class ClickyRoster: ObservableObject {
 
     // MARK: - Transcript helpers
 
+    /// Streamed words not yet in the chat (see handleRuntimeEvent).
+    private var pendingAssistantTextByAgentID: [UUID: String] = [:]
+    private var assistantTextFlushTask: Task<Void, Never>?
+
+    private func scheduleAssistantTextFlush() {
+        guard assistantTextFlushTask == nil else { return }
+        assistantTextFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self else { return }
+            self.assistantTextFlushTask = nil
+            for agentID in Array(self.pendingAssistantTextByAgentID.keys) {
+                self.flushPendingAssistantText(for: agentID)
+            }
+        }
+    }
+
+    /// Adds the words gathered for this Dot to its chat: onto its last
+    /// answer while it's still the newest item, else as a new answer.
+    private func flushPendingAssistantText(for agentID: UUID) {
+        guard let pendingText = pendingAssistantTextByAgentID.removeValue(forKey: agentID), !pendingText.isEmpty else { return }
+        var transcript = transcriptsByAgentID[agentID] ?? []
+        if let lastItem = transcript.last, lastItem.kind == .assistant {
+            transcript[transcript.count - 1].text += pendingText
+            transcriptsByAgentID[agentID] = transcript
+        } else {
+            appendTranscriptItem(.assistant, text: pendingText, to: agentID, persist: false)
+        }
+    }
+
     private func appendTranscriptItem(
         _ kind: ClickyAgentTranscriptItem.Kind,
         text: String,
@@ -1008,6 +1054,8 @@ final class ClickyRoster: ObservableObject {
         toolID: String? = nil,
         persist: Bool = true
     ) {
+        // Words still gathering belong before this item.
+        flushPendingAssistantText(for: agentID)
         var transcript = transcriptsByAgentID[agentID] ?? []
         transcript.append(ClickyAgentTranscriptItem(
             id: UUID(),
@@ -1071,6 +1119,22 @@ final class ClickyRoster: ObservableObject {
         if let settingsData = try? JSONSerialization.data(withJSONObject: geminiSettings, options: [.prettyPrinted, .sortedKeys]) {
             try? settingsData.write(to: agentWorkspaceURL.appendingPathComponent(".gemini/settings.json"))
         }
+    }
+
+    /// Brings an existing Dot's AGENTS.md up to date: it's written when the
+    /// Dot is made, and the standing instructions change with app updates.
+    /// Everything from the "## Notes" heading on is the Dot's own and stays.
+    private func refreshAgentInstructions(for agent: ClickyAgent) {
+        let instructionsFileURL = workspaceURL(for: agent).appendingPathComponent("AGENTS.md")
+        let notesHeading = "\n## Notes\n"
+        let currentInstructions = Self.agentInstructions(for: agent)
+        guard let existingText = try? String(contentsOf: instructionsFileURL, encoding: .utf8),
+              let existingNotesRange = existingText.range(of: notesHeading),
+              let currentNotesRange = currentInstructions.range(of: notesHeading) else { return }
+        let refreshedText = String(currentInstructions[..<currentNotesRange.lowerBound])
+            + String(existingText[existingNotesRange.lowerBound...])
+        guard refreshedText != existingText else { return }
+        try? refreshedText.write(to: instructionsFileURL, atomically: true, encoding: .utf8)
     }
 
     /// The standing instructions every agent gets: identity, how to work,
@@ -1502,11 +1566,8 @@ extension ClickyRoster {
     /// Teams: projects two or more helpers worked on, newest first. Read
     /// from the projects folder's index (DottieProjects writes it).
     func helperTeams() -> [(name: String, helperNames: [String])] {
-        guard let projectsFolderURL = sharedFolderURLs.first,
-              let indexData = try? Data(contentsOf: projectsFolderURL.appendingPathComponent("projects.json")) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        guard let projectsFolderURL = sharedFolderURLs.first else { return [] }
+        let projects = projectIndex(in: projectsFolderURL)
         let helperNamesHere = Set(agents.map { $0.name.lowercased() })
         return projects
             .sorted { $0.updatedAt > $1.updatedAt }
@@ -1518,5 +1579,22 @@ extension ClickyRoster {
                 }
                 return uniqueNames.count >= 2 ? (project.name, uniqueNames) : nil
             }
+    }
+
+    private func projectIndex(in projectsFolderURL: URL) -> [DottieProjects.Project] {
+        let indexURL = projectsFolderURL.appendingPathComponent("projects.json")
+        guard let modifiedAt = (try? FileManager.default.attributesOfItem(atPath: indexURL.path))?[.modificationDate] as? Date else {
+            cachedProjectIndex = nil
+            return []
+        }
+        if let cachedProjectIndex, cachedProjectIndex.modifiedAt == modifiedAt {
+            return cachedProjectIndex.projects
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let indexData = try? Data(contentsOf: indexURL),
+              let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        cachedProjectIndex = (modifiedAt, projects)
+        return projects
     }
 }

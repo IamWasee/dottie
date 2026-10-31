@@ -52,7 +52,11 @@ enum DottieGameMapPicture {
         try? reportText(of: worldMap, floorPlan: floorPlan)
             .write(to: worldMap.mapFolderURL.appendingPathComponent(reportFileName), atomically: true, encoding: .utf8)
         write3DModel(of: worldMap)
-        worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL)
+        let surfaceMap = worldMap.surfaceMap
+        let mapFolderURL = worldMap.mapFolderURL
+        Task {
+            await surfaceMap.writeModel(into: mapFolderURL)
+        }
     }
 
     // MARK: - 3D model
@@ -448,7 +452,7 @@ enum DottieGameMapPicture {
         if existingSurfaceModelURL() == nil || existingOpenableBlocksModelURL() == nil {
             let worldMap = DottieGameWorldMap(gameName: savedMap.gameName, gameFolderURL: savedMap.gameFolderURL)
             await write3DModel(of: worldMap).value
-            await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL).value
+            await worldMap.surfaceMap.writeModel(into: worldMap.mapFolderURL)
         }
         if let surfaceModelURL = existingSurfaceModelURL() {
             return NSWorkspace.shared.open(surfaceModelURL)

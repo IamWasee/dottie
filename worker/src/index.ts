@@ -80,9 +80,11 @@ export default {
     const url = new URL(request.url);
 
     // Gemini CLI can only send an "API key", so the agents' passthrough
-    // authenticates with x-goog-api-key instead of x-clicky-secret.
+    // authenticates with that key instead of x-clicky-secret. Google's
+    // clients send it as x-goog-api-key or, some of them, as ?key=.
     if (url.pathname.startsWith("/gemini/")) {
-      if (env.APP_SHARED_SECRET && request.headers.get("x-goog-api-key") !== env.APP_SHARED_SECRET) {
+      const sentKey = request.headers.get("x-goog-api-key") ?? url.searchParams.get("key");
+      if (env.APP_SHARED_SECRET && sentKey !== env.APP_SHARED_SECRET) {
         return new Response("Unauthorized", { status: 401 });
       }
       try {
@@ -796,12 +798,6 @@ function modelsToTry(model: string, fallbackModels?: string): string[] {
 }
 
 /**
- * Calls `models/<model>:<method>` on each model in turn until one answers.
- * Free-tier models often say "high demand" (503) or hit their per-model
- * limit (429) while others are fine, so a busy model moves on to the next.
- * Any other error is returned as is.
- */
-/**
  * `x-dottie-attempt-seconds`: how long one model may take to start
  * answering before the next one is tried. The app sends it for quick
  * lookups (a box on a screenshot), where a model that's slow to start
@@ -815,6 +811,12 @@ function attemptTimeoutMilliseconds(request: Request): number | undefined {
   return Math.min(attemptSeconds, 60) * 1000;
 }
 
+/**
+ * Calls `models/<model>:<method>` on each model in turn until one answers.
+ * Free-tier models often say "high demand" (503) or hit their per-model
+ * limit (429) while others are fine, so a busy model moves on to the next.
+ * Any other error is returned as is.
+ */
 async function fetchGeminiWithFallback(
   env: Env,
   models: string[],

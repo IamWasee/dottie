@@ -20,6 +20,7 @@
 
 import AppKit
 import Foundation
+import Vision
 
 /// One stroke for the cursor to trace like a pen: fly to its start in
 /// `leadInSeconds`, follow it over `drawSeconds`, then say the caption.
@@ -63,7 +64,7 @@ enum DottieTeaching {
 
     enum Kind: String, CaseIterable {
         case line, arrow, double_arrow, curve, polygon, circle, box, highlight, underline
-        case angle, right_angle, point, text, ticks, measure, brace, axes, plot, cross, check
+        case angle, right_angle, point, text, ticks, measure, brace, axes, plot, cross, check, grid, chart
     }
 
     struct Anchor {
@@ -80,6 +81,14 @@ enum DottieTeaching {
         let caption: String?
         let say: String?
         let range: [Double]
+        /// chart only: line, bar or dots.
+        let style: String?
+
+        /// The same step with other text, for a chart whose numbers were
+        /// read from the circled area on the Mac.
+        func replacingText(_ newText: String) -> Step {
+            Step(kind: kind, points: points, text: newText, ink: ink, size: size, caption: caption, say: say, range: range, style: style)
+        }
     }
 
     struct Plan {
@@ -87,13 +96,22 @@ enum DottieTeaching {
         let anchors: [Anchor]
         let steps: [Step]
         let keepsDrawing: Bool
+        /// Draw onto the drawing that's already up (same board) instead of
+        /// starting over, for "now add…" or "continue it" later on.
+        let addsToLastDrawing: Bool
+        /// Whether the model named a surface, so adding to a board keeps
+        /// that board unless it asked for another one.
+        let surfaceWasGiven: Bool
 
         init?(arguments: [String: Any]) {
             func trimmed(_ value: Any?) -> String? {
                 let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return text?.isEmpty == false ? text : nil
             }
-            surface = trimmed(arguments["surface"]).flatMap { Surface(rawValue: $0.lowercased()) } ?? .screen
+            let givenSurface = trimmed(arguments["surface"]).flatMap { Surface(rawValue: $0.lowercased()) }
+            surface = givenSurface ?? .screen
+            surfaceWasGiven = givenSurface != nil
+            addsToLastDrawing = (arguments["add_to_last"] as? Bool) ?? ((arguments["add_to_last"] as? NSNumber)?.boolValue ?? false)
             anchors = ((arguments["anchors"] as? [Any]) ?? []).compactMap { item in
                 guard let fields = item as? [String: Any], let name = trimmed(fields["name"]) else { return nil }
                 return Anchor(name: name, description: trimmed(fields["describe"]) ?? name)
@@ -121,11 +139,13 @@ enum DottieTeaching {
                     size: trimmed(fields["size"])?.lowercased(),
                     caption: trimmed(fields["caption"]),
                     say: trimmed(fields["say"]),
-                    range: ((fields["range"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.doubleValue }
+                    range: ((fields["range"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.doubleValue },
+                    style: trimmed(fields["style"])?.lowercased()
                 )
             }
             guard !steps.isEmpty else { return nil }
-            keepsDrawing = (arguments["keep"] as? Bool) ?? (surface != .screen)
+            // Kept up by default, so the user can ask to add to it later.
+            keepsDrawing = (arguments["keep"] as? Bool) ?? true
         }
 
         var anchorNames: Set<String> { Set(anchors.map { $0.name.lowercased() }) }
@@ -139,18 +159,19 @@ enum DottieTeaching {
             "points": [
                 "type": "ARRAY",
                 "items": ["type": "STRING"],
-                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot: the graph area's top-left and bottom-right."
+                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
-            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, or for plot the function of x like x^2 - 3. Use math symbols: x², √, π, θ, ⊥, ≠, ≤, ½, →."],
+            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Use math symbols: x², √, π, θ, ⊥, ≠, ≤, ½, →."],
             "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
             "say": ["type": "STRING", "description": "The sentence you say out loud for this step. It's spoken while this step is drawn."],
-            "range": ["type": "ARRAY", "items": ["type": "NUMBER"], "description": "plot only: xmin, xmax, ymin, ymax. Default -10, 10, -10, 10."]
+            "range": ["type": "ARRAY", "items": ["type": "NUMBER"], "description": "plot: xmin, xmax, ymin, ymax (default -10, 10, -10, 10). chart: ymin, ymax if you want a set value scale (default fits the data)."],
+            "style": ["type": "STRING", "enum": ["line", "bar", "dots"], "description": "chart only: line (default, for trends over time), bar (for comparing amounts) or dots (a scatter)."]
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". To mark things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math goes on a board (board_right or board_left, whichever covers less of what matters) as text steps, one line of working each, top to bottom, like \"m = (8−2)/(5−3) = 3\" then \"m⊥ = −1/3\". Use plot for a function's real graph, measure for lengths, angle with its size, ticks for equal sides. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math goes on a board (board_right or board_left, whichever covers less of what matters) as text steps, one line of working each, top to bottom, like \"m = (8−2)/(5−3) = 3\" then \"m⊥ = −1/3\". Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -176,7 +197,8 @@ enum DottieTeaching {
                         "items": ["type": "OBJECT", "properties": stepProperties, "required": ["kind", "points"]],
                         "description": "The drawing, in the order to draw and explain it."
                     ],
-                    "keep": ["type": "BOOLEAN", "description": "Keep the drawing up after you finish until it's cleared. Default true on a board, false on the screen."]
+                    "keep": ["type": "BOOLEAN", "description": "Keep the drawing up after you finish until it's cleared (about 10 minutes). Default true; false fades it after a minute."],
+                    "add_to_last": ["type": "BOOLEAN", "description": "true adds these steps to the drawing already up, on the same board, instead of starting a new one. Use it whenever the user asks to add to, change or continue what you drew."]
                 ],
                 "required": ["steps"]
             ]
@@ -610,6 +632,37 @@ enum DottieTeaching {
                 drawn.addLabel(names[1], centeredAt: CGPoint(x: points[2].x + 20, y: points[2].y + 4), fontSize: 20, ink: step.ink ?? .white)
             }
 
+        case .grid:
+            guard points.count >= 2 else { return nil }
+            let gridArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                                  width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+            guard gridArea.width > 20, gridArea.height > 20 else { return nil }
+            // "8x5" is 8 cells across and 5 down; one number is the cells
+            // across, with square-ish cells down.
+            let cellCounts = (step.text ?? "")
+                .lowercased()
+                .components(separatedBy: CharacterSet(charactersIn: "x× ,"))
+                .compactMap { Int($0) }
+            let columnCount = min(max(cellCounts.first ?? 10, 1), 40)
+            let defaultRowCount = Int((CGFloat(columnCount) * gridArea.height / gridArea.width).rounded())
+            let rowCount = min(max(cellCounts.count > 1 ? cellCounts[1] : defaultRowCount, 1), 40)
+            let gridInk = step.ink ?? .white
+            // Thin and quick: a grid is the paper, not the point.
+            let lineCount = columnCount + rowCount + 2
+            let secondsPerLine = max(0.04, min(0.12, 2.0 / Double(lineCount)))
+            for columnIndex in 0...columnCount {
+                let lineX = gridArea.minX + gridArea.width * CGFloat(columnIndex) / CGFloat(columnCount)
+                let gridLine = [CGPoint(x: lineX, y: gridArea.maxY), CGPoint(x: lineX, y: gridArea.minY)]
+                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
+            }
+            for rowIndex in 0...rowCount {
+                let lineY = gridArea.minY + gridArea.height * CGFloat(rowIndex) / CGFloat(rowCount)
+                let gridLine = [CGPoint(x: gridArea.minX, y: lineY), CGPoint(x: gridArea.maxX, y: lineY)]
+                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
+            }
+
         case .plot:
             guard points.count >= 2, let expressionText = step.text,
                   let function = DottieMathExpression(expressionText) else { return nil }
@@ -670,6 +723,96 @@ enum DottieTeaching {
                       ink: step.ink ?? .red, lineWidth: 4, pen: first, duration: 0.2)
             drawn.add(.stroke(points: second, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
                       ink: step.ink ?? .red, lineWidth: 4, pen: second, duration: 0.2)
+
+        case .chart:
+            guard points.count >= 2, let dataText = step.text else { return nil }
+            let chartPoints = DottieChartData.parse(dataText)
+            guard !chartPoints.isEmpty else { return nil }
+            // Room on the left for the scale and below for the labels.
+            let outerArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                                   width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+            let scaleLabelFontSize: CGFloat = 15
+            let plotArea = CGRect(x: outerArea.minX + 46, y: outerArea.minY + 30,
+                                  width: outerArea.width - 56, height: outerArea.height - 40)
+            guard plotArea.width > 40, plotArea.height > 40 else { return nil }
+            let chartStyle = step.style ?? "line"
+            let values = chartPoints.map(\.value)
+            let valueScale = DottieChartData.valueScale(
+                values: values,
+                startsAtZero: chartStyle == "bar",
+                givenRange: step.range.count >= 2 && step.range[1] > step.range[0] ? (step.range[0], step.range[1]) : nil
+            )
+            func screenY(_ value: Double) -> CGFloat {
+                plotArea.minY + CGFloat((value - valueScale.minimum) / (valueScale.maximum - valueScale.minimum)) * plotArea.height
+            }
+            // x is spread evenly for labels, or by the numbers for x, y pairs.
+            let numericXValues = chartPoints.compactMap(\.x)
+            let usesNumericX = numericXValues.count == chartPoints.count && chartPoints.count > 1
+                && (numericXValues.max() ?? 0) > (numericXValues.min() ?? 0)
+            func screenX(_ index: Int) -> CGFloat {
+                if usesNumericX, let xMinimum = numericXValues.min(), let xMaximum = numericXValues.max(), let x = chartPoints[index].x {
+                    return plotArea.minX + 12 + CGFloat((x - xMinimum) / (xMaximum - xMinimum)) * (plotArea.width - 24)
+                }
+                return plotArea.minX + plotArea.width * (CGFloat(index) + 0.5) / CGFloat(chartPoints.count)
+            }
+            let axisInk = DottieInk.white
+            // Faint scale lines with their numbers.
+            for tickValue in valueScale.ticks {
+                let lineY = screenY(tickValue)
+                let scaleLine = [CGPoint(x: plotArea.minX, y: lineY), CGPoint(x: plotArea.maxX, y: lineY)]
+                drawn.add(.stroke(points: scaleLine, closed: false, smooth: false, dashed: true, arrowAtStart: false, arrowAtEnd: false),
+                          ink: axisInk, lineWidth: 0.8, pen: scaleLine, duration: 0.08)
+                let tickText = DottieChartData.shortNumber(tickValue)
+                let tickWidth = DottieFigure.estimatedTextWidth(tickText, fontSize: scaleLabelFontSize)
+                drawn.addText(tickText, origin: CGPoint(x: plotArea.minX - tickWidth - 8, y: lineY + 5), fontSize: scaleLabelFontSize, ink: axisInk)
+            }
+            let axes = [CGPoint(x: plotArea.minX, y: plotArea.maxY), CGPoint(x: plotArea.minX, y: plotArea.minY), CGPoint(x: plotArea.maxX, y: plotArea.minY)]
+            drawn.add(.stroke(points: axes, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: axisInk, lineWidth: 2.5, pen: axes, duration: 0.4)
+            // Labels under the axis, every one that fits.
+            let xLabels = chartPoints.indices.map { index in
+                chartPoints[index].label ?? chartPoints[index].x.map(DottieChartData.shortNumber) ?? ""
+            }
+            let widestLabel = xLabels.map { DottieFigure.estimatedTextWidth($0, fontSize: scaleLabelFontSize) }.max() ?? 0
+            let slotWidth = plotArea.width / CGFloat(chartPoints.count)
+            let labelEvery = max(1, Int(ceil((widestLabel + 8) / max(slotWidth, 1))))
+            for index in chartPoints.indices where index % labelEvery == 0 && !xLabels[index].isEmpty {
+                drawn.addLabel(xLabels[index], centeredAt: CGPoint(x: screenX(index), y: plotArea.minY - 12), fontSize: scaleLabelFontSize, ink: axisInk)
+            }
+            // The data itself.
+            let dataPoints = chartPoints.indices.map { CGPoint(x: screenX($0), y: screenY(chartPoints[$0].value)) }
+            switch chartStyle {
+            case "bar":
+                let barWidth = max(4, min(60, slotWidth * 0.6))
+                let baseY = screenY(max(valueScale.minimum, min(0, valueScale.maximum)))
+                for dataPoint in dataPoints {
+                    let barCorners = [CGPoint(x: dataPoint.x - barWidth / 2, y: baseY), CGPoint(x: dataPoint.x - barWidth / 2, y: dataPoint.y),
+                                      CGPoint(x: dataPoint.x + barWidth / 2, y: dataPoint.y), CGPoint(x: dataPoint.x + barWidth / 2, y: baseY)]
+                    drawn.add(.fill(points: barCorners), ink: ink, pen: barCorners, duration: max(0.12, 1.4 / Double(dataPoints.count)))
+                }
+            case "dots":
+                for dataPoint in dataPoints {
+                    drawn.add(.dot(center: dataPoint, radius: 5), ink: ink, pen: [dataPoint], duration: max(0.06, 1.0 / Double(dataPoints.count)))
+                }
+            default:
+                if dataPoints.count >= 2 {
+                    drawn.add(.stroke(points: dataPoints, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                              ink: ink, lineWidth: 3.5, pen: dataPoints, duration: min(2.4, max(0.6, Double(dataPoints.count) * 0.15)))
+                }
+                for dataPoint in dataPoints where dataPoints.count <= 40 {
+                    drawn.add(.dot(center: dataPoint, radius: 4.5), ink: ink, pen: [dataPoint], duration: 0.04)
+                }
+            }
+            // Each value written on its point when there are few enough.
+            if dataPoints.count <= 12 && labelEvery == 1 {
+                for (index, dataPoint) in dataPoints.enumerated() {
+                    drawn.addLabel(DottieChartData.shortNumber(chartPoints[index].value), centeredAt: CGPoint(x: dataPoint.x, y: dataPoint.y + 18),
+                                   fontSize: scaleLabelFontSize, ink: ink)
+                }
+            }
+            if let label = step.caption.map(DottieMathText.pretty) {
+                drawn.addLabel(label, centeredAt: CGPoint(x: plotArea.midX, y: outerArea.maxY + 4), fontSize: 20, ink: axisInk)
+            }
 
         case .check:
             guard let point = points.first else { return nil }
@@ -1051,5 +1194,163 @@ struct DottieMathExpression {
                 return nil
             }
         }
+    }
+}
+
+// MARK: - Chart data
+
+/// The numbers for a chart step: "Mon: 12; Tue: 9", "1, 3; 2, 5", or rows
+/// read from a table the user circled.
+enum DottieChartData {
+    struct ChartPoint {
+        let label: String?
+        let x: Double?
+        let value: Double
+    }
+
+    static func parse(_ dataText: String) -> [ChartPoint] {
+        let entries = dataText
+            .components(separatedBy: CharacterSet(charactersIn: ";\n"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return entries.prefix(200).compactMap(parseEntry)
+    }
+
+    private static func parseEntry(_ entry: String) -> ChartPoint? {
+        // "label: value" or "label = value"
+        if let separatorRange = entry.range(of: ":") ?? entry.range(of: "=") {
+            let label = entry[..<separatorRange.lowerBound].trimmingCharacters(in: .whitespaces)
+            let valueText = entry[separatorRange.upperBound...].replacingOccurrences(of: ",", with: "")
+            guard let value = numbers(in: valueText).last else { return nil }
+            let labelIsNumber = Double(label) != nil
+            return ChartPoint(label: label.isEmpty || labelIsNumber ? nil : label, x: labelIsNumber ? Double(label) : nil, value: value)
+        }
+        let hasLetters = entry.rangeOfCharacter(from: .letters) != nil
+        let entryNumbers = numbers(in: entry)
+        // "x, y"
+        if !hasLetters, entryNumbers.count == 2 {
+            return ChartPoint(label: nil, x: entryNumbers[0], value: entryNumbers[1])
+        }
+        // "Jan 1,200": the last number is the value, what's before it the label.
+        let withoutThousands = entry.replacingOccurrences(of: #"(\d),(\d{3})"#, with: "$1$2", options: .regularExpression)
+        guard let lastNumberRange = withoutThousands.range(of: #"-?\d+(\.\d+)?(?!.*\d)"#, options: .regularExpression),
+              let value = Double(withoutThousands[lastNumberRange]) else { return nil }
+        let label = withoutThousands[..<lastNumberRange.lowerBound]
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "|,$€£%")))
+        return ChartPoint(label: label.isEmpty ? nil : label, x: label.isEmpty ? nil : Double(label), value: value)
+    }
+
+    private static func numbers(in text: String) -> [Double] {
+        guard let expression = try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#) else { return [] }
+        let wholeText = NSRange(text.startIndex..., in: text)
+        return expression.matches(in: text, range: wholeText).compactMap { match in
+            Range(match.range, in: text).flatMap { Double(text[$0]) }
+        }
+    }
+
+    struct ValueScale {
+        let minimum: Double
+        let maximum: Double
+        let ticks: [Double]
+    }
+
+    /// A value axis with round numbers, about five lines. Bars start at
+    /// zero; lines fit the data so a trend is easy to see.
+    static func valueScale(values: [Double], startsAtZero: Bool, givenRange: (Double, Double)?) -> ValueScale {
+        var low = givenRange?.0 ?? (values.min() ?? 0)
+        var high = givenRange?.1 ?? (values.max() ?? 1)
+        if givenRange == nil && startsAtZero {
+            low = min(low, 0)
+            high = max(high, 0)
+        }
+        if high <= low {
+            low -= 1
+            high += 1
+        }
+        let roughStep = (high - low) / 5
+        let magnitude = pow(10, floor(log10(roughStep)))
+        let niceStep = [1.0, 2.0, 2.5, 5.0, 10.0].map { $0 * magnitude }.first { $0 >= roughStep } ?? roughStep
+        let scaleMinimum = givenRange?.0 ?? floor(low / niceStep) * niceStep
+        let scaleMaximum = givenRange?.1 ?? ceil(high / niceStep) * niceStep
+        var ticks: [Double] = []
+        var tick = ceil(scaleMinimum / niceStep) * niceStep
+        while tick <= scaleMaximum + niceStep * 0.001 && ticks.count < 12 {
+            ticks.append(tick)
+            tick += niceStep
+        }
+        return ValueScale(minimum: scaleMinimum, maximum: scaleMaximum, ticks: ticks)
+    }
+
+    /// 12, 2.5, 1.2k, 3M.
+    static func shortNumber(_ value: Double) -> String {
+        let magnitude = abs(value)
+        func trimmed(_ number: Double) -> String {
+            number == number.rounded() ? String(Int(number)) : String(format: "%.1f", number)
+        }
+        if magnitude >= 1_000_000 { return trimmed(value / 1_000_000) + "M" }
+        if magnitude >= 10_000 { return trimmed(value / 1_000) + "k" }
+        if magnitude > 0 && magnitude < 1 { return String(format: "%.2f", value) }
+        return trimmed((value * 10).rounded() / 10)
+    }
+
+    /// Reads what's inside an area of the screen on this Mac (sharp
+    /// screenshot, Apple's text recognition) as rows top to bottom, cells
+    /// split by " | ". Used for tables and numbers the user circled.
+    @MainActor
+    static func readRows(inGlobalRect circledRect: CGRect) async -> [String] {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(circledRect) }),
+              let screenImage = await DottieDisplayCapture.captureImage(displayFrame: screen.frame, maximumDimension: 4096) else { return [] }
+        let displayFrame = screen.frame
+        let pixelsPerPoint = CGFloat(screenImage.width) / displayFrame.width
+        let visibleRect = circledRect.intersection(displayFrame)
+        // Image rows run top-down; AppKit's y runs up.
+        let cropRect = CGRect(
+            x: (visibleRect.minX - displayFrame.minX) * pixelsPerPoint,
+            y: (displayFrame.maxY - visibleRect.maxY) * pixelsPerPoint,
+            width: visibleRect.width * pixelsPerPoint,
+            height: visibleRect.height * pixelsPerPoint
+        ).integral
+        guard let croppedImage = screenImage.cropping(to: cropRect) else { return [] }
+        return await Task.detached(priority: .userInitiated) { () -> [String] in
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = false
+            let handler = VNImageRequestHandler(cgImage: croppedImage, options: [:])
+            guard (try? handler.perform([request])) != nil else { return [] }
+            let pieces = (request.results ?? []).compactMap { observation -> (text: String, box: CGRect)? in
+                guard let candidate = observation.topCandidates(1).first else { return nil }
+                return (text: candidate.string, box: observation.boundingBox)
+            }
+            // Pieces whose middles sit at about the same height are one row.
+            var rows: [[(text: String, box: CGRect)]] = []
+            for piece in pieces.sorted(by: { $0.box.midY > $1.box.midY }) {
+                if let lastRow = rows.last, let rowPiece = lastRow.first,
+                   abs(rowPiece.box.midY - piece.box.midY) < max(rowPiece.box.height, piece.box.height) * 0.6 {
+                    rows[rows.count - 1].append(piece)
+                } else {
+                    rows.append([piece])
+                }
+            }
+            return rows.map { row in
+                row.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: " | ")
+            }
+        }.value
+    }
+
+    /// Turns table rows into chart data: each row with a number becomes a
+    /// point, labeled by its first words, valued by its last number. A
+    /// header row without numbers is left out.
+    static func chartText(fromRows rows: [String]) -> String {
+        rows.compactMap { row -> String? in
+            let cells = row.components(separatedBy: " | ").map { $0.trimmingCharacters(in: .whitespaces) }
+            let numericCells = cells.filter { cell in
+                Double(cell.replacingOccurrences(of: #"[,$€£%\s]"#, with: "", options: .regularExpression)) != nil
+            }
+            guard let lastNumber = numericCells.last else { return nil }
+            let valueText = lastNumber.replacingOccurrences(of: #"[,$€£%\s]"#, with: "", options: .regularExpression)
+            let labelCell = cells.first { !numericCells.contains($0) } ?? (numericCells.count >= 2 ? numericCells[0] : nil)
+            guard let labelCell else { return valueText }
+            return "\(labelCell): \(valueText)"
+        }.joined(separator: "; ")
     }
 }

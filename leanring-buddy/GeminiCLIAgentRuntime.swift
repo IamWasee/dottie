@@ -92,6 +92,33 @@ final class GeminiCLIAgentRuntime {
         }
 
         // nvm and friends put it somewhere only the login shell knows.
+        // Starting a login shell takes a moment (and the Dots page asked
+        // every time it was drawn), so its answer is remembered: a found
+        // path while it's still there, no answer for a minute.
+        shellLookupCacheLock.lock()
+        let cachedShellLookup = cachedShellLookupResult
+        shellLookupCacheLock.unlock()
+        if let cachedShellLookup {
+            if let cachedPath = cachedShellLookup.path {
+                if FileManager.default.isExecutableFile(atPath: cachedPath) {
+                    return URL(fileURLWithPath: cachedPath)
+                }
+            } else if Date().timeIntervalSince(cachedShellLookup.lookedUpAt) < secondsToRememberMissingCLI {
+                return nil
+            }
+        }
+        let shellLookupPath = geminiPathFromLoginShell()
+        shellLookupCacheLock.lock()
+        cachedShellLookupResult = (shellLookupPath, Date())
+        shellLookupCacheLock.unlock()
+        return shellLookupPath.map { URL(fileURLWithPath: $0) }
+    }
+
+    private static let shellLookupCacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedShellLookupResult: (path: String?, lookedUpAt: Date)?
+    private static let secondsToRememberMissingCLI: TimeInterval = 60
+
+    private static func geminiPathFromLoginShell() -> String? {
         let shellLookupProcess = Process()
         shellLookupProcess.executableURL = URL(fileURLWithPath: "/bin/zsh")
         shellLookupProcess.arguments = ["-lc", "command -v gemini"]
@@ -107,7 +134,7 @@ final class GeminiCLIAgentRuntime {
         let lookupOutput = String(decoding: lookupOutputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lookupOutput.isEmpty, FileManager.default.isExecutableFile(atPath: lookupOutput) else { return nil }
-        return URL(fileURLWithPath: lookupOutput)
+        return lookupOutput
     }
 
     /// The login shell's PATH, so the agent's shell commands find the same
@@ -265,7 +292,10 @@ final class GeminiCLIAgentRuntime {
     /// installed. Gemini CLI ignores the auth type in workspace settings.
     /// Cheap enough to run before every turn, so installing cua-driver takes
     /// effect without a relaunch.
-    static func prepareCLIHome(at cliHomeURL: URL, skillLibraryURL: URL) {
+    /// `helperToolInstructions` is DottieToolRegistry.helperPromptSections
+    /// (memory files, the Code tab, command-line tools), passed in by the
+    /// caller on the main actor.
+    static func prepareCLIHome(at cliHomeURL: URL, skillLibraryURL: URL, helperToolInstructions: String) {
         let settingsFolderURL = cliHomeURL.appendingPathComponent(".gemini", isDirectory: true)
         try? FileManager.default.createDirectory(at: settingsFolderURL, withIntermediateDirectories: true)
 
@@ -310,9 +340,9 @@ final class GeminiCLIAgentRuntime {
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,
             DottieBrowser.agentInstructions,
-            DottieCLIToolsManager.helperInstructions.isEmpty
+            helperToolInstructions.isEmpty
                 ? ""
-                : "# Command-line tools\n\n" + DottieCLIToolsManager.helperInstructions + "\n"
+                : "# Dottie's other tools\n\n" + helperToolInstructions + "\n"
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
@@ -378,12 +408,6 @@ final class GeminiCLIAgentRuntime {
         let runningProcess = runningProcessesByAgentID[agentID]
         runningProcessesLock.unlock()
         runningProcess?.terminate()
-    }
-
-    func isTurnRunning(agentID: UUID) -> Bool {
-        runningProcessesLock.lock()
-        defer { runningProcessesLock.unlock() }
-        return runningProcessesByAgentID[agentID] != nil
     }
 
     private func setRunningProcess(_ process: Process?, forAgentID agentID: UUID) {

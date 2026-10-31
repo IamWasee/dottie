@@ -226,7 +226,7 @@ jobs:
             exit 1
           fi
           # Inside out: helper executables, then nested bundles, then the app.
-          # Nested code keeps its own entitlements (Sparkle's XPC services).
+          # Nested code keeps its own entitlements.
           find "$app/Contents" \( -path "*/Helpers/*" -o -path "*/Frameworks/*" \) -type f -perm -u+x | while read -r nested; do
             codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements,flags "$nested"
           done
@@ -252,6 +252,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :ClickyWorkerBaseURL" "$app/Contents/Info.plist"
           lipo -archs "$app/Contents/MacOS/Dottie"
           test -x "$app/Contents/Helpers/cua-driver"
+          test -f "$app/Contents/Frameworks/libneedle3.dylib"
+          test -f "$app/Contents/Resources/Needle/needle3.cact"
+          test -f "$app/Contents/Resources/Needle/whistle.cact"
           codesign --verify --deep --strict --verbose=2 "$app"
 
       - name: Make Dottie.dmg

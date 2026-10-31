@@ -34,7 +34,7 @@ struct ScreenAnnotation {
     }
 
     /// Short note for the model about the ring in the screenshot.
-    static let modelContextText = "while talking, the user circled part of the screen with the cursor. the screenshot shows it as a bright blue hand-drawn ring. they're asking about what's inside that ring, so focus on it."
+    static let modelContextText = "while talking, the user circled part of the screen with the cursor. the screenshot shows it as a bright blue hand-drawn ring. they're asking about what's inside that ring, so focus on it. to draw, solve, graph or explain it on screen, explain_on_screen knows that area as the anchor circled (write beside it at circled.right), and a chart step with text circled graphs its table or numbers exactly."
 }
 
 @MainActor

@@ -3,8 +3,8 @@
 //  leanring-buddy
 //
 //  Apple's on-device language model (Apple Intelligence, macOS 26 and
-//  later), for small text jobs that don't need the screen or the internet:
-//  a quick answer, or sorting a request ("is this a simple job?"). It
+//  later), for small text jobs that don't need the screen or the internet,
+//  like sorting a request ("is this a simple job?"). It
 //  answers in well under a second, costs nothing and works offline, so it
 //  saves a trip to Gemini where it can.
 //
@@ -90,30 +90,6 @@ enum DottieOnDeviceModel {
         ) else { return nil }
         let answerWords = answer.lowercased().components(separatedBy: CharacterSet.letters.inverted)
         return labels.first { answerWords.contains($0) }
-    }
-
-    /// A quick answer to a plain text question that doesn't need the screen,
-    /// the web or the user's files ("how many ounces in a cup", "say thanks
-    /// in Spanish"), or nil when it needs Gemini. For a type-to-ask bar.
-    static func quickAnswer(_ question: String) async -> String? {
-        guard isAvailable else { return nil }
-        let kind = await classify(
-            question,
-            labels: ["simple", "needs"],
-            instructions: """
-            You decide if a question to a Mac assistant can be answered from general knowledge alone. \
-            "simple" means a short, stable, general-knowledge answer, a tiny rewrite, a translation or \
-            arithmetic. "needs" means it needs the screen ("this", "here", "on my screen"), today's news, \
-            weather, prices, the user's own files, mail or calendar, or doing something on the Mac. \
-            Answer with one word: simple or needs.
-            """
-        )
-        guard kind == "simple" else { return nil }
-        return await respond(
-            instructions: "You are Dottie, a friendly Mac companion. Answer in one or two short, plain sentences. No markdown.",
-            prompt: question,
-            maximumTokens: 200
-        )
     }
 
     private static func withTimeout(seconds: Double, operation: @escaping @Sendable () async -> String?) async -> String? {

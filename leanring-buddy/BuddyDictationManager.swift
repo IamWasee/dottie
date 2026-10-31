@@ -13,189 +13,12 @@ import Combine
 import Foundation
 import Speech
 
+/// Whether a shortcut was just pressed or let go (see `ClickyHotkey`).
 enum BuddyPushToTalkShortcut {
-    enum ShortcutOption {
-        case shiftFunction
-        case controlOption
-        case shiftControl
-        case controlOptionSpace
-        case shiftControlSpace
-
-        var displayText: String {
-            switch self {
-            case .shiftFunction:
-                return "shift + fn"
-            case .controlOption:
-                return "ctrl + option"
-            case .shiftControl:
-                return "shift + control"
-            case .controlOptionSpace:
-                return "ctrl + option + space"
-            case .shiftControlSpace:
-                return "shift + control + space"
-            }
-        }
-
-        var keyCapsuleLabels: [String] {
-            switch self {
-            case .shiftFunction:
-                return ["shift", "fn"]
-            case .controlOption:
-                return ["ctrl", "option"]
-            case .shiftControl:
-                return ["shift", "control"]
-            case .controlOptionSpace:
-                return ["ctrl", "option", "space"]
-            case .shiftControlSpace:
-                return ["shift", "control", "space"]
-            }
-        }
-
-        fileprivate var modifierOnlyFlags: NSEvent.ModifierFlags? {
-            switch self {
-            case .shiftFunction:
-                return [.shift, .function]
-            case .controlOption:
-                return [.control, .option]
-            case .shiftControl:
-                return [.shift, .control]
-            case .controlOptionSpace, .shiftControlSpace:
-                return nil
-            }
-        }
-
-        fileprivate var spaceShortcutModifierFlags: NSEvent.ModifierFlags? {
-            switch self {
-            case .shiftFunction:
-                return nil
-            case .controlOption:
-                return nil
-            case .shiftControl:
-                return nil
-            case .controlOptionSpace:
-                return [.control, .option]
-            case .shiftControlSpace:
-                return [.shift, .control]
-            }
-        }
-    }
-
     enum ShortcutTransition {
         case none
         case pressed
         case released
-    }
-
-    private enum ShortcutEventType {
-        case flagsChanged
-        case keyDown
-        case keyUp
-    }
-
-    static let currentShortcutOption: ShortcutOption = .controlOption
-    static let pushToTalkKeyCode: UInt16 = 49 // Space
-    static let pushToTalkDisplayText = currentShortcutOption.displayText
-    static let pushToTalkTooltipText = "push to talk (\(pushToTalkDisplayText))"
-
-    static func shortcutTransition(
-        for event: NSEvent,
-        wasShortcutPreviouslyPressed: Bool
-    ) -> ShortcutTransition {
-        guard let shortcutEventType = shortcutEventType(for: event.type) else { return .none }
-
-        return shortcutTransition(
-            for: shortcutEventType,
-            keyCode: event.keyCode,
-            modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
-            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed
-        )
-    }
-
-    static func shortcutTransition(
-        for eventType: CGEventType,
-        keyCode: UInt16,
-        modifierFlagsRawValue: UInt64,
-        wasShortcutPreviouslyPressed: Bool
-    ) -> ShortcutTransition {
-        guard let shortcutEventType = shortcutEventType(for: eventType) else { return .none }
-
-        return shortcutTransition(
-            for: shortcutEventType,
-            keyCode: keyCode,
-            modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(modifierFlagsRawValue))
-                .intersection(.deviceIndependentFlagsMask),
-            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed
-        )
-    }
-
-    private static func shortcutEventType(for eventType: NSEvent.EventType) -> ShortcutEventType? {
-        switch eventType {
-        case .flagsChanged:
-            return .flagsChanged
-        case .keyDown:
-            return .keyDown
-        case .keyUp:
-            return .keyUp
-        default:
-            return nil
-        }
-    }
-
-    private static func shortcutEventType(for eventType: CGEventType) -> ShortcutEventType? {
-        switch eventType {
-        case .flagsChanged:
-            return .flagsChanged
-        case .keyDown:
-            return .keyDown
-        case .keyUp:
-            return .keyUp
-        default:
-            return nil
-        }
-    }
-
-    private static func shortcutTransition(
-        for shortcutEventType: ShortcutEventType,
-        keyCode: UInt16,
-        modifierFlags: NSEvent.ModifierFlags,
-        wasShortcutPreviouslyPressed: Bool
-    ) -> ShortcutTransition {
-        if let modifierOnlyFlags = currentShortcutOption.modifierOnlyFlags {
-            guard shortcutEventType == .flagsChanged else { return .none }
-
-            let isShortcutCurrentlyPressed = modifierFlags.contains(modifierOnlyFlags)
-
-            if isShortcutCurrentlyPressed && !wasShortcutPreviouslyPressed {
-                return .pressed
-            }
-
-            if !isShortcutCurrentlyPressed && wasShortcutPreviouslyPressed {
-                return .released
-            }
-
-            return .none
-        }
-
-        guard let pushToTalkModifierFlags = currentShortcutOption.spaceShortcutModifierFlags else {
-            return .none
-        }
-
-        let matchesModifierFlags = modifierFlags.isSuperset(of: pushToTalkModifierFlags)
-
-        if shortcutEventType == .keyDown
-            && keyCode == pushToTalkKeyCode
-            && matchesModifierFlags
-            && !wasShortcutPreviouslyPressed {
-            return .pressed
-        }
-
-        if shortcutEventType == .keyUp
-            && keyCode == pushToTalkKeyCode
-            && wasShortcutPreviouslyPressed {
-            return .released
-        }
-
-        return .none
     }
 }
 
@@ -205,7 +28,6 @@ enum BuddyDictationPermissionProblem {
 }
 
 private enum BuddyDictationStartSource {
-    case microphoneButton
     case keyboardShortcut
 }
 
@@ -217,40 +39,17 @@ private struct BuddyDictationDraftCallbacks {
 @MainActor
 final class BuddyDictationManager: NSObject, ObservableObject {
     private static let defaultFinalTranscriptFallbackDelaySeconds: TimeInterval = 2.4
-    private static let recordedAudioPowerHistoryLength = 44
-    private static let recordedAudioPowerHistoryBaselineLevel: CGFloat = 0.02
-    private static let recordedAudioPowerHistorySampleIntervalSeconds: TimeInterval = 0.07
 
-    @Published private(set) var isRecordingFromMicrophoneButton = false
     @Published private(set) var isRecordingFromKeyboardShortcut = false
     @Published private(set) var isKeyboardShortcutSessionActiveOrFinalizing = false
     @Published private(set) var isFinalizingTranscript = false
     @Published private(set) var isPreparingToRecord = false
     @Published private(set) var currentAudioPowerLevel: CGFloat = 0
-    @Published private(set) var recordedAudioPowerHistory = Array(
-        repeating: BuddyDictationManager.recordedAudioPowerHistoryBaselineLevel,
-        count: BuddyDictationManager.recordedAudioPowerHistoryLength
-    )
-    @Published private(set) var microphoneButtonRecordingStartedAt: Date?
-    @Published private(set) var transcriptionProviderDisplayName = ""
     @Published var lastErrorMessage: String?
     @Published private(set) var currentPermissionProblem: BuddyDictationPermissionProblem?
 
     var isDictationInProgress: Bool {
-        isPreparingToRecord || isRecordingFromMicrophoneButton || isRecordingFromKeyboardShortcut || isFinalizingTranscript
-    }
-
-    var isActivelyRecordingAudio: Bool {
-        isRecordingFromMicrophoneButton || isRecordingFromKeyboardShortcut
-    }
-
-    var isMicrophoneButtonActivelyRecordingAudio: Bool {
-        isRecordingFromMicrophoneButton
-    }
-
-    var isMicrophoneButtonSessionBusy: Bool {
-        activeStartSource == .microphoneButton
-            && (isPreparingToRecord || isRecordingFromMicrophoneButton || isFinalizingTranscript)
+        isPreparingToRecord || isRecordingFromKeyboardShortcut || isFinalizingTranscript
     }
 
     var needsInitialPermissionPrompt: Bool {
@@ -273,8 +72,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private var hasFinishedCurrentDictationSession = false
     private var finalizeFallbackWorkItem: DispatchWorkItem?
     private var pendingStartRequestIdentifier = UUID()
-    private var contextualKeyterms: [String] = []
-    private var lastRecordedAudioPowerSampleDate = Date.distantPast
     private var activePermissionRequestTask: Task<Bool, Never>?
     /// Timestamp of the last completed permission request, used to debounce
     /// rapid follow-up requests that arrive before macOS updates its cache.
@@ -288,26 +85,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     /// to Gemini Live instead of to a speech-to-text service.
     init(transcriptionProvider: any BuddyTranscriptionProvider) {
         self.transcriptionProvider = transcriptionProvider
-        self.transcriptionProviderDisplayName = transcriptionProvider.displayName
         super.init()
-    }
-
-    func updateContextualKeyterms(_ contextualKeyterms: [String]) {
-        self.contextualKeyterms = contextualKeyterms
-    }
-
-    func startPersistentDictationFromMicrophoneButton(
-        currentDraftText: String,
-        updateDraftText: @escaping (String) -> Void,
-        submitDraftText: @escaping (String) -> Void
-    ) async {
-        await startPushToTalk(
-            startSource: .microphoneButton,
-            currentDraftText: currentDraftText,
-            updateDraftText: updateDraftText,
-            submitDraftText: submitDraftText,
-            shouldAutomaticallySubmitFinalDraftOnStop: false
-        )
     }
 
     func startPushToTalkFromKeyboardShortcut(
@@ -324,10 +102,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
         )
-    }
-
-    func stopPersistentDictationFromMicrophoneButton() {
-        stopPushToTalk(expectedStartSource: .microphoneButton)
     }
 
     func stopPushToTalkFromKeyboardShortcut() {
@@ -352,31 +126,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         activeTranscriptionSession?.cancel()
 
         resetSessionState()
-    }
-
-    func requestInitialPushToTalkPermissionsIfNeeded() async {
-        guard needsInitialPermissionPrompt else { return }
-        guard !isDictationInProgress else { return }
-
-        lastErrorMessage = nil
-        currentPermissionProblem = nil
-        isPreparingToRecord = true
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-
-        do {
-            try await Task.sleep(for: .milliseconds(200))
-        } catch {
-            // If the task is cancelled while we are waiting for macOS to bring
-            // the app forward, we can safely continue into the permission check.
-        }
-
-        let hasPermissions = await requestMicrophoneAndSpeechPermissionsWithoutDuplicatePrompts()
-        isPreparingToRecord = false
-
-        if hasPermissions {
-            lastErrorMessage = nil
-        }
     }
 
     private func startPushToTalk(
@@ -435,16 +184,9 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         shouldAutomaticallySubmitFinalDraft = shouldAutomaticallySubmitFinalDraftOnStop
         hasFinishedCurrentDictationSession = false
         isFinalizingTranscript = false
-        isRecordingFromMicrophoneButton = startSource == .microphoneButton
         isRecordingFromKeyboardShortcut = startSource == .keyboardShortcut
         isKeyboardShortcutSessionActiveOrFinalizing = startSource == .keyboardShortcut
         currentAudioPowerLevel = 0
-        recordedAudioPowerHistory = Array(
-            repeating: Self.recordedAudioPowerHistoryBaselineLevel,
-            count: Self.recordedAudioPowerHistoryLength
-        )
-        microphoneButtonRecordingStartedAt = nil
-        lastRecordedAudioPowerSampleDate = .distantPast
 
         guard !Task.isCancelled else {
             print("🎙️ BuddyDictationManager: start cancelled (shortcut released before recording began)")
@@ -461,9 +203,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 activeTranscriptionSession?.cancel()
                 resetSessionState()
                 return
-            }
-            if startSource == .microphoneButton {
-                microphoneButtonRecordingStartedAt = Date()
             }
             isPreparingToRecord = false
             print("🎙️ BuddyDictationManager: recognition session started")
@@ -489,7 +228,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
 
         print("🎙️ BuddyDictationManager: stop requested (\(expectedStartSource))")
 
-        isRecordingFromMicrophoneButton = false
         isRecordingFromKeyboardShortcut = false
         isFinalizingTranscript = true
 
@@ -641,17 +379,10 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         shouldAutomaticallySubmitFinalDraft = false
         hasFinishedCurrentDictationSession = false
         isPreparingToRecord = false
-        isRecordingFromMicrophoneButton = false
         isRecordingFromKeyboardShortcut = false
         isKeyboardShortcutSessionActiveOrFinalizing = false
         isFinalizingTranscript = false
         currentAudioPowerLevel = 0
-        recordedAudioPowerHistory = Array(
-            repeating: Self.recordedAudioPowerHistoryBaselineLevel,
-            count: Self.recordedAudioPowerHistoryLength
-        )
-        microphoneButtonRecordingStartedAt = nil
-        lastRecordedAudioPowerSampleDate = .distantPast
     }
 
     private func buildTranscriptionKeyterms() -> [String] {
@@ -669,7 +400,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             "localhost"
         ]
 
-        let combinedKeyterms = baseKeyterms + contextualKeyterms
+        let combinedKeyterms = baseKeyterms
         var uniqueNormalizedKeyterms = Set<String>()
         var orderedKeyterms: [String] = []
 
@@ -713,29 +444,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                 self.currentAudioPowerLevel * 0.72
             )
             self.currentAudioPowerLevel = smoothedAudioPowerLevel
-
-            let now = Date()
-            if now.timeIntervalSince(self.lastRecordedAudioPowerSampleDate)
-                >= Self.recordedAudioPowerHistorySampleIntervalSeconds {
-                self.lastRecordedAudioPowerSampleDate = now
-                self.appendRecordedAudioPowerSample(
-                    max(CGFloat(boostedLevel), Self.recordedAudioPowerHistoryBaselineLevel)
-                )
-            }
         }
-    }
-
-    private func appendRecordedAudioPowerSample(_ audioPowerSample: CGFloat) {
-        var updatedRecordedAudioPowerHistory = recordedAudioPowerHistory
-        updatedRecordedAudioPowerHistory.append(audioPowerSample)
-
-        if updatedRecordedAudioPowerHistory.count > Self.recordedAudioPowerHistoryLength {
-            updatedRecordedAudioPowerHistory.removeFirst(
-                updatedRecordedAudioPowerHistory.count - Self.recordedAudioPowerHistoryLength
-            )
-        }
-
-        recordedAudioPowerHistory = updatedRecordedAudioPowerHistory
     }
 
     private func requestMicrophoneAndSpeechPermissionsIfNeeded() async -> Bool {
@@ -834,22 +543,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             currentPermissionProblem = .speechRecognitionDenied
             return false
         }
-    }
-
-    func openRelevantPrivacySettings() {
-        let settingsURLString: String
-
-        switch currentPermissionProblem {
-        case .microphoneAccessDenied:
-            settingsURLString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-        case .speechRecognitionDenied:
-            settingsURLString = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
-        case nil:
-            settingsURLString = "x-apple.systempreferences:com.apple.preference.security"
-        }
-
-        guard let settingsURL = URL(string: settingsURLString) else { return }
-        NSWorkspace.shared.open(settingsURL)
     }
 
     private func userFacingErrorMessage(from error: Error, fallback: String) -> String {

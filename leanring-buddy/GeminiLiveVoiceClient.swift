@@ -214,8 +214,12 @@ final class GeminiLiveVoiceClient {
     /// then a dropped session can be retried without the user noticing.
     private var hasReceivedModelContentThisTurn = false
     private var turnReplayCount = 0
-    /// Set for a replay so the next session uses the backup model.
+    /// Set for a second replay so the next session uses the backup model.
     private var shouldUseBackupLiveModel = false
+    /// The open session runs on the backup model. Its voices sound different
+    /// even with the same voice name, so it's closed after its one answer
+    /// and the next turn goes back to the main model.
+    private var isConnectedSessionOnBackupModel = false
     /// Text for the current turn, sent when the turn ends. Sent earlier,
     /// voice detection would answer the text before the user has spoken.
     private var pendingTurnContextTexts: [String] = []
@@ -439,6 +443,7 @@ final class GeminiLiveVoiceClient {
         let (ephemeralToken, tokenLiveModel) = try await fetchEphemeralToken()
         try Task.checkCancellation()
         let liveModel = shouldUseBackupLiveModel ? Self.backupLiveModel : tokenLiveModel
+        isConnectedSessionOnBackupModel = shouldUseBackupLiveModel
 
         var urlComponents = URLComponents(string: Self.liveWebSocketBaseURL)!
         urlComponents.queryItems = [URLQueryItem(name: "access_token", value: ephemeralToken)]
@@ -721,7 +726,10 @@ final class GeminiLiveVoiceClient {
     /// registry's voice tools. Only the everyday ones are declared to Live
     /// (see directFunctionDeclarations); the rest are found with find_tool
     /// and run with use_tool, through the same dispatch.
-    private static var everyFunctionDeclaration: [[String: Any]] {
+    ///
+    /// Made once: none of them change while Dottie runs, and every
+    /// find_tool and use_tool call used to build the whole list again.
+    private static let everyFunctionDeclaration: [[String: Any]] = {
         var declarations: [[String: Any]] = coreFunctionDeclarations
         declarations += DottieScreenAction.functionDeclarations
         declarations += DottieMacTools.functionDeclarations
@@ -731,7 +739,7 @@ final class GeminiLiveVoiceClient {
         declarations += DottieSmartHome.functionDeclarations
         declarations += DottieToolRegistry.functionDeclarations(for: .voice)
         return declarations
-    }
+    }()
 
     /// What the session's setup declares: the everyday tools, plus find_tool
     /// and use_tool for the rest. Every declaration is read again at the
@@ -748,16 +756,12 @@ final class GeminiLiveVoiceClient {
     }
 
     /// The tools Live doesn't get declared, which find_tool searches.
-    private static var hiddenFunctionDeclarations: [[String: Any]] {
-        everyFunctionDeclaration.filter { declaration in
-            guard let toolName = declaration["name"] as? String else { return false }
-            return !GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
-        }
+    private static let hiddenFunctionDeclarations: [[String: Any]] = everyFunctionDeclaration.filter { declaration in
+        guard let toolName = declaration["name"] as? String else { return false }
+        return !GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
     }
 
-    private static var everyFunctionName: Set<String> {
-        Set(everyFunctionDeclaration.compactMap { $0["name"] as? String })
-    }
+    private static let everyFunctionName: Set<String> = Set(everyFunctionDeclaration.compactMap { $0["name"] as? String })
 
     private static var coreFunctionDeclarations: [[String: Any]] {
         [
@@ -1053,7 +1057,12 @@ final class GeminiLiveVoiceClient {
             let finishedUserTranscript = wasCancelledByUser ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             let finishedModelTranscript = wasCancelledByUser ? "" : currentTurnModelTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript)
-            if shouldDisconnectAfterCurrentTurn {
+            if isConnectedSessionOnBackupModel {
+                // Back to the main model (and its voice) for the next turn;
+                // the conversation carries over through the history.
+                sessionResumptionHandle = nil
+                disconnect()
+            } else if shouldDisconnectAfterCurrentTurn {
                 disconnect()
             } else {
                 scheduleIdleDisconnect()
@@ -1411,8 +1420,10 @@ final class GeminiLiveVoiceClient {
         }
 
         turnReplayCount += 1
-        shouldUseBackupLiveModel = true
-        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays)) on \(Self.backupLiveModel)")
+        // The main model's drops are usually one-offs, so the first replay
+        // stays on it (same voice); only a second drop moves to the backup.
+        shouldUseBackupLiveModel = turnReplayCount >= 2
+        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays))\(shouldUseBackupLiveModel ? " on \(Self.backupLiveModel)" : "")")
 
         let wasUserTurnOpen = isUserTurnOpen
         disconnect()
@@ -1606,6 +1617,13 @@ enum GeminiLiveToolCatalog {
         "control_device",
         "click_on_screen", "press_keys", "open_url",
         "run_applescript", "get_schedule", "add_reminder",
+        // The user's connected apps (Home → Tools). Through use_tool, a
+        // connected app's arguments were JSON inside JSON, and Live often
+        // gave up or sent them wrong.
+        "apps_and_tools", "use_app_tool",
+        // Drawing. Through use_tool, a drawing's steps were JSON inside
+        // JSON, and asks that didn't say "draw" never found the tool.
+        "explain_on_screen", "draw_on_screen", "clear_drawings",
         // Co-op mid-game needs to be instant.
         "game_command"
     ]
@@ -1613,7 +1631,7 @@ enum GeminiLiveToolCatalog {
     /// One line for the voice prompt naming what the hidden tools cover, so
     /// the model knows to look for them. Keep it in step with what isn't in
     /// directFunctionNames.
-    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, and the user's connected apps"
+    static let hiddenToolAreasSummary = "typing and scrolling, your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, the code editor (code_editor: open, show or change code in Home → Code), saved game maps (game_maps), watch-and-learn how-tos (watch_and_learn), and away mode (away_mode)"
 
     /// Extra words find_tool matches on, for asks that don't share words
     /// with the tool's description ("turn into a cat" → change_cursor).
@@ -1658,7 +1676,11 @@ enum GeminiLiveToolCatalog {
         "smart_replays": "create smart replay commercial replay of me doing this watch me record steps show you how redo closing line say at the end edit filming",
         "self_check": "broken working diagnose check test sound microphone problem",
         "about_me": "dottie yourself settings version features permission help how tour update account",
-        "install_tool": "install command line cli homebrew brew npm pip uninstall"
+        "install_tool": "install command line cli homebrew brew npm pip uninstall",
+        "code_editor": "code editor file open edit change program script coder project source",
+        "game_maps": "game map maps show open delete 3d overview where explored",
+        "watch_and_learn": "watch me learn how to show you teach seconds",
+        "away_mode": "away leaving heading out back home phone while gone"
     ]
 
     private static let maximumToolsPerSearch = 3

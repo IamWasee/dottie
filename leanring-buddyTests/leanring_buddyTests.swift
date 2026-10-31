@@ -4,11 +4,11 @@
 //
 
 import Testing
-@testable import leanring_buddy
+@testable import Dottie
 
 struct leanring_buddyTests {
 
-    @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
+    @Test @MainActor func firstPermissionRequestUsesSystemPromptOnly() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,
             hasAttemptedSystemPrompt: false
@@ -17,7 +17,7 @@ struct leanring_buddyTests {
         #expect(presentationDestination == .systemPrompt)
     }
 
-    @Test func repeatedPermissionRequestOpensSystemSettings() async throws {
+    @Test @MainActor func repeatedPermissionRequestOpensSystemSettings() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,
             hasAttemptedSystemPrompt: true
@@ -26,13 +26,12 @@ struct leanring_buddyTests {
         #expect(presentationDestination == .systemSettings)
     }
 
-    @Test func knownGrantedScreenRecordingPermissionSkipsTheGate() async throws {
-        let shouldTreatPermissionAsGranted = WindowPositionManager.shouldTreatScreenRecordingPermissionAsGrantedForSessionLaunch(
-            hasScreenRecordingPermissionNow: false,
-            hasPreviouslyConfirmedScreenRecordingPermission: true
+    @Test @MainActor func grantedPermissionNeedsNoPrompt() async throws {
+        let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
+            hasPermissionNow: true,
+            hasAttemptedSystemPrompt: false
         )
 
-        #expect(shouldTreatPermissionAsGranted)
+        #expect(presentationDestination == .alreadyGranted)
     }
-
 }
