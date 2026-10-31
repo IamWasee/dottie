@@ -157,7 +157,7 @@ final class DottieMacTools {
         ),
         declaration(
             "meeting_notes",
-            "Meeting mode: take notes of a meeting or call the user is in by listening to their mic and their Mac's audio. start only when the user asks you to take notes or start meeting mode, never on your own. stop when they say the meeting's over or to stop; the summary with action items comes back to you later. status tells you what's been said so far (for 'what did they just say'). latest reads the notes from their most recent meeting. Notes are saved in Home → Meetings.",
+            "Meeting mode: take notes of a meeting or call the user is in by listening to their mic and their Mac's audio. start only when the user asks you to take notes or start meeting mode, never on your own. stop when they say the meeting's over or to stop; the summary with action items comes back to you later. status tells you what's been said so far (for 'what did they just say'). latest reads the notes from their most recent meeting. Notes are saved in Home → Meetings. While notes are on, live help (unless turned off in Home → Meetings) shows suggested answers in the notch whenever the other people ask the user something; it's never spoken, and ⌘⇧Return asks for one any time.",
             ["action": ["type": "STRING", "enum": ["start", "stop", "status", "latest"], "description": "What to do."]],
             required: ["action"]
         ),

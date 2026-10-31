@@ -2,8 +2,11 @@
 //  DottieChat.swift
 //  leanring-buddy
 //
-//  One plain request to Gemini through the Worker's /chat route, for the
-//  features that just need text back (meeting notes, phone replies).
+//  One plain request through the Worker's /chat route, for the features
+//  that just need text back (meeting notes, phone replies). Text-only asks
+//  go to Groq first (fast; the Worker falls back to Gemini when Groq isn't
+//  set up, is busy, or the ask is too big for its free plan). Asks with
+//  pictures or audio stay on Gemini first.
 //
 
 import Foundation
@@ -17,7 +20,15 @@ enum DottieChat {
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-        guard let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
+        guard var requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
+        let carriesPicturesOrAudio = String(decoding: requestBodyData, as: UTF8.self).contains("\"inlineData\"")
+        if requestBody["provider"] == nil && !carriesPicturesOrAudio {
+            var groqFirstRequestBody = requestBody
+            groqFirstRequestBody["provider"] = "groq"
+            if let groqFirstRequestBodyData = try? JSONSerialization.data(withJSONObject: groqFirstRequestBody) {
+                requestBodyData = groqFirstRequestBodyData
+            }
+        }
         request.httpBody = requestBodyData
 
         guard let (responseData, response) = try? await URLSession.shared.data(for: request) else { return nil }

@@ -7,6 +7,8 @@
 //  other people on the call), transcribes it every 45 seconds, and when it
 //  stops writes a summary with decisions and action items. Each meeting is
 //  saved as a Markdown file and in the second brain. Audio is never kept.
+//  Live help (DottieMeetingLiveHelp) runs alongside it: the same audio,
+//  heard as it comes, for suggested answers in the notch.
 //
 
 import AVFoundation
@@ -47,6 +49,8 @@ final class DottieMeetingRecorder: ObservableObject {
     private static let silenceLevel: Float = 0.002
 
     private let audioMixer = MeetingAudioMixer()
+    /// Suggested answers while the meeting runs, when turned on.
+    let liveHelp = DottieMeetingLiveHelp()
     private var captureStream: SCStream?
     private var streamOutput: MeetingStreamOutput?
     private var audioEngine: AVAudioEngine?
@@ -83,6 +87,9 @@ final class DottieMeetingRecorder: ObservableObject {
 
         isRecording = true
         startedAt = Date()
+        if DottieMeetingLiveHelp.isEnabled {
+            liveHelp.start(audioMixer: audioMixer)
+        }
         chunkTimer = Timer.scheduledTimer(withTimeInterval: Self.chunkSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.handleChunkTimer() }
         }
@@ -96,6 +103,7 @@ final class DottieMeetingRecorder: ObservableObject {
     func stop() -> String {
         guard isRecording else { return "meeting notes weren't on." }
         let meetingStart = startedAt ?? Date()
+        liveHelp.stop(audioMixer: audioMixer)
         stopCapture()
         isRecording = false
         isSummarizing = true
@@ -106,6 +114,18 @@ final class DottieMeetingRecorder: ObservableObject {
             await self?.writeSummary(meetingStart: meetingStart)
         }
         return "stopped. writing up the notes now; i'll tell you when they're ready."
+    }
+
+    /// The live help switch in Home → Meetings; takes effect right away
+    /// when a meeting is running.
+    func setLiveHelpEnabled(_ isEnabled: Bool) {
+        UserDefaults.standard.set(isEnabled, forKey: DottieMeetingLiveHelp.isEnabledDefaultsKey)
+        guard isRecording else { return }
+        if isEnabled {
+            liveHelp.start(audioMixer: audioMixer)
+        } else {
+            liveHelp.stop(audioMixer: audioMixer)
+        }
     }
 
     var elapsedText: String {
@@ -338,13 +358,16 @@ final class DottieMeetingRecorder: ObservableObject {
 }
 
 /// Collects mic and computer audio at 16 kHz mono from their own threads
-/// and mixes them into one chunk on request.
+/// and mixes them into one chunk on request. Live help can also listen to
+/// each side as it arrives, kept apart so it knows who's talking.
 final class MeetingAudioMixer: @unchecked Sendable {
     nonisolated static let sampleRate: Double = 16_000
 
     private let lock = NSLock()
     private var microphoneSamples: [Float] = []
     private var computerSamples: [Float] = []
+    private var liveMicrophoneListener: (@Sendable ([Float]) -> Void)?
+    private var liveComputerListener: (@Sendable ([Float]) -> Void)?
     private var microphoneConverter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
@@ -352,6 +375,15 @@ final class MeetingAudioMixer: @unchecked Sendable {
         lock.lock()
         microphoneSamples = []
         computerSamples = []
+        lock.unlock()
+    }
+
+    /// Hands each new piece of 16 kHz audio to live help, per side, from
+    /// the audio threads. Nil stops it.
+    nonisolated func setLiveListeners(microphone: (@Sendable ([Float]) -> Void)?, computer: (@Sendable ([Float]) -> Void)?) {
+        lock.lock()
+        liveMicrophoneListener = microphone
+        liveComputerListener = computer
         lock.unlock()
     }
 
@@ -397,26 +429,33 @@ final class MeetingAudioMixer: @unchecked Sendable {
             return buffer
         }
         guard conversionError == nil, let channelData = outputBuffer.floatChannelData else { return }
-        let samples = UnsafeBufferPointer(start: channelData[0], count: Int(outputBuffer.frameLength))
+        let samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(outputBuffer.frameLength)))
         lock.lock()
         microphoneSamples.append(contentsOf: samples)
+        let listener = liveMicrophoneListener
         lock.unlock()
+        listener?(samples)
     }
 
     nonisolated func appendComputerAudio(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double) {
-        lock.lock()
-        defer { lock.unlock() }
+        var samplesAt16Kilohertz: [Float]
         if abs(sampleRate - Self.sampleRate) < 1 {
-            computerSamples.append(contentsOf: samples)
-            return
+            samplesAt16Kilohertz = Array(samples)
+        } else {
+            // Rarely needed: pick samples to land on 16 kHz.
+            samplesAt16Kilohertz = []
+            let step = sampleRate / Self.sampleRate
+            var position = 0.0
+            while Int(position) < samples.count {
+                samplesAt16Kilohertz.append(samples[Int(position)])
+                position += step
+            }
         }
-        // Rarely needed: pick samples to land on 16 kHz.
-        let step = sampleRate / Self.sampleRate
-        var position = 0.0
-        while Int(position) < samples.count {
-            computerSamples.append(samples[Int(position)])
-            position += step
-        }
+        lock.lock()
+        computerSamples.append(contentsOf: samplesAt16Kilohertz)
+        let listener = liveComputerListener
+        lock.unlock()
+        listener?(samplesAt16Kilohertz)
     }
 }
 

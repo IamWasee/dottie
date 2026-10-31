@@ -141,6 +141,9 @@ final class DottieScreenJobGuesser {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestBody: [String: Any] = [
+            // Words only, so Groq can answer first (much faster); the
+            // Worker uses Gemini when it can't.
+            "provider": "groq",
             "model": Self.geminiPlanModel,
             "systemInstruction": ["parts": [["text": Self.plannerInstructions]]],
             "contents": [["role": "user", "parts": [["text": question]]]],

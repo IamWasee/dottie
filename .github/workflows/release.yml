@@ -14,6 +14,8 @@ name: Release
 #   CLOUDFLARE_ACCOUNT_ID  optional; only if the token reaches several accounts
 #   DOTTIE_APP_SECRET      optional; any long random string. The Worker then
 #                          only answers copies of Dottie built with it.
+#   GROQ_API_KEY           optional; free key from https://console.groq.com/keys.
+#                          Live meeting help and quick asks answer on Groq.
 # Repository variable it uses when the Worker isn't deployed here:
 #   DOTTIE_WORKER_URL      the Worker's address, e.g. https://dottie.you.workers.dev
 
@@ -68,6 +70,9 @@ jobs:
           # Optional free key from build.nvidia.com: NVIDIA models answer
           # when every Gemini model is busy.
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          # Optional free key from console.groq.com: quick asks and live
+          # meeting help answer on Groq first.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           npm ci
           npx wrangler deploy 2>&1 | tee deploy.log
@@ -77,6 +82,9 @@ jobs:
           fi
           if [ -n "$NVIDIA_API_KEY" ]; then
             printf '%s' "$NVIDIA_API_KEY" | npx wrangler secret put NVIDIA_API_KEY
+          fi
+          if [ -n "$GROQ_API_KEY" ]; then
+            printf '%s' "$GROQ_API_KEY" | npx wrangler secret put GROQ_API_KEY
           fi
           worker_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"

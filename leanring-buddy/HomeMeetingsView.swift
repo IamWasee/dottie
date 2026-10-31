@@ -2,8 +2,9 @@
 //  HomeMeetingsView.swift
 //  leanring-buddy
 //
-//  Home → Meetings: the switch for meeting mode, the live transcript while
-//  it runs, and every saved meeting's notes.
+//  Home → Meetings: the switch for meeting mode, live help (its switch and
+//  notes for Dottie), the live transcript while it runs, and every saved
+//  meeting's notes.
 //
 
 import AppKit
@@ -73,6 +74,8 @@ struct HomeMeetingsView: View {
                     }
                 }
 
+                HomeMeetingLiveHelpCard(meetingRecorder: meetingRecorder, liveHelp: meetingRecorder.liveHelp)
+
                 HomeCard(title: "Saved meetings") {
                     if meetingRecorder.pastMeetings.isEmpty {
                         HomeHint("No meetings yet.")
@@ -105,6 +108,74 @@ struct HomeMeetingsView: View {
             .padding(20)
         }
         .onAppear { meetingRecorder.reloadPastMeetings() }
+    }
+}
+
+/// Live help: the switch, notes for Dottie before the meeting, and what
+/// each side is saying while it runs.
+private struct HomeMeetingLiveHelpCard: View {
+    @ObservedObject var meetingRecorder: DottieMeetingRecorder
+    @ObservedObject var liveHelp: DottieMeetingLiveHelp
+    @State private var isLiveHelpEnabled = DottieMeetingLiveHelp.isEnabled
+    @AppStorage(DottieMeetingLiveHelp.prepNotesDefaultsKey) private var prepNotes = ""
+
+    var body: some View {
+        HomeCard(title: "Live help") {
+            Toggle(isOn: Binding(
+                get: { isLiveHelpEnabled },
+                set: { newValue in
+                    isLiveHelpEnabled = newValue
+                    meetingRecorder.setLiveHelpEnabled(newValue)
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Suggest answers during the meeting")
+                        .font(.system(size: 13))
+                        .foregroundColor(DS.Colors.textPrimary)
+                    Text("When someone asks you something, a short answer shows in the notch, never out loud. Press \u{2318}\u{21E7}Return or \u{201C}help me\u{201D} on the notch to ask any time. Uses Apple's speech recognition on your Mac and Groq (Gemini if Groq isn't set up).")
+                        .font(.system(size: 11))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            .pointerCursor()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notes for Dottie")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+                TextEditor(text: $prepNotes)
+                    .font(.system(size: 12))
+                    .frame(minHeight: 60, maxHeight: 110)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                            .fill(DS.Colors.surface2)
+                    )
+                HomeHint("The agenda, who you're meeting, prices, what you want out of it. Live help uses these in its answers.")
+            }
+
+            if liveHelp.isRunning {
+                if let statusNote = liveHelp.statusNote {
+                    HomeHint(statusNote)
+                }
+                let recentLines = liveHelp.liveLines.suffix(8)
+                if recentLines.isEmpty {
+                    HomeHint("Listening. What each side says shows up here as it's said.")
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(recentLines) { liveLine in
+                            Text("\(liveLine.speakerName): \(liveLine.text)")
+                                .font(.system(size: 12))
+                                .foregroundColor(liveLine.speakerName == "You" ? DS.Colors.textTertiary : DS.Colors.textSecondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
