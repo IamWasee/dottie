@@ -3,7 +3,8 @@
 //  leanring-buddy
 //
 //  Home → Profile: Dottie's level, XP bar and day streak, what she's
-//  unlocked (and what's still locked), and any 24/7 jobs that are running.
+//  unlocked (and what's still locked), the details she fills into forms,
+//  and any 24/7 jobs that are running.
 //
 
 import SwiftUI
@@ -47,6 +48,10 @@ struct HomeProfileView: View {
                     Text("Shows around the notch when it opens.")
                         .font(.system(size: 11))
                         .foregroundColor(DS.Colors.textTertiary)
+                }
+
+                section(title: "Form details") {
+                    HomeFormDetailsSection()
                 }
 
                 section(title: "24/7 jobs") {

@@ -16,8 +16,16 @@ name: Release
 #                          only answers copies of Dottie built with it.
 #   GROQ_API_KEY           optional; free key from https://console.groq.com/keys.
 #                          Live meeting help and quick asks answer on Groq.
-# Repository variable it uses when the Worker isn't deployed here:
-#   DOTTIE_WORKER_URL      the Worker's address, e.g. https://dottie.you.workers.dev
+#   DOTTIE_RELEASES_TOKEN  needed with DOTTIE_RELEASES_REPOSITORY below: a
+#                          fine-grained token with Contents read and write on
+#                          that releases repository only.
+# Repository variables it uses:
+#   DOTTIE_WORKER_URL      when the Worker isn't deployed here: its address,
+#                          e.g. https://dottie.you.workers.dev
+#   DOTTIE_RELEASES_REPOSITORY  optional, like IamWasee/dottie-releases: a
+#                          public repository the DMG is published to, so the
+#                          code can stay private while people still download
+#                          and update Dottie. Without it, releases go here.
 
 on:
   workflow_dispatch:
@@ -113,6 +121,10 @@ jobs:
     needs: deploy-worker
     runs-on: macos-15
     timeout-minutes: 40
+    env:
+      # Where downloads and in-app updates come from: the public releases
+      # repository when one is set, otherwise this one.
+      RELEASES_REPOSITORY: ${{ vars.DOTTIE_RELEASES_REPOSITORY || github.repository }}
     steps:
       - uses: actions/checkout@v4
 
@@ -159,8 +171,8 @@ jobs:
           if [ -n "$DOTTIE_APP_SECRET" ]; then
             /usr/libexec/PlistBuddy -c "Set :ClickyAppSharedSecret $DOTTIE_APP_SECRET" "$plist"
           fi
-          # In-app updates read this repository's releases.
-          /usr/libexec/PlistBuddy -c "Set :DottieUpdateRepository $GITHUB_REPOSITORY" "$plist"
+          # In-app updates read the releases repository's releases.
+          /usr/libexec/PlistBuddy -c "Set :DottieUpdateRepository $RELEASES_REPOSITORY" "$plist"
 
       - name: Build Dottie.app
         env:
@@ -275,21 +287,50 @@ jobs:
       - name: Publish the release
         if: github.event_name != 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
+          RELEASES_TOKEN: ${{ secrets.DOTTIE_RELEASES_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cat > notes.md <<EOF
-          **Download [Dottie.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/Dottie.dmg)**, open it and drag Dottie into Applications.
-
-          The first time you open it, macOS says it can't check the app for malware. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Full steps: [INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/INSTALL.md).
-          EOF
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release upload "v$VERSION" Dottie.dmg Dottie.dmg.sha256 --clobber
+          if [ "$RELEASES_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+            export GH_TOKEN="${{ github.token }}"
+            # The tag points at the commit that was built.
+            target_arguments=(--target "$GITHUB_SHA")
           else
-            gh release create "v$VERSION" Dottie.dmg Dottie.dmg.sha256 \
-              --title "Dottie $VERSION" \
-              --notes-file notes.md \
-              --target "$GITHUB_SHA"
+            if [ -z "$RELEASES_TOKEN" ]; then
+              echo "::error::DOTTIE_RELEASES_REPOSITORY is $RELEASES_REPOSITORY, but the DOTTIE_RELEASES_TOKEN secret is missing, so the release can't be published there."
+              exit 1
+            fi
+            export GH_TOKEN="$RELEASES_TOKEN"
+            # This commit isn't in the releases repository: tag its newest commit.
+            target_arguments=()
+          fi
+          # The install steps are in the notes themselves, since this
+          # repository's INSTALL.md may be private.
+          cat > notes.md <<EOF
+          **Download [Dottie.dmg](https://github.com/${RELEASES_REPOSITORY}/releases/download/v${VERSION}/Dottie.dmg)**, open it and drag Dottie into Applications.
+
+          The first time you open it, macOS says it can't check the app for malware. Click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**, then enter your password and click **Open**. You only do this once.
+
+          Already have Dottie? Update from **Home → Settings → Updates**.
+          EOF
+          publish_release() {
+            local repository="$1"
+            shift
+            if gh release view "v$VERSION" --repo "$repository" >/dev/null 2>&1; then
+              gh release upload "v$VERSION" Dottie.dmg Dottie.dmg.sha256 --clobber --repo "$repository"
+            else
+              gh release create "v$VERSION" Dottie.dmg Dottie.dmg.sha256 \
+                --repo "$repository" \
+                --title "Dottie $VERSION" \
+                --notes-file notes.md \
+                "$@"
+            fi
+          }
+          publish_release "$RELEASES_REPOSITORY" "${target_arguments[@]}"
+          # Copies of Dottie from before the releases repository look for
+          # updates here, so the release goes here too: they find it while
+          # this repository is public, and the update moves them over.
+          if [ "$RELEASES_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            GH_TOKEN="${{ github.token }}" publish_release "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
           fi
 
       - name: Upload build log

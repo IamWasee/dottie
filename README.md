@@ -15,7 +15,7 @@ See [ROADMAP.md](ROADMAP.md) for which features are done and what's next.
 
 ## Install
 
-**[Download Dottie.dmg](https://github.com/IamWasee/dottie/releases/latest/download/Dottie.dmg)**. [INSTALL.md](INSTALL.md) walks through installing it on any Mac, and the one-time setup that makes GitHub build the app and its server for you (no Mac tools needed).
+**[Download Dottie.dmg](https://github.com/IamWasee/dottie-releases/releases/latest/download/Dottie.dmg)**. [INSTALL.md](INSTALL.md) walks through installing it on any Mac, and the one-time setup that makes GitHub build the app and its server for you (no Mac tools needed).
 
 ## Build from source
 

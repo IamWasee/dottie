@@ -259,6 +259,14 @@ final class DottieScreenTaskRunner {
         var actionLog: [String] = []
         let lessonSelection = DottieScreenLessons.shared.select(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
         var lessonsText = lessonSelection.promptText
+        // A form job gets the user's saved details up front, so it fills
+        // them in without asking. Other jobs don't send them anywhere.
+        if !isGameMode, DottieFormDetails.taskLooksLikeForm(taskText) {
+            let formDetailsText = DottieFormDetails.shared.promptTextForFormJob
+            if !formDetailsText.isEmpty {
+                lessonsText += "\n" + formDetailsText
+            }
+        }
 
         // Instant replay: the same job done before in this app or site
         // runs again from memory, and Gemini only steps in where the
@@ -783,6 +791,14 @@ final class DottieScreenTaskRunner {
     private func askUser(_ arguments: [String: Any], stepNumber: Int) async -> String? {
         let question = arguments.dottieString("question") ?? "What should I do next?"
         let kind = arguments.dottieString("kind")?.lowercased() ?? "missing_info"
+        // A form detail the user already gave on an earlier form is
+        // answered from memory, without asking again.
+        let formField = kind == "missing_info" ? arguments.dottieString("field") : nil
+        if let formField, let savedValue = DottieFormDetails.shared.value(forField: formField) {
+            print("🙋 Screen job asked for \(formField); answered from saved form details")
+            onProgress?(stepNumber, "using your saved \(DottieFormDetails.fieldKey(formField).replacingOccurrences(of: "_", with: " "))")
+            return "from the user's saved form details, \(DottieFormDetails.fieldKey(formField)): \(savedValue). Use it; don't ask the user."
+        }
         print("🙋 Screen job asks: \(question)")
         onProgress?(stepNumber, "waiting for you: \(question)")
         onAskUser?(question, kind)
@@ -799,6 +815,14 @@ final class DottieScreenTaskRunner {
         case "do_it_yourself":
             return "the user says: \(answer). Look at the new screenshot and carry on from there."
         default:
+            if let formField {
+                switch DottieFormDetails.shared.save(field: formField, value: answer) {
+                case .saved:
+                    return "the user answered: \(answer). Carry on with that; don't ask again. (Saved as their \(DottieFormDetails.fieldKey(formField)) for future forms.)"
+                case .refusedSensitive, .refusedEmpty, .rememberingOff:
+                    break
+                }
+            }
             return "the user answered: \(answer). Carry on with that; don't ask again."
         }
     }
@@ -1369,6 +1393,8 @@ final class DottieScreenTaskRunner {
     - When the task is done, call finish with the answer for the user: one or two short, plain sentences with the actual result (like "you're ranked 312th in the RSNA knee competition"). Also call finish if you truly can't go on (a captcha, or you've tried several ways), saying what you tried and why it stopped.
     - Ask only when you must, with ask_user, once, in one short line: something only the user knows (which account when several fit and the task doesn't say, a password nobody saved, a code sent to their phone), something only they can do (Touch ID, their Mac password), or before a risky step the task didn't clearly ask for (paying, sending, posting, deleting, changing account settings). Then carry on with the answer. Never ask about anything you can see or work out.
 
+    - Forms: fill in the user's saved form details when you're given them. For one of the user's own details you don't have (their name, email, phone, address, company), ask_user with kind missing_info and field set to its name (full_name, email, phone, street_address, city, state, postcode, country, date_of_birth, company, job_title); Dottie answers from memory when she knows it and saves what the user says for next time. Leave optional fields empty rather than asking. Never make a detail up.
+
     Safety:
     - Signing in is fine when the user asks for it: use the account they named and passwords the browser or keychain fills in (an autofill list, a key icon, a field that's already filled). Never type a password the user hasn't given you, and never type payment details.
     - Don't buy anything, send or post messages, delete things, or change account settings unless the task explicitly asks for exactly that; when it isn't clear, ask_user first.
@@ -1531,7 +1557,8 @@ final class DottieScreenTaskRunner {
                 "description": "Ask the user one short question and wait for the answer, only when you can't go on without it: which account, a password nobody saved, a code sent to them, Touch ID or something only they can do, or okay for a risky step the task didn't clearly ask for.",
                 "parameters": ["type": "object", "properties": [
                     "question": ["type": "string", "description": "One short, friendly line, like 'Which account, work or personal?'."],
-                    "kind": ["type": "string", "enum": ["missing_info", "password", "code", "confirm", "do_it_yourself"], "description": "password or code when they'll tell you one (it stays hidden from you); do_it_yourself when they have to do something on the Mac (Touch ID, type it themselves); confirm for okay to go ahead."]
+                    "kind": ["type": "string", "enum": ["missing_info", "password", "code", "confirm", "do_it_yourself"], "description": "password or code when they'll tell you one (it stays hidden from you); do_it_yourself when they have to do something on the Mac (Touch ID, type it themselves); confirm for okay to go ahead."],
+                    "field": ["type": "string", "description": "missing_info only, when it's one of the user's own details for a form: its name, like full_name, email, phone, street_address, city, state, postcode, country, date_of_birth, company or job_title. Empty for anything else, and never for passwords, card, bank or ID numbers."]
                 ], "required": ["question", "kind"]]
             ],
             [

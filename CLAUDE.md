@@ -149,6 +149,8 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieScreenJobClaudeBrain.swift` | ~195 | Screen job steps on Claude Sonnet: newest turn → message with screenshot files, JSON actions with pixel boxes → Gemini function-call parts. |
 | `DottieScreenJobGuesser.swift` | ~350 | Guess first: steps in words from Claude/Gemini, done by name through Accessibility (menus, controls), done check by on-Mac OCR, hand-over note on a miss. |
 | `DottieWatchAndLearn.swift` | ~380 | Watch and learn: frames + action lines → a how-to in words (Claude, Gemini backup), saved as a skill; `watch_and_learn` voice tool. |
+| `DottieFormDetails.swift` | ~300 | Form details: the user's everyday details (name, email, address…) in `FormDetails.json`, given to form-looking screen jobs, used to answer `ask_user` questions that name a `field`, and saved from the user's answers; passwords, card/bank/ID numbers and codes are refused by field name and value. `form_details` voice tool. |
+| `HomeFormDetailsSection.swift` | ~170 | Home → Profile → Form details: list, edit, add, forget, and the remember switch. |
 | `DottieWorkRoutes.swift` | ~90 | Helpers' route ladder (connectors/APIs → CLI → browser → `<SCREEN_JOB>`), Office files, learning skills, home-folder access setting. |
 | `DottieCodeWorkspace.swift` | ~300 | Home → Code's state: roots, open/save, reload on disk change, run a command, ask the Coder helper; `code_editor` voice tool. |
 | `HomeCodeView.swift` | ~365 | Home → Code: file tree, `DottieCodeTextView` (NSTextView with syntax colors), command box and output, Ask Coder. |
