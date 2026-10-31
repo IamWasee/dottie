@@ -66,9 +66,11 @@ export default {
     const url = new URL(request.url);
 
     // Gemini CLI can only send an "API key", so the agents' passthrough
-    // authenticates with x-goog-api-key instead of x-clicky-secret.
+    // authenticates with that key instead of x-clicky-secret. Google's
+    // clients send it as x-goog-api-key or, some of them, as ?key=.
     if (url.pathname.startsWith("/gemini/")) {
-      if (env.APP_SHARED_SECRET && request.headers.get("x-goog-api-key") !== env.APP_SHARED_SECRET) {
+      const sentKey = request.headers.get("x-goog-api-key") ?? url.searchParams.get("key");
+      if (env.APP_SHARED_SECRET && sentKey !== env.APP_SHARED_SECRET) {
         return new Response("Unauthorized", { status: 401 });
       }
       try {

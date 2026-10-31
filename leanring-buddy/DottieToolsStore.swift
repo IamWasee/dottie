@@ -779,6 +779,13 @@ enum DottieHelperMCPSync {
                 synced[externalName] = entryFingerprint
             }
         }
+        // Claude Code keeps servers' keys in this file as written, so only
+        // the user may read it (Claude Code makes it that way, but a file
+        // copied in from elsewhere may not be).
+        let claudeConfigPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json").path
+        if !servers.isEmpty, FileManager.default.fileExists(atPath: claudeConfigPath) {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: claudeConfigPath)
+        }
         return synced
     }
 

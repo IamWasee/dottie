@@ -202,7 +202,16 @@ final class ClickyRoster: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSpokenName.isEmpty else { return nil }
         return agents.first { $0.name.lowercased() == normalizedSpokenName }
-            ?? agents.first { $0.name.lowercased().contains(normalizedSpokenName) || normalizedSpokenName.contains($0.name.lowercased()) }
+            ?? agents.first { Self.containsAsWholeWords(normalizedSpokenName, $0.name.lowercased()) || Self.containsAsWholeWords($0.name.lowercased(), normalizedSpokenName) }
+    }
+
+    /// True when `phrase` appears in `text` as whole words ("research" in
+    /// "research bot", not "art" in "start"). Names under three letters only
+    /// match exactly, so a Dot called "Al" isn't found inside every ask.
+    private static func containsAsWholeWords(_ text: String, _ phrase: String) -> Bool {
+        guard phrase.count >= 3 else { return false }
+        let pattern = "(^|[^\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: phrase) + "($|[^\\p{L}\\p{N}])"
+        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// The Brain agent, made the first time it's needed.
@@ -449,6 +458,7 @@ final class ClickyRoster: ObservableObject {
         let fullMessageForAgent = isTurnApprovedForComputerUse
             ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
             : messageForAgent
+        refreshAgentInstructions(for: agent)
         // Picks up a cua-driver installed since launch.
         GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
         skillLibrary.reload()
@@ -460,10 +470,14 @@ final class ClickyRoster: ObservableObject {
         // Something on screen right away, whichever engine picks it up.
         appendTranscriptItem(.tool, text: "Getting started…", to: agentID, toolID: gettingStartedToolID, persist: false)
 
-        let additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
-            + (agent.isBrain == true
-                ? [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
-                : [])
+        var additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
+        if agent.isBrain == true {
+            additionalDirectoryURLs += [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
+        }
+        // The Coder helper edits files in any folder opened in Home → Code.
+        if agent.name == DottieCodeWorkspace.coderHelperName {
+            additionalDirectoryURLs += DottieCodeWorkspace.shared.roots.map(\.url)
+        }
         let claudeSpec = mausBotSpec(for: agent, extraFolderURLs: additionalDirectoryURLs)
         // What was said before, for an engine that didn't hear it.
         let conversationContext = recentConversationContext(forAgentID: agentID)
@@ -1067,6 +1081,22 @@ final class ClickyRoster: ObservableObject {
         if let settingsData = try? JSONSerialization.data(withJSONObject: geminiSettings, options: [.prettyPrinted, .sortedKeys]) {
             try? settingsData.write(to: agentWorkspaceURL.appendingPathComponent(".gemini/settings.json"))
         }
+    }
+
+    /// Brings an existing Dot's AGENTS.md up to date: it's written when the
+    /// Dot is made, and the standing instructions change with app updates.
+    /// Everything from the "## Notes" heading on is the Dot's own and stays.
+    private func refreshAgentInstructions(for agent: ClickyAgent) {
+        let instructionsFileURL = workspaceURL(for: agent).appendingPathComponent("AGENTS.md")
+        let notesHeading = "\n## Notes\n"
+        let currentInstructions = Self.agentInstructions(for: agent)
+        guard let existingText = try? String(contentsOf: instructionsFileURL, encoding: .utf8),
+              let existingNotesRange = existingText.range(of: notesHeading),
+              let currentNotesRange = currentInstructions.range(of: notesHeading) else { return }
+        let refreshedText = String(currentInstructions[..<currentNotesRange.lowerBound])
+            + String(existingText[existingNotesRange.lowerBound...])
+        guard refreshedText != existingText else { return }
+        try? refreshedText.write(to: instructionsFileURL, atomically: true, encoding: .utf8)
     }
 
     /// The standing instructions every agent gets: identity, how to work,
