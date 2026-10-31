@@ -174,7 +174,7 @@ final class DottieBrain: ObservableObject {
         memoriesSinceProfileUpdate = 0
         let memoryLines = newMemories.map { "[\($0.kind.rawValue)] \($0.text.prefix(600))" }.joined(separator: "\n")
         let instruction = """
-        You keep a short note about one person for their desktop companion, Dottie. Update the note with anything new and lasting from the latest memories: their name, what they do, their projects and files, apps and tools they use, people they mention, preferences (how they like answers, likes and dislikes), and ongoing tasks or goals. Drop things that are finished or no longer true. Keep every fact the current note has unless a memory contradicts it. Never store passwords, keys, card numbers or other secrets. Plain short bullet lines grouped under a few headings, under \(Self.maximumProfileLength - 500) characters. Reply with the note only.
+        You keep a short note about one person for their desktop companion, Dottie. Update the note with anything new and lasting from the latest memories: their name, what they do, their projects and files, apps and tools they use, people they mention, preferences (how they like answers, likes and dislikes), and ongoing tasks or goals. Drop things that are finished or no longer true. Keep every fact the current note has unless a memory contradicts it. Never store passwords, keys, card or bank numbers, ID or passport numbers, codes or other secrets. Plain short bullet lines grouped under a few headings, under \(Self.maximumProfileLength - 500) characters. Reply with the note only.
 
         Current note:
         \(profileText.isEmpty ? "(empty)" : profileText)
