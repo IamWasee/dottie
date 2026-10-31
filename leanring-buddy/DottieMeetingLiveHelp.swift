@@ -389,7 +389,7 @@ final class DottieMeetingLiveHelp: ObservableObject {
     /// A small screenshot when the screen looks different from the last one
     /// sent, else nil (the words alone are faster and cheaper).
     private func screenshotIfChanged() async -> Data? {
-        guard let screenshot = await DottieScreenTaskRunner.captureActiveDisplay(maximumDimension: 1024) else { return nil }
+        guard let screenshot = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1024) else { return nil }
         let fingerprint = Self.fingerprint(of: screenshot.image)
         if let lastSentScreenFingerprint, let fingerprint,
            Self.averageDifference(between: lastSentScreenFingerprint, and: fingerprint) < 6 {
