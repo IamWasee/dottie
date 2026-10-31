@@ -210,11 +210,6 @@ final class ClickyRoutineStore: ObservableObject {
 
     // MARK: - 24/7 jobs
 
-    /// 24/7 jobs that are on (not paused).
-    var activeKeepWorkingRoutines: [ClickyRoutine] {
-        routines.filter { $0.keepWorking != nil && !$0.isPaused }
-    }
-
     /// Starts (or replaces) a 24/7 job for a helper. Its first run is the
     /// turn the caller starts now.
     @discardableResult

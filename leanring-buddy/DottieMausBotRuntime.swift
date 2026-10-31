@@ -193,10 +193,6 @@ final class DottieMausBotRuntime {
 
     // MARK: - Turns
 
-    func isTurnRunning(agentID: UUID) -> Bool {
-        botIDByRunningAgentID[agentID] != nil
-    }
-
     /// Runs one turn and streams its messages to `onEvent` (on the main
     /// actor, in order). Returns how it ended.
     ///
@@ -215,11 +211,6 @@ final class DottieMausBotRuntime {
         cancelFollowUp(agentID: agentID)
         stopRequestedAgentIDs.remove(agentID)
         botIDByRunningAgentID[agentID] = botID
-        DottieMausBot.shared.claudeTurnStarted()
-        defer {
-            DottieMausBot.shared.claudeTurnEnded()
-        }
-
         let translator = DottieMausBotTurnTranslator(onEvent: onEvent)
         await eventStream.startIfNeeded(launcher: launcher)
         eventStream.subscribe(agentID: agentID) { frame in
@@ -435,10 +426,6 @@ final class DottieMausBotRuntime {
         if let followUpProcess = followUpProcessByAgentID.removeValue(forKey: agentID), followUpProcess.isRunning {
             followUpProcess.terminate()
         }
-    }
-
-    func isFollowingUp(agentID: UUID) -> Bool {
-        followUpTaskByAgentID[agentID] != nil
     }
 
     // MARK: - Helpers

@@ -50,7 +50,6 @@ final class DottieScreenMemory: ObservableObject {
 
     @Published private(set) var isEnabled: Bool
     @Published private(set) var excludedApps: [String]
-    @Published private(set) var pendingMomentCount = 0
 
     weak var memory: DottieEpisodicMemory?
 
@@ -66,7 +65,6 @@ final class DottieScreenMemory: ObservableObject {
         isEnabled = UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
         excludedApps = UserDefaults.standard.stringArray(forKey: Self.excludedAppsDefaultsKey) ?? Self.defaultExcludedApps
         pendingMoments = loadMoments()
-        pendingMomentCount = pendingMoments.count
         lastMoment = pendingMoments.last
     }
 
@@ -96,7 +94,6 @@ final class DottieScreenMemory: ObservableObject {
 
     func forgetPendingMoments() {
         pendingMoments = []
-        pendingMomentCount = 0
         lastMoment = nil
         try? FileManager.default.removeItem(at: momentsFileURL)
     }
@@ -133,7 +130,6 @@ final class DottieScreenMemory: ObservableObject {
         defer { isChecking = false }
         if let moment = await takeNote() {
             pendingMoments.append(moment)
-            pendingMomentCount = pendingMoments.count
             lastMoment = moment
             appendToMomentsFile(moment)
         }
@@ -192,7 +188,6 @@ final class DottieScreenMemory: ObservableObject {
         await memory.foldScreenMoments(moments)
         // Notes taken while folding stay for next time.
         pendingMoments.removeFirst(min(moments.count, pendingMoments.count))
-        pendingMomentCount = pendingMoments.count
         rewriteMomentsFile()
     }
 

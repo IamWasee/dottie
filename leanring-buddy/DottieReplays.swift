@@ -472,6 +472,32 @@ enum DottieAX {
         "AXMenuButton", "AXSlider", "AXIncrementor", "AXSegmentedControl", "AXImage", "AXStaticText"
     ]
 
+    /// The words on the control at `point` (an AppKit point), read through
+    /// Accessibility: the clickable element there or the one just around
+    /// it. Empty when nothing can be read. Away mode checks these as well as
+    /// the label the model gave, so a "Send" button can't slip through
+    /// under an empty or vague label.
+    static func controlText(atAppKitPoint point: CGPoint) -> String {
+        guard AXIsProcessTrusted() else { return "" }
+        let pointInAXSpace = axPoint(fromAppKit: point)
+        var hitElement: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(pointInAXSpace.x), Float(pointInAXSpace.y), &hitElement) == .success,
+              let hitElement else { return "" }
+        var texts: [String] = []
+        var candidate: AXUIElement? = hitElement
+        for _ in 0..<4 {
+            guard let current = candidate else { break }
+            for attribute in [kAXTitleAttribute as String, kAXDescriptionAttribute as String, "AXLabel", kAXValueAttribute as String, kAXHelpAttribute as String] {
+                if let text = string(current, attribute), text.count <= 120 {
+                    texts.append(text)
+                }
+            }
+            if let role = string(current, kAXRoleAttribute), strongClickableRoles.contains(role) { break }
+            candidate = element(current, kAXParentAttribute)
+        }
+        return texts.joined(separator: " ")
+    }
+
     static let strongClickableRoles: Set<String> = [
         "AXButton", "AXLink", "AXMenuItem", "AXMenuBarItem", "AXCheckBox", "AXRadioButton", "AXPopUpButton",
         "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXTab", "AXMenuButton", "AXRow"

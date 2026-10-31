@@ -55,24 +55,6 @@ class OverlayWindow: NSWindow {
     }
 }
 
-// Cursor-like triangle shape (equilateral)
-struct Triangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let size = min(rect.width, rect.height)
-        let height = size * sqrt(3.0) / 2.0
-
-        // Top vertex
-        path.move(to: CGPoint(x: rect.midX, y: rect.midY - height / 1.5))
-        // Bottom left vertex
-        path.addLine(to: CGPoint(x: rect.midX - size / 2, y: rect.midY + height / 3))
-        // Bottom right vertex
-        path.addLine(to: CGPoint(x: rect.midX + size / 2, y: rect.midY + height / 3))
-        path.closeSubpath()
-        return path
-    }
-}
-
 // PreferenceKey for tracking bubble size
 struct SizePreferenceKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
@@ -511,9 +493,15 @@ struct BlueCursorView: View {
     // MARK: - Cursor Tracking
 
     private func startTrackingCursor() {
+        // Values are only written when they change: every write redrew the
+        // overlay, 60 times a second on every screen even with the mouse
+        // standing still.
         timer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
             let mouseLocation = NSEvent.mouseLocation
-            self.isCursorOnThisScreen = self.screenFrame.contains(mouseLocation)
+            let isMouseOnThisScreen = self.screenFrame.contains(mouseLocation)
+            if self.isCursorOnThisScreen != isMouseOnThisScreen {
+                self.isCursorOnThisScreen = isMouseOnThisScreen
+            }
 
             // During forward flight or pointing, the buddy is NOT interrupted by
             // mouse movement — it completes its full animation and return flight.
@@ -538,8 +526,14 @@ struct BlueCursorView: View {
 
             // A roaming pet goes where it likes.
             if self.cursorPet.isRoamingNow {
-                self.isCursorOnThisScreen = self.screenFrame.contains(self.cursorPet.center)
-                self.cursorPosition = self.convertScreenPointToSwiftUICoordinates(self.cursorPet.center)
+                let isPetOnThisScreen = self.screenFrame.contains(self.cursorPet.center)
+                if self.isCursorOnThisScreen != isPetOnThisScreen {
+                    self.isCursorOnThisScreen = isPetOnThisScreen
+                }
+                let petPosition = self.convertScreenPointToSwiftUICoordinates(self.cursorPet.center)
+                if self.cursorPosition != petPosition {
+                    self.cursorPosition = petPosition
+                }
                 return
             }
 
@@ -547,7 +541,10 @@ struct BlueCursorView: View {
             let swiftUIPosition = self.convertScreenPointToSwiftUICoordinates(mouseLocation)
             let buddyX = swiftUIPosition.x + 35
             let buddyY = swiftUIPosition.y + 25
-            self.cursorPosition = CGPoint(x: buddyX, y: buddyY)
+            let followingPosition = CGPoint(x: buddyX, y: buddyY)
+            if self.cursorPosition != followingPosition {
+                self.cursorPosition = followingPosition
+            }
         }
     }
 
@@ -1102,10 +1099,6 @@ class OverlayWindowManager {
                 window.contentView = nil
             }
         })
-    }
-
-    func isShowingOverlay() -> Bool {
-        return !overlayWindows.isEmpty
     }
 }
 

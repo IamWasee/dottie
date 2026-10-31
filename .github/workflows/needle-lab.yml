@@ -5,10 +5,13 @@ name: Needle lab
 # checksums scripts/embed-needle.sh pins. Run it by hand (Actions → Needle
 # lab) after changing the toolsets or bumping the Needle version.
 on:
-  push:
-    branches: [claude/project-thread-7je5ze]
-    paths: ["scripts/needle-lab/**", "leanring-buddy/DottieNeedle*.swift", ".github/workflows/needle-lab.yml"]
+  pull_request:
+    paths: ["scripts/needle-lab/**", "scripts/embed-needle.sh", "leanring-buddy/DottieNeedle*.swift", ".github/workflows/needle-lab.yml"]
   workflow_dispatch:
+    inputs:
+      files:
+        description: "pinned (what Dottie ships) or latest (Hugging Face main, before bumping the pins)"
+        default: pinned
 
 permissions:
   contents: read
@@ -23,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch Needle
-        run: scripts/needle-lab/fetch.sh "$RUNNER_TEMP/needle"
+        run: scripts/needle-lab/fetch.sh "$RUNNER_TEMP/needle" "${{ inputs.files || 'pinned' }}"
       - name: Build the lab
         run: |
           swiftc -O -o "$RUNNER_TEMP/needle-lab" scripts/needle-lab/main.swift leanring-buddy/DottieNeedleEngine.swift leanring-buddy/DottieNeedleToolsets.swift

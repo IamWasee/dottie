@@ -528,7 +528,17 @@ final class DottieScreenTaskRunner {
                 // Clicking the same thing over and over (a link that opens a
                 // new tab each time) piles up tabs, so the third click in a
                 // row is refused.
-                let clickLabel = arguments.dottieString("label") ?? ""
+                let modelClickLabel = arguments.dottieString("label") ?? ""
+                // While away, the words on the real control (read on the Mac)
+                // count too, so an empty or vague label can't hide a Send.
+                var clickLabel = modelClickLabel
+                if functionName == "click", !isGameMode, DottieAwayMode.shared.isAway,
+                   let awayClickPoint = Self.clickPoint(arguments: arguments, screen: screen) {
+                    let controlText = DottieAX.controlText(atAppKitPoint: awayClickPoint)
+                    if DottieAwayMode.isRiskyLabel(controlText), !DottieAwayMode.isRiskyLabel(modelClickLabel) {
+                        clickLabel = modelClickLabel.isEmpty ? controlText : "\(modelClickLabel) (\(controlText))"
+                    }
+                }
                 if functionName == "click", !isGameMode,
                    recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
@@ -1746,7 +1756,28 @@ enum DottieDisplayCapture {
         return Screenshot(image: image, jpegData: jpegData, displayFrame: displayFrame)
     }
 
+    /// What to capture for one display, kept for a moment. Asking macOS
+    /// for every window and display (SCShareableContent) is slow, and
+    /// games capture many frames a second, so frames in quick succession
+    /// reuse the same filter. Kept only briefly, so a window Dottie opens
+    /// (a drawing, a card) is still left out of the next captures.
+    private struct ReusableCaptureSetup {
+        let displayFrame: CGRect
+        let maximumDimension: Int
+        let filter: SCContentFilter
+        let configuration: SCStreamConfiguration
+        let madeAt: Date
+    }
+    private static var reusableCaptureSetup: ReusableCaptureSetup?
+    private static let secondsToReuseCaptureSetup: TimeInterval = 1.0
+
     static func captureImage(displayFrame: CGRect, maximumDimension: Int) async -> CGImage? {
+        if let reusableCaptureSetup,
+           reusableCaptureSetup.displayFrame == displayFrame,
+           reusableCaptureSetup.maximumDimension == maximumDimension,
+           Date().timeIntervalSince(reusableCaptureSetup.madeAt) < secondsToReuseCaptureSetup {
+            return try? await SCScreenshotManager.captureImage(contentFilter: reusableCaptureSetup.filter, configuration: reusableCaptureSetup.configuration)
+        }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
 
         let matchingScreen = NSScreen.screens.first(where: { $0.frame == displayFrame })
@@ -1766,6 +1797,13 @@ enum DottieDisplayCapture {
         configuration.height = Int(nativeHeight * downscale)
         configuration.showsCursor = false
 
+        reusableCaptureSetup = ReusableCaptureSetup(
+            displayFrame: displayFrame,
+            maximumDimension: maximumDimension,
+            filter: filter,
+            configuration: configuration,
+            madeAt: Date()
+        )
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
     }
 

@@ -57,7 +57,7 @@ enum DottieSelfKnowledge: DottieToolModule {
     static var appVersion: String { DottieUpdater.currentVersion }
 
     static var tools: [DottieTool] {
-        [aboutMeTool(for: .voice), aboutMeTool(for: .helpers)]
+        [aboutMeTool(for: .voice)]
     }
 
     static var voicePromptSection: String {
@@ -84,17 +84,13 @@ enum DottieSelfKnowledge: DottieToolModule {
         case features, status, troubleshoot, how_to, open, guide, ask_permission, fix, switch_claude_account
     }
 
-    /// Helpers work in the background, so they don't get the on-screen
-    /// actions.
     private static func actions(for audience: DottieTool.Audience) -> [Action] {
-        audience == .voice ? Action.allCases : [.features, .status, .troubleshoot, .how_to]
+        Action.allCases
     }
 
     private static func aboutMeTool(for audience: DottieTool.Audience) -> DottieTool {
         let actionNames = actions(for: audience).map(\.rawValue)
-        let description = audience == .voice
-            ? "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes (uses the self-check). open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt. fix: run a fix troubleshoot named (its id). switch_claude_account: sign Claude out and start a new sign-in so they can pick which Claude account helpers use (status says which one is in use now). Answer a \"how do i…\" in one sentence, then offer to show them (guide; next and stop work like any guide). When one of your own things fails (a missing permission, helpers not ready, phone not paired, an update waiting), say so plainly and offer the fix (troubleshoot, then ask_permission or fix). Asked what you can do: name three or four things in a sentence or two and offer a quick tour (guide with about \"tour\")."
-            : "What Dottie (the app you run in) can do and where each thing lives in her app (features, how_to), her live state (status), and likely problems with their fixes (troubleshoot)."
+        let description = "Dottie's knowledge of herself: her features, where every setting lives in her app, and her live state. Call it instead of guessing whenever the user asks what you can do, how to do something in Dottie, where a setting is, what version you are, what's missing or not working, or wants to be shown around or walked through your app. features: everything you can do and where. how_to: the best matching features for a question. status: live facts. troubleshoot: likely problems with their fixes (uses the self-check). open: open a Home page or Settings section. guide: walk them through a topic in your app step by step on screen. ask_permission: start macOS's permission prompt. fix: run a fix troubleshoot named (its id). switch_claude_account: sign Claude out and start a new sign-in so they can pick which Claude account helpers use (status says which one is in use now). Answer a \"how do i…\" in one sentence, then offer to show them (guide; next and stop work like any guide). When one of your own things fails (a missing permission, helpers not ready, phone not paired, an update waiting), say so plainly and offer the fix (troubleshoot, then ask_permission or fix). Asked what you can do: name three or four things in a sentence or two and offer a quick tour (guide with about \"tour\")."
         return DottieTool(
             name: "about_me",
             description: description,
@@ -924,7 +920,7 @@ extension DottieSelfKnowledge {
         // show up here without anyone editing this file.
         var seenToolNames: Set<String> = ["about_me"]
         var registryLines: [String] = []
-        for tool in DottieToolRegistry.tools(for: .voice) + DottieToolRegistry.tools(for: .helpers) where !seenToolNames.contains(tool.name) {
+        for tool in DottieToolRegistry.tools(for: .voice) where !seenToolNames.contains(tool.name) {
             seenToolNames.insert(tool.name)
             registryLines.append("- \(tool.name): \(firstSentence(of: tool.description))")
         }

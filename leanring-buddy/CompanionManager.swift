@@ -336,14 +336,14 @@ final class CompanionManager: ObservableObject {
     /// Whether the user has submitted their email during onboarding.
     @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
 
-    /// Records the user's email locally (and in analytics, if configured).
+    /// Marks the email step done and passes the email to analytics when
+    /// PostHog is configured. The email itself isn't kept on the Mac.
     func submitEmail(_ email: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { return }
 
         hasSubmittedEmail = true
         UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
-        UserDefaults.standard.set(trimmedEmail, forKey: "submittedEmail")
 
         ClickyAnalytics.identifyUser(email: trimmedEmail)
     }
@@ -518,18 +518,33 @@ final class CompanionManager: ObservableObject {
         let previouslyHadAll = allPermissionsGranted
 
         let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
-        hasAccessibilityPermission = currentlyHasAccessibility
-
-        if currentlyHasAccessibility {
-            globalPushToTalkShortcutMonitor.start()
-        } else {
-            globalPushToTalkShortcutMonitor.stop()
+        let accessibilityPermissionChanged = currentlyHasAccessibility != hasAccessibilityPermission
+        // Each published value is only set when it changed. Setting it to
+        // the same value still told every window watching CompanionManager
+        // to redraw, every 1.5 seconds for as long as Dottie runs.
+        if accessibilityPermissionChanged {
+            hasAccessibilityPermission = currentlyHasAccessibility
         }
 
-        hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
+        // Push-to-talk works without Accessibility: the monitor then only
+        // listens (it can't swallow a key shortcut's key). When the
+        // permission changes, the tap is rebuilt so it switches between
+        // listening and active. start() does nothing while a tap runs.
+        if accessibilityPermissionChanged {
+            globalPushToTalkShortcutMonitor.stop()
+        }
+        globalPushToTalkShortcutMonitor.start()
+
+        let currentlyHasScreenRecording = WindowPositionManager.hasScreenRecordingPermission()
+        if hasScreenRecordingPermission != currentlyHasScreenRecording {
+            hasScreenRecordingPermission = currentlyHasScreenRecording
+        }
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        hasMicrophonePermission = micAuthStatus == .authorized
+        let currentlyHasMicrophone = micAuthStatus == .authorized
+        if hasMicrophonePermission != currentlyHasMicrophone {
+            hasMicrophonePermission = currentlyHasMicrophone
+        }
 
         // Debug: log permission state on changes
         if previouslyHadAccessibility != hasAccessibilityPermission
@@ -550,8 +565,8 @@ final class CompanionManager: ObservableObject {
         }
         // Screen content permission is persisted — once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
-        if !hasScreenContentPermission {
-            hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
+        if !hasScreenContentPermission, UserDefaults.standard.bool(forKey: "hasScreenContentPermission") {
+            hasScreenContentPermission = true
         }
 
         if !previouslyHadAll && allPermissionsGranted {
@@ -605,17 +620,6 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Private
-
-    /// Triggers the system microphone prompt if the user has never been asked.
-    /// Once granted/denied the status sticks and polling picks it up.
-    private func promptForMicrophoneIfNotDetermined() {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            Task { @MainActor [weak self] in
-                self?.hasMicrophonePermission = granted
-            }
-        }
-    }
 
     /// Polls all permissions frequently so the UI updates live after the
     /// user grants them in System Settings. Screen Recording is the exception —
@@ -882,6 +886,9 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask = nil
             // Before the turn closes, so Live gets the marked frame inside it.
             currentTurnAnnotation = screenAnnotationManager.finishTracking()
+            if let currentTurnAnnotation {
+                rememberCircledArea(currentTurnAnnotation.boundingRect)
+            }
             if voiceMode == .live, let currentTurnAnnotation {
                 sendAnnotationToLiveTurn(currentTurnAnnotation)
             }
@@ -971,6 +978,9 @@ final class CompanionManager: ObservableObject {
         if recentEpisodeCount > 0 {
             prompt += "\n\nyou remember \(recentEpisodeCount) thing\(recentEpisodeCount == 1 ? "" : "s") from the last few days; use_tool memories {\"action\": \"recent\"} lists them and recall_memory searches everything. bring them up only if relevant."
         }
+        if let routinesLine = DottieHabits.shared.voicePromptLine {
+            prompt += "\n\n" + routinesLine + " use_tool memories {\"action\": \"routines\"} lists them with ids; when the user tells you a routine of theirs, save it with add_routine."
+        }
         let savedPictureCount = imageMemory.items.count
         if savedPictureCount > 0 {
             prompt += "\n\npictures: \(savedPictureCount) saved picture\(savedPictureCount == 1 ? "" : "s") (the user's and yours). use_tool find_pictures {\"query\": \"…\"} gives their names and where they're from. when the user means one (\"grab that sword\", \"where's the thing i showed you\"), pass its exact name in do_task_on_screen's reference_images or as point_at_element's label, so the picture itself is matched on screen. save_picture saves a new one."
@@ -1012,12 +1022,12 @@ final class CompanionManager: ObservableObject {
 
     going deeper: you're the fast voice. for careful reading of small text, code or a long document, precise steps or real reasoning, say a few words ("let me take a closer look"), call send_to_higher_model, then speak its answer in your own voice. it points the cursor itself, so don't point again for the same thing.
 
-    doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing, scrolling and drawing are in your other tools. then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
+    doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing and scrolling are in your other tools; drawing is explain_on_screen (see teaching). then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
 
     multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
-    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked; find_tool gives its arguments.
+    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked. any ask to draw, sketch, graph, chart or mark something goes to explain_on_screen too, whether or not they say "on my screen": a grid, a graph with a downward trend, an arrow at something. when they ask to add to or change what you drew, call it again with add_to_last true and only the new steps. when they circled something (a problem, a question, a table) and ask you to solve it, do an example or graph it on screen, draw onto or beside it with the anchor circled; for a graph of a table or numbers, use a chart step (text circled graphs exactly what they circled), never lines placed by guessing.
 
     second brain: it remembers everything you and the helpers did with the user, and can dig through their files, command-line tools and connected apps.
     - about the past ("what was i working on yesterday", "what was that site"): recall_memory with a few keywords, and answer from it.
@@ -1344,6 +1354,8 @@ final class CompanionManager: ObservableObject {
         case .clearDrawings:
             stopTeaching(clearingDrawing: true)
             drawingOverlayManager.clear()
+            lastTeachingBoardRect = nil
+            lastTeachingDisplayFrame = nil
             return "cleared the drawings."
         }
     }
@@ -1362,37 +1374,123 @@ final class CompanionManager: ObservableObject {
         guard let plan = DottieTeaching.Plan(arguments: arguments) else {
             return "error: give steps, each with a kind and points."
         }
-        stopTeaching(clearingDrawing: true)
+        // Adding to a drawing that's still up keeps it, and its board, so
+        // "now show a downward trend on it" lands on the same grid. Every
+        // call used to wipe the screen and start over.
+        let isAddingToDrawingOnScreen = plan.addsToLastDrawing && !drawingOverlayManager.figures.isEmpty
+        let earlierTeachingTask = isAddingToDrawingOnScreen ? teachingTask : nil
+        if !isAddingToDrawingOnScreen {
+            stopTeaching(clearingDrawing: true)
+            drawingOverlayManager.clear()
+            lastTeachingBoardRect = nil
+            lastTeachingDisplayFrame = nil
+        }
         stopGuide()
-        drawingOverlayManager.clear()
         let mouseLocation = NSEvent.mouseLocation
         guard let cursorScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main else {
             return "couldn't find the screen."
         }
-        let boardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        let reusesEarlierBoard = isAddingToDrawingOnScreen && lastTeachingBoardRect != nil
+            && (!plan.surfaceWasGiven || plan.surface != .screen)
+        let boardRect = reusesEarlierBoard ? lastTeachingBoardRect : plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        let drawsNewBoard = boardRect != nil && !reusesEarlierBoard
+        let teachingDisplayFrame = reusesEarlierBoard ? (lastTeachingDisplayFrame ?? cursorScreen.frame) : cursorScreen.frame
+        lastTeachingBoardRect = boardRect
+        lastTeachingDisplayFrame = teachingDisplayFrame
         let screenFrame = currentLiveTurnScreenFrame
         let userQuestion = currentLiveTurnTypedText ?? lastTranscript ?? ""
         let hasSpokenLines = plan.steps.contains { $0.say != nil }
+        let circledArea = recentCircledArea
+        let circledRowsTask = circledArea == nil ? nil : lastCircledAreaRowsTask
         print("✏️ Teaching: \(plan.steps.count) steps on \(plan.surface.rawValue), \(plan.anchors.count) anchors")
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
+        teachingGeneration += 1
+        let generationOfThisTeaching = teachingGeneration
         teachingTask = Task { [weak self] in
-            await self?.runTeaching(plan: plan, screenFrame: screenFrame, displayFrame: cursorScreen.frame,
-                                    boardRect: boardRect, userQuestion: userQuestion, speaksLines: hasSpokenLines)
+            // Steps added while the last ones are still drawing go after
+            // them; stopping this stops those too.
+            await withTaskCancellationHandler {
+                await earlierTeachingTask?.value
+            } onCancel: {
+                earlierTeachingTask?.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            await self?.runTeaching(plan: plan, screenFrame: screenFrame, displayFrame: teachingDisplayFrame,
+                                    boardRect: boardRect, drawsBoard: drawsNewBoard, userQuestion: userQuestion,
+                                    speaksLines: hasSpokenLines, generation: generationOfThisTeaching,
+                                    circledArea: circledArea, circledRowsTask: circledRowsTask)
         }
-        return hasSpokenLines
+        let continuingNote = isAddingToDrawingOnScreen
+            ? "adding to the drawing that's up. "
+            : (plan.addsToLastDrawing ? "nothing was up any more, so this starts a new drawing. " : "")
+        let laterNote = " it stays up; to add to it later, call explain_on_screen again with add_to_last true and the same positions."
+        var circledNote = ""
+        if circledArea != nil, let circledRows = lastCircledAreaRows, !circledRows.isEmpty {
+            let circledText = String(circledRows.joined(separator: " / ").prefix(1500))
+            circledNote = " the circled area reads (exactly, from the Mac): \(circledText)"
+        }
+        return continuingNote + (hasSpokenLines
             ? "drawing it now. say only two or three words like 'okay, watch'; each step's line comes to you to say while it's drawn."
-            : "drawing it now, step by step. explain it in the same order, briefly, while it draws."
+            : "drawing it now, step by step. explain it in the same order, briefly, while it draws.") + laterNote + circledNote
     }
+
+    /// The last area the user circled while talking, so a drawing can sit
+    /// on or beside it (the "circled" anchor) and a chart can graph the
+    /// table in it. Its text is read on the Mac right away, so it's
+    /// usually ready by the time Live asks to draw.
+    private var lastCircledArea: CGRect?
+    private var lastCircledAreaCircledAt: Date?
+    private var lastCircledAreaRowsTask: Task<[String], Never>?
+    private var lastCircledAreaRows: [String]?
+    /// A circle older than this isn't what a new drawing is about.
+    private static let circledAreaSecondsToKeep: TimeInterval = 15 * 60
+
+    private func rememberCircledArea(_ circledRect: CGRect) {
+        guard circledRect.width > 8, circledRect.height > 8 else { return }
+        lastCircledArea = circledRect
+        lastCircledAreaCircledAt = Date()
+        lastCircledAreaRows = nil
+        lastCircledAreaRowsTask?.cancel()
+        lastCircledAreaRowsTask = Task { [weak self] in
+            // Once the ring has faded off the screen, so it isn't read too.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return [] }
+            let rows = await DottieChartData.readRows(inGlobalRect: circledRect)
+            if !Task.isCancelled, self?.lastCircledArea == circledRect {
+                self?.lastCircledAreaRows = rows
+            }
+            return rows
+        }
+    }
+
+    /// The circled area while it's recent enough to be what the user means.
+    private var recentCircledArea: CGRect? {
+        guard let lastCircledArea, let lastCircledAreaCircledAt,
+              Date().timeIntervalSince(lastCircledAreaCircledAt) < Self.circledAreaSecondsToKeep else { return nil }
+        return lastCircledArea
+    }
+
+    /// The board the last explanation drew on and its display, so steps
+    /// added later (add_to_last) land on the same board.
+    private var lastTeachingBoardRect: CGRect?
+    private var lastTeachingDisplayFrame: CGRect?
+    /// Counts explanations, so one that finishes before steps added to it
+    /// doesn't forget the newer task.
+    private var teachingGeneration = 0
 
     private func runTeaching(
         plan: DottieTeaching.Plan,
         screenFrame: CompanionCompositeScreenFrame?,
         displayFrame: CGRect,
         boardRect: CGRect?,
+        drawsBoard: Bool,
         userQuestion: String,
-        speaksLines: Bool
+        speaksLines: Bool,
+        generation: Int,
+        circledArea: CGRect?,
+        circledRowsTask: Task<[String], Never>?
     ) async {
         // Finding the anchors starts now and only holds up the first step
         // that needs them.
@@ -1406,7 +1504,7 @@ final class CompanionManager: ObservableObject {
         }
         var anchorFrames: [String: CGRect]?
 
-        if let boardRect {
+        if drawsBoard, let boardRect {
             drawingOverlayManager.addFigures([DottieFigure(shape: .board(rect: boardRect), drawDuration: 0.35)])
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
@@ -1419,14 +1517,31 @@ final class CompanionManager: ObservableObject {
             }
         }
 
+        // "circled" is always an anchor: the area the user circled.
+        let builtInAnchorFrames: [String: CGRect] = circledArea.map { ["circled": $0] } ?? [:]
         var missedSteps = 0
-        for step in plan.steps {
+        for plannedStep in plan.steps {
             if Task.isCancelled { break }
-            let usesAnchors = step.points.contains { reference in
+            var step = plannedStep
+            // A chart of what the user circled gets its numbers read on the
+            // Mac, exactly, instead of from Live's small frame.
+            if step.kind == .chart, let chartText = step.text, chartText.lowercased().contains("circled") {
+                let circledRows = await circledRowsTask?.value ?? []
+                let circledChartText = DottieChartData.chartText(fromRows: circledRows)
+                print("✏️ Circled table: \(circledRows.count) rows → \(circledChartText.prefix(200))")
+                if Task.isCancelled { break }
+                step = step.replacingText(circledChartText)
+            }
+            let usesPlanAnchors = step.points.contains { reference in
                 let name = reference.lowercased()
                 return anchorNames.contains(name) || anchorNames.contains(where: { name.hasPrefix($0 + ".") })
             }
-            if usesAnchors && anchorFrames == nil {
+            let usesCircledArea = step.points.contains { reference in
+                let name = reference.lowercased()
+                return builtInAnchorFrames[name] != nil || builtInAnchorFrames.keys.contains(where: { name.hasPrefix($0 + ".") })
+            }
+            let usesAnchors = usesPlanAnchors || usesCircledArea
+            if usesPlanAnchors && anchorFrames == nil {
                 notchPresenter.showScreenTaskStep("finding it on your screen", title: "drawing")
                 anchorFrames = await anchorLookup?.value ?? [:]
                 notchPresenter.endScreenTask()
@@ -1435,7 +1550,7 @@ final class CompanionManager: ObservableObject {
             let space = DottieTeaching.Space(
                 // Anchored steps point at the screen even with a board open.
                 boardRect: usesAnchors ? nil : boardRect,
-                anchorFrames: anchorFrames ?? [:],
+                anchorFrames: (anchorFrames ?? [:]).merging(builtInAnchorFrames) { foundFrame, _ in foundFrame },
                 screenPoint: { normalizedX, normalizedY in
                     guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else { return nil }
                     return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
@@ -1467,8 +1582,10 @@ final class CompanionManager: ObservableObject {
         // under way.
         guard !Task.isCancelled else { return }
         penTrace = nil
-        teachingTask = nil
-        teachingNarrationTask = nil
+        if generation == teachingGeneration {
+            teachingTask = nil
+            teachingNarrationTask = nil
+        }
         if missedSteps > 0 {
             print("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
         }
@@ -2636,6 +2753,7 @@ final class CompanionManager: ObservableObject {
             self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
         }
         DottieEpisodicMemory.shared.start()
+        DottieHabits.shared.start()
     }
 
     /// Hands a question to the Brain agent; Dottie says the answer when it

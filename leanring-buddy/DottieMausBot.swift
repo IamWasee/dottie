@@ -637,8 +637,6 @@ final class DottieMausBot: ObservableObject {
     @Published private(set) var preference: DottieHelperEngine = DottieHelperEngine.preference
     @Published private(set) var claudePausedUntil: Date? = DottieHelperEngine.claudePausedUntil
     @Published private(set) var claudePauseReason: String? = DottieHelperEngine.claudePauseReason
-    /// Claude turns running now, so the workspace isn't swapped under them.
-    @Published private(set) var activeClaudeTurnCount = 0
     /// Dottie is downloading or installing the MausBot app right now.
     @Published private(set) var isInstallingDesktopApp = false
     /// The MausBot app didn't install the last time it was tried, so Set up
@@ -715,9 +713,6 @@ final class DottieMausBot: ObservableObject {
         claudePauseReason = nil
         refreshStatus(startWorkspace: true)
     }
-
-    func claudeTurnStarted() { activeClaudeTurnCount += 1 }
-    func claudeTurnEnded() { activeClaudeTurnCount = max(0, activeClaudeTurnCount - 1) }
 
     /// Decides where the next helper turn runs, starting MausBot's
     /// workspace first if it's set up but not running.

@@ -427,8 +427,6 @@ final class DottieGameNotebook {
 /// Usual controls and tactics per kind of game, so a new game doesn't
 /// start from nothing.
 enum DottieGameGenres {
-    static let knownGenres = ["shooter", "rpg", "platformer", "roblox obby", "racing", "puzzle", "strategy", "sandbox"]
-
     static func starter(for genre: String, gameName: String) -> String {
         // Roblox games share Roblox's own controls whatever their genre, so
         // a Roblox "sandbox" doesn't get Minecraft's.

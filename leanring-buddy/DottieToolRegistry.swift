@@ -5,7 +5,10 @@
 //  One place for features to add tools without touching the voice client or
 //  CompanionManager. A feature declares a DottieToolModule in its own file,
 //  lists it in DottieToolModules.all, and its tools show up for Dottie's
-//  voice, her helpers, or both. Its prompt lines join the voice prompt.
+//  voice. Its prompt lines join the voice prompt, and its helper lines join
+//  every helper's instructions. Helpers (Gemini CLI, Claude) can't call
+//  these Swift tools, so a module tells them about files or commands they
+//  can use themselves in helperPromptSection instead.
 //
 //  Voice tools are not declared to Gemini Live up front unless they're in
 //  GeminiLiveToolCatalog.directFunctionNames: Live finds them with find_tool
@@ -20,9 +23,9 @@
 
 import Foundation
 
-/// A tool a feature gives Dottie's voice and/or her helpers.
+/// A tool a feature gives Dottie's voice.
 struct DottieTool {
-    enum Audience: Hashable { case voice, helpers }
+    enum Audience: Hashable { case voice }
 
     let name: String
     let description: String
@@ -35,7 +38,7 @@ struct DottieTool {
         name: String,
         description: String,
         parameters: [String: Any]? = nil,
-        audiences: Set<Audience> = [.voice, .helpers],
+        audiences: Set<Audience> = [.voice],
         run: @escaping @MainActor ([String: Any]) async -> String
     ) {
         self.name = name
@@ -70,8 +73,27 @@ extension DottieToolModule {
 
 @MainActor
 enum DottieToolRegistry {
+    /// Every module's tools, made once: the list never changes while
+    /// Dottie runs, and it used to be built again on every tool call.
+    private static var cachedToolsByAudience: [DottieTool.Audience: [DottieTool]] = [:]
+    private static var cachedToolsByNameByAudience: [DottieTool.Audience: [String: DottieTool]] = [:]
+
     static func tools(for audience: DottieTool.Audience) -> [DottieTool] {
-        DottieToolModules.all.flatMap { $0.tools }.filter { $0.audiences.contains(audience) }
+        if let cachedTools = cachedToolsByAudience[audience] {
+            return cachedTools
+        }
+        let audienceTools = DottieToolModules.all.flatMap { $0.tools }.filter { $0.audiences.contains(audience) }
+        cachedToolsByAudience[audience] = audienceTools
+        return audienceTools
+    }
+
+    private static func tool(named name: String, for audience: DottieTool.Audience) -> DottieTool? {
+        if let cachedToolsByName = cachedToolsByNameByAudience[audience] {
+            return cachedToolsByName[name]
+        }
+        let toolsByName = Dictionary(tools(for: audience).map { ($0.name, $0) }, uniquingKeysWith: { firstTool, _ in firstTool })
+        cachedToolsByNameByAudience[audience] = toolsByName
+        return toolsByName[name]
     }
 
     static func functionDeclarations(for audience: DottieTool.Audience) -> [[String: Any]] {
@@ -79,13 +101,13 @@ enum DottieToolRegistry {
     }
 
     static func handles(_ name: String, for audience: DottieTool.Audience) -> Bool {
-        tools(for: audience).contains { $0.name == name }
+        tool(named: name, for: audience) != nil
     }
 
     /// Runs a registered tool, or returns nil when no module has it.
     static func run(_ name: String, arguments: [String: Any], for audience: DottieTool.Audience) async -> String? {
-        guard let tool = tools(for: audience).first(where: { $0.name == name }) else { return nil }
-        return await tool.run(arguments)
+        guard let registeredTool = tool(named: name, for: audience) else { return nil }
+        return await registeredTool.run(arguments)
     }
 
     static var voicePromptSections: String {

@@ -136,42 +136,6 @@ extension DottieEpisodicMemory {
         return "forgot \(doomed.count) episode\(doomed.count == 1 ? "" : "s"): \(titles)\(doomed.count > 5 ? " and more" : "")."
     }
 
-    /// A few lines for the start of every voice conversation: the most
-    /// relevant recent episodes, about 400 characters.
-    func promptContext(frontmostAppName: String?) -> String {
-        let now = Date()
-        var recentEpisodes = episodes.filter { now.timeIntervalSince($0.endedAt) < 3 * 86_400 }
-        if recentEpisodes.isEmpty {
-            recentEpisodes = episodes.filter { now.timeIntervalSince($0.endedAt) < 14 * 86_400 }
-        }
-        guard !recentEpisodes.isEmpty else { return "" }
-        let appName = frontmostAppName?.lowercased()
-        let chosen = recentEpisodes.map { episode -> (episode: DottieEpisode, score: Double) in
-            let ageInHours = max(now.timeIntervalSince(episode.endedAt) / 3600, 0)
-            var score = episode.importance * 0.6 + exp(-ageInHours / 18)
-            if let appName, episode.appName?.lowercased() == appName { score += 0.4 }
-            if episode.source == .screen { score -= 0.15 }
-            return (episode: episode, score: score)
-        }
-        .sorted { $0.score > $1.score }
-        .prefix(3)
-        .map(\.episode)
-        .sorted { $0.startedAt < $1.startedAt }
-
-        var lines: [String] = []
-        var totalLength = 0
-        for episode in chosen {
-            let firstSentence = DottieEpisodeSearch.firstSentence(of: episode.summary)
-            var line = "- \(DottieEpisodeSearch.relativeTime(episode.startedAt)): \(episode.title)"
-            if !firstSentence.isEmpty { line += " — " + firstSentence }
-            line = String(line.prefix(150))
-            guard totalLength + line.count <= 420 else { break }
-            totalLength += line.count
-            lines.append(line)
-        }
-        return lines.joined(separator: "\n")
-    }
-
     static func lineForModel(_ episode: DottieEpisode) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEE d MMM, h:mm a"
@@ -186,6 +150,9 @@ extension DottieEpisodicMemory {
         if !whereText.isEmpty { line += " where: \(whereText.prefix(200))." }
         if !episode.people.isEmpty { line += " involved: \(episode.people.prefix(5).joined(separator: ", "))." }
         if let outcome = episode.outcome, !outcome.isEmpty { line += " outcome: \(outcome.prefix(160))" }
+        if episode.thumbnailFileName != nil {
+            line += " has a picture" + (episode.pictureDescription.map { " (\($0.prefix(200)))" } ?? "") + "."
+        }
         return line
     }
 
@@ -380,7 +347,7 @@ enum DottieEpisodeSearch {
             var strongText = episode.tags.joined(separator: " ") + " " + episode.people.joined(separator: " ")
             strongText += " " + (episode.appName ?? "") + " " + (episode.windowTitle ?? "") + " " + (episode.url ?? "")
             strong = DottieEpisodeSearch.wordSet(strongText)
-            body = DottieEpisodeSearch.wordSet(episode.summary + " " + (episode.outcome ?? ""))
+            body = DottieEpisodeSearch.wordSet(episode.summary + " " + (episode.outcome ?? "") + " " + (episode.pictureDescription ?? ""))
         }
 
         /// The weight of the best place the word shows up, or nil.
@@ -696,7 +663,7 @@ final class DottieEpisodeEmbeddings {
     }
 
     private static func text(for episode: DottieEpisode) -> String {
-        "\(episode.title). \(episode.summary) \(episode.whereText) \(episode.tags.joined(separator: " "))"
+        "\(episode.title). \(episode.summary) \(episode.pictureDescription ?? "") \(episode.whereText) \(episode.tags.joined(separator: " "))"
     }
 
     private static func cosineSimilarity(_ first: [Float], _ second: [Float]) -> Double {

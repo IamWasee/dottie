@@ -3,7 +3,8 @@
 //  leanring-buddy
 //
 //  Home → Brain: what Dottie's second brain knows (editable), the timeline
-//  of what happened (episodic memory), the "Remember what's on my screen"
+//  of what happened (episodic memory), the user's routines, the
+//  "Remember what's on my screen"
 //  switch, the newest memories, the folders the Brain agent may use, the
 //  MCP servers it and the Dots can call, and a way to wipe it all.
 //
@@ -71,6 +72,10 @@ struct HomeBrainView: View {
 
                 group(title: "Timeline") {
                     DottieEpisodeTimeline(memory: DottieEpisodicMemory.shared)
+                }
+
+                group(title: "Your routines") {
+                    DottieHabitsSection(habits: DottieHabits.shared)
                 }
 
                 group(title: "What Dottie sees") {
@@ -203,5 +208,54 @@ struct HomeBrainView: View {
             .font(.system(size: 11))
             .foregroundColor(DS.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The routines Dottie noticed or was told, each with a way to forget it,
+/// and the switch for noticing them.
+struct DottieHabitsSection: View {
+    @ObservedObject var habits: DottieHabits
+
+    var body: some View {
+        Toggle(isOn: $habits.isNoticingEnabled) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Notice my routines")
+                    .font(.system(size: 12))
+                    .foregroundColor(DS.Colors.textPrimary)
+                Text("Which app is in front and the pages in Dottie's memory, kept on this Mac (app names only, no screenshots). After about a week she spots what you do at the same time most days.")
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+        .pointerCursor()
+
+        if habits.habits.isEmpty {
+            Text("None yet. You can also tell Dottie one: \u{201C}I go to the gym Mondays at 6.\u{201D}")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        ForEach(habits.habits) { habit in
+            HStack(alignment: .firstTextBaseline) {
+                Image(systemName: habit.source == .told ? "text.bubble.fill" : "clock.arrow.circlepath")
+                    .foregroundColor(DS.Colors.textTertiary)
+                Text(habit.sentence)
+                    .font(.system(size: 12))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button {
+                    habits.forget(habit)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Forget this routine")
+            }
+        }
     }
 }

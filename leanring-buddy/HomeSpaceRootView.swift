@@ -494,7 +494,7 @@ private struct HomeConversationEntryView: View {
                 HStack(spacing: 6) {
                     Spacer(minLength: 60)
                     ForEach(imageFileNames, id: \.self) { fileName in
-                        if let image = NSImage(contentsOf: imageFolderURL.appendingPathComponent(fileName)) {
+                        if let image = DottieThumbnailCache.thumbnail(of: imageFolderURL.appendingPathComponent(fileName), maximumPixelSize: 400) {
                             Image(nsImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -543,7 +543,7 @@ private struct HomeSettingsView: View {
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
     private let isCuaDriverBundled = ClickyComputerUse.isCuaDriverBundled
     // Same key ClickyComputerUse.isAlwaysAllowed reads.
-    @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
+    @AppStorage(ClickyComputerUse.alwaysAllowDefaultsKey) private var isComputerUseAlwaysAllowed = false
     // Same keys ClickyDictationController reads.
     @AppStorage("clickyDictationEnabled") private var isDictationEnabled = true
     @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true
