@@ -292,7 +292,7 @@ final class DottieHabits: ObservableObject {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    static func clockText(minuteOfDay: Int) -> String {
+    nonisolated static func clockText(minuteOfDay: Int) -> String {
         let hour = (minuteOfDay / 60) % 24
         let minute = minuteOfDay % 60
         let displayHour = hour % 12 == 0 ? 12 : hour % 12
