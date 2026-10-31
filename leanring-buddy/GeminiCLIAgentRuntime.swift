@@ -380,12 +380,6 @@ final class GeminiCLIAgentRuntime {
         runningProcess?.terminate()
     }
 
-    func isTurnRunning(agentID: UUID) -> Bool {
-        runningProcessesLock.lock()
-        defer { runningProcessesLock.unlock() }
-        return runningProcessesByAgentID[agentID] != nil
-    }
-
     private func setRunningProcess(_ process: Process?, forAgentID agentID: UUID) {
         runningProcessesLock.lock()
         runningProcessesByAgentID[agentID] = process

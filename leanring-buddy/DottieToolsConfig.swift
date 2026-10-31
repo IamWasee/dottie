@@ -38,8 +38,6 @@ struct DottieMCPServerConfig: Codable, Equatable {
     var type: String?
     var cwd: String?
 
-    var isWebServer: Bool { command == nil && url != nil }
-
     init(command: String? = nil, args: [String] = [], env: [String: String] = [:], url: String? = nil, headers: [String: String] = [:], type: String? = nil, cwd: String? = nil) {
         self.command = command
         self.args = args

@@ -61,15 +61,6 @@ struct CompanionPanelView: View {
                     .padding(.horizontal, 16)
             }
 
-            // Show Clicky toggle — hidden for now
-            // if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            //     Spacer()
-            //         .frame(height: 16)
-            //
-            //     showClickyCursorToggleRow
-            //         .padding(.horizontal, 16)
-            // }
-
             Spacer()
                 .frame(height: 12)
 
@@ -557,35 +548,6 @@ struct CompanionPanelView: View {
 
 
 
-    // MARK: - Show Clicky Cursor Toggle
-
-    private var showClickyCursorToggleRow: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "cursorarrow")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 16)
-
-                Text("Show Dottie")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            Toggle("", isOn: Binding(
-                get: { companionManager.isClickyCursorEnabled },
-                set: { companionManager.setClickyCursorEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .tint(DS.Colors.accent)
-            .scaleEffect(0.8)
-        }
-        .padding(.vertical, 4)
-    }
-
     // MARK: - Away Mode Toggle
 
     /// Away mode (DottieAwayMode): Dottie keeps working while the user is
@@ -619,28 +581,6 @@ struct CompanionPanelView: View {
             .tint(DS.Colors.accent)
             .scaleEffect(0.8)
             .pointerCursor()
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var speechToTextProviderRow: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "mic.badge.waveform")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 16)
-
-                Text("Speech to Text")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            Text(companionManager.buddyDictationManager.transcriptionProviderDisplayName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
         }
         .padding(.vertical, 4)
     }

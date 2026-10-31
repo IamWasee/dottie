@@ -543,7 +543,7 @@ private struct HomeSettingsView: View {
     private let isCuaDriverInstalled = ClickyComputerUse.locateCuaDriverExecutable() != nil
     private let isCuaDriverBundled = ClickyComputerUse.isCuaDriverBundled
     // Same key ClickyComputerUse.isAlwaysAllowed reads.
-    @AppStorage("clickyComputerUseAlwaysAllowed") private var isComputerUseAlwaysAllowed = false
+    @AppStorage(ClickyComputerUse.alwaysAllowDefaultsKey) private var isComputerUseAlwaysAllowed = false
     // Same keys ClickyDictationController reads.
     @AppStorage("clickyDictationEnabled") private var isDictationEnabled = true
     @AppStorage(ClickyNotifications.enabledDefaultsKey) private var areDotNotificationsEnabled = true

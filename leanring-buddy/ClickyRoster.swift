@@ -259,10 +259,6 @@ final class ClickyRoster: ObservableObject {
         try? FileManager.default.trashItem(at: workspaceURL(for: agent), resultingItemURL: nil)
     }
 
-    var unreadAgentCount: Int {
-        agents.filter { $0.hasUnreadReply == true }.count
-    }
-
     func markRead(agentID: UUID) {
         guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
               agents[agentIndex].hasUnreadReply == true else { return }

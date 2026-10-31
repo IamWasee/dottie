@@ -4,7 +4,7 @@
 //
 
 import Testing
-@testable import leanring_buddy
+@testable import Dottie
 
 struct leanring_buddyTests {
 
@@ -26,13 +26,12 @@ struct leanring_buddyTests {
         #expect(presentationDestination == .systemSettings)
     }
 
-    @Test func knownGrantedScreenRecordingPermissionSkipsTheGate() async throws {
-        let shouldTreatPermissionAsGranted = WindowPositionManager.shouldTreatScreenRecordingPermissionAsGrantedForSessionLaunch(
-            hasScreenRecordingPermissionNow: false,
-            hasPreviouslyConfirmedScreenRecordingPermission: true
+    @Test func grantedPermissionNeedsNoPrompt() async throws {
+        let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
+            hasPermissionNow: true,
+            hasAttemptedSystemPrompt: false
         )
 
-        #expect(shouldTreatPermissionAsGranted)
+        #expect(presentationDestination == .alreadyGranted)
     }
-
 }

@@ -59,8 +59,6 @@ enum DottieNeedleToolset: String, CaseIterable, Sendable {
         }
     }
 
-    static let windowPlaces = ["left", "right", "full screen", "center", "other screen", "laptop screen", "big screen"]
-
     private static let macToolsJSON = """
     [
       {"name": "open_app", "description": "Open, launch or start an app or a website on the Mac.",

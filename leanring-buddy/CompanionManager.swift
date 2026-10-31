@@ -336,14 +336,14 @@ final class CompanionManager: ObservableObject {
     /// Whether the user has submitted their email during onboarding.
     @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
 
-    /// Records the user's email locally (and in analytics, if configured).
+    /// Marks the email step done and passes the email to analytics when
+    /// PostHog is configured. The email itself isn't kept on the Mac.
     func submitEmail(_ email: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { return }
 
         hasSubmittedEmail = true
         UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
-        UserDefaults.standard.set(trimmedEmail, forKey: "submittedEmail")
 
         ClickyAnalytics.identifyUser(email: trimmedEmail)
     }
@@ -605,17 +605,6 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Private
-
-    /// Triggers the system microphone prompt if the user has never been asked.
-    /// Once granted/denied the status sticks and polling picks it up.
-    private func promptForMicrophoneIfNotDetermined() {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            Task { @MainActor [weak self] in
-                self?.hasMicrophonePermission = granted
-            }
-        }
-    }
 
     /// Polls all permissions frequently so the UI updates live after the
     /// user grants them in System Settings. Screen Recording is the exception —

@@ -37,7 +37,7 @@ enum ClickyComputerUse {
     /// it what this means.
     static let approvedTurnPrefix = "[Computer use approved for this turn]"
 
-    private static let alwaysAllowDefaultsKey = "clickyComputerUseAlwaysAllowed"
+    static let alwaysAllowDefaultsKey = "clickyComputerUseAlwaysAllowed"
 
     /// "Always allow": every turn may click and type without asking.
     static var isAlwaysAllowed: Bool {

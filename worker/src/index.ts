@@ -753,12 +753,6 @@ function modelsToTry(model: string, fallbackModels?: string): string[] {
 }
 
 /**
- * Calls `models/<model>:<method>` on each model in turn until one answers.
- * Free-tier models often say "high demand" (503) or hit their per-model
- * limit (429) while others are fine, so a busy model moves on to the next.
- * Any other error is returned as is.
- */
-/**
  * `x-dottie-attempt-seconds`: how long one model may take to start
  * answering before the next one is tried. The app sends it for quick
  * lookups (a box on a screenshot), where a model that's slow to start
@@ -772,6 +766,12 @@ function attemptTimeoutMilliseconds(request: Request): number | undefined {
   return Math.min(attemptSeconds, 60) * 1000;
 }
 
+/**
+ * Calls `models/<model>:<method>` on each model in turn until one answers.
+ * Free-tier models often say "high demand" (503) or hit their per-model
+ * limit (429) while others are fine, so a busy model moves on to the next.
+ * Any other error is returned as is.
+ */
 async function fetchGeminiWithFallback(
   env: Env,
   models: string[],
