@@ -978,6 +978,9 @@ final class CompanionManager: ObservableObject {
         if recentEpisodeCount > 0 {
             prompt += "\n\nyou remember \(recentEpisodeCount) thing\(recentEpisodeCount == 1 ? "" : "s") from the last few days; use_tool memories {\"action\": \"recent\"} lists them and recall_memory searches everything. bring them up only if relevant."
         }
+        if let routinesLine = DottieHabits.shared.voicePromptLine {
+            prompt += "\n\n" + routinesLine + " use_tool memories {\"action\": \"routines\"} lists them with ids; when the user tells you a routine of theirs, save it with add_routine."
+        }
         let savedPictureCount = imageMemory.items.count
         if savedPictureCount > 0 {
             prompt += "\n\npictures: \(savedPictureCount) saved picture\(savedPictureCount == 1 ? "" : "s") (the user's and yours). use_tool find_pictures {\"query\": \"…\"} gives their names and where they're from. when the user means one (\"grab that sword\", \"where's the thing i showed you\"), pass its exact name in do_task_on_screen's reference_images or as point_at_element's label, so the picture itself is matched on screen. save_picture saves a new one."
@@ -2750,6 +2753,7 @@ final class CompanionManager: ObservableObject {
             self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
         }
         DottieEpisodicMemory.shared.start()
+        DottieHabits.shared.start()
     }
 
     /// Hands a question to the Brain agent; Dottie says the answer when it

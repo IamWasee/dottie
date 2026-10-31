@@ -150,6 +150,9 @@ extension DottieEpisodicMemory {
         if !whereText.isEmpty { line += " where: \(whereText.prefix(200))." }
         if !episode.people.isEmpty { line += " involved: \(episode.people.prefix(5).joined(separator: ", "))." }
         if let outcome = episode.outcome, !outcome.isEmpty { line += " outcome: \(outcome.prefix(160))" }
+        if episode.thumbnailFileName != nil {
+            line += " has a picture" + (episode.pictureDescription.map { " (\($0.prefix(200)))" } ?? "") + "."
+        }
         return line
     }
 
@@ -344,7 +347,7 @@ enum DottieEpisodeSearch {
             var strongText = episode.tags.joined(separator: " ") + " " + episode.people.joined(separator: " ")
             strongText += " " + (episode.appName ?? "") + " " + (episode.windowTitle ?? "") + " " + (episode.url ?? "")
             strong = DottieEpisodeSearch.wordSet(strongText)
-            body = DottieEpisodeSearch.wordSet(episode.summary + " " + (episode.outcome ?? ""))
+            body = DottieEpisodeSearch.wordSet(episode.summary + " " + (episode.outcome ?? "") + " " + (episode.pictureDescription ?? ""))
         }
 
         /// The weight of the best place the word shows up, or nil.
@@ -660,7 +663,7 @@ final class DottieEpisodeEmbeddings {
     }
 
     private static func text(for episode: DottieEpisode) -> String {
-        "\(episode.title). \(episode.summary) \(episode.whereText) \(episode.tags.joined(separator: " "))"
+        "\(episode.title). \(episode.summary) \(episode.pictureDescription ?? "") \(episode.whereText) \(episode.tags.joined(separator: " "))"
     }
 
     private static func cosineSimilarity(_ first: [Float], _ second: [Float]) -> Double {

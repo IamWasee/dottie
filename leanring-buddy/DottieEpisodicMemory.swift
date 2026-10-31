@@ -8,7 +8,8 @@
 //
 //    - conversations: once the user stops talking for a bit, ONE quick
 //      Gemini call turns the whole conversation (plus the app, window and
-//      page they were in, and the last screenshot) into 0-3 episodes.
+//      page they were in, and up to three screenshots from it) into 0-3
+//      episodes; each keeps the picture it was about, described in words.
 //      Small talk is skipped.
 //    - helpers: every finished helper task becomes an episode (no call).
 //    - screen jobs: every finished do_task_on_screen job (no call).
@@ -77,6 +78,10 @@ struct DottieEpisode: Codable, Identifiable, Equatable {
     /// 0...1: how likely the user is to ask about it again.
     var importance: Double
     var thumbnailFileName: String?
+    /// What the picture saved with it shows, in a sentence ("a red linen
+    /// dress on Zara's site, €49"), so "that dress I was looking at" finds
+    /// it by words.
+    var pictureDescription: String? = nil
 
     /// What the user says to point at one ("forget #a1b2c3").
     var shortID: String { String(id.uuidString.prefix(6)).lowercased() }
@@ -154,8 +159,16 @@ final class DottieEpisodicMemory: ObservableObject {
     }
 
     private var pendingExchanges: [PendingExchange] = []
-    /// The last screenshot Dottie saw in the current conversation.
-    private var latestConversationScreenshot: Data?
+    /// The screenshots Dottie saw in the current conversation (the last
+    /// few), so each episode can keep the picture of what it was about.
+    private struct ConversationScreenshot {
+        let date: Date
+        let jpegData: Data
+    }
+    private var conversationScreenshots: [ConversationScreenshot] = []
+    private static let maximumConversationScreenshots = 3
+    /// A new screenshot replaces the last one when it's this close in time.
+    private static let secondsBetweenKeptScreenshots: TimeInterval = 20
     private var conversationIdleTask: Task<Void, Never>?
     private var nextModelCallSlot = Date.distantPast
     private var busyUntil = Date.distantPast
@@ -231,7 +244,16 @@ final class DottieEpisodicMemory: ObservableObject {
     /// The frame sent with the latest voice turn. Only kept in memory.
     func noteConversationScreenshot(_ jpegData: Data?) {
         guard let jpegData else { return }
-        latestConversationScreenshot = jpegData
+        let screenshot = ConversationScreenshot(date: Date(), jpegData: jpegData)
+        if let lastScreenshot = conversationScreenshots.last,
+           screenshot.date.timeIntervalSince(lastScreenshot.date) < Self.secondsBetweenKeptScreenshots {
+            conversationScreenshots[conversationScreenshots.count - 1] = screenshot
+        } else {
+            conversationScreenshots.append(screenshot)
+        }
+        if conversationScreenshots.count > Self.maximumConversationScreenshots {
+            conversationScreenshots.removeFirst(conversationScreenshots.count - Self.maximumConversationScreenshots)
+        }
     }
 
     private func scheduleConversationSave(after seconds: TimeInterval) {
@@ -247,7 +269,7 @@ final class DottieEpisodicMemory: ObservableObject {
     private func saveConversation() async {
         guard !pendingExchanges.isEmpty, !isSaving else { return }
         let exchanges = pendingExchanges
-        let screenshot = latestConversationScreenshot
+        let screenshots = conversationScreenshots
 
         // Nothing worth a call: a hello, a thanks, a one-word turn.
         let userLetters = exchanges.map(\.userText).joined().filter(\.isLetter).count
@@ -270,7 +292,7 @@ final class DottieEpisodicMemory: ObservableObject {
         }.joined(separator: "\n\n")
 
         let instruction = """
-        You keep the episodic memory of Dottie, a voice companion on the user's Mac, so later she can answer things like "what did we talk about yesterday" or "what was that site I was on". Below is one conversation, numbered by exchange, with the app, window and web page the user was in\(screenshot == nil ? "" : ", and the last screenshot from it").
+        You keep the episodic memory of Dottie, a voice companion on the user's Mac, so later she can answer things like "what did we talk about yesterday" or "what was that site I was on". Below is one conversation, numbered by exchange, with the app, window and web page the user was in\(screenshots.isEmpty ? "" : ", and \(screenshots.count == 1 ? "a screenshot" : "\(screenshots.count) numbered screenshots") of their screen from it").
 
         Turn it into 0 to 3 episodes, one per separate thing that happened (a question answered, a problem solved, a plan or decision made, something found, a task started). Skip small talk, greetings, thanks and test lines: return [] if nothing is worth remembering.
         For each episode:
@@ -282,6 +304,8 @@ final class DottieEpisodicMemory: ObservableObject {
         - tags: 2 to 5 lowercase words
         - importance: 0 to 1 (1 = they'll likely ask about it again: a decision, plan, file, site or fact they cared about)
         - firstExchange, lastExchange: exchange numbers it covers
+        - picture: the number of the screenshot that shows what the episode is about (0 if none does)
+        - seen: when picture isn't 0, one sentence on what that picture shows that matters (the product, page, photo, chart, error or design, with names, colors and numbers), so the user can find it later by describing it
         Never include passwords, codes, card numbers or other secrets. Reply with JSON only.
 
         Conversation:
@@ -289,8 +313,9 @@ final class DottieEpisodicMemory: ObservableObject {
         """
 
         var parts: [[String: Any]] = []
-        let smallScreenshot = screenshot.flatMap { DottieEpisodeThumbnails.downscaledJPEG($0, maximumDimension: 768, quality: 0.6) }
-        if let smallScreenshot {
+        for (screenshotIndex, screenshot) in screenshots.enumerated() {
+            guard let smallScreenshot = DottieEpisodeThumbnails.downscaledJPEG(screenshot.jpegData, maximumDimension: 768, quality: 0.6) else { continue }
+            parts.append(["text": "screenshot \(screenshotIndex + 1), at \(timeFormatter.string(from: screenshot.date)):"])
             parts.append(["inlineData": ["mimeType": "image/jpeg", "data": smallScreenshot.base64EncodedString()]])
         }
         parts.append(["text": instruction])
@@ -302,7 +327,7 @@ final class DottieEpisodicMemory: ObservableObject {
         }
 
         var newEpisodes: [DottieEpisode] = []
-        for (index, draft) in parsed.prefix(3).enumerated() {
+        for draft in parsed.prefix(3) {
             let firstIndex = min(max(draft.firstIndex ?? 1, 1), exchanges.count) - 1
             let lastIndex = min(max(draft.lastIndex ?? exchanges.count, firstIndex + 1), exchanges.count) - 1
             let context = exchanges[firstIndex...lastIndex].last(where: { $0.context != nil })?.context
@@ -312,9 +337,20 @@ final class DottieEpisodicMemory: ObservableObject {
                 endedAt: exchanges[lastIndex].date,
                 context: context
             )
-            // The screenshot goes with the part of the talk it came from.
-            if let screenshot, index == parsed.prefix(3).count - 1 {
-                episode.thumbnailFileName = DottieEpisodeThumbnails.save(screenshot, for: episode.id, in: thumbnailsFolderURL)
+            // The picture the model picked, or else the one taken during
+            // that part of the talk.
+            let pickedPictureNumber = (draft.fields["picture"] as? NSNumber)?.intValue ?? -1
+            var episodeScreenshot: ConversationScreenshot?
+            if pickedPictureNumber >= 1, pickedPictureNumber <= screenshots.count {
+                episodeScreenshot = screenshots[pickedPictureNumber - 1]
+            } else if pickedPictureNumber != 0 {
+                episodeScreenshot = screenshots.last { $0.date <= episode.endedAt.addingTimeInterval(5) }
+            }
+            if let episodeScreenshot {
+                episode.thumbnailFileName = DottieEpisodeThumbnails.save(episodeScreenshot.jpegData, for: episode.id, in: thumbnailsFolderURL)
+                if episode.thumbnailFileName != nil {
+                    episode.pictureDescription = draft.string("seen").map { String($0.prefix(300)) }
+                }
             }
             newEpisodes.append(episode)
         }
@@ -325,7 +361,7 @@ final class DottieEpisodicMemory: ObservableObject {
     private func finishConversation(_ savedExchanges: [PendingExchange]) {
         let savedIDs = Set(savedExchanges.map(\.id))
         pendingExchanges.removeAll { savedIDs.contains($0.id) }
-        if pendingExchanges.isEmpty { latestConversationScreenshot = nil }
+        if pendingExchanges.isEmpty { conversationScreenshots = [] }
         savePending()
     }
 
@@ -486,7 +522,9 @@ final class DottieEpisodicMemory: ObservableObject {
                 "tags": ["type": "ARRAY", "items": ["type": "STRING"]],
                 "importance": ["type": "NUMBER"],
                 "first": ["type": "INTEGER"],
-                "last": ["type": "INTEGER"]
+                "last": ["type": "INTEGER"],
+                "picture": ["type": "INTEGER"],
+                "seen": ["type": "STRING"]
             ],
             "required": ["title", "summary"]
         ]
@@ -566,8 +604,9 @@ final class DottieEpisodicMemory: ObservableObject {
         conversationIdleTask?.cancel()
         episodes = []
         pendingExchanges = []
-        latestConversationScreenshot = nil
+        conversationScreenshots = []
         cachedSearchWords = [:]
+        DottieHabits.shared.forgetEverything()
         try? FileManager.default.removeItem(at: thumbnailsFolderURL)
         try? FileManager.default.createDirectory(at: thumbnailsFolderURL, withIntermediateDirectories: true)
         embeddings.removeAll()
@@ -765,7 +804,9 @@ enum DottieMemoryNetwork {
 enum DottieEpisodeThumbnails {
     /// Saves a small copy of the picture and returns its file name.
     static func save(_ imageData: Data, for episodeID: UUID, in folderURL: URL) -> String? {
-        guard let thumbnailData = downscaledJPEG(imageData, maximumDimension: 320, quality: 0.6) else { return nil }
+        // Big enough to read when the user asks to see it again; the
+        // timeline shows it smaller.
+        guard let thumbnailData = downscaledJPEG(imageData, maximumDimension: 1280, quality: 0.65) else { return nil }
         let fileName = "\(episodeID.uuidString).jpg"
         do {
             try thumbnailData.write(to: folderURL.appendingPathComponent(fileName), options: .atomic)
