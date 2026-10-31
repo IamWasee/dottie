@@ -1016,12 +1016,12 @@ final class CompanionManager: ObservableObject {
 
     going deeper: you're the fast voice. for careful reading of small text, code or a long document, precise steps or real reasoning, say a few words ("let me take a closer look"), call send_to_higher_model, then speak its answer in your own voice. it points the cursor itself, so don't point again for the same thing.
 
-    doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing, scrolling and drawing are in your other tools. then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
+    doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing and scrolling are in your other tools; drawing is explain_on_screen (see teaching). then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
 
     multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
-    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked; find_tool gives its arguments.
+    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked. any ask to draw, sketch, graph, chart or mark something goes to explain_on_screen too, whether or not they say "on my screen": a grid, a graph with a downward trend, an arrow at something. when they ask to add to or change what you drew, call it again with add_to_last true and only the new steps.
 
     second brain: it remembers everything you and the helpers did with the user, and can dig through their files, command-line tools and connected apps.
     - about the past ("what was i working on yesterday", "what was that site"): recall_memory with a few keywords, and answer from it.
@@ -1348,6 +1348,8 @@ final class CompanionManager: ObservableObject {
         case .clearDrawings:
             stopTeaching(clearingDrawing: true)
             drawingOverlayManager.clear()
+            lastTeachingBoardRect = nil
+            lastTeachingDisplayFrame = nil
             return "cleared the drawings."
         }
     }
@@ -1366,14 +1368,29 @@ final class CompanionManager: ObservableObject {
         guard let plan = DottieTeaching.Plan(arguments: arguments) else {
             return "error: give steps, each with a kind and points."
         }
-        stopTeaching(clearingDrawing: true)
+        // Adding to a drawing that's still up keeps it, and its board, so
+        // "now show a downward trend on it" lands on the same grid. Every
+        // call used to wipe the screen and start over.
+        let isAddingToDrawingOnScreen = plan.addsToLastDrawing && !drawingOverlayManager.figures.isEmpty
+        let earlierTeachingTask = isAddingToDrawingOnScreen ? teachingTask : nil
+        if !isAddingToDrawingOnScreen {
+            stopTeaching(clearingDrawing: true)
+            drawingOverlayManager.clear()
+            lastTeachingBoardRect = nil
+            lastTeachingDisplayFrame = nil
+        }
         stopGuide()
-        drawingOverlayManager.clear()
         let mouseLocation = NSEvent.mouseLocation
         guard let cursorScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main else {
             return "couldn't find the screen."
         }
-        let boardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        let reusesEarlierBoard = isAddingToDrawingOnScreen && lastTeachingBoardRect != nil
+            && (!plan.surfaceWasGiven || plan.surface != .screen)
+        let boardRect = reusesEarlierBoard ? lastTeachingBoardRect : plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        let drawsNewBoard = boardRect != nil && !reusesEarlierBoard
+        let teachingDisplayFrame = reusesEarlierBoard ? (lastTeachingDisplayFrame ?? cursorScreen.frame) : cursorScreen.frame
+        lastTeachingBoardRect = boardRect
+        lastTeachingDisplayFrame = teachingDisplayFrame
         let screenFrame = currentLiveTurnScreenFrame
         let userQuestion = currentLiveTurnTypedText ?? lastTranscript ?? ""
         let hasSpokenLines = plan.steps.contains { $0.say != nil }
@@ -1381,22 +1398,47 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
+        teachingGeneration += 1
+        let generationOfThisTeaching = teachingGeneration
         teachingTask = Task { [weak self] in
-            await self?.runTeaching(plan: plan, screenFrame: screenFrame, displayFrame: cursorScreen.frame,
-                                    boardRect: boardRect, userQuestion: userQuestion, speaksLines: hasSpokenLines)
+            // Steps added while the last ones are still drawing go after
+            // them; stopping this stops those too.
+            await withTaskCancellationHandler {
+                await earlierTeachingTask?.value
+            } onCancel: {
+                earlierTeachingTask?.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            await self?.runTeaching(plan: plan, screenFrame: screenFrame, displayFrame: teachingDisplayFrame,
+                                    boardRect: boardRect, drawsBoard: drawsNewBoard, userQuestion: userQuestion,
+                                    speaksLines: hasSpokenLines, generation: generationOfThisTeaching)
         }
-        return hasSpokenLines
+        let continuingNote = isAddingToDrawingOnScreen
+            ? "adding to the drawing that's up. "
+            : (plan.addsToLastDrawing ? "nothing was up any more, so this starts a new drawing. " : "")
+        let laterNote = " it stays up; to add to it later, call explain_on_screen again with add_to_last true and the same positions."
+        return continuingNote + (hasSpokenLines
             ? "drawing it now. say only two or three words like 'okay, watch'; each step's line comes to you to say while it's drawn."
-            : "drawing it now, step by step. explain it in the same order, briefly, while it draws."
+            : "drawing it now, step by step. explain it in the same order, briefly, while it draws.") + laterNote
     }
+
+    /// The board the last explanation drew on and its display, so steps
+    /// added later (add_to_last) land on the same board.
+    private var lastTeachingBoardRect: CGRect?
+    private var lastTeachingDisplayFrame: CGRect?
+    /// Counts explanations, so one that finishes before steps added to it
+    /// doesn't forget the newer task.
+    private var teachingGeneration = 0
 
     private func runTeaching(
         plan: DottieTeaching.Plan,
         screenFrame: CompanionCompositeScreenFrame?,
         displayFrame: CGRect,
         boardRect: CGRect?,
+        drawsBoard: Bool,
         userQuestion: String,
-        speaksLines: Bool
+        speaksLines: Bool,
+        generation: Int
     ) async {
         // Finding the anchors starts now and only holds up the first step
         // that needs them.
@@ -1410,7 +1452,7 @@ final class CompanionManager: ObservableObject {
         }
         var anchorFrames: [String: CGRect]?
 
-        if let boardRect {
+        if drawsBoard, let boardRect {
             drawingOverlayManager.addFigures([DottieFigure(shape: .board(rect: boardRect), drawDuration: 0.35)])
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
@@ -1471,8 +1513,10 @@ final class CompanionManager: ObservableObject {
         // under way.
         guard !Task.isCancelled else { return }
         penTrace = nil
-        teachingTask = nil
-        teachingNarrationTask = nil
+        if generation == teachingGeneration {
+            teachingTask = nil
+            teachingNarrationTask = nil
+        }
         if missedSteps > 0 {
             print("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
         }

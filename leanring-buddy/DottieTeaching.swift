@@ -63,7 +63,7 @@ enum DottieTeaching {
 
     enum Kind: String, CaseIterable {
         case line, arrow, double_arrow, curve, polygon, circle, box, highlight, underline
-        case angle, right_angle, point, text, ticks, measure, brace, axes, plot, cross, check
+        case angle, right_angle, point, text, ticks, measure, brace, axes, plot, cross, check, grid
     }
 
     struct Anchor {
@@ -87,13 +87,22 @@ enum DottieTeaching {
         let anchors: [Anchor]
         let steps: [Step]
         let keepsDrawing: Bool
+        /// Draw onto the drawing that's already up (same board) instead of
+        /// starting over, for "now add…" or "continue it" later on.
+        let addsToLastDrawing: Bool
+        /// Whether the model named a surface, so adding to a board keeps
+        /// that board unless it asked for another one.
+        let surfaceWasGiven: Bool
 
         init?(arguments: [String: Any]) {
             func trimmed(_ value: Any?) -> String? {
                 let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return text?.isEmpty == false ? text : nil
             }
-            surface = trimmed(arguments["surface"]).flatMap { Surface(rawValue: $0.lowercased()) } ?? .screen
+            let givenSurface = trimmed(arguments["surface"]).flatMap { Surface(rawValue: $0.lowercased()) }
+            surface = givenSurface ?? .screen
+            surfaceWasGiven = givenSurface != nil
+            addsToLastDrawing = (arguments["add_to_last"] as? Bool) ?? ((arguments["add_to_last"] as? NSNumber)?.boolValue ?? false)
             anchors = ((arguments["anchors"] as? [Any]) ?? []).compactMap { item in
                 guard let fields = item as? [String: Any], let name = trimmed(fields["name"]) else { return nil }
                 return Anchor(name: name, description: trimmed(fields["describe"]) ?? name)
@@ -125,7 +134,8 @@ enum DottieTeaching {
                 )
             }
             guard !steps.isEmpty else { return nil }
-            keepsDrawing = (arguments["keep"] as? Bool) ?? (surface != .screen)
+            // Kept up by default, so the user can ask to add to it later.
+            keepsDrawing = (arguments["keep"] as? Bool) ?? true
         }
 
         var anchorNames: Set<String> { Set(anchors.map { $0.name.lowercased() }) }
@@ -139,9 +149,9 @@ enum DottieTeaching {
             "points": [
                 "type": "ARRAY",
                 "items": ["type": "STRING"],
-                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot: the graph area's top-left and bottom-right."
+                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot: the graph area's top-left and bottom-right. grid: two opposite corners of the grid."
             ],
-            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, or for plot the function of x like x^2 - 3. Use math symbols: x², √, π, θ, ⊥, ≠, ≤, ½, →."],
+            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), or for plot the function of x like x^2 - 3. Use math symbols: x², √, π, θ, ⊥, ≠, ≤, ½, →."],
             "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
@@ -150,7 +160,7 @@ enum DottieTeaching {
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". To mark things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math goes on a board (board_right or board_left, whichever covers less of what matters) as text steps, one line of working each, top to bottom, like \"m = (8−2)/(5−3) = 3\" then \"m⊥ = −1/3\". Use plot for a function's real graph, measure for lengths, angle with its size, ticks for equal sides. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". To mark things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math goes on a board (board_right or board_left, whichever covers less of what matters) as text steps, one line of working each, top to bottom, like \"m = (8−2)/(5−3) = 3\" then \"m⊥ = −1/3\". Use plot for a function's real graph, grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -176,7 +186,8 @@ enum DottieTeaching {
                         "items": ["type": "OBJECT", "properties": stepProperties, "required": ["kind", "points"]],
                         "description": "The drawing, in the order to draw and explain it."
                     ],
-                    "keep": ["type": "BOOLEAN", "description": "Keep the drawing up after you finish until it's cleared. Default true on a board, false on the screen."]
+                    "keep": ["type": "BOOLEAN", "description": "Keep the drawing up after you finish until it's cleared (about 10 minutes). Default true; false fades it after a minute."],
+                    "add_to_last": ["type": "BOOLEAN", "description": "true adds these steps to the drawing already up, on the same board, instead of starting a new one. Use it whenever the user asks to add to, change or continue what you drew."]
                 ],
                 "required": ["steps"]
             ]
@@ -608,6 +619,37 @@ enum DottieTeaching {
             drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: points[1].x + 4, y: points[1].y - 22), fontSize: 20, ink: step.ink ?? .white)
             if names.count > 1 {
                 drawn.addLabel(names[1], centeredAt: CGPoint(x: points[2].x + 20, y: points[2].y + 4), fontSize: 20, ink: step.ink ?? .white)
+            }
+
+        case .grid:
+            guard points.count >= 2 else { return nil }
+            let gridArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                                  width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+            guard gridArea.width > 20, gridArea.height > 20 else { return nil }
+            // "8x5" is 8 cells across and 5 down; one number is the cells
+            // across, with square-ish cells down.
+            let cellCounts = (step.text ?? "")
+                .lowercased()
+                .components(separatedBy: CharacterSet(charactersIn: "x× ,"))
+                .compactMap { Int($0) }
+            let columnCount = min(max(cellCounts.first ?? 10, 1), 40)
+            let defaultRowCount = Int((CGFloat(columnCount) * gridArea.height / gridArea.width).rounded())
+            let rowCount = min(max(cellCounts.count > 1 ? cellCounts[1] : defaultRowCount, 1), 40)
+            let gridInk = step.ink ?? .white
+            // Thin and quick: a grid is the paper, not the point.
+            let lineCount = columnCount + rowCount + 2
+            let secondsPerLine = max(0.04, min(0.12, 2.0 / Double(lineCount)))
+            for columnIndex in 0...columnCount {
+                let lineX = gridArea.minX + gridArea.width * CGFloat(columnIndex) / CGFloat(columnCount)
+                let gridLine = [CGPoint(x: lineX, y: gridArea.maxY), CGPoint(x: lineX, y: gridArea.minY)]
+                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
+            }
+            for rowIndex in 0...rowCount {
+                let lineY = gridArea.minY + gridArea.height * CGFloat(rowIndex) / CGFloat(rowCount)
+                let gridLine = [CGPoint(x: gridArea.minX, y: lineY), CGPoint(x: gridArea.maxX, y: lineY)]
+                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
             }
 
         case .plot:
