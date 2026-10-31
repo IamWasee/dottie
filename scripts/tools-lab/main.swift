@@ -116,6 +116,37 @@ func runLab() async {
     }
     print("connected \(connectedPresetIDs.count) of \(presetIDsToTry.count)")
 
+    print("\n== 2b. Connecting the way the Tools page does (in the background) ==")
+    // The page never calls connect() itself: adding an app starts a
+    // background attempt, and the row shows a spinner while the status is
+    // "starting". Every attempt has to end connected or with a reason.
+    let backgroundCases: [(name: String, commandOrAddress: String)] = [
+        ("lab-time", "uvx mcp-server-time"),
+        ("lab-missing-package", "npx -y dottie-lab-package-that-does-not-exist"),
+        ("lab-web-not-mcp", "https://example.com/mcp")
+    ]
+    for backgroundCase in backgroundCases {
+        if let problem = store.addCustom(name: backgroundCase.name, commandOrAddress: backgroundCase.commandOrAddress, settingLines: "") {
+            print("[\(backgroundCase.name)] couldn't add: \(problem)")
+            continue
+        }
+        let waitStart = Date()
+        var settledStatus = store.status(for: backgroundCase.name)
+        while Date().timeIntervalSince(waitStart) < 150 {
+            settledStatus = store.status(for: backgroundCase.name)
+            if case .starting = settledStatus {} else if case .ready = settledStatus {} else { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        let waitedSeconds = String(format: "%.1f", Date().timeIntervalSince(waitStart))
+        switch settledStatus {
+        case .starting, .ready:
+            print("[\(backgroundCase.name)] ✗ still spinning after \(waitedSeconds) s")
+        default:
+            print("[\(backgroundCase.name)] ✓ settled in \(waitedSeconds) s: \(settledStatus)")
+        }
+        store.remove(backgroundCase.name)
+    }
+
     print("\n== 3. Voice Dottie's path (use_tool → apps_and_tools / use_app_tool) ==")
     print("voice prompt line: \(oneLine(DottieToolRegistry.voicePromptSections, limit: 400))")
     let summary = await DottieToolRegistry.run("apps_and_tools", arguments: [:], for: .voice) ?? "(no such tool)"
