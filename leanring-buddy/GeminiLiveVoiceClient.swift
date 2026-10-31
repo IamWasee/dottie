@@ -214,8 +214,12 @@ final class GeminiLiveVoiceClient {
     /// then a dropped session can be retried without the user noticing.
     private var hasReceivedModelContentThisTurn = false
     private var turnReplayCount = 0
-    /// Set for a replay so the next session uses the backup model.
+    /// Set for a second replay so the next session uses the backup model.
     private var shouldUseBackupLiveModel = false
+    /// The open session runs on the backup model. Its voices sound different
+    /// even with the same voice name, so it's closed after its one answer
+    /// and the next turn goes back to the main model.
+    private var isConnectedSessionOnBackupModel = false
     /// Text for the current turn, sent when the turn ends. Sent earlier,
     /// voice detection would answer the text before the user has spoken.
     private var pendingTurnContextTexts: [String] = []
@@ -439,6 +443,7 @@ final class GeminiLiveVoiceClient {
         let (ephemeralToken, tokenLiveModel) = try await fetchEphemeralToken()
         try Task.checkCancellation()
         let liveModel = shouldUseBackupLiveModel ? Self.backupLiveModel : tokenLiveModel
+        isConnectedSessionOnBackupModel = shouldUseBackupLiveModel
 
         var urlComponents = URLComponents(string: Self.liveWebSocketBaseURL)!
         urlComponents.queryItems = [URLQueryItem(name: "access_token", value: ephemeralToken)]
@@ -1052,7 +1057,12 @@ final class GeminiLiveVoiceClient {
             let finishedUserTranscript = wasCancelledByUser ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             let finishedModelTranscript = wasCancelledByUser ? "" : currentTurnModelTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript)
-            if shouldDisconnectAfterCurrentTurn {
+            if isConnectedSessionOnBackupModel {
+                // Back to the main model (and its voice) for the next turn;
+                // the conversation carries over through the history.
+                sessionResumptionHandle = nil
+                disconnect()
+            } else if shouldDisconnectAfterCurrentTurn {
                 disconnect()
             } else {
                 scheduleIdleDisconnect()
@@ -1410,8 +1420,10 @@ final class GeminiLiveVoiceClient {
         }
 
         turnReplayCount += 1
-        shouldUseBackupLiveModel = true
-        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays)) on \(Self.backupLiveModel)")
+        // The main model's drops are usually one-offs, so the first replay
+        // stays on it (same voice); only a second drop moves to the backup.
+        shouldUseBackupLiveModel = turnReplayCount >= 2
+        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays))\(shouldUseBackupLiveModel ? " on \(Self.backupLiveModel)" : "")")
 
         let wasUserTurnOpen = isUserTurnOpen
         disconnect()
