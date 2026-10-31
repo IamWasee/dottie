@@ -1605,6 +1605,10 @@ enum GeminiLiveToolCatalog {
         "control_device",
         "click_on_screen", "press_keys", "open_url",
         "run_applescript", "get_schedule", "add_reminder",
+        // The user's connected apps (Home → Tools). Through use_tool, a
+        // connected app's arguments were JSON inside JSON, and Live often
+        // gave up or sent them wrong.
+        "apps_and_tools", "use_app_tool",
         // Co-op mid-game needs to be instant.
         "game_command"
     ]
@@ -1612,7 +1616,7 @@ enum GeminiLiveToolCatalog {
     /// One line for the voice prompt naming what the hidden tools cover, so
     /// the model knows to look for them. Keep it in step with what isn't in
     /// directFunctionNames.
-    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, the code editor (code_editor: open, show or change code in Home → Code), saved game maps (game_maps), watch-and-learn how-tos (watch_and_learn), away mode (away_mode), and the user's connected apps"
+    static let hiddenToolAreasSummary = "typing and scrolling, drawing or marking the screen and clearing it, explaining with drawings and math (explain_on_screen), your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, the code editor (code_editor: open, show or change code in Home → Code), saved game maps (game_maps), watch-and-learn how-tos (watch_and_learn), and away mode (away_mode)"
 
     /// Extra words find_tool matches on, for asks that don't share words
     /// with the tool's description ("turn into a cat" → change_cursor).
