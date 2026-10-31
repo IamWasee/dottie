@@ -8,7 +8,7 @@ import Testing
 
 struct leanring_buddyTests {
 
-    @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
+    @Test @MainActor func firstPermissionRequestUsesSystemPromptOnly() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,
             hasAttemptedSystemPrompt: false
@@ -17,7 +17,7 @@ struct leanring_buddyTests {
         #expect(presentationDestination == .systemPrompt)
     }
 
-    @Test func repeatedPermissionRequestOpensSystemSettings() async throws {
+    @Test @MainActor func repeatedPermissionRequestOpensSystemSettings() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,
             hasAttemptedSystemPrompt: true
@@ -26,7 +26,7 @@ struct leanring_buddyTests {
         #expect(presentationDestination == .systemSettings)
     }
 
-    @Test func grantedPermissionNeedsNoPrompt() async throws {
+    @Test @MainActor func grantedPermissionNeedsNoPrompt() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: true,
             hasAttemptedSystemPrompt: false
