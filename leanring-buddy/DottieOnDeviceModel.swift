@@ -3,8 +3,8 @@
 //  leanring-buddy
 //
 //  Apple's on-device language model (Apple Intelligence, macOS 26 and
-//  later), for small text jobs that don't need the screen or the internet:
-//  a quick answer, or sorting a request ("is this a simple job?"). It
+//  later), for small text jobs that don't need the screen or the internet,
+//  like sorting a request ("is this a simple job?"). It
 //  answers in well under a second, costs nothing and works offline, so it
 //  saves a trip to Gemini where it can.
 //

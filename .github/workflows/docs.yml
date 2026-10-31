@@ -1,0 +1,42 @@
+name: Docs
+
+# Keeps CLAUDE.md (and AGENTS.md, a link to it) in step with the code.
+# On a pull request it fails when the Key Files table, the Worker routes or
+# the Worker settings are out of date, and says how to fix it. On main it
+# fixes what it can by itself (rows for new or deleted files, line counts)
+# and commits the result, so the docs never drift for long.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check CLAUDE.md
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/docs/update-docs.py
+
+      - name: Update CLAUDE.md on main
+        if: github.event_name != 'pull_request'
+        run: |
+          python3 scripts/docs/update-docs.py --fix
+          if git diff --quiet -- CLAUDE.md; then
+            echo "CLAUDE.md already matches the code."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CLAUDE.md
+          git commit -m "Update CLAUDE.md's file table to match the code"
+          # Pushes made with GITHUB_TOKEN don't start other workflows, so
+          # this can't loop.
+          git push
