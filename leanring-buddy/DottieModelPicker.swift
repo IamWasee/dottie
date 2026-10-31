@@ -97,7 +97,9 @@ final class DottieModelPicker: @unchecked Sendable {
         } else if statusCode == 200 {
             health.answeredCount += 1
             health.averageSeconds = health.averageSeconds.map { $0 * 0.6 + seconds * 0.4 } ?? seconds
-            let wasReplaced = answeredBy.map { !$0.isEmpty && !$0.hasPrefix(model) && model != "higher" } ?? false
+            // Groq answering says nothing about Gemini: quick asks go to it
+            // first on purpose.
+            let wasReplaced = answeredBy.map { !$0.isEmpty && !$0.hasPrefix(model) && !$0.hasPrefix("groq/") && model != "higher" } ?? false
             if wasReplaced, let answeredBy {
                 // The Worker fell back: the named model was busy, the one
                 // that answered is fine.
