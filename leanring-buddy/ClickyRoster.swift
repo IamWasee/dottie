@@ -128,6 +128,10 @@ private let gettingStartedToolID = "dottie-getting-started"
 final class ClickyRoster: ObservableObject {
     @Published private(set) var agents: [ClickyAgent] = []
     @Published private(set) var transcriptsByAgentID: [UUID: [ClickyAgentTranscriptItem]] = [:]
+    /// projects.json, read again only when it changed (see projectIndex).
+    /// The Dots page asks for the teams every time it redraws, which is
+    /// many times a second while a Dot is answering.
+    private var cachedProjectIndex: (modifiedAt: Date, projects: [DottieProjects.Project])?
     @Published private(set) var runningAgentIDs: Set<UUID> = []
     /// Set when something (the notch) asks Home to show a Dot's chat; Home
     /// clears it once it has.
@@ -1576,11 +1580,6 @@ extension ClickyRoster {
                 return uniqueNames.count >= 2 ? (project.name, uniqueNames) : nil
             }
     }
-
-    /// projects.json, read again only when it changed. The Dots page asks
-    /// for the teams every time it redraws, which is many times a second
-    /// while a Dot is answering.
-    private var cachedProjectIndex: (modifiedAt: Date, projects: [DottieProjects.Project])?
 
     private func projectIndex(in projectsFolderURL: URL) -> [DottieProjects.Project] {
         let indexURL = projectsFolderURL.appendingPathComponent("projects.json")
