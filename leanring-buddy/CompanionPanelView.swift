@@ -128,10 +128,7 @@ struct CompanionPanelView: View {
     @ViewBuilder
     private var permissionsCopySection: some View {
         if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            Text("Hold Control+Option to talk.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            PanelTalkShortcutHint(shortcutMonitor: companionManager.globalPushToTalkShortcutMonitor)
         } else if companionManager.allPermissionsGranted && !companionManager.hasSubmittedEmail {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Drop your email to get started.")
@@ -857,5 +854,18 @@ private struct VoicePreviewButton: View {
         .pointerCursor()
         .padding(.leading, 6)
         .help("Hear \(voiceName)")
+    }
+}
+
+/// "Hold <talk shortcut> to talk." Watches the shortcut monitor itself so
+/// the hint changes as soon as a new shortcut is recorded in Settings.
+private struct PanelTalkShortcutHint: View {
+    @ObservedObject var shortcutMonitor: GlobalPushToTalkShortcutMonitor
+
+    var body: some View {
+        Text("Hold \(shortcutMonitor.talkHotkey.displayText) to talk.")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(DS.Colors.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

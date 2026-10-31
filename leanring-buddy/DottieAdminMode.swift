@@ -6,8 +6,10 @@
 //  everything Dottie can list about herself) until the user says, or types,
 //  the secret phrase to Dottie. Then Home → Admin shows beta features (the
 //  human auto typer) and admin unlocks (every profile cosmetic). The phrase
-//  is checked here, on the Mac, against what the user said; Gemini is never
-//  told it.
+//  is checked here, on the Mac, against what the user typed or what Apple's
+//  speech recognizer heard, and kept out of the saved history. Spoken in
+//  live mode, the voice itself still streams to Gemini Live like every
+//  other push-to-talk turn; typing the phrase keeps it on the Mac.
 //
 //  Saved in UserDefaults ("dottieAdminTabUnlocked").
 //

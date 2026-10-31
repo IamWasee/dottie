@@ -518,13 +518,17 @@ final class CompanionManager: ObservableObject {
         let previouslyHadAll = allPermissionsGranted
 
         let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
+        let accessibilityPermissionChanged = currentlyHasAccessibility != hasAccessibilityPermission
         hasAccessibilityPermission = currentlyHasAccessibility
 
-        if currentlyHasAccessibility {
-            globalPushToTalkShortcutMonitor.start()
-        } else {
+        // Push-to-talk works without Accessibility: the monitor then only
+        // listens (it can't swallow a key shortcut's key). When the
+        // permission changes, the tap is rebuilt so it switches between
+        // listening and active. start() does nothing while a tap runs.
+        if accessibilityPermissionChanged {
             globalPushToTalkShortcutMonitor.stop()
         }
+        globalPushToTalkShortcutMonitor.start()
 
         hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
 

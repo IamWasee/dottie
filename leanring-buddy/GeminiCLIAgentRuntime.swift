@@ -265,7 +265,10 @@ final class GeminiCLIAgentRuntime {
     /// installed. Gemini CLI ignores the auth type in workspace settings.
     /// Cheap enough to run before every turn, so installing cua-driver takes
     /// effect without a relaunch.
-    static func prepareCLIHome(at cliHomeURL: URL, skillLibraryURL: URL) {
+    /// `helperToolInstructions` is DottieToolRegistry.helperPromptSections
+    /// (memory files, the Code tab, command-line tools), passed in by the
+    /// caller on the main actor.
+    static func prepareCLIHome(at cliHomeURL: URL, skillLibraryURL: URL, helperToolInstructions: String) {
         let settingsFolderURL = cliHomeURL.appendingPathComponent(".gemini", isDirectory: true)
         try? FileManager.default.createDirectory(at: settingsFolderURL, withIntermediateDirectories: true)
 
@@ -310,9 +313,9 @@ final class GeminiCLIAgentRuntime {
             ClickyRoutinePrompts.globalAgentInstructions,
             webSearchAgentInstructions,
             DottieBrowser.agentInstructions,
-            DottieCLIToolsManager.helperInstructions.isEmpty
+            helperToolInstructions.isEmpty
                 ? ""
-                : "# Command-line tools\n\n" + DottieCLIToolsManager.helperInstructions + "\n"
+                : "# Dottie's other tools\n\n" + helperToolInstructions + "\n"
         ].joined(separator: "\n")
         try? globalAgentInstructions
             .write(to: settingsFolderURL.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)

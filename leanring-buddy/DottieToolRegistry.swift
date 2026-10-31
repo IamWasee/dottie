@@ -5,7 +5,10 @@
 //  One place for features to add tools without touching the voice client or
 //  CompanionManager. A feature declares a DottieToolModule in its own file,
 //  lists it in DottieToolModules.all, and its tools show up for Dottie's
-//  voice, her helpers, or both. Its prompt lines join the voice prompt.
+//  voice. Its prompt lines join the voice prompt, and its helper lines join
+//  every helper's instructions. Helpers (Gemini CLI, Claude) can't call
+//  these Swift tools, so a module tells them about files or commands they
+//  can use themselves in helperPromptSection instead.
 //
 //  Voice tools are not declared to Gemini Live up front unless they're in
 //  GeminiLiveToolCatalog.directFunctionNames: Live finds them with find_tool
@@ -20,9 +23,9 @@
 
 import Foundation
 
-/// A tool a feature gives Dottie's voice and/or her helpers.
+/// A tool a feature gives Dottie's voice.
 struct DottieTool {
-    enum Audience: Hashable { case voice, helpers }
+    enum Audience: Hashable { case voice }
 
     let name: String
     let description: String
@@ -35,7 +38,7 @@ struct DottieTool {
         name: String,
         description: String,
         parameters: [String: Any]? = nil,
-        audiences: Set<Audience> = [.voice, .helpers],
+        audiences: Set<Audience> = [.voice],
         run: @escaping @MainActor ([String: Any]) async -> String
     ) {
         self.name = name

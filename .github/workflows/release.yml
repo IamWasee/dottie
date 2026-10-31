@@ -244,6 +244,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :ClickyWorkerBaseURL" "$app/Contents/Info.plist"
           lipo -archs "$app/Contents/MacOS/Dottie"
           test -x "$app/Contents/Helpers/cua-driver"
+          test -f "$app/Contents/Frameworks/libneedle3.dylib"
+          test -f "$app/Contents/Resources/Needle/needle3.cact"
+          test -f "$app/Contents/Resources/Needle/whistle.cact"
           codesign --verify --deep --strict --verbose=2 "$app"
 
       - name: Make Dottie.dmg

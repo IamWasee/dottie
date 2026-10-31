@@ -59,9 +59,40 @@ jobs:
           file "$app_path/Contents/Helpers/cua-driver"
           "$app_path/Contents/Helpers/cua-driver" --version || true
 
+      - name: Check the bundled Needle
+        # embed-needle.sh only warns when a download fails (so offline
+        # builds work), so CI is where a missing Needle gets caught.
+        run: |
+          grep -E "Needle" build.log | grep -v "^\s*$" | head -5 || true
+          app_path="$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 5 -type d -name Dottie.app -path '*/Build/Products/Debug/*' | head -1)"
+          test -f "$app_path/Contents/Frameworks/libneedle3.dylib"
+          test -f "$app_path/Contents/Resources/Needle/needle3.cact"
+          test -f "$app_path/Contents/Resources/Needle/whistle.cact"
+          lipo -archs "$app_path/Contents/Frameworks/libneedle3.dylib"
+
+      - name: Build the unit tests
+        # Compiles the test target against the app without running it (the
+        # tests host the whole app, which needs a real Mac's permissions).
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project leanring-buddy.xcodeproj \
+            -scheme leanring-buddy \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
+            SWIFT_APPROACHABLE_CONCURRENCY=NO \
+            2>&1 | tee test-build.log | grep -E "error:|TEST BUILD (SUCCEEDED|FAILED)|BUILD (SUCCEEDED|FAILED)" || true
+          grep -qE "TEST BUILD SUCCEEDED|BUILD SUCCEEDED" test-build.log
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            test-build.log

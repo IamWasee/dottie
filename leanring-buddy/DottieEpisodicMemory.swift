@@ -16,9 +16,10 @@
 //      (off by default): light notes made on this Mac, folded into
 //      episodes now and then (see DottieEpisodicMemoryScreen.swift).
 //
-//  Voice Dottie gets the few most relevant recent episodes in every
-//  conversation, and searches the rest with the memories tool (and
-//  recall_memory / ask_brain, which include them).
+//  Voice Dottie is told how many episodes the last few days hold (the
+//  episodes themselves would cost tokens every session) and looks them up
+//  with the memories tool (and recall_memory / ask_brain, which include
+//  them).
 //
 //  On disk, under ~/Library/Application Support/Dottie/Memory/:
 //    episodes.jsonl    one episode per line, oldest first

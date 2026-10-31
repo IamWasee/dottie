@@ -594,6 +594,16 @@ final class DottieToolsStore: ObservableObject {
             let (filledConfig, missing) = config.filledIn(serverName: serverName)
             if missing.isEmpty { readyServers[serverName] = filledConfig }
         }
+        // Servers added as JSON in Home → Brain. Gemini CLI already reads
+        // them from its settings; Claude helpers only see what's synced
+        // here. A Tools server of the same name wins.
+        for (serverName, serverObject) in DottieBrain.userMCPServers() where readyServers[serverName] == nil {
+            if let serverData = try? JSONSerialization.data(withJSONObject: serverObject),
+               let config = try? JSONDecoder().decode(DottieMCPServerConfig.self, from: serverData),
+               config.command != nil || config.url != nil {
+                readyServers[serverName] = config
+            }
+        }
         let previousClaudeCode = file.dottie.claudeCodeSynced
         let previousOpenMausBot = file.dottie.openMausBotSynced
         let result = await Task.detached(priority: .utility) {

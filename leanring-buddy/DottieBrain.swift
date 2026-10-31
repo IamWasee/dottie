@@ -226,6 +226,9 @@ final class DottieBrain: ObservableObject {
         }
         mcpServersJSON = trimmedJSON
         try? trimmedJSON.write(to: Self.mcpFileURL, atomically: true, encoding: .utf8)
+        // Claude helpers read their servers from Claude Code's own list, so
+        // the Tools store copies these there too.
+        DottieToolsStore.shared.scheduleHelperSync(delay: 1.5)
         return nil
     }
 

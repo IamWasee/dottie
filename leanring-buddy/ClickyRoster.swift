@@ -179,7 +179,7 @@ final class ClickyRoster: ObservableObject {
         try? FileManager.default.createDirectory(at: rosterDirectoryURL, withIntermediateDirectories: true)
         skillLibrary = ClickySkillLibrary(libraryURL: cloneDirectoryURL.appendingPathComponent("Skills", isDirectory: true))
         routineStore = ClickyRoutineStore(routinesFileURL: rosterDirectoryURL.appendingPathComponent("routines.json"))
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
         loadRoster()
         startRoutineScheduler()
         DottieMausBot.shared.warmUpAfterLaunch()
@@ -450,7 +450,7 @@ final class ClickyRoster: ObservableObject {
             ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
             : messageForAgent
         // Picks up a cua-driver installed since launch.
-        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL)
+        GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
         skillLibrary.reload()
         skillLibrary.linkSkills(named: Set(agent.enabledSkillNames ?? []), intoWorkspace: agentWorkspaceURL)
         skillFolderNamesBeforeTurnByAgentID[agentID] = skillLibrary.skillFolderNamesOnDisk()

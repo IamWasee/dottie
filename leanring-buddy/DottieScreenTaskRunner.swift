@@ -520,7 +520,17 @@ final class DottieScreenTaskRunner {
                 // Clicking the same thing over and over (a link that opens a
                 // new tab each time) piles up tabs, so the third click in a
                 // row is refused.
-                let clickLabel = arguments.dottieString("label") ?? ""
+                let modelClickLabel = arguments.dottieString("label") ?? ""
+                // While away, the words on the real control (read on the Mac)
+                // count too, so an empty or vague label can't hide a Send.
+                var clickLabel = modelClickLabel
+                if functionName == "click", !isGameMode, DottieAwayMode.shared.isAway,
+                   let awayClickPoint = Self.clickPoint(arguments: arguments, screen: screen) {
+                    let controlText = DottieAX.controlText(atAppKitPoint: awayClickPoint)
+                    if DottieAwayMode.isRiskyLabel(controlText), !DottieAwayMode.isRiskyLabel(modelClickLabel) {
+                        clickLabel = modelClickLabel.isEmpty ? controlText : "\(modelClickLabel) (\(controlText))"
+                    }
+                }
                 if functionName == "click", !isGameMode,
                    recentActionSignatures.suffix(4).filter({ $0 == actionSignature }).count >= 3 {
                     result = "not clicked: you've already clicked this 3 times. It probably worked and opened somewhere else (a new tab, a new window or another app), or it doesn't do what you think. Look at the window title and the tab bar, switch to the tab or app it opened, or try a different way. Don't click it again."
