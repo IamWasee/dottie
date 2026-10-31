@@ -52,12 +52,24 @@ final class DottieCodeWorkspace: ObservableObject {
         openedFolderURLs = (UserDefaults.standard.stringArray(forKey: Self.openedFoldersDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
-        // Catches helpers' edits to the open file every two seconds.
+    }
+
+    /// Catches helpers' edits to the open file every two seconds, only
+    /// while the Code tab is on screen (it used to run for as long as
+    /// Dottie did). Opening the tab checks right away.
+    func startWatchingOpenFile() {
+        reloadIfChangedOnDisk()
+        guard reloadTimer == nil else { return }
         reloadTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             MainActor.assumeIsolated {
                 DottieCodeWorkspace.shared.reloadIfChangedOnDisk()
             }
         }
+    }
+
+    func stopWatchingOpenFile() {
+        reloadTimer?.invalidate()
+        reloadTimer = nil
     }
 
     /// Projects, the Dots' folders, then folders the user opened.

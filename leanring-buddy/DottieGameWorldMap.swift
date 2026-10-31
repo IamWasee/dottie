@@ -171,6 +171,8 @@ final class DottieGameWorldMap {
     /// How far apart zones are laid out on the map.
     private static let zoneSpacing = 500.0
     private var lastSavedAt = Date()
+    /// The block files being written in the background (see save()).
+    private var backgroundSaveTask: Task<Void, Never>?
     private var isConsideringFrame = false
     private var lastConsideredAt: Date?
     /// The last pose that was known for sure (a keyframe match) and how
@@ -732,7 +734,14 @@ final class DottieGameWorldMap {
         var surfaceHits: [(x: Double, y: Double, z: Double, color: UInt32?)] = []
         surfaceHits.reserveCapacity(cameraSamples.count)
         defer {
-            surfaceMap.addRays(cameraX: framePose.x, cameraY: framePose.y, cameraHeight: Self.cameraHeight, hits: surfaceHits)
+            // The surface layer works on its own actor, so the tens of
+            // thousands of cells a frame touches don't hold up the game.
+            let surfaceMapToUpdate = surfaceMap
+            let finishedSurfaceHits = surfaceHits
+            let cameraHeightAboveFloor = Self.cameraHeight
+            Task {
+                await surfaceMapToUpdate.addRays(cameraX: framePose.x, cameraY: framePose.y, cameraHeight: cameraHeightAboveFloor, hits: finishedSurfaceHits)
+            }
         }
         for cameraSample in cameraSamples {
             var levelForward = cameraSample.forward
@@ -980,9 +989,25 @@ final class DottieGameWorldMap {
         if let summaryData = try? encoder.encode(summary) {
             try? summaryData.write(to: mapFolderURL.appendingPathComponent("map.json"), options: .atomic)
         }
-        Self.saveVoxels(voxelHits, to: mapFolderURL.appendingPathComponent("voxels.bin"))
-        Self.saveDetailVoxels(hits: detailVoxelHits, colors: detailVoxelColors, to: mapFolderURL.appendingPathComponent("detail.bin"))
-        surfaceMap.save()
+        // Turning a million blocks into bytes took the main thread for a
+        // moment every two minutes, freezing the game. The blocks are
+        // handed over as they are now and written in the background, one
+        // save after the other so an older one never lands last.
+        let voxelHitsToSave = voxelHits
+        let detailVoxelHitsToSave = detailVoxelHits
+        let detailVoxelColorsToSave = detailVoxelColors
+        let voxelsFileURL = mapFolderURL.appendingPathComponent("voxels.bin")
+        let detailFileURL = mapFolderURL.appendingPathComponent("detail.bin")
+        let earlierBackgroundSave = backgroundSaveTask
+        backgroundSaveTask = Task.detached(priority: .utility) {
+            await earlierBackgroundSave?.value
+            Self.saveVoxels(voxelHitsToSave, to: voxelsFileURL)
+            Self.saveDetailVoxels(hits: detailVoxelHitsToSave, colors: detailVoxelColorsToSave, to: detailFileURL)
+        }
+        let surfaceMapToSave = surfaceMap
+        Task {
+            await surfaceMapToSave.save()
+        }
         // A picture and a report the user can open to see the map working.
         DottieGameMapPicture.write(for: self)
     }
@@ -1025,7 +1050,7 @@ final class DottieGameWorldMap {
     }
 
     /// 13 bytes a fine block: the key, how many frames saw it, its color.
-    private static func saveDetailVoxels(hits detailHits: [Int64: UInt16], colors detailColors: [Int64: UInt32], to fileURL: URL) {
+    nonisolated private static func saveDetailVoxels(hits detailHits: [Int64: UInt16], colors detailColors: [Int64: UInt32], to fileURL: URL) {
         var detailData = Data(capacity: detailHits.count * 13)
         for (key, hits) in detailHits {
             withUnsafeBytes(of: key.littleEndian) { detailData.append(contentsOf: $0) }
@@ -1058,7 +1083,7 @@ final class DottieGameWorldMap {
     }
 
     /// 10 bytes a voxel: the key, then how many frames saw it.
-    private static func saveVoxels(_ voxelHits: [Int64: UInt16], to fileURL: URL) {
+    nonisolated private static func saveVoxels(_ voxelHits: [Int64: UInt16], to fileURL: URL) {
         var voxelData = Data(capacity: voxelHits.count * 10)
         for (key, hits) in voxelHits {
             withUnsafeBytes(of: key.littleEndian) { voxelData.append(contentsOf: $0) }

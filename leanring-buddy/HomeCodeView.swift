@@ -39,6 +39,8 @@ struct HomeCodeView: View {
                 }
             }
         }
+        .onAppear { workspace.startWatchingOpenFile() }
+        .onDisappear { workspace.stopWatchingOpenFile() }
         .background(
             // cmd+S saves, as in any editor.
             Button("") { workspace.save() }

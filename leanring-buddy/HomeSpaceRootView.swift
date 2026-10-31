@@ -494,7 +494,7 @@ private struct HomeConversationEntryView: View {
                 HStack(spacing: 6) {
                     Spacer(minLength: 60)
                     ForEach(imageFileNames, id: \.self) { fileName in
-                        if let image = NSImage(contentsOf: imageFolderURL.appendingPathComponent(fileName)) {
+                        if let image = DottieThumbnailCache.thumbnail(of: imageFolderURL.appendingPathComponent(fileName), maximumPixelSize: 400) {
                             Image(nsImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)

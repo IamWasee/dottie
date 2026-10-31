@@ -638,6 +638,11 @@ final class ClickyRoster: ObservableObject {
 
     private func handleRuntimeEvent(_ event: GeminiCLIAgentEvent, agentID: UUID) {
         markGettingStartedDone(agentID: agentID)
+        if case .assistantTextDelta = event {} else {
+            // Anything else (a tool, the end of the turn) comes after the
+            // words before it, so those go in first.
+            flushPendingAssistantText(for: agentID)
+        }
         switch event {
         case .sessionStarted:
             // Not saved yet: Gemini CLI only writes the session once a turn
@@ -645,13 +650,11 @@ final class ClickyRoster: ObservableObject {
             // nothing to resume. It's marked on a successful finish instead.
             break
         case .assistantTextDelta(let textDelta):
-            var transcript = transcriptsByAgentID[agentID] ?? []
-            if let lastItem = transcript.last, lastItem.kind == .assistant {
-                transcript[transcript.count - 1].text += textDelta
-                transcriptsByAgentID[agentID] = transcript
-            } else {
-                appendTranscriptItem(.assistant, text: textDelta, to: agentID, persist: false)
-            }
+            // Gathered for a tenth of a second instead of written straight
+            // in: every write copied the whole chat and redrew the Dots
+            // page, a few times for each word on a long chat.
+            pendingAssistantTextByAgentID[agentID, default: ""] += textDelta
+            scheduleAssistantTextFlush()
         case .toolStarted(let toolID, let toolName, let parametersSummary):
             let toolLine = parametersSummary.isEmpty ? toolName : "\(toolName) · \(parametersSummary)"
             appendTranscriptItem(.tool, text: toolLine, to: agentID, toolID: toolID, persist: false)
@@ -1011,6 +1014,35 @@ final class ClickyRoster: ObservableObject {
 
     // MARK: - Transcript helpers
 
+    /// Streamed words not yet in the chat (see handleRuntimeEvent).
+    private var pendingAssistantTextByAgentID: [UUID: String] = [:]
+    private var assistantTextFlushTask: Task<Void, Never>?
+
+    private func scheduleAssistantTextFlush() {
+        guard assistantTextFlushTask == nil else { return }
+        assistantTextFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self else { return }
+            self.assistantTextFlushTask = nil
+            for agentID in Array(self.pendingAssistantTextByAgentID.keys) {
+                self.flushPendingAssistantText(for: agentID)
+            }
+        }
+    }
+
+    /// Adds the words gathered for this Dot to its chat: onto its last
+    /// answer while it's still the newest item, else as a new answer.
+    private func flushPendingAssistantText(for agentID: UUID) {
+        guard let pendingText = pendingAssistantTextByAgentID.removeValue(forKey: agentID), !pendingText.isEmpty else { return }
+        var transcript = transcriptsByAgentID[agentID] ?? []
+        if let lastItem = transcript.last, lastItem.kind == .assistant {
+            transcript[transcript.count - 1].text += pendingText
+            transcriptsByAgentID[agentID] = transcript
+        } else {
+            appendTranscriptItem(.assistant, text: pendingText, to: agentID, persist: false)
+        }
+    }
+
     private func appendTranscriptItem(
         _ kind: ClickyAgentTranscriptItem.Kind,
         text: String,
@@ -1018,6 +1050,8 @@ final class ClickyRoster: ObservableObject {
         toolID: String? = nil,
         persist: Bool = true
     ) {
+        // Words still gathering belong before this item.
+        flushPendingAssistantText(for: agentID)
         var transcript = transcriptsByAgentID[agentID] ?? []
         transcript.append(ClickyAgentTranscriptItem(
             id: UUID(),
@@ -1528,11 +1562,8 @@ extension ClickyRoster {
     /// Teams: projects two or more helpers worked on, newest first. Read
     /// from the projects folder's index (DottieProjects writes it).
     func helperTeams() -> [(name: String, helperNames: [String])] {
-        guard let projectsFolderURL = sharedFolderURLs.first,
-              let indexData = try? Data(contentsOf: projectsFolderURL.appendingPathComponent("projects.json")) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        guard let projectsFolderURL = sharedFolderURLs.first else { return [] }
+        let projects = projectIndex(in: projectsFolderURL)
         let helperNamesHere = Set(agents.map { $0.name.lowercased() })
         return projects
             .sorted { $0.updatedAt > $1.updatedAt }
@@ -1544,5 +1575,27 @@ extension ClickyRoster {
                 }
                 return uniqueNames.count >= 2 ? (project.name, uniqueNames) : nil
             }
+    }
+
+    /// projects.json, read again only when it changed. The Dots page asks
+    /// for the teams every time it redraws, which is many times a second
+    /// while a Dot is answering.
+    private var cachedProjectIndex: (modifiedAt: Date, projects: [DottieProjects.Project])?
+
+    private func projectIndex(in projectsFolderURL: URL) -> [DottieProjects.Project] {
+        let indexURL = projectsFolderURL.appendingPathComponent("projects.json")
+        guard let modifiedAt = (try? FileManager.default.attributesOfItem(atPath: indexURL.path))?[.modificationDate] as? Date else {
+            cachedProjectIndex = nil
+            return []
+        }
+        if let cachedProjectIndex, cachedProjectIndex.modifiedAt == modifiedAt {
+            return cachedProjectIndex.projects
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let indexData = try? Data(contentsOf: indexURL),
+              let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        cachedProjectIndex = (modifiedAt, projects)
+        return projects
     }
 }

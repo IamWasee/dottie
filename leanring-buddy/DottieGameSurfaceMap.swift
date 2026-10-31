@@ -26,8 +26,10 @@
 import Foundation
 import ModelIO
 
-@MainActor
-final class DottieGameSurfaceMap {
+/// An actor, so the rays of every frame and the saving of millions of
+/// cells happen off the main thread: on it, they froze the game for a
+/// moment every few seconds and on every save.
+actor DottieGameSurfaceMap {
     /// One cell: its average distance to the nearest surface (as a share
     /// of `truncationDistance`, -1…1), how many looks that average is
     /// over, and its color (0xRRGGBB).
@@ -39,24 +41,24 @@ final class DottieGameSurfaceMap {
 
     /// Depth rays from a few dozen frames are too far apart for smaller
     /// cells: 0.1 left most cells seen only once and the model full of holes.
-    static let cellSize = 0.2
+    nonisolated static let cellSize = 0.2
     /// How far before and behind a hit the surface is written.
-    private static let truncationDistance = 0.5
+    nonisolated private static let truncationDistance = 0.5
     /// Fewer faces than this is scattered dots, not a model worth opening.
-    private static let minimumFaceCount = 300
+    nonisolated private static let minimumFaceCount = 300
     /// Older looks stop counting more than this, so the surface can follow
     /// a game world that changes (a door opening).
-    private static let maximumWeight: UInt8 = 40
+    nonisolated private static let maximumWeight: UInt8 = 40
     /// About 50 MB in memory at the most.
-    private static let maximumCellCount = 2_500_000
+    nonisolated private static let maximumCellCount = 2_500_000
     /// Rays longer than this are too rough for small cells.
-    private static let maximumRayLength = 12.0
+    nonisolated private static let maximumRayLength = 12.0
 
-    static let modelFileName = "map3d-surface.usdz"
+    nonisolated static let modelFileName = "map3d-surface.usdz"
     /// Written instead when this Mac's Model I/O can't write USDZ (1.0.34
     /// left none on celly's Mac); Preview opens it the same way.
-    static let fallbackModelFileName = "map3d-surface.usdc"
-    static let plainModelFileName = "map3d-surface.obj"
+    nonisolated static let fallbackModelFileName = "map3d-surface.usdc"
+    nonisolated static let plainModelFileName = "map3d-surface.obj"
 
     private(set) var cells: [Int64: Cell] = [:]
     private let fileURL: URL
@@ -113,7 +115,7 @@ final class DottieGameSurfaceMap {
         }
     }
 
-    private static func blendedColor(_ earlierColor: UInt32, with newColor: UInt32, earlierWeight: Float) -> UInt32 {
+    nonisolated private static func blendedColor(_ earlierColor: UInt32, with newColor: UInt32, earlierWeight: Float) -> UInt32 {
         func blendedChannel(_ shift: UInt32) -> UInt32 {
             let earlierChannel = Float((earlierColor >> shift) & 0xFF)
             let newChannel = Float((newColor >> shift) & 0xFF)
@@ -124,30 +126,27 @@ final class DottieGameSurfaceMap {
 
     // MARK: - Making the model
 
-    /// Builds the mesh off the main thread and writes the model files into
-    /// `mapFolderURL`. Returns once they're written.
-    @discardableResult
-    func writeModel(into mapFolderURL: URL) -> Task<Void, Never> {
-        let cellsSnapshot = cells
+    /// Builds the mesh and writes the model files into `mapFolderURL`.
+    /// Runs on this actor, so the cells aren't copied and the main thread
+    /// never waits for it. Returns once they're written.
+    func writeModel(into mapFolderURL: URL) {
         let usdzURL = mapFolderURL.appendingPathComponent(Self.modelFileName)
         let usdcURL = mapFolderURL.appendingPathComponent(Self.fallbackModelFileName)
         let objURL = mapFolderURL.appendingPathComponent(Self.plainModelFileName)
-        return Task.detached(priority: .utility) {
-            let mesh = Self.surfaceMesh(from: cellsSnapshot)
-            guard mesh.quads.count >= Self.minimumFaceCount else {
-                // An older, better-looking model isn't there to replace, so
-                // opening the map falls back to the colored blocks.
-                try? FileManager.default.removeItem(at: usdzURL)
-                try? FileManager.default.removeItem(at: usdcURL)
-                try? FileManager.default.removeItem(at: objURL)
-                return
-            }
-            Self.writeObj(mesh, to: objURL)
+        let mesh = Self.surfaceMesh(from: cells)
+        guard mesh.quads.count >= Self.minimumFaceCount else {
+            // An older, better-looking model isn't there to replace, so
+            // opening the map falls back to the colored blocks.
             try? FileManager.default.removeItem(at: usdzURL)
             try? FileManager.default.removeItem(at: usdcURL)
-            if !Self.writeUSD(mesh, to: usdzURL) {
-                Self.writeUSD(mesh, to: usdcURL)
-            }
+            try? FileManager.default.removeItem(at: objURL)
+            return
+        }
+        Self.writeObj(mesh, to: objURL)
+        try? FileManager.default.removeItem(at: usdzURL)
+        try? FileManager.default.removeItem(at: usdcURL)
+        if !Self.writeUSD(mesh, to: usdzURL) {
+            Self.writeUSD(mesh, to: usdcURL)
         }
     }
 
@@ -330,7 +329,7 @@ final class DottieGameSurfaceMap {
         try? cellData.write(to: fileURL, options: .atomic)
     }
 
-    private static func loadCells(from fileURL: URL) -> [Int64: Cell] {
+    nonisolated private static func loadCells(from fileURL: URL) -> [Int64: Cell] {
         guard let cellData = try? Data(contentsOf: fileURL) else { return [:] }
         let bytes = [UInt8](cellData)
         let cellCount = bytes.count / 13

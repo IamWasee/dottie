@@ -92,6 +92,33 @@ final class GeminiCLIAgentRuntime {
         }
 
         // nvm and friends put it somewhere only the login shell knows.
+        // Starting a login shell takes a moment (and the Dots page asked
+        // every time it was drawn), so its answer is remembered: a found
+        // path while it's still there, no answer for a minute.
+        shellLookupCacheLock.lock()
+        let cachedShellLookup = cachedShellLookupResult
+        shellLookupCacheLock.unlock()
+        if let cachedShellLookup {
+            if let cachedPath = cachedShellLookup.path {
+                if FileManager.default.isExecutableFile(atPath: cachedPath) {
+                    return URL(fileURLWithPath: cachedPath)
+                }
+            } else if Date().timeIntervalSince(cachedShellLookup.lookedUpAt) < secondsToRememberMissingCLI {
+                return nil
+            }
+        }
+        let shellLookupPath = geminiPathFromLoginShell()
+        shellLookupCacheLock.lock()
+        cachedShellLookupResult = (shellLookupPath, Date())
+        shellLookupCacheLock.unlock()
+        return shellLookupPath.map { URL(fileURLWithPath: $0) }
+    }
+
+    private static let shellLookupCacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedShellLookupResult: (path: String?, lookedUpAt: Date)?
+    private static let secondsToRememberMissingCLI: TimeInterval = 60
+
+    private static func geminiPathFromLoginShell() -> String? {
         let shellLookupProcess = Process()
         shellLookupProcess.executableURL = URL(fileURLWithPath: "/bin/zsh")
         shellLookupProcess.arguments = ["-lc", "command -v gemini"]
@@ -107,7 +134,7 @@ final class GeminiCLIAgentRuntime {
         let lookupOutput = String(decoding: lookupOutputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lookupOutput.isEmpty, FileManager.default.isExecutableFile(atPath: lookupOutput) else { return nil }
-        return URL(fileURLWithPath: lookupOutput)
+        return lookupOutput
     }
 
     /// The login shell's PATH, so the agent's shell commands find the same

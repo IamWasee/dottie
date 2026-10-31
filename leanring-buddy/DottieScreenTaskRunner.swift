@@ -1729,7 +1729,28 @@ enum DottieDisplayCapture {
         return Screenshot(image: image, jpegData: jpegData, displayFrame: displayFrame)
     }
 
+    /// What to capture for one display, kept for a moment. Asking macOS
+    /// for every window and display (SCShareableContent) is slow, and
+    /// games capture many frames a second, so frames in quick succession
+    /// reuse the same filter. Kept only briefly, so a window Dottie opens
+    /// (a drawing, a card) is still left out of the next captures.
+    private struct ReusableCaptureSetup {
+        let displayFrame: CGRect
+        let maximumDimension: Int
+        let filter: SCContentFilter
+        let configuration: SCStreamConfiguration
+        let madeAt: Date
+    }
+    private static var reusableCaptureSetup: ReusableCaptureSetup?
+    private static let secondsToReuseCaptureSetup: TimeInterval = 1.0
+
     static func captureImage(displayFrame: CGRect, maximumDimension: Int) async -> CGImage? {
+        if let reusableCaptureSetup,
+           reusableCaptureSetup.displayFrame == displayFrame,
+           reusableCaptureSetup.maximumDimension == maximumDimension,
+           Date().timeIntervalSince(reusableCaptureSetup.madeAt) < secondsToReuseCaptureSetup {
+            return try? await SCScreenshotManager.captureImage(contentFilter: reusableCaptureSetup.filter, configuration: reusableCaptureSetup.configuration)
+        }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
 
         let matchingScreen = NSScreen.screens.first(where: { $0.frame == displayFrame })
@@ -1749,6 +1770,13 @@ enum DottieDisplayCapture {
         configuration.height = Int(nativeHeight * downscale)
         configuration.showsCursor = false
 
+        reusableCaptureSetup = ReusableCaptureSetup(
+            displayFrame: displayFrame,
+            maximumDimension: maximumDimension,
+            filter: filter,
+            configuration: configuration,
+            madeAt: Date()
+        )
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
     }
 

@@ -188,7 +188,7 @@ struct HomePicturesView: View {
     @ViewBuilder
     private func pictureCard(_ item: DottieImageMemory.Item) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let image = NSImage(contentsOf: imageMemory.fileURL(for: item)) {
+            if let image = DottieThumbnailCache.thumbnail(of: imageMemory.fileURL(for: item), maximumPixelSize: 600) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

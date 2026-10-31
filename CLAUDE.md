@@ -247,6 +247,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `HomeToolsView.swift` | ~660 | Home → Tools: connect apps (MCP servers) Dottie and her helpers can use, and install handy command-line tools. See DottieToolsStore and DottieCLITools. |
 | `PointingPrecision.swift` | ~230 | Two helpers that make pointing and clicking land exactly: |
 | `PointingRefiner.swift` | ~530 | Gemini Live points from a small, downscaled frame of every screen, so its guess is often near the right spot but not on it (a little to the left of "Sign in"), and for tiny toolbar icons sometimes somewhere else entirely. Before the cursor flies, the guess gets a second look: |
+| `DottieThumbnailCache.swift` | ~40 | Small copies of the pictures shown in Home (the conversation's pictures, the picture library), made once and kept in memory. Views used to load each picture at full size from disk every time they were drawn. |
 
 ## Build & Run
 

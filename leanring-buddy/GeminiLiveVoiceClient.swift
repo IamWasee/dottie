@@ -721,7 +721,10 @@ final class GeminiLiveVoiceClient {
     /// registry's voice tools. Only the everyday ones are declared to Live
     /// (see directFunctionDeclarations); the rest are found with find_tool
     /// and run with use_tool, through the same dispatch.
-    private static var everyFunctionDeclaration: [[String: Any]] {
+    ///
+    /// Made once: none of them change while Dottie runs, and every
+    /// find_tool and use_tool call used to build the whole list again.
+    private static let everyFunctionDeclaration: [[String: Any]] = {
         var declarations: [[String: Any]] = coreFunctionDeclarations
         declarations += DottieScreenAction.functionDeclarations
         declarations += DottieMacTools.functionDeclarations
@@ -731,7 +734,7 @@ final class GeminiLiveVoiceClient {
         declarations += DottieSmartHome.functionDeclarations
         declarations += DottieToolRegistry.functionDeclarations(for: .voice)
         return declarations
-    }
+    }()
 
     /// What the session's setup declares: the everyday tools, plus find_tool
     /// and use_tool for the rest. Every declaration is read again at the
@@ -748,16 +751,12 @@ final class GeminiLiveVoiceClient {
     }
 
     /// The tools Live doesn't get declared, which find_tool searches.
-    private static var hiddenFunctionDeclarations: [[String: Any]] {
-        everyFunctionDeclaration.filter { declaration in
-            guard let toolName = declaration["name"] as? String else { return false }
-            return !GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
-        }
+    private static let hiddenFunctionDeclarations: [[String: Any]] = everyFunctionDeclaration.filter { declaration in
+        guard let toolName = declaration["name"] as? String else { return false }
+        return !GeminiLiveToolCatalog.directFunctionNames.contains(toolName)
     }
 
-    private static var everyFunctionName: Set<String> {
-        Set(everyFunctionDeclaration.compactMap { $0["name"] as? String })
-    }
+    private static let everyFunctionName: Set<String> = Set(everyFunctionDeclaration.compactMap { $0["name"] as? String })
 
     private static var coreFunctionDeclarations: [[String: Any]] {
         [

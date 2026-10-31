@@ -77,6 +77,11 @@ final class DottieBrain: ObservableObject {
     nonisolated static var mcpFileURL: URL { defaultBrainFolderURL.appendingPathComponent("mcp.json") }
 
     private var memoriesSinceProfileUpdate = 0
+    private var memoriesSinceJournalTrim = 0
+    /// The journal keeps this many newest memories, like the episodic
+    /// memory. Uncapped, every "do you remember…" read a file that only
+    /// ever grew.
+    private static let maximumJournalMemoryCount = 3_000
 
     nonisolated static var defaultBrainFolderURL: URL {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -94,7 +99,9 @@ final class DottieBrain: ObservableObject {
         profileText = (try? String(contentsOf: profileFileURL, encoding: .utf8)) ?? ""
         folderPaths = (try? JSONDecoder().decode([String].self, from: Data(contentsOf: foldersFileURL))) ?? []
         mcpServersJSON = (try? String(contentsOf: Self.mcpFileURL, encoding: .utf8)) ?? ""
-        recentMemories = Array(loadJournal().suffix(200))
+        let journalMemories = loadJournal()
+        recentMemories = Array(journalMemories.suffix(200))
+        trimJournalIfNeeded(journalMemories)
     }
 
     // MARK: - Remembering
@@ -108,6 +115,11 @@ final class DottieBrain: ObservableObject {
             recentMemories.removeFirst(recentMemories.count - 200)
         }
         appendToJournal(memory)
+        memoriesSinceJournalTrim += 1
+        if memoriesSinceJournalTrim >= 100 {
+            memoriesSinceJournalTrim = 0
+            trimJournalIfNeeded(loadJournal())
+        }
 
         memoriesSinceProfileUpdate += 1
         // Something the user asked to remember goes in right away.
@@ -270,6 +282,21 @@ final class DottieBrain: ObservableObject {
         } else {
             try? lineData.write(to: journalFileURL, options: .atomic)
         }
+    }
+
+    /// Rewrites the journal with only its newest memories when it holds
+    /// more than `maximumJournalMemoryCount`.
+    private func trimJournalIfNeeded(_ journalMemories: [Memory]) {
+        guard journalMemories.count > Self.maximumJournalMemoryCount else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var trimmedJournalData = Data()
+        for memory in journalMemories.suffix(Self.maximumJournalMemoryCount) {
+            guard let lineData = try? encoder.encode(memory) else { continue }
+            trimmedJournalData.append(lineData)
+            trimmedJournalData.append(UInt8(ascii: "\n"))
+        }
+        try? trimmedJournalData.write(to: journalFileURL, options: .atomic)
     }
 
     private func loadJournal() -> [Memory] {
