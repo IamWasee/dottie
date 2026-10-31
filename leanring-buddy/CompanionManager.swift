@@ -2698,6 +2698,40 @@ final class CompanionManager: ObservableObject {
             .sink { [weak self] isRecording in
                 self?.notchPresenter.isMeetingRecording = isRecording
             }
+        // Live help shows its suggestions in the notch as they come.
+        notchPresenter.onAskMeetingHelp = { [weak self] in
+            self?.meetingRecorder.liveHelp.askNow()
+        }
+        var lastShownSuggestion: DottieMeetingLiveHelp.Suggestion?
+        meetingRecorder.liveHelp.onDisplayChanged = { [weak self] in
+            guard let self else { return }
+            let liveHelp = self.meetingRecorder.liveHelp
+            guard liveHelp.isRunning else {
+                lastShownSuggestion = nil
+                self.notchPresenter.endMeetingHelp()
+                return
+            }
+            let suggestion = liveHelp.latestSuggestion
+            let hasNewSuggestion = suggestion != nil && suggestion != lastShownSuggestion
+            lastShownSuggestion = suggestion
+            var heading = "live help · ⌘⇧↩ to ask"
+            if let questionText = suggestion?.questionText {
+                heading = "they asked: \(questionText)"
+            } else if suggestion != nil {
+                heading = "you could say"
+            }
+            var suggestedLines = suggestion?.suggestedLines ?? []
+            if suggestedLines.isEmpty, let statusNote = liveHelp.statusNote {
+                suggestedLines = [statusNote]
+            }
+            self.notchPresenter.showMeetingHelp(
+                heading: heading,
+                lines: suggestedLines,
+                talkingPoints: liveHelp.talkingPointsText,
+                isThinking: liveHelp.isThinking,
+                hasNewSuggestion: hasNewSuggestion
+            )
+        }
         meetingRecorder.onMeetingSaved = { [weak self] title, summary, _ in
             guard let self else { return }
             self.brain.record(.meeting, "meeting \"\(title)\":\n\(summary.prefix(3000))")

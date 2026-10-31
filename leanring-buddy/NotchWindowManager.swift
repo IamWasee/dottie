@@ -255,6 +255,9 @@ final class NotchWindowManager {
             contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 150)
         case .screenTask:
             contentSize = CGSize(width: max(geometry.notchWidth + 240, 440), height: geometry.notchHeight + 70)
+        case .meetingHelp:
+            // A heading, up to three suggested lines and the talking points.
+            contentSize = CGSize(width: max(geometry.notchWidth + 260, 460), height: geometry.notchHeight + 136)
         }
 
         let shoulderWidth = 2 * Self.shoulderRadius(for: presentation)

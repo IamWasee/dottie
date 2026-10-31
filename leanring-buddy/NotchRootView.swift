@@ -112,6 +112,8 @@ struct NotchRootView: View {
             NotchTextResponseSurface(notchPresenter: notchPresenter)
         case .screenTask:
             screenTaskContent
+        case .meetingHelp:
+            meetingHelpContent
         }
     }
 
@@ -367,6 +369,76 @@ struct NotchRootView: View {
             .buttonStyle(.plain)
             .pointerCursor()
             .help("Stop (or press Escape)")
+        }
+        .padding(.top, 8)
+    }
+
+    /// Live help in a meeting: what they asked, the suggested answer as
+    /// short lines, and what's being discussed. Never spoken out loud.
+    private var meetingHelpContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 6, height: 6)
+                Text(notchPresenter.meetingHelpHeading)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                if notchPresenter.isMeetingHelpThinking {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.white)
+                }
+                Button(action: { notchPresenter.askMeetingHelp() }) {
+                    Text("help me")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.white.opacity(0.16)))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Suggest what to say now (⌘⇧Return)")
+                Button(action: { notchPresenter.hideMeetingHelp() }) {
+                    Text("hide")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Fold away until the next suggestion")
+            }
+            if notchPresenter.meetingHelpLines.isEmpty {
+                Text(notchPresenter.isMeetingHelpThinking ? "thinking…" : "listening. when they ask you something, an answer shows up here.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(2)
+            } else {
+                ForEach(Array(notchPresenter.meetingHelpLines.enumerated()), id: \.offset) { lineIndex, suggestedLine in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("•")
+                            .foregroundColor(.white.opacity(0.5))
+                        // The first line is the answer to say; it stands out.
+                        Text(suggestedLine)
+                            .font(.system(size: 13, weight: lineIndex == 0 ? .semibold : .regular))
+                            .foregroundColor(.white.opacity(lineIndex == 0 ? 0.95 : 0.8))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            if let talkingPoints = notchPresenter.meetingHelpTalkingPoints {
+                Text(talkingPoints)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
         .padding(.top, 8)
     }

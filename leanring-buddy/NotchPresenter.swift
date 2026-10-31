@@ -64,6 +64,9 @@ final class NotchPresenter: ObservableObject {
         /// Dottie is doing a multi-step job on the screen; shows the
         /// current step and a stop button.
         case screenTask
+        /// Live help during a meeting: suggested answers to what the other
+        /// people just asked, and what's being discussed.
+        case meetingHelp
     }
 
     /// How the island shows the current surface, like the Dynamic Island:
@@ -143,7 +146,7 @@ final class NotchPresenter: ObservableObject {
             // A plain "thinking" fits beside the notch; a label like
             // "looking at your picture" needs the card to be read.
             return activityLabel == Self.defaultThinkingLabel ? .wings : .expanded
-        case .speaking, .textInput, .textResponse, .screenTask:
+        case .speaking, .textInput, .textResponse, .screenTask, .meetingHelp:
             return .expanded
         }
     }
@@ -181,6 +184,18 @@ final class NotchPresenter: ObservableObject {
 
     /// Meeting mode is listening: the closed notch shows a red light.
     @Published var isMeetingRecording = false
+
+    /// Live help is running (DottieMeetingLiveHelp). The notch comes back to
+    /// its card after a voice turn or another card, unless the user hid it.
+    private(set) var isMeetingHelpRunning = false
+    private var isMeetingHelpHidden = false
+    /// "they asked: how long would it take?", or "live help".
+    @Published private(set) var meetingHelpHeading = "live help"
+    @Published private(set) var meetingHelpLines: [String] = []
+    @Published private(set) var meetingHelpTalkingPoints: String?
+    @Published private(set) var isMeetingHelpThinking = false
+    /// Set by CompanionManager.
+    var onAskMeetingHelp: (() -> Void)?
 
     /// The brain's screen journal is on: the closed notch shows a small
     /// light so the user always knows.
@@ -251,6 +266,51 @@ final class NotchPresenter: ObservableObject {
         if surface == .compact && isScreenTaskRunning {
             surface = .screenTask
         }
+        if surface == .compact && isMeetingHelpRunning && !isMeetingHelpHidden {
+            surface = .meetingHelp
+        }
+    }
+
+    // MARK: - Meeting live help
+
+    /// Live help has something new (or started thinking). A new suggestion
+    /// brings back a card the user hid; while Dottie is talking or another
+    /// card is up, it shows once they close.
+    func showMeetingHelp(heading: String, lines: [String], talkingPoints: String?, isThinking: Bool, hasNewSuggestion: Bool) {
+        isMeetingHelpRunning = true
+        meetingHelpHeading = heading
+        meetingHelpLines = lines
+        meetingHelpTalkingPoints = talkingPoints
+        isMeetingHelpThinking = isThinking
+        if hasNewSuggestion {
+            isMeetingHelpHidden = false
+        }
+        if surface == .compact && !isScreenTaskRunning && !isMeetingHelpHidden {
+            surface = .meetingHelp
+        }
+    }
+
+    func endMeetingHelp() {
+        isMeetingHelpRunning = false
+        isMeetingHelpHidden = false
+        meetingHelpLines = []
+        meetingHelpTalkingPoints = nil
+        isMeetingHelpThinking = false
+        if surface == .meetingHelp {
+            collapse()
+        }
+    }
+
+    /// Folds the card away until the next suggestion.
+    func hideMeetingHelp() {
+        isMeetingHelpHidden = true
+        if surface == .meetingHelp {
+            collapse()
+        }
+    }
+
+    func askMeetingHelp() {
+        onAskMeetingHelp?()
     }
 
     /// A screen task started or moved on to its next step. Doesn't cover a
@@ -367,7 +427,8 @@ final class NotchPresenter: ObservableObject {
     }
 
     private func showNextPendingAgentUpdateIfIdle() {
-        guard surface == .compact, !pendingAgentUpdates.isEmpty else { return }
+        // Cards also show over live help's card, which comes back after.
+        guard surface == .compact || surface == .meetingHelp, !pendingAgentUpdates.isEmpty else { return }
         let nextUpdate = pendingAgentUpdates.removeFirst()
         lastResponseText = nextUpdate.text
         lastResponseTitle = nextUpdate.title
@@ -427,8 +488,8 @@ final class NotchPresenter: ObservableObject {
                 self.autoDismissProgress = max(0, 1 - elapsedSeconds / Self.textResponseAutoDismissSeconds)
             }
             guard !Task.isCancelled, let self, self.surface == .textResponse else { return }
-            self.surface = .compact
-            self.showNextPendingAgentUpdateIfIdle()
+            // Back to the next card, a running screen task or live help.
+            self.collapse()
         }
     }
 

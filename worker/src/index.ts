@@ -27,9 +27,17 @@
  *                      GOOGLE_GEMINI_BASE_URL and sends the shared secret as
  *                      its "API key"; the real key is swapped in here.
  *
- * Backup: set the NVIDIA_API_KEY secret (free key from build.nvidia.com) and
- * text/picture requests that every Gemini model turns down as busy go to
- * NVIDIA NIM models instead (see nim.ts). Voice and speech stay on Gemini.
+ * Groq: set the GROQ_API_KEY secret (free key from console.groq.com/keys).
+ * /chat requests that ask for it with "provider": "groq" (live meeting help
+ * and the app's quick text asks) go to Groq first, which answers in well
+ * under a second, and to Gemini when Groq is busy or the request is too big
+ * for its free plan. Every other small /chat request gets Groq as a backup
+ * when every Gemini model is busy. Voice, speech, screen pointing and the
+ * Dots stay on Gemini (see chatCompletions.ts).
+ *
+ * Last resort: set the NVIDIA_API_KEY secret (free key from build.nvidia.com)
+ * and text/picture requests that everything else turns down as busy go to
+ * NVIDIA NIM models.
  *
  * Optional: set the APP_SHARED_SECRET secret and the same value as
  * ClickyAppSharedSecret in the app's Info.plist. Requests without the
@@ -49,6 +57,12 @@ interface Env {
   /** Comma-separated models to try, in order, when the chosen one is busy. */
   GEMINI_FALLBACK_MODELS?: string;
   GEMINI_TTS_FALLBACK_MODELS?: string;
+  /** Free Groq key; when set, quick asks go to Groq first (see handleChat). */
+  GROQ_API_KEY?: string;
+  /** Comma-separated Groq models for text-only requests, best first. */
+  GROQ_TEXT_MODELS?: string;
+  /** Comma-separated Groq models for requests with pictures, best first. */
+  GROQ_VISION_MODELS?: string;
   /** Free NVIDIA NIM key; when set, NIM answers when every Gemini model is busy. */
   NVIDIA_API_KEY?: string;
   /** Comma-separated NIM models to try, in order. */
@@ -57,7 +71,7 @@ interface Env {
 
 const BUSY_STATUSES = [429, 500, 503, 504];
 
-import { answerWithNim, canUseNim } from "./nim";
+import { answerWithProvider, canAnswer, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -88,6 +102,7 @@ export default {
         ok: true,
         app: "dottie",
         hasGeminiKey: Boolean(env.GEMINI_API_KEY),
+        hasGroqKey: Boolean(env.GROQ_API_KEY),
         requiresAppSecret: Boolean(env.APP_SHARED_SECRET),
       });
     }
@@ -110,6 +125,9 @@ export default {
           ttsModel: env.GEMINI_TTS_MODEL,
           ttsVoice: env.GEMINI_TTS_VOICE,
           dictationModel: env.GEMINI_DICTATION_MODEL,
+          groq: env.GROQ_API_KEY
+            ? { textModels: env.GROQ_TEXT_MODELS || "default", visionModels: env.GROQ_VISION_MODELS || "default" }
+            : "off",
           nimBackup: env.NVIDIA_API_KEY ? env.NIM_MODELS || "default" : "off",
         });
       }
@@ -196,6 +214,11 @@ async function handleLiveToken(env: Env): Promise<Response> {
  * generationConfig). The model comes from the body's optional "model" field,
  * falling back to GEMINI_CHAT_MODEL. The alias "higher" maps to
  * GEMINI_HIGHER_MODEL, used when the voice model hands off a hard question.
+ *
+ * The optional "provider" field picks who answers first: "groq" tries Groq
+ * before Gemini (when the Groq key is set and the request fits its free
+ * plan); anything else tries Gemini first. Either way the others are
+ * backups: Gemini's models in turn, then Groq, then NIM.
  */
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const requestBody = (await request.json()) as Record<string, unknown>;
@@ -203,7 +226,18 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   if (requestedModel === "higher") {
     requestedModel = env.GEMINI_HIGHER_MODEL || env.GEMINI_CHAT_MODEL;
   }
+  const prefersGroq = requestBody.provider === "groq";
   delete requestBody.model;
+  delete requestBody.provider;
+
+  const groq = env.GROQ_API_KEY ? groqProvider(env.GROQ_API_KEY, env.GROQ_TEXT_MODELS, env.GROQ_VISION_MODELS) : undefined;
+  const groqCanAnswer = Boolean(groq && canAnswer(groq, requestBody));
+
+  if (prefersGroq && groq && groqCanAnswer) {
+    const groqResponse = await answerWithProvider(groq, requestBody, true);
+    if (groqResponse) return groqResponse;
+    console.warn(`[/chat] Groq couldn't answer; trying Gemini`);
+  }
 
   const response = await fetchGeminiWithFallback(
     env,
@@ -213,12 +247,19 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     attemptTimeoutMilliseconds(request)
   );
 
-  if (BUSY_STATUSES.includes(response.status) && env.NVIDIA_API_KEY && canUseNim(requestBody)) {
-    const nimResponse = await answerWithNim(requestBody, env.NVIDIA_API_KEY, env.NIM_MODELS, true);
-    if (nimResponse) {
-      console.warn(`[/chat] every Gemini model was busy (${response.status}); NIM answered`);
-      await response.body?.cancel();
-      return nimResponse;
+  if (BUSY_STATUSES.includes(response.status)) {
+    const backups: ChatProvider[] = [];
+    // Groq was already tried when it was asked for first.
+    if (groq && groqCanAnswer && !prefersGroq) backups.push(groq);
+    if (env.NVIDIA_API_KEY) backups.push(nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS));
+    for (const backup of backups) {
+      if (!canAnswer(backup, requestBody)) continue;
+      const backupResponse = await answerWithProvider(backup, requestBody, true);
+      if (backupResponse) {
+        console.warn(`[/chat] every Gemini model was busy (${response.status}); ${backup.name} answered`);
+        await response.body?.cancel();
+        return backupResponse;
+      }
     }
   }
 
@@ -442,12 +483,14 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
   }
 
   // Every Gemini model busy: a Dot's generateContent goes to NIM instead.
+  // (Groq isn't tried: a Dot's prompt is far bigger than its free plan.)
   const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
   if (BUSY_STATUSES.includes(upstreamResponse!.status) && env.NVIDIA_API_KEY && generateMethod && requestBody) {
     try {
       const geminiBody = JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
-      if (canUseNim(geminiBody)) {
-        const nimResponse = await answerWithNim(geminiBody, env.NVIDIA_API_KEY, env.NIM_MODELS, Boolean(generateMethod[1]));
+      const nim = nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS);
+      if (canAnswer(nim, geminiBody)) {
+        const nimResponse = await answerWithProvider(nim, geminiBody, Boolean(generateMethod[1]));
         if (nimResponse) {
           console.warn(`[/gemini] every Gemini model was busy (${upstreamResponse!.status}); NIM answered`);
           await upstreamResponse!.body?.cancel();
