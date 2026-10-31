@@ -17,13 +17,20 @@ Dottie talks to Google Gemini through a small server (a Cloudflare Worker) that 
 
 Run **Release** again whenever you want a new version with the latest changes.
 
+**Keeping the code private (optional).** GitHub hides a private repo's releases, so nobody could download or update Dottie. Make a second, **public** repo for the downloads only (for example `dottie-releases`, with **Add a README** ticked so it isn't empty). Then:
+
+- Make a token at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new): under **Repository access** pick **Only select repositories** and that releases repo, and under **Permissions → Contents** pick **Read and write**. Copy it.
+- In this repo, add the secret `DOTTIE_RELEASES_TOKEN` (the token), and under **Variables** add `DOTTIE_RELEASES_REPOSITORY` (like `yourname/dottie-releases`).
+
+From the next **Release** on, the DMG is published there and Dottie updates itself from there.
+
 Everyone who installs your build shares your Gemini key's free-tier limits. If people start hitting "rate limit" answers, turn on billing for the key in AI Studio.
 
 ## Install on a Mac
 
 You need macOS 14.2 or later. Any Mac works, Apple silicon or Intel.
 
-1. **Download** [Dottie.dmg](https://github.com/IamWasee/dottie/releases/latest/download/Dottie.dmg).
+1. **Download** [Dottie.dmg](https://github.com/IamWasee/dottie-releases/releases/latest/download/Dottie.dmg).
 2. **Open it** and drag **Dottie** onto **Applications**.
 3. **Open Dottie** from your Applications folder. The first time, macOS says it can't check Dottie for malware, because Dottie isn't registered with Apple (it's a free app). Click **Done**, then:
    - Open **System Settings → Privacy & Security**.

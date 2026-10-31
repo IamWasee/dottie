@@ -57,11 +57,13 @@ final class DottieUpdater: ObservableObject {
     }
 
     /// owner/repo of the GitHub project releases come from. The release
-    /// workflow writes it into Info.plist; the original project otherwise.
+    /// workflow writes it into Info.plist; otherwise the public releases
+    /// repository, since the code's own repository can be private and
+    /// GitHub hides a private repository's releases from the app.
     private static var repository: String {
         let fromInfoPlist = (Bundle.main.infoDictionary?["DottieUpdateRepository"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return fromInfoPlist.contains("/") ? fromInfoPlist : "IamWasee/dottie"
+        return fromInfoPlist.contains("/") ? fromInfoPlist : "IamWasee/dottie-releases"
     }
 
     // MARK: - Checking
