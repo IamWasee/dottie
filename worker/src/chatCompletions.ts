@@ -6,11 +6,15 @@
  *
  * Groq is very fast (well under a second) but its free plan is small per
  * model: about 30 requests and 8,000 tokens a minute, 1,000 requests and
- * 200,000 tokens a day. So only small requests go to it (a few pictures at
- * most, no long histories); screen jobs with many screenshots and the Dots
- * (Gemini CLI, very long prompts) stay on Gemini. NIM's free endpoints are
- * slower (about 40 requests a minute per key), so it's only a backup.
- * Voice (Live), speech and dictation stay on Gemini: neither has those.
+ * 200,000 tokens a day, and it turns down any one request over the
+ * minute's tokens. So a request goes to Groq only when it fits
+ * (GROQ_MAX_REQUEST_TOKENS, 7,000 by default; raise it on a paid plan):
+ * screen jobs send Groq only their newest screenshots and recent steps
+ * (fittedForProvider), and a Dot turn too big for it goes to Gemini.
+ * Pointing asks Groq for boxes in pixels and turns them into Gemini's
+ * box_2d (pixelBoxes below). NIM's free endpoints are slower (about 40
+ * requests a minute per key), so it's only a backup. Voice (Live), speech
+ * and dictation stay on Gemini: neither has those.
  */
 
 export interface ChatProvider {
@@ -43,7 +47,11 @@ export const DEFAULT_NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-
 /** Answers at the end count toward Groq's per-minute tokens too. */
 const DEFAULT_ANSWER_TOKENS = 1024;
 
-export function groqProvider(apiKey: string, textModels?: string, visionModels?: string): ChatProvider {
+/** Groq's free plan allows 8,000 tokens a minute per model. */
+const DEFAULT_GROQ_MAX_REQUEST_TOKENS = 7000;
+
+export function groqProvider(apiKey: string, textModels?: string, visionModels?: string, maximumRequestTokens?: string): ChatProvider {
+  const configuredMaximumTokens = Number.parseInt(maximumRequestTokens ?? "", 10);
   return {
     name: "groq",
     apiURL: GROQ_API_URL,
@@ -51,8 +59,9 @@ export function groqProvider(apiKey: string, textModels?: string, visionModels?:
     textModels: modelList(textModels || DEFAULT_GROQ_TEXT_MODELS),
     visionModels: modelList(visionModels || DEFAULT_GROQ_VISION_MODELS),
     maximumImages: 3,
-    // The free plan allows 8,000 tokens a minute per model.
-    maximumTokens: 7000,
+    maximumTokens: Number.isFinite(configuredMaximumTokens) && configuredMaximumTokens > 0
+      ? configuredMaximumTokens
+      : DEFAULT_GROQ_MAX_REQUEST_TOKENS,
     extrasForModel: (model) => {
       // Thinking costs time and tokens these quick asks don't need.
       if (model.startsWith("openai/gpt-oss")) return { reasoning_effort: "low", include_reasoning: false };
@@ -153,16 +162,64 @@ function estimatedTokens(geminiBody: Record<string, unknown>): number {
 
 /**
  * True when this provider can answer the body: text and a few pictures,
- * small enough for its limits. Screen pointing answers in Gemini's own
- * box_2d coordinates, which other models write in a different order, so
- * those requests never leave Gemini.
+ * small enough for its limits. Screen pointing (box_2d) goes to Groq in
+ * pixels (see pixelBoxes) and to NIM as it is.
  */
 export function canAnswer(provider: ChatProvider, geminiBody: Record<string, unknown>): boolean {
   if (involvesAudio(geminiBody)) return false;
   if (imageCount(geminiBody) > provider.maximumImages) return false;
-  if (provider.name !== "nim" && JSON.stringify(geminiBody.contents ?? "").includes("box_2d")) return false;
-  if (provider.name !== "nim" && JSON.stringify(geminiBody.systemInstruction ?? "").includes("box_2d")) return false;
   return estimatedTokens(geminiBody) <= provider.maximumTokens;
+}
+
+/**
+ * The body cut down to what the provider takes, for jobs that send a
+ * screenshot every step: only the newest pictures stay (older ones become
+ * a short note), and with `dropOldSteps` the oldest steps between the
+ * first message and the last few go until it fits. A model turn and the
+ * tool results after it go together, so every call keeps its result.
+ * The original body is left as it was for Gemini.
+ */
+export function fittedForProvider(
+  provider: ChatProvider,
+  geminiBody: Record<string, unknown>,
+  dropOldSteps: boolean
+): Record<string, unknown> {
+  const contents = structuredClone((geminiBody.contents ?? []) as GeminiContent[]);
+
+  let picturesToKeep = provider.maximumImages;
+  for (let contentIndex = contents.length - 1; contentIndex >= 0; contentIndex -= 1) {
+    const parts = contents[contentIndex].parts ?? [];
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      if (!(parts[partIndex].inlineData?.mimeType ?? "").startsWith("image/")) continue;
+      if (picturesToKeep > 0) {
+        picturesToKeep -= 1;
+      } else {
+        parts[partIndex] = { text: "(an earlier screenshot, left out)" };
+      }
+    }
+  }
+
+  const fittedBody: Record<string, unknown> = { ...geminiBody, contents };
+  if (!dropOldSteps) return fittedBody;
+
+  // Keep the first message (the task) and at least the last four turns.
+  const newestTurnsToKeep = 4;
+  let leftOutStepCount = 0;
+  while (estimatedTokens(fittedBody) > provider.maximumTokens && contents.length > 1 + newestTurnsToKeep) {
+    // Drop from the second turn on: a model turn with the user turn after it.
+    const removeCount = contents[1]?.role === "model" && contents[2]?.role !== "model" ? 2 : 1;
+    contents.splice(1, removeCount);
+    leftOutStepCount += 1;
+    // The history must not start a pair with tool results whose call is gone.
+    while (contents.length > 1 + newestTurnsToKeep && contents[1]?.role !== "model") {
+      contents.splice(1, 1);
+    }
+  }
+  if (leftOutStepCount > 0) {
+    contents.splice(1, 0, { role: "user", parts: [{ text: `(${leftOutStepCount} earlier steps left out to keep this short)` }] });
+    // A user note followed by the kept model turn keeps the turns alternating.
+  }
+  return fittedBody;
 }
 
 /**
@@ -175,7 +232,10 @@ export async function answerWithProvider(
   streaming: boolean
 ): Promise<Response | undefined> {
   const models = imageCount(geminiBody) > 0 ? provider.visionModels : provider.textModels;
-  const chatRequest = toChatRequest(geminiBody);
+  // Groq's models write boxes in pixels, left first; Gemini's box_2d is
+  // 0-1000, top first. Groq is asked for pixels and its answer turned back.
+  const boxConversion = provider.name === "groq" ? pixelBoxConversion(geminiBody) : undefined;
+  const chatRequest = toChatRequest(boxConversion ? boxConversion.bodyForProvider : geminiBody);
   if (provider.name === "groq" && typeof chatRequest.max_tokens !== "number") {
     chatRequest.max_tokens = DEFAULT_ANSWER_TOKENS;
   }
@@ -192,8 +252,9 @@ export async function answerWithProvider(
       });
       if (response.ok) {
         const chatResponse = (await response.json()) as Record<string, unknown>;
-        const geminiResponse = toGeminiResponse(chatResponse, `${provider.name}/${model}`);
+        let geminiResponse = toGeminiResponse(chatResponse, `${provider.name}/${model}`);
         if (!geminiResponse) break;
+        if (boxConversion) geminiResponse = boxConversion.responseForGemini(geminiResponse);
         const payload = JSON.stringify(geminiResponse);
         return streaming
           ? new Response(`data: ${payload}\r\n\r\n`, {
@@ -217,7 +278,13 @@ export async function answerWithProvider(
 function toChatRequest(geminiBody: Record<string, unknown>): Record<string, unknown> {
   const messages: ChatMessage[] = [];
 
-  const systemText = partsText(((geminiBody.systemInstruction ?? {}) as GeminiContent).parts);
+  let systemText = partsText(((geminiBody.systemInstruction ?? {}) as GeminiContent).parts);
+  // The chat format only promises JSON, not Gemini's response schema, so
+  // the schema's shape goes into the instructions.
+  const responseSchema = ((geminiBody.generationConfig ?? {}) as Record<string, unknown>).responseSchema;
+  if (responseSchema) {
+    systemText += `${systemText ? "\n\n" : ""}Reply with only a JSON object matching this JSON schema:\n${JSON.stringify(lowercaseSchema(responseSchema))}`;
+  }
   if (systemText) messages.push({ role: "system", content: systemText });
 
   // Gemini matches tool results to calls by name (ids are optional), the
@@ -363,4 +430,205 @@ function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel:
     },
     modelVersion: answeringModel,
   };
+}
+
+// MARK: - Pixel boxes for Groq
+
+/**
+ * Pointing asks for boxes as box_2d = [ymin, xmin, ymax, xmax] from 0 to
+ * 1000 (Gemini's own format, also target_box_2d, player_box_2d and the
+ * guide's target_box). Groq's vision model measures in pixels with left
+ * first, and mixes the two up when asked for Gemini's order. So for Groq
+ * every such key becomes a "_px" key in pixels of the newest picture,
+ * [left, top, right, bottom], in the instructions, the schemas and earlier
+ * calls in the history, and the answer's "_px" boxes are turned back into
+ * the keys and 0-1000 boxes the app asked for.
+ */
+function pixelBoxConversion(geminiBody: Record<string, unknown>):
+  | { bodyForProvider: Record<string, unknown>; responseForGemini: (response: Record<string, unknown>) => Record<string, unknown> }
+  | undefined {
+  const bodyText = JSON.stringify(geminiBody);
+  const mentionsBoxes = bodyText.includes("box_2d") || bodyText.includes("\"target_box\"");
+  if (!mentionsBoxes) return undefined;
+  const pictureSize = newestPictureSize(geminiBody);
+  if (!pictureSize) return undefined;
+
+  const originalKeyByPixelKey = new Map<string, string>();
+  const pixelKey = (key: string): string | undefined => {
+    let renamed: string | undefined;
+    if (key.endsWith("box_2d")) renamed = `${key.slice(0, -"box_2d".length)}box_px`;
+    else if (key === "target_box") renamed = "target_box_px";
+    if (renamed) originalKeyByPixelKey.set(renamed, key);
+    return renamed;
+  };
+
+  const renameInText = (text: string): string =>
+    text
+      .replace(/\b([a-z_]*)box_2d\b/g, (_match, prefix: string) => pixelKey(`${prefix}box_2d`)!)
+      .replace(/\btarget_box\b(?!_)/g, () => pixelKey("target_box")!)
+      .replace(/\[\s*ymin\s*,\s*xmin\s*,\s*ymax\s*,\s*xmax\s*\]/g, "[left, top, right, bottom]");
+
+  // Gemini boxes in earlier calls of a job, so the history agrees.
+  const toPixels = (value: unknown): unknown => {
+    const box = boxNumbers(value);
+    if (!box) return value;
+    const [ymin, xmin, ymax, xmax] = box;
+    return [
+      Math.round((xmin / 1000) * pictureSize.width),
+      Math.round((ymin / 1000) * pictureSize.height),
+      Math.round((xmax / 1000) * pictureSize.width),
+      Math.round((ymax / 1000) * pictureSize.height),
+    ];
+  };
+  const toGeminiBox = (value: unknown): unknown => {
+    const box = boxNumbers(value);
+    if (!box) return value;
+    const [left, top, right, bottom] = box;
+    const scaled = (pixels: number, size: number) => Math.min(1000, Math.max(0, Math.round((pixels / size) * 1000)));
+    return [
+      scaled(Math.min(top, bottom), pictureSize.height),
+      scaled(Math.min(left, right), pictureSize.width),
+      scaled(Math.max(top, bottom), pictureSize.height),
+      scaled(Math.max(left, right), pictureSize.width),
+    ];
+  };
+
+  const renameKeys = (value: unknown, convertBox: ((box: unknown) => unknown) | undefined, keyFor: (key: string) => string | undefined): unknown => {
+    if (Array.isArray(value)) return value.map((item) => renameKeys(item, convertBox, keyFor));
+    if (!value || typeof value !== "object") return typeof value === "string" && !convertBox ? renameInText(value) : value;
+    const renamedObject: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const newKey = keyFor(key);
+      if (newKey) {
+        renamedObject[newKey] = convertBox ? convertBox(item) : renameKeys(item, convertBox, keyFor);
+      } else if (key === "required" && Array.isArray(item)) {
+        renamedObject[key] = item.map((name) => (typeof name === "string" ? keyFor(name) ?? name : name));
+      } else {
+        renamedObject[key] = renameKeys(item, convertBox, keyFor);
+      }
+    }
+    return renamedObject;
+  };
+
+  const bodyForProvider = structuredClone(geminiBody);
+  for (const content of (bodyForProvider.contents ?? []) as GeminiContent[]) {
+    for (const part of content.parts ?? []) {
+      if (typeof part.text === "string") part.text = renameInText(part.text);
+      if (part.functionCall?.args) part.functionCall.args = renameKeys(part.functionCall.args, toPixels, pixelKey);
+    }
+  }
+  // Schemas and descriptions: keys renamed, and text inside them too.
+  if (bodyForProvider.tools) bodyForProvider.tools = renameKeys(bodyForProvider.tools, undefined, pixelKey);
+  const generationConfig = (bodyForProvider.generationConfig ?? {}) as Record<string, unknown>;
+  if (generationConfig.responseSchema) {
+    generationConfig.responseSchema = renameKeys(generationConfig.responseSchema, undefined, pixelKey);
+  }
+  const systemInstruction = (bodyForProvider.systemInstruction ?? { parts: [] }) as GeminiContent;
+  const systemParts = (systemInstruction.parts ?? []).map((part) =>
+    typeof part.text === "string" ? { ...part, text: renameInText(part.text) } : part
+  );
+  systemParts.push({
+    text:
+      `Boxes: ignore any 0-1000 scale described above. The newest image is ${pictureSize.width}×${pictureSize.height} pixels. ` +
+      `Give every box (${[...new Set(originalKeyByPixelKey.keys())].join(", ") || "box_px"}) in pixels of that image as [left, top, right, bottom], ` +
+      `measured on the image itself, tight around the thing.`,
+  });
+  bodyForProvider.systemInstruction = { ...systemInstruction, parts: systemParts };
+
+  const geminiKey = (key: string): string | undefined =>
+    originalKeyByPixelKey.get(key) ?? (key.endsWith("box_px") ? `${key.slice(0, -"box_px".length)}box_2d` : undefined);
+
+  const responseForGemini = (response: Record<string, unknown>): Record<string, unknown> => {
+    const converted = structuredClone(response);
+    for (const candidate of (converted.candidates ?? []) as Array<{ content?: GeminiContent }>) {
+      for (const part of candidate.content?.parts ?? []) {
+        if (part.functionCall?.args) part.functionCall.args = renameKeys(part.functionCall.args, toGeminiBox, geminiKey);
+        if (typeof part.text === "string") part.text = textWithGeminiBoxes(part.text, toGeminiBox, geminiKey);
+      }
+    }
+    return converted;
+  };
+
+  return { bodyForProvider, responseForGemini };
+}
+
+/** "box_px": [l, t, r, b] in an answer's text (JSON or close to it) → Gemini's key and box. */
+function textWithGeminiBoxes(
+  text: string,
+  toGeminiBox: (box: unknown) => unknown,
+  geminiKey: (key: string) => string | undefined
+): string {
+  const number = String.raw`-?\d+(?:\.\d+)?`;
+  const boxPattern = new RegExp(
+    String.raw`"([a-z_]*box_px)"\s*:\s*\[?\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*\]?`,
+    "g"
+  );
+  return text
+    .replace(boxPattern, (_match, key: string, left: string, top: string, right: string, bottom: string) => {
+      const box = toGeminiBox([Number(left), Number(top), Number(right), Number(bottom)]);
+      return `"${geminiKey(key) ?? key}": ${JSON.stringify(box)}`;
+    })
+    .replace(/"([a-z_]*box_px)"/g, (_match, key: string) => `"${geminiKey(key) ?? key}"`);
+}
+
+function boxNumbers(value: unknown): [number, number, number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 4) return undefined;
+  const numbers = value.map((item) => Number(item));
+  return numbers.every((item) => Number.isFinite(item)) ? (numbers as [number, number, number, number]) : undefined;
+}
+
+/** Width and height of the body's newest picture, read from its JPEG or PNG header. */
+function newestPictureSize(geminiBody: Record<string, unknown>): { width: number; height: number } | undefined {
+  let newestPictureBase64: string | undefined;
+  for (const content of (geminiBody.contents ?? []) as GeminiContent[]) {
+    for (const part of content.parts ?? []) {
+      if ((part.inlineData?.mimeType ?? "").startsWith("image/") && part.inlineData?.data) newestPictureBase64 = part.inlineData.data;
+    }
+  }
+  if (!newestPictureBase64) return undefined;
+  // The header is near the start; a little of the picture is enough.
+  const headerBase64 = newestPictureBase64.slice(0, 87_384).replace(/=+$/, "");
+  const usableLength = headerBase64.length - (headerBase64.length % 4);
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(headerBase64.slice(0, usableLength)), (character) => character.charCodeAt(0));
+  } catch {
+    return undefined;
+  }
+  return pictureSize(bytes);
+}
+
+export function pictureSize(bytes: Uint8Array): { width: number; height: number } | undefined {
+  // PNG: the IHDR chunk right after the signature.
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  // JPEG: walk the markers to the start-of-frame one.
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = bytes[offset + 1];
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+      offset += 2;
+      continue;
+    }
+    const segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3];
+    const isStartOfFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isStartOfFrame) {
+      const height = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      const width = (bytes[offset + 7] << 8) | bytes[offset + 8];
+      return width > 0 && height > 0 ? { width, height } : undefined;
+    }
+    offset += 2 + segmentLength;
+  }
+  return undefined;
 }

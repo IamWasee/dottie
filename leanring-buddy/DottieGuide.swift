@@ -596,6 +596,9 @@ final class DottieGuide {
         }
         if Task.isCancelled { return nil }
         let requestBody: [String: Any] = [
+            // Groq first when Claude isn't there (the Worker asks it for
+            // pixels and hands back box_2d); Gemini when Groq can't answer.
+            "provider": "groq",
             "model": DottieModelPicker.shared.pick(.normal),
             "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
             "contents": [[

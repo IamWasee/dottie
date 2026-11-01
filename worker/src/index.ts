@@ -28,12 +28,13 @@
  *                      its "API key"; the real key is swapped in here.
  *
  * Groq: set the GROQ_API_KEY secret (free key from console.groq.com/keys).
- * /chat requests that ask for it with "provider": "groq" (live meeting help
- * and the app's quick text asks) go to Groq first, which answers in well
- * under a second, and to Gemini when Groq is busy or the request is too big
- * for its free plan. Every other small /chat request gets Groq as a backup
- * when every Gemini model is busy. Voice, speech, screen pointing and the
- * Dots stay on Gemini (see chatCompletions.ts).
+ * /chat requests that ask for it with "provider": "groq" (live meeting help,
+ * quick text asks, pointing, guides and screen jobs) go to Groq first, which
+ * answers in well under a second, and to Gemini when Groq is busy or the
+ * request is too big for it (GROQ_MAX_REQUEST_TOKENS). Dot turns that fit
+ * go to Groq first too. Every other small /chat request gets Groq as a
+ * backup when every Gemini model is busy. Voice, speech and dictation stay
+ * on Gemini (see chatCompletions.ts).
  *
  * Last resort: set the NVIDIA_API_KEY secret (free key from build.nvidia.com)
  * and text/picture requests that everything else turns down as busy go to
@@ -67,11 +68,13 @@ interface Env {
   NVIDIA_API_KEY?: string;
   /** Comma-separated NIM models to try, in order. */
   NIM_MODELS?: string;
+  /** Biggest request (prompt + answer, in tokens) sent to Groq; 7000 fits its free plan. */
+  GROQ_MAX_REQUEST_TOKENS?: string;
 }
 
 const BUSY_STATUSES = [429, 500, 503, 504];
 
-import { answerWithProvider, canAnswer, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
+import { answerWithProvider, canAnswer, fittedForProvider, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -230,13 +233,20 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   delete requestBody.model;
   delete requestBody.provider;
 
-  const groq = env.GROQ_API_KEY ? groqProvider(env.GROQ_API_KEY, env.GROQ_TEXT_MODELS, env.GROQ_VISION_MODELS) : undefined;
+  const groq = groqFromEnv(env);
   const groqCanAnswer = Boolean(groq && canAnswer(groq, requestBody));
 
-  if (prefersGroq && groq && groqCanAnswer) {
-    const groqResponse = await answerWithProvider(groq, requestBody, true);
-    if (groqResponse) return groqResponse;
-    console.warn(`[/chat] Groq couldn't answer; trying Gemini`);
+  if (prefersGroq && groq) {
+    // Screen jobs send a screenshot every step: Groq gets the newest ones
+    // and the recent steps; Gemini, if it has to answer, gets everything.
+    const bodyForGroq = fittedForProvider(groq, requestBody, true);
+    if (canAnswer(groq, bodyForGroq)) {
+      const groqResponse = await answerWithProvider(groq, bodyForGroq, true);
+      if (groqResponse) return groqResponse;
+      console.warn(`[/chat] Groq couldn't answer; trying Gemini`);
+    } else {
+      console.warn(`[/chat] too big for Groq; trying Gemini`);
+    }
   }
 
   const response = await fetchGeminiWithFallback(
@@ -443,6 +453,12 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
  * Forwards /gemini/<path> to generativelanguage.googleapis.com/<path> with the
  * real key. Bodies and streamed responses pass through untouched.
  */
+function groqFromEnv(env: Env): ChatProvider | undefined {
+  return env.GROQ_API_KEY
+    ? groqProvider(env.GROQ_API_KEY, env.GROQ_TEXT_MODELS, env.GROQ_VISION_MODELS, env.GROQ_MAX_REQUEST_TOKENS)
+    : undefined;
+}
+
 async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Promise<Response> {
   const upstreamPath = url.pathname.slice("/gemini".length);
   const upstreamQuery = new URLSearchParams();
@@ -467,6 +483,24 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
         .map((model) => `${modelCall[1]}${encodeURIComponent(model)}${modelCall[3]}`)
     : [upstreamPath];
 
+  // Dot turns go to Groq first when they fit (on Groq's free plan most are
+  // too big, so those stay on Gemini); the CLI can't tell who answered.
+  const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
+  const groq = groqFromEnv(env);
+  if (groq && generateMethod && requestBody && request.method === "POST") {
+    try {
+      const geminiBody = JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
+      const bodyForGroq = fittedForProvider(groq, geminiBody, false);
+      if (canAnswer(groq, bodyForGroq)) {
+        const groqResponse = await answerWithProvider(groq, bodyForGroq, Boolean(generateMethod[1]));
+        if (groqResponse) return groqResponse;
+        console.warn(`[/gemini] Groq couldn't answer; trying Gemini`);
+      }
+    } catch (error) {
+      console.warn(`[/gemini] Groq first failed: ${error}`);
+    }
+  }
+
   let upstreamResponse: Response | undefined;
   for (const [index, path] of upstreamPaths.entries()) {
     const upstreamURL = new URL(`https://generativelanguage.googleapis.com${path}`);
@@ -483,8 +517,6 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
   }
 
   // Every Gemini model busy: a Dot's generateContent goes to NIM instead.
-  // (Groq isn't tried: a Dot's prompt is far bigger than its free plan.)
-  const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
   if (BUSY_STATUSES.includes(upstreamResponse!.status) && env.NVIDIA_API_KEY && generateMethod && requestBody) {
     try {
       const geminiBody = JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;

@@ -30,5 +30,8 @@ GEMINI_TTS_FALLBACK_MODELS = "gemini-3.8-flash-tts"
 # limit (about 30 requests and 8,000 tokens a minute).
 GROQ_TEXT_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b"
 GROQ_VISION_MODELS = "qwen/qwen3.8-27b"
+# Biggest request sent to Groq, in tokens. 7000 fits the free plan's 8,000 a
+# minute; raise it on a paid plan so long screen jobs and Dot turns fit too.
+GROQ_MAX_REQUEST_TOKENS = "7000"
 # NVIDIA NIM backups (only with NVIDIA_API_KEY), best first.
 NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"
