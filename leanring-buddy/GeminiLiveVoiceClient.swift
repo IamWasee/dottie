@@ -1623,7 +1623,7 @@ enum GeminiLiveToolCatalog {
         "apps_and_tools", "use_app_tool",
         // Drawing. Through use_tool, a drawing's steps were JSON inside
         // JSON, and asks that didn't say "draw" never found the tool.
-        "explain_on_screen", "draw_on_screen", "clear_drawings",
+        "explain_on_screen", "draw_on_screen", "clear_drawings", "write_notes",
         // Co-op mid-game needs to be instant.
         "game_command"
     ]
@@ -1659,6 +1659,7 @@ enum GeminiLiveToolCatalog {
         "find_pictures": "pictures picture image saved find showed",
         "change_cursor": "cursor pet shape costume turn into cat dog animal emoji walk roam look",
         "explain_on_screen": "explain draw teach math geometry graph equation diagram board plot tutor",
+        "write_notes": "notes note take write notebook study summary working solution steps equation formula chemistry physics science bullet heading",
         "home_devices": "smart home devices lights tv list connected",
         "tv_task": "tv television episode youtube netflix show",
         "memories": "memories episodes forget recent yesterday history past happened",

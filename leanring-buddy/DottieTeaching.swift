@@ -161,7 +161,7 @@ enum DottieTeaching {
                 "items": ["type": "STRING"],
                 "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
-            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Use math symbols: x², √, π, θ, ⊥, ≠, ≤, ½, →."],
+            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**."],
             "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
@@ -171,7 +171,7 @@ enum DottieTeaching {
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math goes on a board (board_right or board_left, whichever covers less of what matters) as text steps, one line of working each, top to bottom, like \"m = (8−2)/(5−3) = 3\" then \"m⊥ = −1/3\". Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -568,7 +568,16 @@ enum DottieTeaching {
             } else {
                 return nil
             }
-            drawn.addText(label, origin: origin, fontSize: fontSize, ink: step.ink ?? .white)
+            // On a board, a long line is written smaller rather than running
+            // off its edge.
+            var fittedFontSize = fontSize
+            if let boardRect = space.boardRect {
+                let roomToTheRight = boardRect.maxX - 18 - origin.x
+                while fittedFontSize > 13, DottieFigure.estimatedTextWidth(label, fontSize: fittedFontSize) > roomToTheRight {
+                    fittedFontSize -= 1
+                }
+            }
+            drawn.addText(label, origin: origin, fontSize: fittedFontSize, ink: step.ink ?? .white)
 
         case .ticks:
             guard points.count >= 2 else { return nil }
@@ -709,7 +718,7 @@ enum DottieTeaching {
                           ink: ink, lineWidth: 3, pen: curve, duration: max(0.25, 1.6 * share))
             }
             if let lastCurve = curves.last, let curveEnd = lastCurve.last {
-                let name = "y = " + DottieMathText.pretty(expressionText)
+                let name = "y = " + DottieMathText.prettyPlainText(expressionText)
                 let width = DottieFigure.estimatedTextWidth(name, fontSize: 20)
                 let x = min(curveEnd.x + 8, area.maxX - width)
                 drawn.addText(name, origin: CGPoint(x: x, y: min(curveEnd.y + 18, area.maxY - 10)), fontSize: 20, ink: ink)
@@ -810,7 +819,7 @@ enum DottieTeaching {
                                    fontSize: scaleLabelFontSize, ink: ink)
                 }
             }
-            if let label = step.caption.map(DottieMathText.pretty) {
+            if let label = step.caption.map(DottieMathText.prettyPlainText) {
                 drawn.addLabel(label, centeredAt: CGPoint(x: plotArea.midX, y: outerArea.maxY + 4), fontSize: 20, ink: axisInk)
             }
 
@@ -883,37 +892,191 @@ enum DottieTeaching {
 
 // MARK: - Math text
 
-/// Turns typed math into what you'd write by hand: x^2 → x², sqrt(x) → √(x),
-/// \theta → θ, >= → ≥, x_1 → x₁, \frac{a}{b} → a/b.
+/// Turns typed math and science into what you'd write by hand: x^2 → x²,
+/// 3*4 → 3×4, sqrt(x) → √(x), \theta → θ, >= → ≥, x_1 → x₁, \frac{a}{b} → a/b,
+/// H2O → H₂O, SO4^2- → SO₄²⁻, Na+ → Na⁺, <=> → ⇌, 25 degC → 25 °C.
+/// Color and bold markings (DottieInkText) are kept.
 enum DottieMathText {
     private static let superscripts: [Character: Character] = [
         "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-        "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ", "i": "ⁱ", "x": "ˣ", "y": "ʸ"
+        "+": "⁺", "-": "⁻", "−": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ", "i": "ⁱ", "x": "ˣ", "y": "ʸ",
+        "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ", "k": "ᵏ", "m": "ᵐ", "t": "ᵗ", "T": "ᵀ", "o": "ᵒ"
     ]
     private static let subscripts: [Character: Character] = [
         "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-        "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎", "a": "ₐ", "e": "ₑ", "x": "ₓ", "n": "ₙ", "i": "ᵢ"
+        "+": "₊", "-": "₋", "−": "₋", "=": "₌", "(": "₍", ")": "₎", "a": "ₐ", "e": "ₑ", "x": "ₓ", "n": "ₙ", "i": "ᵢ",
+        "o": "ₒ", "k": "ₖ", "m": "ₘ", "t": "ₜ", "r": "ᵣ", "s": "ₛ", "p": "ₚ", "j": "ⱼ", "h": "ₕ", "l": "ₗ"
     ]
+    /// Longer names first wherever one starts another (\leftarrow before
+    /// \left, \neq before \ne, <=> before <=).
     private static let words: [(String, String)] = [
-        ("\\left", ""), ("\\right", ""),
-        ("\\theta", "θ"), ("\\alpha", "α"), ("\\beta", "β"), ("\\gamma", "γ"), ("\\delta", "δ"), ("\\Delta", "Δ"),
-        ("\\lambda", "λ"), ("\\mu", "μ"), ("\\sigma", "σ"), ("\\omega", "ω"), ("\\phi", "φ"), ("\\pi", "π"),
-        ("\\infty", "∞"), ("\\angle", "∠"), ("\\perp", "⊥"), ("\\parallel", "∥"), ("\\cdot", "·"), ("\\times", "×"),
-        ("\\div", "÷"), ("\\pm", "±"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\le", "≤"), ("\\ge", "≥"), ("\\neq", "≠"),
-        ("\\approx", "≈"), ("\\degree", "°"), ("^\\circ", "°"), ("\\circ", "°"), ("\\to", "→"), ("\\rightarrow", "→"),
-        ("\\therefore", "∴"), ("\\sqrt", "√"), ("sqrt", "√"), ("->", "→"), ("<=", "≤"), (">=", "≥"), ("!=", "≠"),
-        ("+-", "±"), ("$", "")
+        // Arrows (chemistry's ⇌ among them).
+        ("\\rightleftharpoons", "⇌"), ("\\leftrightarrow", "↔"), ("\\Leftrightarrow", "⇔"), ("\\iff", "⇔"),
+        ("\\Rightarrow", "⇒"), ("\\implies", "⇒"), ("\\Leftarrow", "⇐"), ("\\rightarrow", "→"), ("\\leftarrow", "←"),
+        ("\\uparrow", "↑"), ("\\downarrow", "↓"), ("\\to", "→"), ("\\gets", "←"),
+        ("\\left", ""), ("\\right", ""), ("\\text", ""), ("\\mathrm", ""), ("\\displaystyle", ""),
+        ("\\mathbb{R}", "ℝ"), ("\\mathbb{N}", "ℕ"), ("\\mathbb{Z}", "ℤ"), ("\\mathbb{Q}", "ℚ"), ("\\mathbb{C}", "ℂ"),
+        // Greek, capitals where they differ from Latin letters.
+        ("\\varepsilon", "ε"), ("\\epsilon", "ε"), ("\\varphi", "φ"), ("\\vartheta", "ϑ"),
+        ("\\alpha", "α"), ("\\beta", "β"), ("\\gamma", "γ"), ("\\Gamma", "Γ"), ("\\delta", "δ"), ("\\Delta", "Δ"),
+        ("\\zeta", "ζ"), ("\\eta", "η"), ("\\theta", "θ"), ("\\Theta", "Θ"), ("\\iota", "ι"), ("\\kappa", "κ"),
+        ("\\lambda", "λ"), ("\\Lambda", "Λ"), ("\\mu", "μ"), ("\\nu", "ν"), ("\\xi", "ξ"), ("\\Xi", "Ξ"),
+        ("\\pi", "π"), ("\\Pi", "Π"), ("\\rho", "ρ"), ("\\sigma", "σ"), ("\\Sigma", "Σ"), ("\\tau", "τ"),
+        ("\\upsilon", "υ"), ("\\phi", "φ"), ("\\Phi", "Φ"), ("\\chi", "χ"), ("\\psi", "ψ"), ("\\Psi", "Ψ"),
+        ("\\omega", "ω"), ("\\Omega", "Ω"), ("\\hbar", "ℏ"), ("\\ell", "ℓ"),
+        // Calculus, sums and sets.
+        ("\\sum", "∑"), ("\\prod", "∏"), ("\\iiint", "∭"), ("\\iint", "∬"), ("\\oint", "∮"), ("\\int", "∫"),
+        ("\\partial", "∂"), ("\\nabla", "∇"), ("\\infty", "∞"), ("\\lim", "lim"),
+        ("\\notin", "∉"), ("\\in", "∈"), ("\\subseteq", "⊆"), ("\\subset", "⊂"), ("\\supset", "⊃"),
+        ("\\cup", "∪"), ("\\cap", "∩"), ("\\emptyset", "∅"), ("\\varnothing", "∅"), ("\\forall", "∀"), ("\\exists", "∃"),
+        ("\\neg", "¬"), ("\\land", "∧"), ("\\lor", "∨"),
+        // Comparisons and operators.
+        ("\\neq", "≠"), ("\\ne", "≠"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\le", "≤"), ("\\ge", "≥"),
+        ("\\ll", "≪"), ("\\gg", "≫"), ("\\approx", "≈"), ("\\equiv", "≡"), ("\\cong", "≅"), ("\\simeq", "≃"),
+        ("\\sim", "∼"), ("\\propto", "∝"), ("\\times", "×"), ("\\div", "÷"), ("\\pm", "±"), ("\\mp", "∓"),
+        ("\\cdots", "⋯"), ("\\ldots", "…"), ("\\dots", "…"), ("\\cdot", "·"),
+        // Geometry.
+        ("\\angle", "∠"), ("\\perp", "⊥"), ("\\parallel", "∥"), ("\\triangle", "△"), ("\\square", "□"),
+        ("\\degree", "°"), ("^\\circ", "°"), ("\\circ", "°"), ("\\therefore", "∴"), ("\\because", "∵"),
+        // Roots.
+        ("\\sqrt[3]", "∛"), ("\\sqrt[4]", "∜"), ("\\sqrt", "√"), ("cbrt", "∛"), ("sqrt", "√"),
+        // Typed the plain way.
+        ("<=>", "⇌"), ("<->", "↔"), ("<-", "←"), ("=>", "⇒"), ("->", "→"),
+        ("<=", "≤"), (">=", "≥"), ("!=", "≠"), ("=/=", "≠"), ("~=", "≈"), ("+/-", "±"), ("+-", "±"),
+        ("*", "×"), ("$", "")
     ]
 
+    /// Patterns that need the letters around them: pi on its own, degrees
+    /// and units after a number, a minus sign, simple fractions.
+    private static let patternReplacements: [(NSRegularExpression, String)] = ([
+        (#"\bpi\b"#, "π"),
+        (#"\binfinity\b"#, "∞"),
+        (#"(\d)\s?deg\s?C\b"#, "$1 °C"),
+        (#"(\d)\s?deg\s?F\b"#, "$1 °F"),
+        (#"(\d)\s?(deg|degrees)\b"#, "$1°"),
+        (#"(\d)\s?ohms?\b"#, "$1 Ω"),
+        (#"(\d)\s?micro(m|g|s|L)\b"#, "$1 µ$2"),
+        // A minus sign, not a hyphen: spaced, or before a number or bracket
+        // at the start or after = ( and operators.
+        (#" - "#, " − "),
+        (#"(^|[=(\[,×÷+/≤≥<>]\s?)-(?=[\d(a-zA-Zπθ√])"#, "$1−"),
+        (#"(?<![\d./])1/2(?![\d/])"#, "½"), (#"(?<![\d./])1/3(?![\d/])"#, "⅓"), (#"(?<![\d./])2/3(?![\d/])"#, "⅔"),
+        (#"(?<![\d./])1/4(?![\d/])"#, "¼"), (#"(?<![\d./])3/4(?![\d/])"#, "¾"), (#"(?<![\d./])1/8(?![\d/])"#, "⅛")
+    ] as [(String, String)]).compactMap { pattern, replacement in
+        (try? NSRegularExpression(pattern: pattern)).map { ($0, replacement) }
+    }
+
+    /// Every element's symbol, so H2O, CO2 and Ca(OH)2 get subscripts but
+    /// MP3, A1 or Q3 don't.
+    private static let elementSymbols: Set<String> = Set("""
+    H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo \
+    Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl \
+    Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og
+    """.split(separator: " ").map(String.init))
+
+    /// Pretty math and science, keeping any color or bold markings.
     static func pretty(_ text: String) -> String {
+        DottieInkText.transformingText(in: text, using: prettyPlain)
+    }
+
+    /// Pretty, with the markings taken out, for what the cursor says.
+    static func prettyPlainText(_ text: String) -> String {
+        DottieInkText.plainText(pretty(text))
+    }
+
+    private static func prettyPlain(_ text: String) -> String {
         var result = text
         result = replaceFractions(in: result)
         for (word, symbol) in words {
             result = result.replacingOccurrences(of: word, with: symbol)
         }
+        for (pattern, replacement) in patternReplacements {
+            result = pattern.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: replacement)
+        }
+        result = chemicalFormulas(in: result)
         result = replaceScripts(in: result, marker: "^", map: superscripts)
         result = replaceScripts(in: result, marker: "_", map: subscripts)
         return result.replacingOccurrences(of: "{", with: "").replacingOccurrences(of: "}", with: "")
+    }
+
+    /// H2O → H₂O, C6H12O6 → C₆H₁₂O₆, Ca(OH)2 → Ca(OH)₂, Na+ → Na⁺, Cl- → Cl⁻,
+    /// Fe3+ → Fe³⁺. Only words made wholly of element symbols, numbers and
+    /// brackets change, so ordinary words and labels are left alone.
+    private static func chemicalFormulas(in text: String) -> String {
+        guard let formulaPattern = try? NSRegularExpression(pattern: #"(?<![A-Za-z0-9])((?:[A-Z][a-z]?|\(|\)|\[|\]|\d)+)([+−-]?)(?![A-Za-z0-9])"#) else { return text }
+        let nsText = text as NSString
+        var result = ""
+        var lastEnd = 0
+        for match in formulaPattern.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            let body = nsText.substring(with: match.range(at: 1))
+            let charge = nsText.substring(with: match.range(at: 2))
+            guard let rewritten = rewrittenFormula(body: body, charge: charge) else { continue }
+            result += nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            result += rewritten
+            lastEnd = match.range.location + match.range.length
+        }
+        result += nsText.substring(from: lastEnd)
+        return result
+    }
+
+    private static func rewrittenFormula(body: String, charge: String) -> String? {
+        // Split into element symbols, brackets and digit runs.
+        var parts: [String] = []
+        var index = body.startIndex
+        while index < body.endIndex {
+            let character = body[index]
+            if character.isUppercase {
+                var symbol = String(character)
+                let nextIndex = body.index(after: index)
+                if nextIndex < body.endIndex, body[nextIndex].isLowercase {
+                    symbol.append(body[nextIndex])
+                    index = body.index(after: nextIndex)
+                } else {
+                    index = nextIndex
+                }
+                parts.append(symbol)
+            } else if character.isNumber {
+                var digits = ""
+                while index < body.endIndex, body[index].isNumber {
+                    digits.append(body[index])
+                    index = body.index(after: index)
+                }
+                parts.append(digits)
+            } else {
+                parts.append(String(character))
+                index = body.index(after: index)
+            }
+        }
+        let elementParts = parts.filter { $0.first?.isUppercase == true }
+        guard !elementParts.isEmpty, elementParts.allSatisfy(elementSymbols.contains) else { return nil }
+        // A number after the first part counts atoms (a leading one, as in
+        // 2H2O, is how many molecules).
+        let hasCount = parts.dropFirst().contains { $0.first?.isNumber == true }
+        let isIon = !charge.isEmpty
+        guard hasCount || isIon else { return nil }
+        // A lone symbol with a sign ("C-", "I+") reads as text, not an ion,
+        // unless it's a common ion.
+        if !hasCount, isIon, elementParts.count == 1, !["Na", "K", "Cl", "H", "Li", "Ag", "F", "Br"].contains(elementParts[0]) { return nil }
+
+        var rewritten = ""
+        for (partIndex, part) in parts.enumerated() {
+            guard part.first?.isNumber == true else {
+                rewritten += part
+                continue
+            }
+            let isLastPart = partIndex == parts.count - 1
+            if isLastPart && isIon {
+                // Fe3+ → Fe³⁺: the number before a charge is the charge's.
+                rewritten += String(part.compactMap { superscripts[$0] })
+            } else if partIndex == 0 {
+                // A leading number is how many: 2H2O.
+                rewritten += part
+            } else {
+                rewritten += String(part.compactMap { subscripts[$0] })
+            }
+        }
+        if isIon { rewritten += charge == "+" ? "⁺" : "⁻" }
+        return rewritten
     }
 
     /// \frac{a}{b} → a/b (with brackets when a part has more than one term).
@@ -975,6 +1138,13 @@ enum DottieMathText {
                 }
                 if contentEnd < text.endIndex && text[contentEnd].isNumber {
                     while contentEnd < text.endIndex && text[contentEnd].isNumber { contentEnd = text.index(after: contentEnd) }
+                    // An ion's charge: SO4^2- → SO₄²⁻.
+                    if contentEnd < text.endIndex, "+-−".contains(text[contentEnd]) {
+                        let afterSign = text.index(after: contentEnd)
+                        if afterSign == text.endIndex || !(text[afterSign].isLetter || text[afterSign].isNumber) {
+                            contentEnd = afterSign
+                        }
+                    }
                 } else if contentEnd == contentStart {
                     contentEnd = text.index(after: contentEnd)
                 }
