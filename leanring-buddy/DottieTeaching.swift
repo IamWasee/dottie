@@ -161,7 +161,7 @@ enum DottieTeaching {
                 "items": ["type": "STRING"],
                 "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
-            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**."],
+            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why."],
             "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
@@ -1127,10 +1127,20 @@ enum DottieMathText {
             var contentEnd = contentStart
             let opener = text[contentStart]
             if opener == "{" || opener == "(" {
+                // To the matching bracket, so x^(3 - (-3)) takes the whole
+                // power, not just up to the first ")".
                 let closer: Character = opener == "{" ? "}" : ")"
                 contentStart = text.index(after: contentStart)
                 contentEnd = contentStart
-                while contentEnd < text.endIndex && text[contentEnd] != closer { contentEnd = text.index(after: contentEnd) }
+                var depth = 1
+                while contentEnd < text.endIndex {
+                    if text[contentEnd] == opener { depth += 1 }
+                    if text[contentEnd] == closer {
+                        depth -= 1
+                        if depth == 0 { break }
+                    }
+                    contentEnd = text.index(after: contentEnd)
+                }
             } else {
                 // A run of digits (maybe signed, like ^-1), or one letter.
                 if opener == "-" || opener == "+" {
@@ -1149,7 +1159,8 @@ enum DottieMathText {
                     contentEnd = text.index(after: contentEnd)
                 }
             }
-            let content = text[contentStart..<contentEnd]
+            // Spaces inside a power don't count: x^(3 + 3) → x³⁺³.
+            let content = text[contentStart..<contentEnd].filter { $0 != " " }
             let mapped = content.compactMap { map[$0] }
             if !content.isEmpty, mapped.count == content.count {
                 output.append(String(mapped))
