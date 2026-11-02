@@ -226,3 +226,119 @@ enum AccessibilitySnap {
         return CGRect(origin: position, size: size)
     }
 }
+
+// MARK: - Marking a button by its word
+
+/// "Circle the like button" often finds just the word "Like" by reading
+/// the screen, and on web pages there's no accessibility frame for the
+/// whole button around it. The 👍 sits to the left of the word, so a
+/// circle around the word alone ended up right of the button's middle.
+/// This looks at the pixels just left of the word and, when an icon is
+/// there, grows the frame to take it in. Only for marks, not clicks: a
+/// click on the word works fine.
+@MainActor
+enum MarkTargetExtender {
+    /// A word's frame grown to the icon beside it, or the frame unchanged.
+    static func frameIncludingIconBeside(_ textFrame: CGRect, displayFrame: CGRect) async -> CGRect {
+        let textHeight = textFrame.height
+        // Only short labels: a sentence has no icon of its own.
+        guard textHeight >= 6, textHeight <= 44, textFrame.width <= 260 else { return textFrame }
+        // A real control around the word already gives the whole button.
+        if AccessibilitySnap.controlFrame(at: CGPoint(x: textFrame.midX, y: textFrame.midY)) != nil { return textFrame }
+
+        let searchWidthToTheLeft = textHeight * 2.4
+        let stripRect = CGRect(
+            x: textFrame.minX - searchWidthToTheLeft,
+            y: textFrame.minY - textHeight * 0.45,
+            width: searchWidthToTheLeft,
+            height: textHeight * 1.9
+        ).intersection(displayFrame)
+        guard !stripRect.isNull, stripRect.width > 4,
+              let screenshot = await DottieDisplayCapture.captureImage(displayFrame: displayFrame, maximumDimension: 3200) else {
+            return textFrame
+        }
+        let pixelsPerPoint = CGFloat(screenshot.width) / displayFrame.width
+        let stripPixelRect = CGRect(
+            x: (stripRect.minX - displayFrame.minX) * pixelsPerPoint,
+            y: (displayFrame.maxY - stripRect.maxY) * pixelsPerPoint,
+            width: stripRect.width * pixelsPerPoint,
+            height: stripRect.height * pixelsPerPoint
+        ).integral
+        guard let stripImage = screenshot.cropping(to: stripPixelRect),
+              let inkColumnRange = inkColumns(in: stripImage) else {
+            return textFrame
+        }
+        // The icon has to end close to the word: a gap of more than about
+        // one letter height means it belongs to something else.
+        let iconRightEdgeInPoints = stripRect.minX + CGFloat(inkColumnRange.upperBound + 1) / pixelsPerPoint
+        let iconLeftEdgeInPoints = stripRect.minX + CGFloat(inkColumnRange.lowerBound) / pixelsPerPoint
+        let gapToWord = textFrame.minX - iconRightEdgeInPoints
+        guard gapToWord <= textHeight * 1.1, textFrame.minX - iconLeftEdgeInPoints <= searchWidthToTheLeft else { return textFrame }
+        let grownFrame = CGRect(x: iconLeftEdgeInPoints, y: textFrame.minY, width: textFrame.maxX - iconLeftEdgeInPoints, height: textFrame.height)
+        print("🎯 Mark grown from the word to the icon beside it: \(Int(textFrame.minX)) → \(Int(grownFrame.minX))")
+        return grownFrame
+    }
+
+    /// The run of columns, nearest the word (the strip's right side),
+    /// that hold something other than the background. nil when the strip
+    /// is plain background.
+    private static func inkColumns(in image: CGImage) -> ClosedRange<Int>? {
+        let width = image.width
+        let height = image.height
+        guard width > 2, height > 2 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        func brightness(column: Int, row: Int) -> Int {
+            let offset = (row * width + column) * 4
+            return (Int(pixels[offset]) * 299 + Int(pixels[offset + 1]) * 587 + Int(pixels[offset + 2]) * 114) / 1000
+        }
+        // The background is the strip's most common brightness.
+        var brightnessCounts = [Int](repeating: 0, count: 256)
+        for row in stride(from: 0, to: height, by: 2) {
+            for column in stride(from: 0, to: width, by: 2) {
+                brightnessCounts[brightness(column: column, row: row)] += 1
+            }
+        }
+        let backgroundBrightness = brightnessCounts.indices.max { brightnessCounts[$0] < brightnessCounts[$1] } ?? 255
+
+        let minimumInkPixelsInColumn = max(2, height / 10)
+        var columnHasInk = [Bool](repeating: false, count: width)
+        for column in 0..<width {
+            var inkPixelCount = 0
+            for row in 0..<height where abs(brightness(column: column, row: row) - backgroundBrightness) > 40 {
+                inkPixelCount += 1
+            }
+            columnHasInk[column] = inkPixelCount >= minimumInkPixelsInColumn
+        }
+        // From the word leftward: skip the gap, then take the icon's
+        // columns until the next real gap.
+        guard let rightmostInkColumn = columnHasInk.lastIndex(of: true) else { return nil }
+        var leftmostInkColumn = rightmostInkColumn
+        var emptyRun = 0
+        let allowedEmptyRun = max(2, height / 6)
+        var column = rightmostInkColumn - 1
+        while column >= 0 {
+            if columnHasInk[column] {
+                leftmostInkColumn = column
+                emptyRun = 0
+            } else {
+                emptyRun += 1
+                if emptyRun > allowedEmptyRun { break }
+            }
+            column -= 1
+        }
+        // A single thin line (a divider) isn't an icon.
+        guard rightmostInkColumn - leftmostInkColumn >= max(3, height / 5) else { return nil }
+        return leftmostInkColumn...rightmostInkColumn
+    }
+}

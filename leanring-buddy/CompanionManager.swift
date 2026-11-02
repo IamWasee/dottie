@@ -1340,7 +1340,9 @@ final class CompanionManager: ObservableObject {
             // guess from Live's rough size, kept modest.
             let markedRect: CGRect
             if let elementFrame = target.elementFrame {
-                markedRect = elementFrame
+                // A word found by reading the screen ("Like") grows to take
+                // in the icon beside it, so the mark sits on the whole button.
+                markedRect = await MarkTargetExtender.frameIncludingIconBeside(elementFrame, displayFrame: target.displayFrame)
             } else {
                 var width: CGFloat = 70
                 if let normalizedSize {
@@ -1349,6 +1351,7 @@ final class CompanionManager: ObservableObject {
                 let height: CGFloat = max(22, min(width * 0.4, 120))
                 markedRect = CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height)
             }
+            print("✏️ draw_on_screen \(shape.rawValue) \"\(label ?? "")\": found \(target.elementFrame == nil ? "nothing, rough box" : "the element") at \(Int(markedRect.midX)),\(Int(markedRect.midY)) size \(Int(markedRect.width))×\(Int(markedRect.height))")
             drawingOverlayManager.add(DottieDrawing(shape: shape, targetRect: markedRect, note: note))
             return "drew a \(shape.rawValue) on screen."
 

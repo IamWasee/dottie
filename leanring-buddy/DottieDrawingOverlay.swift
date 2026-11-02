@@ -457,7 +457,8 @@ private struct DottieFigureView: View {
         case .board(let rect):
             let localBoard = localRect(rect)
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(red: 0.08, green: 0.09, blue: 0.12).opacity(0.93))
+                // Solid, so the page behind doesn't show through the writing.
+                .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(Color.white.opacity(0.14), lineWidth: 1)
