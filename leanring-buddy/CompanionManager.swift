@@ -3733,7 +3733,9 @@ final class CompanionManager: ObservableObject {
         ClickyAnalytics.trackHigherModelHandoff()
 
         do {
-            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            // Sharp enough to read small print and exponents: at 1280 px a
+            // Retina screen's superscripts are a few pixels tall (3 read as 2).
+            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG(maximumDimension: 2560)
             let labeledImages = labeledScreenImages(from: screenCaptures, annotation: currentTurnAnnotation)
             // The last few exchanges are enough context for one hard
             // question, and every screen image already rides along.
