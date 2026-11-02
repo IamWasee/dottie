@@ -1641,6 +1641,9 @@ final class DottieScreenTaskRunner {
             requestContents[0]["parts"] = firstParts
         }
         var requestBody: [String: Any] = [
+            // Groq first (much faster), with the newest screenshot and recent
+            // steps; the Worker uses Gemini when Groq can't take the step.
+            "provider": "groq",
             "model": requestModel,
             "systemInstruction": ["parts": [["text": Self.systemInstruction + (isGameMode ? Self.gameInstruction : "")]]],
             "contents": requestContents,

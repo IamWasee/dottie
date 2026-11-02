@@ -49,6 +49,12 @@ final class DottieScreenJobGuesser {
     }
 
     private static let claudeTimeoutSeconds: Double = 25
+    /// How long a step waits for its menu item or button to show up (apps
+    /// and pages can take a moment), looking again every tenth of a second
+    /// and going the moment it's there.
+    private static let waitForControlSeconds: Double = 2
+    /// How long an app or link gets to open before the next step.
+    private static let waitAfterOpeningSeconds: Double = 1.5
     private static let geminiPlanModel = "gemini-3.6-flash"
 
     private let plannerBot = DottieClaudeBot(
@@ -102,8 +108,15 @@ final class DottieScreenJobGuesser {
         let doneWhenText = (plan["done_when_text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let answer = (plan["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Done."
         if !needsLook, !doneWhenText.isEmpty {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            if await Self.screenShows(doneWhenText) {
+            // The result can take a moment to show: look at 1.5 s, and once
+            // more at 2 s.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            var screenShowsDoneText = await Self.screenShows(doneWhenText)
+            if !screenShowsDoneText {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                screenShowsDoneText = await Self.screenShows(doneWhenText)
+            }
+            if screenShowsDoneText {
                 print("🔮 Guessed the whole job without a screenshot: \(doneStepDescriptions.joined(separator: "; "))")
                 return .finished(answer: answer, steps: doneStepDescriptions)
             }
@@ -210,7 +223,7 @@ final class DottieScreenJobGuesser {
             guard let appName = rawStep["app"] as? String, await DottieScreenTaskRunner.openApplication(named: appName) else {
                 return "couldn't open that app"
             }
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(Self.waitAfterOpeningSeconds * 1_000_000_000))
             return nil
         case "open_url":
             guard let address = rawStep["url"] as? String, let url = URL(string: address), url.scheme != nil else { return "not a link" }
@@ -220,11 +233,11 @@ final class DottieScreenJobGuesser {
             } else {
                 opened = NSWorkspace.shared.open(url)
             }
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(Self.waitAfterOpeningSeconds * 1_000_000_000))
             return opened ? nil : "couldn't open the link"
         case "menu":
             let path = (rawStep["path"] as? [String]) ?? []
-            return Self.selectMenu(path: path)
+            return await Self.retryingUntilItWorks { Self.selectMenu(path: path) }
         case "keys":
             guard let keys = rawStep["keys"] as? String, DottieScreenActionPerformer.press(keyCombination: keys) else { return "couldn't press those keys" }
             return nil
@@ -238,7 +251,7 @@ final class DottieScreenJobGuesser {
             // Away, risky buttons need a yes, which needs a screenshot to
             // show: leave those to the screenshot loop.
             if DottieAwayMode.isRiskyLabel(label) { return "it's a button that pays, sends, posts or deletes, so it needs a look first" }
-            return await Self.clickControl(named: label)
+            return await Self.retryingUntilItWorks { await Self.clickControl(named: label) }
         case "wait":
             let seconds = min(max((rawStep["seconds"] as? NSNumber)?.doubleValue ?? 1, 0.2), 8)
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -246,6 +259,20 @@ final class DottieScreenJobGuesser {
         default:
             return "unknown step"
         }
+    }
+
+    /// Runs a step that finds something by name (a menu item, a button)
+    /// again every tenth of a second until it works or waitForControlSeconds
+    /// pass, so a slow app or page gets time to draw it. nil when it worked,
+    /// else the last problem.
+    private static func retryingUntilItWorks(_ step: () async -> String?) async -> String? {
+        let deadline = Date().addingTimeInterval(waitForControlSeconds)
+        var lastProblem = await step()
+        while lastProblem != nil, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            lastProblem = await step()
+        }
+        return lastProblem
     }
 
     /// Picks a menu item by its titles, starting at the menu bar of the app

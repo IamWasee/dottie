@@ -62,6 +62,121 @@ enum DottieInk: String, CaseIterable {
     }
 }
 
+/// Text Dottie writes (on the board, over the screen, in the notes) can
+/// color or stress parts of itself, to highlight the term that matters:
+/// "{red:key term}" in a pen color, "{highlight:this}" on a marker-yellow
+/// wash, "**this**" in bold. Markings can sit inside each other, and
+/// anything else in braces (x^{10}) is math, left alone.
+enum DottieInkText {
+    struct Segment: Equatable {
+        var text: String
+        var ink: DottieInk?
+        var isBold = false
+        var isHighlighted = false
+    }
+
+    private static let markingNames: Set<String> = Set(DottieInk.allCases.map(\.rawValue)).union(["highlight", "bold"])
+
+    static func segments(in markedText: String) -> [Segment] {
+        var collectedSegments: [Segment] = []
+        collect(markedText, inheriting: Segment(text: ""), into: &collectedSegments)
+        return collectedSegments.filter { !$0.text.isEmpty }
+    }
+
+    /// The words alone, for measuring, speaking and saving.
+    static func plainText(_ markedText: String) -> String {
+        segments(in: markedText).map(\.text).joined()
+    }
+
+    /// Changes the words of every segment (like making the math pretty)
+    /// and keeps the markings around them.
+    static func transformingText(in markedText: String, using transform: (String) -> String) -> String {
+        segments(in: markedText).map { segment in
+            var written = transform(segment.text)
+            if segment.isBold { written = "**\(written)**" }
+            if segment.isHighlighted { written = "{highlight:\(written)}" }
+            if let ink = segment.ink { written = "{\(ink.rawValue):\(written)}" }
+            return written
+        }.joined()
+    }
+
+    /// Ready for a SwiftUI Text: colored runs, bold runs and highlighted
+    /// runs; the rest takes the Text's own color.
+    static func attributedString(_ markedText: String) -> AttributedString {
+        var attributedText = AttributedString()
+        for segment in segments(in: markedText) {
+            var run = AttributedString(segment.text)
+            if let ink = segment.ink { run.swiftUI.foregroundColor = ink.color }
+            if segment.isBold { run.foundation.inlinePresentationIntent = .stronglyEmphasized }
+            if segment.isHighlighted {
+                run.swiftUI.backgroundColor = Color(red: 1.0, green: 0.86, blue: 0.2).opacity(0.38)
+            }
+            attributedText.append(run)
+        }
+        return attributedText
+    }
+
+    private static func collect(_ text: String, inheriting attributes: Segment, into collectedSegments: inout [Segment]) {
+        var plainRun = ""
+        func flushPlainRun() {
+            guard !plainRun.isEmpty else { return }
+            var segment = attributes
+            segment.text = plainRun
+            collectedSegments.append(segment)
+            plainRun = ""
+        }
+
+        var index = text.startIndex
+        while index < text.endIndex {
+            let remainingText = text[index...]
+            // **bold**
+            if remainingText.hasPrefix("**"),
+               let closingRange = text.range(of: "**", range: text.index(index, offsetBy: 2)..<text.endIndex) {
+                flushPlainRun()
+                var boldAttributes = attributes
+                boldAttributes.isBold = true
+                collect(String(text[text.index(index, offsetBy: 2)..<closingRange.lowerBound]), inheriting: boldAttributes, into: &collectedSegments)
+                index = closingRange.upperBound
+                continue
+            }
+            // {red:…}, {highlight:…}, {bold:…}
+            if text[index] == "{",
+               let colonIndex = remainingText.firstIndex(of: ":"),
+               markingNames.contains(String(text[text.index(after: index)..<colonIndex]).lowercased()),
+               let closingBraceIndex = matchingClosingBrace(in: text, openingAt: index) {
+                flushPlainRun()
+                let markingName = String(text[text.index(after: index)..<colonIndex]).lowercased()
+                var markedAttributes = attributes
+                switch markingName {
+                case "highlight": markedAttributes.isHighlighted = true
+                case "bold": markedAttributes.isBold = true
+                default: markedAttributes.ink = DottieInk(rawValue: markingName)
+                }
+                collect(String(text[text.index(after: colonIndex)..<closingBraceIndex]), inheriting: markedAttributes, into: &collectedSegments)
+                index = text.index(after: closingBraceIndex)
+                continue
+            }
+            plainRun.append(text[index])
+            index = text.index(after: index)
+        }
+        flushPlainRun()
+    }
+
+    private static func matchingClosingBrace(in text: String, openingAt openingIndex: String.Index) -> String.Index? {
+        var depth = 0
+        var index = openingIndex
+        while index < text.endIndex {
+            if text[index] == "{" { depth += 1 }
+            if text[index] == "}" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+}
+
 /// One piece of a teaching drawing (explain_on_screen): a pen stroke, a
 /// dot, a filled area, handwritten text, or the dark board it all sits on.
 /// Points are global AppKit coordinates (bottom-left origin).
@@ -100,7 +215,7 @@ struct DottieFigure: Identifiable, Equatable {
     }
 
     static func estimatedTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
-        CGFloat(text.count) * fontSize * 0.56 + 6
+        CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.56 + 6
     }
 }
 
@@ -208,6 +323,11 @@ private struct DottieDrawingCanvasView: View {
             }
         }
         .frame(width: screenFrame.width, height: screenFrame.height, alignment: .topLeading)
+        // The window covers the whole display, menu bar and notch included.
+        // Without this, on a Mac with a notch SwiftUI kept the canvas out of
+        // the notch's safe area, so every mark landed lower than the thing
+        // it marked.
+        .ignoresSafeArea()
         .animation(.easeOut(duration: 0.4), value: overlayManager.drawings)
         .animation(.easeOut(duration: 0.5), value: overlayManager.figures)
     }
@@ -337,7 +457,8 @@ private struct DottieFigureView: View {
         case .board(let rect):
             let localBoard = localRect(rect)
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(red: 0.08, green: 0.09, blue: 0.12).opacity(0.93))
+                // Solid, so the page behind doesn't show through the writing.
+                .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(Color.white.opacity(0.14), lineWidth: 1)
@@ -365,7 +486,7 @@ private struct DottieFigureView: View {
 
         case .text(let text, let origin, let fontSize):
             let localOrigin = localPoint(origin)
-            Text(text)
+            Text(DottieInkText.attributedString(text))
                 .font(Self.handwriting(size: fontSize))
                 .foregroundColor(figure.ink.color)
                 .fixedSize()

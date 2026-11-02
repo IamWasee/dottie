@@ -34,8 +34,8 @@ enum CompanionScreenCaptureUtility {
     }
 
     /// Captures every display (cursor screen first) at up to 1280px on the
-    /// long edge, excluding this app's own windows.
-    private static func captureAllDisplayImages() async throws -> [CapturedDisplayImage] {
+    /// long edge (or the given size), excluding this app's own windows.
+    private static func captureAllDisplayImages(maximumDimension: Int = 1280) async throws -> [CapturedDisplayImage] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
         guard !content.displays.isEmpty else {
@@ -89,7 +89,8 @@ enum CompanionScreenCaptureUtility {
             let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
 
             let configuration = SCStreamConfiguration()
-            let maxDimension = 1280
+            // Never larger than the display itself.
+            let maxDimension = min(maximumDimension, max(display.width, display.height) * 2)
             let aspectRatio = CGFloat(display.width) / CGFloat(display.height)
             if display.width >= display.height {
                 configuration.width = maxDimension
@@ -132,8 +133,8 @@ enum CompanionScreenCaptureUtility {
     /// Captures all connected displays as JPEG data, labeling each with
     /// whether the user's cursor is on that screen. This gives the AI
     /// full context across multiple monitors.
-    static func captureAllScreensAsJPEG() async throws -> [CompanionScreenCapture] {
-        let capturedDisplayImages = try await captureAllDisplayImages()
+    static func captureAllScreensAsJPEG(maximumDimension: Int = 1280) async throws -> [CompanionScreenCapture] {
+        let capturedDisplayImages = try await captureAllDisplayImages(maximumDimension: maximumDimension)
 
         var capturedScreens: [CompanionScreenCapture] = []
         for capturedDisplayImage in capturedDisplayImages {

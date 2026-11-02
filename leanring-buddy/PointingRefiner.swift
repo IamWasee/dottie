@@ -462,6 +462,9 @@ private enum VisionElementLocator {
         request.setValue(String(workerAttemptSeconds), forHTTPHeaderField: "x-dottie-attempt-seconds")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestBody: [String: Any] = [
+            // Groq first (the Worker asks it for pixels and hands back
+            // box_2d); Gemini when Groq can't answer.
+            "provider": "groq",
             "model": model,
             "contents": [[
                 "role": "user",

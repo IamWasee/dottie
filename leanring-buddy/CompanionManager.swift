@@ -1027,6 +1027,7 @@ final class CompanionManager: ObservableObject {
     multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
+    worked math, step-by-step solutions, formulas and study notes go on the notes board with write_notes (headings, lists, equations, pictures; place right to continue the same working on one line), always in real symbols (¹⁄₁₆x⁴, ×, √, H₂O), never math spelled out in words; color the part that matters with {red:…} or {highlight:…}. Make it easy for someone who doesn't think in symbols: the rule first in plain words, one small change per line with a short "why" beside it, matching colors for parts that go together, and the answer highlighted at the end; say the explanation out loud in everyday words. when you write numbers (notes, the screen, typed answers), use digits for math, measurements, money, times, dates, scores and anything 10 or more, and words for small everyday counts in a sentence ("two ways", "the first step"); if the user says which they want, keep to it.
     whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked. any ask to draw, sketch, graph, chart or mark something goes to explain_on_screen too, whether or not they say "on my screen": a grid, a graph with a downward trend, an arrow at something. when they ask to add to or change what you drew, call it again with add_to_last true and only the new steps. when they circled something (a problem, a question, a table) and ask you to solve it, do an example or graph it on screen, draw onto or beside it with the anchor circled; for a graph of a table or numbers, use a chart step (text circled graphs exactly what they circled), never lines placed by guessing.
 
     second brain: it remembers everything you and the helpers did with the user, and can dig through their files, command-line tools and connected apps.
@@ -1339,7 +1340,9 @@ final class CompanionManager: ObservableObject {
             // guess from Live's rough size, kept modest.
             let markedRect: CGRect
             if let elementFrame = target.elementFrame {
-                markedRect = elementFrame
+                // A word found by reading the screen ("Like") grows to take
+                // in the icon beside it, so the mark sits on the whole button.
+                markedRect = await MarkTargetExtender.frameIncludingIconBeside(elementFrame, displayFrame: target.displayFrame)
             } else {
                 var width: CGFloat = 70
                 if let normalizedSize {
@@ -1348,6 +1351,7 @@ final class CompanionManager: ObservableObject {
                 let height: CGFloat = max(22, min(width * 0.4, 120))
                 markedRect = CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height)
             }
+            print("✏️ draw_on_screen \(shape.rawValue) \"\(label ?? "")\": found \(target.elementFrame == nil ? "nothing, rough box" : "the element") at \(Int(markedRect.midX)),\(Int(markedRect.midY)) size \(Int(markedRect.width))×\(Int(markedRect.height))")
             drawingOverlayManager.add(DottieDrawing(shape: shape, targetRect: markedRect, note: note))
             return "drew a \(shape.rawValue) on screen."
 
@@ -1564,7 +1568,7 @@ final class CompanionManager: ObservableObject {
             if let drawn = DottieTeaching.draw(step, in: space) {
                 let leadInSeconds = 0.4
                 penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
-                                          caption: step.caption.map(DottieMathText.pretty), displayFrame: displayFrame)
+                                          caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)
                 try? await Task.sleep(nanoseconds: UInt64(leadInSeconds * 1_000_000_000))
                 if Task.isCancelled { break }
                 drawingOverlayManager.addFigures(drawn.figures)
@@ -3729,7 +3733,9 @@ final class CompanionManager: ObservableObject {
         ClickyAnalytics.trackHigherModelHandoff()
 
         do {
-            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            // Sharp enough to read small print and exponents: at 1280 px a
+            // Retina screen's superscripts are a few pixels tall (3 read as 2).
+            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG(maximumDimension: 2560)
             let labeledImages = labeledScreenImages(from: screenCaptures, annotation: currentTurnAnnotation)
             // The last few exchanges are enough context for one hard
             // question, and every screen image already rides along.
