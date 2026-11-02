@@ -166,7 +166,7 @@ struct HomeAdminView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
-            hint("Turn this on for code editors like VS Code, IntelliJ or Xcode, in a new or empty file: indentation and the brackets, quotes and tags the editor adds itself aren't doubled. Anything after the cursor is cleared at each new line. You can also say \u{201C}type what's on my clipboard like a human\u{201D} to Dottie.")
+            hint("Turn this on for code editors like VS Code, IntelliJ or Xcode, in a new or empty file: the editor's own indentation and the brackets, quotes and tags it adds itself don't double up. Anything after the cursor is cleared at each new line. You can also say \u{201C}type what's on my clipboard like a human\u{201D} to Dottie.")
         }
         .padding(16)
         .background(cardBackground)

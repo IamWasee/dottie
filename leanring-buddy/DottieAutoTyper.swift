@@ -35,11 +35,11 @@ final class DottieAutoTyper: ObservableObject {
         var typoChance: Double = 0.03
         /// Longer stops now and then, as if thinking about the next words.
         var thinkingPauses = true
-        /// For a new file in a code editor: the text's own indentation after
-        /// a new line is skipped (the editor indents), and before each new
-        /// line whatever the editor added after the cursor (closing
-        /// brackets, quotes and tags, a closing-brace line) is cleared, so
-        /// nothing ends up doubled. Kept under its old name so saved
+        /// For a new file in a code editor: before each new line whatever
+        /// the editor added after the cursor (closing brackets, quotes and
+        /// tags, a closing-brace line) is cleared, and after it the
+        /// editor's own indentation is swapped for the text's, so nothing
+        /// ends up doubled. Kept under its old name so saved
         /// settings still load.
         var editorIndentsNewLines = false
         /// Seconds between Start and the first key, to click into the field.
@@ -174,6 +174,19 @@ final class DottieAutoTyper: ObservableObject {
         let roughMinutes = Double(wordCount) / max(settings.wordsPerMinute, 1)
         let roughDuration = roughMinutes < 1 ? "under a minute" : "about \(Int(roughMinutes.rounded())) minute\(Int(roughMinutes.rounded()) == 1 ? "" : "s")"
         return "typing \(wordCount) words into the app in front in \(Int(countdownSeconds.rounded())) seconds, at about \(Int(settings.wordsPerMinute)) words a minute with typos and fixes; it'll take \(roughDuration). esc stops it. say so in a few words."
+    }
+
+    /// Types the text and returns once it's done: true when all of it was
+    /// typed, false when it was stopped (Esc) or couldn't start. For
+    /// features that type several things in a row (code_on_screen).
+    func typeAndWait(_ text: String, intoCodeEditor: Bool) async -> Bool {
+        let savedCodeEditorSetting = settings.editorIndentsNewLines
+        settings.editorIndentsNewLines = intoCodeEditor
+        defer { settings.editorIndentsNewLines = savedCodeEditorSetting }
+        start(text: text, startDelaySeconds: 0)
+        guard let runningTypingTask = typingTask else { return false }
+        await runningTypingTask.value
+        return phase == .finished
     }
 
     func stop() {
@@ -316,14 +329,6 @@ final class DottieAutoTyper: ObservableObject {
             characterIndex += 1
             typedCharacterCount = characterIndex
 
-            // An editor that indents new lines itself would double the text's
-            // own indentation, so it's skipped.
-            if character == "\n" && settings.editorIndentsNewLines {
-                while characterIndex < characters.count, characters[characterIndex] == " " || characters[characterIndex] == "\t" {
-                    characterIndex += 1
-                }
-                typedCharacterCount = characterIndex
-            }
 
             await pause(seconds: pauseAfterTyping(character, nextCharacter: characterIndex < characters.count ? characters[characterIndex] : nil))
         }
@@ -343,6 +348,15 @@ final class DottieAutoTyper: ObservableObject {
                 await clearWhatTheEditorAddedAfterTheCursor(lineEndsWithWord: previousCharacter.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false)
             }
             pressKey(keyCode: CGKeyCode(kVK_Return))
+            if settings.editorIndentsNewLines {
+                // The editor indents the new line its own way; that's
+                // selected and removed so the text's own indentation (which
+                // Python and YAML depend on) is what ends up there.
+                await pause(seconds: 0.03)
+                pressKey(keyCode: CGKeyCode(kVK_LeftArrow), flags: [.maskShift, .maskCommand])
+                await pause(seconds: 0.03)
+                pressKey(keyCode: CGKeyCode(kVK_ForwardDelete))
+            }
         case "\t":
             pressKey(keyCode: CGKeyCode(kVK_Tab))
         default:
