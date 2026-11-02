@@ -89,6 +89,9 @@ final class DottieNeedleRouter {
     }
 
     private func toolCallPlan(for normalizedRequest: String, geminiIsDown: Bool) async -> DottieInstantLane.Plan? {
+        if let knownPlace = await knownPlaceByMeaning(for: normalizedRequest) {
+            return .instantCommands([.openPlace(url: URL(fileURLWithPath: knownPlace.path), placeName: knownPlace.displayName)])
+        }
         let toolset = DottieNeedleToolset.toolset(forNormalizedRequest: normalizedRequest)
         guard let answer = await engine.toolCalls(
             for: normalizedRequest,
@@ -118,6 +121,36 @@ final class DottieNeedleRouter {
             guard let organizerStep = DottieNeedleToolset.organizerStep(for: callsToActOn[0], fullRequest: normalizedRequest) else { return nil }
             return .toolSteps([DottieLearnedShortcut.Step(functionName: organizerStep.functionName, arguments: organizerStep.arguments)])
         }
+    }
+
+    /// "open the thing for my coffee shop" when a place was saved as
+    /// "coffee store website": the closest known file or folder by meaning,
+    /// only when it's clearly closer than the next one. Vectors of the
+    /// places' names are kept, so later asks only embed the ask itself.
+    private func knownPlaceByMeaning(for normalizedRequest: String) async -> DottieKnownPlaces.Place? {
+        let openVerbs = ["open up ", "open ", "pull up ", "bring up ", "show me ", "go to "]
+        guard let openVerb = openVerbs.first(where: { normalizedRequest.hasPrefix($0) }) else { return nil }
+        let spokenTarget = DottieKnownPlaces.spokenForm(String(normalizedRequest.dropFirst(openVerb.count)))
+        guard !spokenTarget.isEmpty, let askVector = await meaningVector(forKeptText: spokenTarget) else { return nil }
+
+        var scoredPlaces: [(place: DottieKnownPlaces.Place, similarity: Float)] = []
+        for place in DottieKnownPlaces.shared.recentPlaces(limit: 150) {
+            var bestSimilarity: Float = -1
+            for spokenName in place.spokenNames.prefix(4) {
+                guard let nameVector = await meaningVector(forKeptText: spokenName) else { continue }
+                bestSimilarity = max(bestSimilarity, DottieNeedleEngine.similarity(askVector, nameVector))
+            }
+            scoredPlaces.append((place, bestSimilarity))
+        }
+        scoredPlaces.sort { $0.similarity > $1.similarity }
+        guard let bestMatch = scoredPlaces.first, bestMatch.similarity >= 0.8 else { return nil }
+        let secondSimilarity = scoredPlaces.count > 1 ? scoredPlaces[1].similarity : -1
+        guard bestMatch.similarity - secondSimilarity >= 0.05,
+              FileManager.default.fileExists(atPath: bestMatch.place.path) else { return nil }
+        // These words become one of its names, so next time the strict
+        // lane opens it without Needle.
+        DottieKnownPlaces.shared.remember(path: bestMatch.place.path, spokenName: spokenTarget)
+        return bestMatch.place
     }
 
     /// 2. The next time these exact words come, the strict lane replays it
