@@ -80,7 +80,7 @@ enum DottieMCPPresets {
                 summary: "Issues, pull requests and code on GitHub.",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 config: web("https://api.githubcopilot.com/mcp/", token: "GITHUB_TOKEN"),
-                fields: [.init(placeholder: "GITHUB_TOKEN", label: "GitHub token", kind: .secret, hint: "A personal access token.")],
+                fields: [.init(placeholder: "GITHUB_TOKEN", label: "GitHub token", kind: .secret, hint: "Filled in for you when you're signed in to the GitHub CLI (gh). Otherwise make a token with access to your repositories, private ones included.")],
                 keyLink: "https://github.com/settings/personal-access-tokens/new"
             ),
             DottieMCPPreset(
@@ -328,7 +328,10 @@ enum DottieMCPPresets {
     /// sign-in page, keeps the sign-in in ~/.mcp-auth and speaks plain
     /// stdio to Dottie and her helpers. Addresses from each maker's docs,
     /// cross-checked against github.com/jaw9c/awesome-remote-mcp-servers
-    /// (Oct 2026).
+    /// (Oct 2026). GitHub isn't one: its hosted server doesn't let apps
+    /// register for a browser sign-in, so mcp-remote's sign-in ends in a
+    /// 404. GitHub uses a token instead (the "github" preset), taken from
+    /// the GitHub CLI's sign-in when there is one.
     static var signInConnectors: [DottieMCPPreset] {
         [
             signIn("notion-connector", "Notion", "Pages and databases in your Notion.", "doc.richtext", "https://mcp.notion.com/mcp"),
@@ -346,7 +349,6 @@ enum DottieMCPPresets {
             signIn("paypal-connector", "PayPal", "Invoices, orders and payments in PayPal. Dottie asks before paying anything.", "dollarsign.circle", "https://mcp.paypal.com/sse"),
             signIn("square-connector", "Square", "Orders, items and customers in Square.", "square", "https://mcp.squareup.com/sse"),
             signIn("stripe-connector", "Stripe", "Payments, customers and invoices in Stripe.", "creditcard", "https://mcp.stripe.com"),
-            signIn("github-connector", "GitHub", "Repositories, issues and pull requests.", "chevron.left.forwardslash.chevron.right", "https://api.githubcopilot.com/mcp"),
             signIn("vercel-connector", "Vercel", "Your Vercel projects and deployments.", "triangle", "https://mcp.vercel.com"),
             signIn("netlify-connector", "Netlify", "Your Netlify sites and deploys.", "globe", "https://netlify-mcp.netlify.app/mcp"),
             signIn("cloudflare-connector", "Cloudflare", "Workers, storage and databases in your Cloudflare account.", "cloud", "https://bindings.mcp.cloudflare.com/sse"),

@@ -2,16 +2,22 @@
 //  DottiePhoneBridge.swift
 //  leanring-buddy
 //
-//  Text Dottie from your phone. The user makes their own Telegram bot
-//  (free, two minutes with @BotFather), pastes its token in Home → Phone,
-//  and sends the bot the pairing code once. From then on, messages from
-//  that one chat go to a "Phone" helper on the Mac, and the helper's reply
-//  comes back as a text. The Mac talks to Telegram directly; nothing goes
-//  through Dottie's server. Messages from anyone else are ignored.
+//  Text Dottie from your phone with Telegram. Two ways in:
+//  - Dottie's own bot (the easy way): Home → Phone → Connect shows a link
+//    and a QR code; opening it on the phone pairs it in one tap. Messages
+//    go through Dottie's server (worker/src/phoneRelay.ts), which only
+//    passes them between that phone and this Mac.
+//  - Your own bot (advanced): made with @BotFather, its token pasted in
+//    Home → Phone, then the 6-digit pairing code sent to it. The Mac then
+//    talks to Telegram directly.
+//  Either way, messages from that one chat go to a "Phone" helper on the
+//  Mac, and the helper's reply comes back as a text. Messages from anyone
+//  else are ignored.
 //
 
 import Combine
 import Foundation
+import Security
 
 @MainActor
 final class DottiePhoneBridge: ObservableObject {
@@ -26,6 +32,11 @@ final class DottiePhoneBridge: ObservableObject {
     @Published private(set) var botUsername: String?
     @Published private(set) var pairedChatID: Int64?
     @Published private(set) var pairingCode = DottiePhoneBridge.newPairingCode()
+    /// True when this Mac uses Dottie's own bot instead of the user's.
+    @Published private(set) var usesDottieBot = false
+    /// Dottie's bot: the t.me link that pairs the phone in one tap.
+    @Published private(set) var pairingLink: URL?
+    private var pairingLinkMadeAt: Date?
     /// Wrong pairing codes per Telegram chat since the code was made.
     private var failedPairingAttemptsByChatID: [Int64: Int] = [:]
     private static let maximumPairingAttemptsPerChat = 5
@@ -61,31 +72,123 @@ final class DottiePhoneBridge: ObservableObject {
     var isWaitingForAnswer: Bool { pendingQuestion != nil }
 
     private static let pairedChatDefaultsKey = "phonePairedChatID"
-    private static let updateOffsetDefaultsKey = "phoneUpdateOffset"
+    private static let ownBotUpdateOffsetDefaultsKey = "phoneUpdateOffset"
+    /// Dottie's bot numbers each Mac's updates itself, so its offset is kept
+    /// apart from the own bot's.
+    private static let dottieBotUpdateOffsetDefaultsKey = "phoneDottieBotUpdateOffset"
+    private static let usesDottieBotDefaultsKey = "phoneUsesDottieBot"
+    private var updateOffsetDefaultsKey: String {
+        usesDottieBot ? Self.dottieBotUpdateOffsetDefaultsKey : Self.ownBotUpdateOffsetDefaultsKey
+    }
     private var botToken: String?
     private var pollingTask: Task<Void, Never>?
 
     init() {
         let savedChatID = UserDefaults.standard.object(forKey: Self.pairedChatDefaultsKey) as? NSNumber
         pairedChatID = savedChatID?.int64Value
-        if let savedToken = Self.readToken(), !savedToken.isEmpty {
+        if UserDefaults.standard.bool(forKey: Self.usesDottieBotDefaultsKey) {
+            Task { _ = await connectWithDottieBot() }
+        } else if let savedToken = Self.readToken(), !savedToken.isEmpty {
             Task { _ = await connect(token: savedToken) }
         }
     }
 
     // MARK: - Setup
 
+    /// The easy way: Dottie's own bot, through Dottie's server. Gets a
+    /// one-time pairing link (unless a phone is already paired) and starts
+    /// listening. Returns an error message, or nil when connected.
+    func connectWithDottieBot() async -> String? {
+        let wasUsingDottieBot = usesDottieBot || UserDefaults.standard.bool(forKey: Self.usesDottieBotDefaultsKey)
+        let wasUsingDottieBotThisSession = usesDottieBot
+        usesDottieBot = true
+        guard let botInfo = await callTelegram(method: "getMe", parameters: [:]) as? [String: Any],
+              let username = botInfo["username"] as? String else {
+            usesDottieBot = wasUsingDottieBotThisSession
+            statusText = "Dottie's phone bot isn't reachable right now."
+            if wasUsingDottieBot && !wasUsingDottieBotThisSession {
+                // At launch with no internet yet: try again in a minute.
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    guard let self, !self.isConnected,
+                          UserDefaults.standard.bool(forKey: Self.usesDottieBotDefaultsKey) else { return }
+                    _ = await self.connectWithDottieBot()
+                }
+            }
+            return "Dottie's phone bot isn't reachable right now. Check the internet connection, or use your own bot below."
+        }
+        pollingTask?.cancel()
+        pollingTask = nil
+        if !wasUsingDottieBot {
+            // Switching from the user's own bot: that chat was paired there.
+            botToken = nil
+            Self.saveToken(nil)
+            forgetPairedChat()
+        }
+        UserDefaults.standard.set(true, forKey: Self.usesDottieBotDefaultsKey)
+        botUsername = username
+        isConnected = true
+        if pairedChatID == nil, let problem = await requestDottieBotPairingLink() {
+            return problem
+        }
+        statusText = pairedChatID == nil ? "Waiting for your phone." : "Connected."
+        startPolling()
+        return nil
+    }
+
+    /// A fresh one-time code and link from Dottie's server.
+    private func requestDottieBotPairingLink() async -> String? {
+        guard var request = relayRequest(route: "/phone/pair", timeout: 20) else { return "Dottie's server isn't set up." }
+        request.httpBody = Data("{}".utf8)
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let answer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (answer["ok"] as? Bool) == true,
+              let code = answer["pairingCode"] as? String,
+              let linkText = answer["link"] as? String,
+              let link = URL(string: linkText) else {
+            statusText = "Couldn't get a pairing link."
+            return "Couldn't get a pairing link from Dottie's server. Try again in a moment."
+        }
+        pairingCode = code
+        pairingLink = link
+        pairingLinkMadeAt = Date()
+        failedPairingAttemptsByChatID = [:]
+        return nil
+    }
+
+    /// Dottie's server keeps a pairing link for 15 minutes; Home → Phone
+    /// asks for a new one when it's shown with an old one, or on request.
+    func refreshPairingLinkIfOld(force: Bool = false) async {
+        guard usesDottieBot, isConnected, pairedChatID == nil else { return }
+        if !force, let pairingLinkMadeAt, Date().timeIntervalSince(pairingLinkMadeAt) < 10 * 60 { return }
+        _ = await requestDottieBotPairingLink()
+    }
+
     /// Checks the token with Telegram, saves it and starts listening.
     /// Returns an error message, or nil when connected.
     func connect(token rawToken: String) async -> String? {
         let token = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard token.contains(":") else { return "That doesn't look like a bot token. It looks like 123456:ABC-DEF…" }
-        guard let botInfo = await callTelegram(token: token, method: "getMe", parameters: [:]) as? [String: Any],
+        let wasUsingDottieBot = usesDottieBot
+        let previousToken = botToken
+        usesDottieBot = false
+        botToken = token
+        guard let botInfo = await callTelegram(method: "getMe", parameters: [:]) as? [String: Any],
               let username = botInfo["username"] as? String else {
+            usesDottieBot = wasUsingDottieBot
+            botToken = previousToken
             statusText = "Telegram didn't accept that token."
             return "Telegram didn't accept that token. Copy it again from @BotFather."
         }
-        botToken = token
+        pollingTask?.cancel()
+        UserDefaults.standard.set(false, forKey: Self.usesDottieBotDefaultsKey)
+        pairingLink = nil
+        if wasUsingDottieBot {
+            // A chat paired through Dottie's bot can't be reached through
+            // this one; the new bot gets its own pairing code.
+            Task { await self.tellDottieServerToUnpair() }
+            forgetPairedChat()
+        }
         Self.saveToken(token)
         botUsername = username
         isConnected = true
@@ -97,6 +200,14 @@ final class DottiePhoneBridge: ObservableObject {
     func disconnect() {
         pollingTask?.cancel()
         pollingTask = nil
+        if usesDottieBot {
+            // Dottie's server forgets the chat, so it stops routing it here.
+            Task { await self.tellDottieServerToUnpair() }
+            forgetPairedChat()
+        }
+        usesDottieBot = false
+        UserDefaults.standard.set(false, forKey: Self.usesDottieBotDefaultsKey)
+        pairingLink = nil
         botToken = nil
         Self.saveToken(nil)
         isConnected = false
@@ -105,11 +216,29 @@ final class DottiePhoneBridge: ObservableObject {
     }
 
     func unpair() {
+        forgetPairedChat()
+        guard usesDottieBot else {
+            statusText = isConnected ? "Waiting for the pairing code." : ""
+            return
+        }
+        statusText = "Waiting for your phone."
+        Task {
+            await tellDottieServerToUnpair()
+            _ = await requestDottieBotPairingLink()
+        }
+    }
+
+    private func forgetPairedChat() {
         pairedChatID = nil
         UserDefaults.standard.removeObject(forKey: Self.pairedChatDefaultsKey)
         pairingCode = Self.newPairingCode()
         failedPairingAttemptsByChatID = [:]
-        statusText = isConnected ? "Waiting for the pairing code." : ""
+    }
+
+    private func tellDottieServerToUnpair() async {
+        guard var request = relayRequest(route: "/phone/unpair", timeout: 20) else { return }
+        request.httpBody = Data("{}".utf8)
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     private static func newPairingCode() -> String {
@@ -119,7 +248,7 @@ final class DottiePhoneBridge: ObservableObject {
     // MARK: - Sending
 
     func send(_ text: String) async {
-        guard let botToken, let pairedChatID else { return }
+        guard isConnected, let pairedChatID else { return }
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
         appendLog(isFromPhone: false, trimmedText)
@@ -128,15 +257,15 @@ final class DottiePhoneBridge: ObservableObject {
         while !remainingText.isEmpty {
             let piece = remainingText.prefix(3900)
             remainingText = remainingText.dropFirst(piece.count)
-            _ = await callTelegram(token: botToken, method: "sendMessage", parameters: ["chat_id": pairedChatID, "text": String(piece)])
+            _ = await callTelegram(method: "sendMessage", parameters: ["chat_id": pairedChatID, "text": String(piece)])
         }
     }
 
     /// Sends a file into the chat. Folders (like some Keynote files) go as
     /// a zip. Returns nil when sent, else why not.
     func sendDocument(_ fileURL: URL, caption: String) async -> String? {
-        guard let botToken, let pairedChatID,
-              let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendDocument") else { return "the phone isn't paired." }
+        guard isConnected, let pairedChatID,
+              var request = methodRequest("sendDocument", timeout: 180) else { return "the phone isn't paired." }
         var uploadURL = fileURL
         var temporaryZipURL: URL?
         var isDirectory: ObjCBool = false
@@ -156,15 +285,15 @@ final class DottiePhoneBridge: ObservableObject {
 
         let boundary = "dottie-\(UUID().uuidString)"
         var body = Data()
-        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n\(pairedChatID)\r\n".utf8))
+        // Dottie's server fills in the chat itself.
+        if !usesDottieBot {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n\(pairedChatID)\r\n".utf8))
+        }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n".utf8))
         let safeFileName = uploadURL.lastPathComponent.replacingOccurrences(of: "\"", with: "")
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"document\"; filename=\"\(safeFileName)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
         body.append(fileData)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 180
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         guard let (_, response) = try? await URLSession.shared.data(for: request),
@@ -179,7 +308,7 @@ final class DottiePhoneBridge: ObservableObject {
     /// answer. A screenshot goes first when given. nil when the phone isn't
     /// paired, a newer question replaced this one, or time ran out.
     func ask(_ question: String, choices: [String] = [], screenshotJPEG: Data? = nil, timeoutSeconds: Double = 1800) async -> String? {
-        guard let botToken, let pairedChatID else { return nil }
+        guard isConnected, let pairedChatID else { return nil }
         resolvePendingQuestion(with: nil)
         if let screenshotJPEG {
             await sendPhoto(screenshotJPEG, caption: "What's on the screen now")
@@ -195,7 +324,7 @@ final class DottiePhoneBridge: ObservableObject {
             parameters["reply_markup"] = ["inline_keyboard": [buttons]]
         }
         appendLog(isFromPhone: false, question + (choices.isEmpty ? "" : " [\(choices.joined(separator: " / "))]"))
-        let sentMessage = await callTelegram(token: botToken, method: "sendMessage", parameters: parameters) as? [String: Any]
+        let sentMessage = await callTelegram(method: "sendMessage", parameters: parameters) as? [String: Any]
         let messageID = sentMessage?["message_id"] as? Int
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             pendingQuestion = PendingQuestion(questionID: questionID, choices: choices, messageID: messageID, continuation: continuation)
@@ -216,15 +345,15 @@ final class DottiePhoneBridge: ObservableObject {
         question.continuation.resume(returning: answer)
         // The buttons go away once answered, so an old question can't be
         // tapped later, and the message says what was picked.
-        if let botToken, let pairedChatID, let messageID = question.messageID, !question.choices.isEmpty {
+        if isConnected, let pairedChatID, let messageID = question.messageID, !question.choices.isEmpty {
             Task {
-                _ = await callTelegram(token: botToken, method: "editMessageReplyMarkup", parameters: [
+                _ = await callTelegram(method: "editMessageReplyMarkup", parameters: [
                     "chat_id": pairedChatID,
                     "message_id": messageID,
                     "reply_markup": ["inline_keyboard": [[[String: Any]]]()]
                 ])
                 if let answer {
-                    _ = await callTelegram(token: botToken, method: "sendMessage", parameters: [
+                    _ = await callTelegram(method: "sendMessage", parameters: [
                         "chat_id": pairedChatID,
                         "text": "→ \(answer)",
                         "reply_to_message_id": messageID
@@ -236,9 +365,9 @@ final class DottiePhoneBridge: ObservableObject {
 
     /// A button under a question was tapped.
     private func handleButtonTap(_ callbackQuery: [String: Any]) async {
-        guard let botToken else { return }
+        guard isConnected else { return }
         if let callbackQueryID = callbackQuery["id"] as? String {
-            _ = await callTelegram(token: botToken, method: "answerCallbackQuery", parameters: ["callback_query_id": callbackQueryID])
+            _ = await callTelegram(method: "answerCallbackQuery", parameters: ["callback_query_id": callbackQueryID])
         }
         let fromUser = callbackQuery["from"] as? [String: Any]
         let tappedByChatID = (fromUser?["id"] as? NSNumber)?.int64Value
@@ -256,21 +385,18 @@ final class DottiePhoneBridge: ObservableObject {
     }
 
     func sendPhoto(_ jpegData: Data, caption: String) async {
-        guard let botToken, let pairedChatID,
-              let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendPhoto") else { return }
+        guard isConnected, let pairedChatID,
+              var request = methodRequest("sendPhoto", timeout: 60) else { return }
         let boundary = "dottie-\(UUID().uuidString)"
         var body = Data()
         func appendField(_ name: String, _ value: String) {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
         }
-        appendField("chat_id", String(pairedChatID))
+        if !usesDottieBot { appendField("chat_id", String(pairedChatID)) }
         appendField("caption", caption)
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"screen.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
         body.append(jpegData)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 60
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         _ = try? await URLSession.shared.data(for: request)
@@ -283,10 +409,10 @@ final class DottiePhoneBridge: ObservableObject {
         pollingTask?.cancel()
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, let token = self.botToken else { return }
-                let offset = UserDefaults.standard.integer(forKey: Self.updateOffsetDefaultsKey)
+                guard let self, self.isConnected else { return }
+                let offsetDefaultsKey = self.updateOffsetDefaultsKey
+                let offset = UserDefaults.standard.integer(forKey: offsetDefaultsKey)
                 let updates = await self.callTelegram(
-                    token: token,
                     method: "getUpdates",
                     parameters: ["timeout": 50, "offset": offset, "allowed_updates": ["message", "callback_query"]],
                     timeout: 65
@@ -298,7 +424,7 @@ final class DottiePhoneBridge: ObservableObject {
                 }
                 for update in updates {
                     if let updateID = update["update_id"] as? Int {
-                        UserDefaults.standard.set(updateID + 1, forKey: Self.updateOffsetDefaultsKey)
+                        UserDefaults.standard.set(updateID + 1, forKey: offsetDefaultsKey)
                     }
                     if let message = update["message"] as? [String: Any] {
                         await self.handle(message)
@@ -316,7 +442,21 @@ final class DottiePhoneBridge: ObservableObject {
               (chat["type"] as? String) == "private",
               let chatID = (chat["id"] as? NSNumber)?.int64Value else { return }
         let text = (message["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let botToken else { return }
+        guard isConnected else { return }
+
+        if pairedChatID == nil, usesDottieBot {
+            // Dottie's bot: the phone opened the pairing link, which sends
+            // "/start <code>". Dottie's server already matched the code to
+            // this Mac; checking it here too costs nothing.
+            let startWords = text.split(separator: " ").map(String.init)
+            guard startWords.count == 2, startWords[0].hasPrefix("/start"), startWords[1] == pairingCode else { return }
+            self.pairedChatID = chatID
+            UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
+            pairingLink = nil
+            statusText = "Paired with your phone."
+            await send("Paired! Text me anything and a helper on your Mac will do it. Try: status, screenshot, or \"check my calendar for tomorrow\".")
+            return
+        }
 
         guard let pairedChatID else {
             // The code has to be the whole message (digits only), and each
@@ -342,7 +482,7 @@ final class DottiePhoneBridge: ObservableObject {
                         statusText = "Too many wrong pairing codes, so there's a new one."
                     }
                 }
-                _ = await callTelegram(token: botToken, method: "sendMessage", parameters: [
+                _ = await callTelegram(method: "sendMessage", parameters: [
                     "chat_id": chatID,
                     "text": "Send the 6-digit pairing code shown in Dottie → Home → Phone."
                 ])
@@ -353,8 +493,10 @@ final class DottiePhoneBridge: ObservableObject {
         guard chatID == pairedChatID, !text.isEmpty else { return }
         appendLog(isFromPhone: true, text)
 
-        let command = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ .!"))
+        var command = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ .!"))
             .replacingOccurrences(of: "’", with: "'")
+        // Opening the pairing link again sends "/start <code>".
+        if text.hasPrefix("/start") { command = "start" }
         // A question Dottie asked is waiting: a typed answer (or yes/no to
         // one with buttons) answers it instead of starting a new job.
         if let question = pendingQuestion {
@@ -409,13 +551,36 @@ final class DottiePhoneBridge: ObservableObject {
         if log.count > 40 { log.removeFirst(log.count - 40) }
     }
 
-    /// Calls a Bot API method and returns its "result", or nil.
-    private func callTelegram(token: String, method: String, parameters: [String: Any], timeout: TimeInterval = 30) async -> Any? {
-        guard let url = URL(string: "https://api.telegram.org/bot\(token)/\(method)"),
-              let body = try? JSONSerialization.data(withJSONObject: parameters) else { return nil }
+    /// A Bot API call: straight to Telegram with the user's own bot, or
+    /// through Dottie's server for Dottie's bot (which fills in the chat).
+    private func methodRequest(_ method: String, timeout: TimeInterval) -> URLRequest? {
+        if usesDottieBot {
+            return relayRequest(route: "/phone/telegram/\(method)", timeout: timeout)
+        }
+        guard let botToken, let url = URL(string: "https://api.telegram.org/bot\(botToken)/\(method)") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
+        return request
+    }
+
+    /// A request to Dottie's server's phone routes, signed with this Mac's
+    /// install key (its mailbox there is named by the key's hash).
+    private func relayRequest(route: String, timeout: TimeInterval) -> URLRequest? {
+        guard ClickyWorkerConfiguration.isWorkerConfigured else { return nil }
+        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: route))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Self.installKey(), forHTTPHeaderField: "x-dottie-phone-key")
+        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        return request
+    }
+
+    /// Calls a Bot API method and returns its "result", or nil.
+    private func callTelegram(method: String, parameters: [String: Any], timeout: TimeInterval = 30) async -> Any? {
+        guard var request = methodRequest(method, timeout: timeout),
+              let body = try? JSONSerialization.data(withJSONObject: parameters) else { return nil }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         guard let (data, _) = try? await URLSession.shared.data(for: request),
@@ -444,5 +609,25 @@ final class DottiePhoneBridge: ObservableObject {
 
     private static func readToken() -> String? {
         (try? String(contentsOf: tokenFileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// This Mac's key for Dottie's bot: 32 random bytes made once and kept
+    /// in a private file next to the token. Whoever has it can read this
+    /// Mac's messages on Dottie's server, so it never leaves the Mac except
+    /// in that header.
+    private static func installKey() -> String {
+        let keyFileURL = tokenFileURL.deletingLastPathComponent().appendingPathComponent("phone-relay-key")
+        if let savedKey = (try? String(contentsOf: keyFileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines),
+           savedKey.count >= 32 {
+            return savedKey
+        }
+        var randomBytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes) != errSecSuccess {
+            randomBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+        }
+        let newKey = randomBytes.map { String(format: "%02x", $0) }.joined()
+        try? FileManager.default.createDirectory(at: keyFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: keyFileURL.path, contents: Data(newKey.utf8), attributes: [.posixPermissions: 0o600])
+        return newKey
     }
 }

@@ -389,7 +389,7 @@ final class DottieSelfCheck: ObservableObject {
             return phoneBridge.pairedChatID != nil
                 ? Item(id: "telegram", title: "Phone (Telegram)", level: .good, detail: "Connected\(phoneBridge.botUsername.map { " as @\($0)" } ?? "") and paired with your phone.")
                 : Item(id: "telegram", title: "Phone (Telegram)", level: .warning,
-                       detail: "Connected, but no phone is paired. Send the pairing code from Home → Phone to the bot.")
+                       detail: "Connected, but no phone is paired. Scan the code in Home → Phone with your phone and tap Start in Telegram.")
         }
         if !phoneBridge.statusText.isEmpty || phoneBridge.pairedChatID != nil {
             return Item(id: "telegram", title: "Phone (Telegram)", level: .problem,

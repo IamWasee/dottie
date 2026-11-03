@@ -19,6 +19,7 @@ final class DottieFunPack {
     /// The companion, for the tool modules (they're static).
     private(set) weak var companion: CompanionManager?
     private var celebrationCancellable: AnyCancellable?
+    private var keepAwakeCancellables: Set<AnyCancellable> = []
 
     private init() {}
 
@@ -26,6 +27,24 @@ final class DottieFunPack {
         guard self.companion == nil else { return }
         self.companion = companion
         DottieKeepWorking.shared.attach(to: companion)
+
+        // The Mac (and by default its screen) stays awake while helpers
+        // work and while the user is away, not only during 24/7 jobs.
+        companion.clickyRoster.$runningAgentIDs
+            .map { !$0.isEmpty }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { isAnyHelperWorking in
+                DottieKeepAwake.shared.hold(.helperWork, isAnyHelperWorking)
+            }
+            .store(in: &keepAwakeCancellables)
+        DottieAwayMode.shared.$isAway
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { isAway in
+                DottieKeepAwake.shared.hold(.awayMode, isAway)
+            }
+            .store(in: &keepAwakeCancellables)
 
         // Level-ups get a card (with confetti) in the notch.
         celebrationCancellable = DottieLevels.shared.$celebration

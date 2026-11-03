@@ -84,7 +84,10 @@ final class DottieScreenTaskRunner {
     var onWillClick: (@MainActor (_ point: CGPoint, _ displayFrame: CGRect) async -> Void)?
 
     private(set) var currentTaskText: String?
-    private var runTask: Task<Void, Never>?
+    private var runTask: Task<Void, Never>? {
+        // The screen stays on (no screensaver, no idle lock) while a job runs.
+        didSet { DottieKeepAwake.shared.hold(.screenJob, runTask != nil) }
+    }
     private var isGameMode = false
     /// How far the character moves per second of a held key, in screen
     /// points, learned from each walk_to (games differ a lot).

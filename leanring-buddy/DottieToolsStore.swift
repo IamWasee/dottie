@@ -50,6 +50,7 @@ final class DottieToolsStore: ObservableObject {
         }
         Task {
             await DottieCommandLocator.warmUp()
+            await self.fixUpGitHubServers()
             self.refreshStatuses()
             self.scheduleHelperSync(delay: 5)
             // So helpers hear which command-line tools are on the Mac.
@@ -308,6 +309,39 @@ final class DottieToolsStore: ObservableObject {
         if value.contains("${") || value.isEmpty { return value }
         DottieToolsKeychain.setValue(value, server: server, name: placeholder)
         return "${\(placeholder)}"
+    }
+
+    /// GitHub's hosted server takes a token, never a browser sign-in. An
+    /// old sign-in connector (mcp-remote, always a 404) becomes the token
+    /// setup, and a GitHub server with no token yet gets the GitHub CLI's
+    /// token when the user is signed in to gh.
+    private func fixUpGitHubServers() async {
+        let gitHubServerNames = serverNames.filter { DottieGitHubLogin.isGitHubServer(file.mcpServers[$0]) }
+        guard !gitHubServerNames.isEmpty else { return }
+        var cliToken: String?
+        var askedCLI = false
+        for serverName in gitHubServerNames {
+            guard let tokenPreset = DottieMCPPresets.preset(withID: "github") else { return }
+            if file.mcpServers[serverName]?.command != nil {
+                print("🔧 Moving \(serverName) from browser sign-in (GitHub answers 404) to a token")
+                file.mcpServers[serverName] = tokenPreset.config
+                var settings = file.dottie.servers[serverName] ?? DottieMCPServerSettings()
+                settings.preset = tokenPreset.id
+                file.dottie.servers[serverName] = settings
+                file.save()
+                statuses[serverName] = nil
+            }
+            let tokenNames = file.mcpServers[serverName]?.placeholderNames ?? []
+            for tokenName in tokenNames where !hasKey(tokenName, for: serverName) {
+                if !askedCLI {
+                    cliToken = await DottieGitHubLogin.cliToken()
+                    askedCLI = true
+                }
+                guard let cliToken else { continue }
+                DottieToolsKeychain.setValue(cliToken, server: serverName, name: tokenName)
+                print("🔑 \(serverName) uses the GitHub CLI's sign-in")
+            }
+        }
     }
 
     func setKey(_ value: String, name: String, for serverName: String) {

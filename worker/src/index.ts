@@ -70,11 +70,16 @@ interface Env {
   NIM_MODELS?: string;
   /** Biggest request (prompt + answer, in tokens) sent to Groq; 7000 fits its free plan. */
   GROQ_MAX_REQUEST_TOKENS?: string;
+  /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
+  TELEGRAM_BOT_TOKEN?: string;
+  PHONE_RELAY: DurableObjectNamespace;
 }
 
 const BUSY_STATUSES = [429, 500, 503, 504];
 
 import { answerWithProvider, canAnswer, fittedForProvider, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
+import { handlePhoneRelay } from "./phoneRelay";
+export { PhoneRelay } from "./phoneRelay";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -98,6 +103,11 @@ export default {
       }
     }
 
+    // Telegram's webhook for Dottie's phone bot carries its own secret.
+    if (url.pathname === "/telegram/webhook") {
+      return (await handlePhoneRelay(request, url, env))!;
+    }
+
     // Open to anyone: says the Worker is up and has a key, nothing more.
     // The release workflow and Dottie's Settings use it to check an address.
     if (request.method === "GET" && url.pathname === "/health") {
@@ -107,6 +117,7 @@ export default {
         hasGeminiKey: Boolean(env.GEMINI_API_KEY),
         hasGroqKey: Boolean(env.GROQ_API_KEY),
         requiresAppSecret: Boolean(env.APP_SHARED_SECRET),
+        hasPhoneBot: Boolean(env.TELEGRAM_BOT_TOKEN),
       });
     }
 
@@ -116,6 +127,9 @@ export default {
     }
 
     try {
+      const phoneRelayResponse = await handlePhoneRelay(request, url, env);
+      if (phoneRelayResponse) return phoneRelayResponse;
+
       if (request.method === "GET" && url.pathname === "/search") {
         return await handleSearch(url);
       }

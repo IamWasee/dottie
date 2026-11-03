@@ -449,6 +449,7 @@ private struct HomeAddPresetSheet: View {
     @State private var values: [String: String] = [:]
     @State private var folders: [String: [String]] = [:]
     @State private var problem: String?
+    @State private var tokenCameFromGitHubCLI = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -482,6 +483,9 @@ private struct HomeAddPresetSheet: View {
                 Link("Get a key", destination: url)
                     .font(.system(size: 11))
             }
+            if tokenCameFromGitHubCLI {
+                HomeHint("Filled in from your GitHub CLI sign-in, so there's nothing to copy. Just press Add.")
+            }
             if preset.needsKey {
                 HomeHint("Keys are kept in your Mac's Keychain, not in a file.")
             }
@@ -504,6 +508,14 @@ private struct HomeAddPresetSheet: View {
         .padding(20)
         .frame(width: 420)
         .background(DS.Colors.surface1)
+        .task {
+            // GitHub: use the GitHub CLI's sign-in instead of making a token.
+            guard DottieGitHubLogin.isGitHubServer(preset.config),
+                  (values["GITHUB_TOKEN"] ?? "").isEmpty,
+                  let cliToken = await DottieGitHubLogin.cliToken() else { return }
+            values["GITHUB_TOKEN"] = cliToken
+            tokenCameFromGitHubCLI = true
+        }
     }
 
     @ViewBuilder

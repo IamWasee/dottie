@@ -16,6 +16,9 @@ name: Release
 #                          only answers copies of Dottie built with it.
 #   GROQ_API_KEY           optional; free key from https://console.groq.com/keys.
 #                          Live meeting help and quick asks answer on Groq.
+#   TELEGRAM_BOT_TOKEN     optional; Dottie's own Telegram bot (make it once
+#                          with @BotFather). Home → Phone then pairs a phone
+#                          in one tap.
 #   DOTTIE_RELEASES_TOKEN  needed with DOTTIE_RELEASES_REPOSITORY below: a
 #                          fine-grained token with Contents read and write on
 #                          that releases repository only.
@@ -81,6 +84,9 @@ jobs:
           # Optional free key from console.groq.com: quick asks and live
           # meeting help answer on Groq first.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Optional: Dottie's own Telegram bot, so people pair their phone
+          # in one tap (Home → Phone) instead of making a bot themselves.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           npm ci
           npx wrangler deploy 2>&1 | tee deploy.log
@@ -93,6 +99,9 @@ jobs:
           fi
           if [ -n "$GROQ_API_KEY" ]; then
             printf '%s' "$GROQ_API_KEY" | npx wrangler secret put GROQ_API_KEY
+          fi
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+            printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN
           fi
           worker_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
