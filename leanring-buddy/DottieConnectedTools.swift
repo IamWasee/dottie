@@ -111,20 +111,52 @@ enum DottieConnectedTools: DottieToolModule {
             }
         }
 
+        let isGitHubServer = DottieGitHubLogin.isGitHubServer(store.config(for: serverName))
+        if isGitHubServer, let rememberedArguments = DottieGitHubLogin.argumentsWithRememberedRepository(toolArguments) {
+            toolArguments = rememberedArguments
+        }
         var result = await store.callTool(server: serverName, tool: resolvedToolName, arguments: toolArguments)
-        if DottieGitHubLogin.isGitHubServer(store.config(for: serverName)),
-           result.range(of: "404", options: .literal) != nil || result.localizedCaseInsensitiveContains("not found") {
-            result += "\n" + DottieGitHubLogin.notFoundHint
+        if isGitHubServer, DottieGitHubLogin.looksNotFound(result), resolvedToolName != "get_me" {
             // Who the token belongs to, so the model stops guessing owners
             // (and a broken sign-in shows up as one).
-            if resolvedToolName != "get_me" {
-                let whoAmIResult = await store.callTool(server: serverName, tool: "get_me", arguments: [:])
+            let whoAmIResult = await store.callTool(server: serverName, tool: "get_me", arguments: [:])
+            if let correctedResult = await retriedWithClosestRepository(
+                store: store, serverName: serverName, toolName: resolvedToolName,
+                toolArguments: toolArguments, whoAmIResult: whoAmIResult) {
+                result = correctedResult
+            } else {
+                result += "\n" + DottieGitHubLogin.notFoundHint
                 result += "\n" + DottieGitHubLogin.signedInAccountNote(fromGetMeResult: whoAmIResult)
             }
         }
         result = compactedJSONText(result)
         guard result.count > maximumResultLength else { return result }
         return String(result.prefix(maximumResultLength)) + "\n…(cut short; \(result.count) characters in all)"
+    }
+
+    /// After a GitHub 404 on a call that named a repository: lists the
+    /// signed-in user's repositories, tries the closest name once ("dotty"
+    /// → IamWasee/dottie, since speech writes Dottie as dotty), and
+    /// remembers it when that works. Nil when nothing close was found or
+    /// the retry failed too.
+    private static func retriedWithClosestRepository(
+        store: DottieToolsStore, serverName: String, toolName: String,
+        toolArguments: [String: Any], whoAmIResult: String
+    ) async -> String? {
+        guard let requestedRepositoryName = toolArguments["repo"] as? String,
+              let login = DottieGitHubLogin.login(fromGetMeResult: whoAmIResult) else { return nil }
+        let searchResult = await store.callTool(
+            server: serverName, tool: "search_repositories",
+            arguments: ["query": "user:\(login)", "perPage": 100])
+        let repositoryFullNames = DottieGitHubLogin.repositoryFullNames(inSearchResult: searchResult)
+        let requestedOwner = toolArguments["owner"] as? String ?? ""
+        guard let closestFullName = DottieGitHubLogin.closestRepositoryFullName(to: requestedRepositoryName, among: repositoryFullNames),
+              closestFullName.caseInsensitiveCompare("\(requestedOwner)/\(requestedRepositoryName)") != .orderedSame,
+              let correctedArguments = DottieGitHubLogin.arguments(toolArguments, pointingAt: closestFullName) else { return nil }
+        let retriedResult = await store.callTool(server: serverName, tool: toolName, arguments: correctedArguments)
+        guard !DottieGitHubLogin.looksNotFound(retriedResult) else { return nil }
+        DottieGitHubLogin.rememberRepository(fullName: closestFullName, forSpokenName: requestedRepositoryName)
+        return "(there's no \(requestedOwner)/\(requestedRepositoryName); this is \(closestFullName), the user's closest repository name. say which one you used.)\n" + retriedResult
     }
 
     /// Many apps answer with pretty-printed JSON; the indents and empty

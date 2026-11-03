@@ -61,12 +61,122 @@ enum DottieGitHubLogin {
     /// its login (so owner/repo can be built from it), or that the sign-in
     /// itself is broken and the user has to sign in again.
     static func signedInAccountNote(fromGetMeResult getMeResult: String) -> String {
-        if let loginRange = getMeResult.range(of: #""login"\s*:\s*"([^"]+)""#, options: .regularExpression) {
-            let loginField = String(getMeResult[loginRange])
-            let login = loginField.split(separator: "\"").dropFirst(2).first.map(String.init) ?? loginField
+        if let login = login(fromGetMeResult: getMeResult) {
             return "the GitHub token belongs to \(login). use \(login) as the owner for their own repositories (exact repo name from search_repositories if unsure). if it's still 404 with \(login)/<repo>, the repository belongs to another account the token can't see: tell the user to sign in again with Sign in with GitHub in Home → Tools, with the account that owns it."
         }
         return "get_me failed too, so the GitHub sign-in itself isn't working (\(getMeResult.prefix(160))). tell the user in one sentence to open Home → Tools → GitHub and press Sign in with GitHub; don't keep retrying."
+    }
+
+    /// The account login in GitHub's get_me answer, if there is one.
+    static func login(fromGetMeResult getMeResult: String) -> String? {
+        guard let loginRange = getMeResult.range(of: #""login"\s*:\s*"([^"]+)""#, options: .regularExpression) else { return nil }
+        let loginField = String(getMeResult[loginRange])
+        return loginField.split(separator: "\"").dropFirst(2).first.map(String.init)
+    }
+
+    /// Whether a GitHub tool answer is a "not found".
+    static func looksNotFound(_ resultText: String) -> Bool {
+        resultText.range(of: "404", options: .literal) != nil || resultText.localizedCaseInsensitiveContains("not found")
+    }
+
+    // MARK: Spoken repository names
+
+    // Speech recognition writes "Dottie" as "dotty", so a spoken repository
+    // name is often a near miss of the real one and GitHub answers 404.
+    // After a 404, the user's own repositories are listed, the closest name
+    // is tried once, and a match that works is remembered for next time.
+
+    private static let rememberedRepositoriesDefaultsKey = "DottieGitHubRememberedRepositories"
+
+    /// Lowercase letters and digits only: "Dottie-Releases" → "dottiereleases".
+    static func normalizedRepositoryName(_ repositoryName: String) -> String {
+        String(repositoryName.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
+    }
+
+    /// The same name with the usual speech-to-text spellings folded together
+    /// ("dotty", "dottie", "dottey" and "doty" all become "doti").
+    static func soundAlikeRepositoryName(_ repositoryName: String) -> String {
+        var foldedName = normalizedRepositoryName(repositoryName)
+        for (spokenEnding, foldedEnding) in [("ie", "i"), ("ey", "i"), ("y", "i")] where foldedName.hasSuffix(spokenEnding) {
+            foldedName = String(foldedName.dropLast(spokenEnding.count)) + foldedEnding
+            break
+        }
+        var withoutDoubleLetters = ""
+        for character in foldedName where character != withoutDoubleLetters.last {
+            withoutDoubleLetters.append(character)
+        }
+        return withoutDoubleLetters
+    }
+
+    /// "owner/repo" of the repository whose name is closest to what was
+    /// asked for, or nil when none is close enough to be the same one.
+    static func closestRepositoryFullName(to requestedRepositoryName: String, among repositoryFullNames: [String]) -> String? {
+        let requestedSoundAlike = soundAlikeRepositoryName(requestedRepositoryName)
+        guard !requestedSoundAlike.isEmpty else { return nil }
+        let allowedEditDistance = max(1, requestedSoundAlike.count / 4)
+        var bestMatch: (fullName: String, editDistance: Int)?
+        for repositoryFullName in repositoryFullNames {
+            let repositoryName = repositoryFullName.split(separator: "/").last.map(String.init) ?? repositoryFullName
+            let editDistance = levenshteinDistance(requestedSoundAlike, soundAlikeRepositoryName(repositoryName))
+            guard editDistance <= allowedEditDistance else { continue }
+            if bestMatch == nil || editDistance < bestMatch!.editDistance {
+                bestMatch = (repositoryFullName, editDistance)
+            }
+        }
+        return bestMatch?.fullName
+    }
+
+    /// Every "owner/repo" in a search_repositories answer.
+    static func repositoryFullNames(inSearchResult searchResult: String) -> [String] {
+        guard let fullNamePattern = try? NSRegularExpression(pattern: #""full_name"\s*:\s*"([^"/]+/[^"]+)""#) else { return [] }
+        let searchRange = NSRange(searchResult.startIndex..., in: searchResult)
+        return fullNamePattern.matches(in: searchResult, range: searchRange).compactMap { match in
+            Range(match.range(at: 1), in: searchResult).map { String(searchResult[$0]) }
+        }
+    }
+
+    /// A repository that worked after a near miss, so the same spoken name
+    /// goes straight to it next time.
+    static func rememberRepository(fullName repositoryFullName: String, forSpokenName spokenRepositoryName: String) {
+        var rememberedRepositories = UserDefaults.standard.dictionary(forKey: rememberedRepositoriesDefaultsKey) as? [String: String] ?? [:]
+        rememberedRepositories[normalizedRepositoryName(spokenRepositoryName)] = repositoryFullName
+        UserDefaults.standard.set(rememberedRepositories, forKey: rememberedRepositoriesDefaultsKey)
+    }
+
+    /// The tool arguments with a remembered near-miss repository name
+    /// swapped for the real owner/repo, or nil when there's nothing to swap.
+    static func argumentsWithRememberedRepository(_ toolArguments: [String: Any]) -> [String: Any]? {
+        guard let spokenRepositoryName = toolArguments["repo"] as? String,
+              let rememberedRepositories = UserDefaults.standard.dictionary(forKey: rememberedRepositoriesDefaultsKey) as? [String: String],
+              let repositoryFullName = rememberedRepositories[normalizedRepositoryName(spokenRepositoryName)] else { return nil }
+        return arguments(toolArguments, pointingAt: repositoryFullName)
+    }
+
+    /// The tool arguments with owner and repo set from "owner/repo".
+    static func arguments(_ toolArguments: [String: Any], pointingAt repositoryFullName: String) -> [String: Any]? {
+        let nameParts = repositoryFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard nameParts.count == 2 else { return nil }
+        var correctedArguments = toolArguments
+        correctedArguments["owner"] = nameParts[0]
+        correctedArguments["repo"] = nameParts[1]
+        return correctedArguments
+    }
+
+    private static func levenshteinDistance(_ firstText: String, _ secondText: String) -> Int {
+        let firstCharacters = Array(firstText)
+        let secondCharacters = Array(secondText)
+        if firstCharacters.isEmpty { return secondCharacters.count }
+        if secondCharacters.isEmpty { return firstCharacters.count }
+        var previousRow = Array(0...secondCharacters.count)
+        for firstIndex in 1...firstCharacters.count {
+            var currentRow = [firstIndex] + Array(repeating: 0, count: secondCharacters.count)
+            for secondIndex in 1...secondCharacters.count {
+                let substitutionCost = firstCharacters[firstIndex - 1] == secondCharacters[secondIndex - 1] ? 0 : 1
+                currentRow[secondIndex] = min(previousRow[secondIndex] + 1, currentRow[secondIndex - 1] + 1, previousRow[secondIndex - 1] + substitutionCost)
+            }
+            previousRow = currentRow
+        }
+        return previousRow[secondCharacters.count]
     }
 }
 
