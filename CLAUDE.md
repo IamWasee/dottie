@@ -46,6 +46,7 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 | `POST /dictate` | `…/models/{dictation model}:generateContent` | Hold-to-dictate: a WAV recording in, cleaned-up text out, in one call |
 | `POST /tts` | `…/models/{tts model}:generateContent` | Gemini TTS, returned as raw 24kHz PCM (classic mode) |
 | `* /gemini/*` | `generativelanguage.googleapis.com/*` | Passthrough for Gemini CLI (agents). The CLI sends the shared secret as its API key; the Worker swaps in the real one |
+| `* /gemini-only/*` | `generativelanguage.googleapis.com/*` | The same passthrough without the Groq-first step, for a helper set to Gemini in Home → Helpers |
 | `GET /search?q=` | Bing, DuckDuckGo, Wikipedia | Free web search (Google Search grounding is quota-blocked on free keys): asks Bing and DuckDuckGo at once and keeps the results covering the most of the question; `debug=1` shows each engine |
 | `GET /config` | none | Echoes the configured model names |
 | `POST /phone/pair`, `/phone/unpair`, `/phone/telegram/<method>` (incl. `/phone/`) | Telegram Bot API, `PhoneRelay` Durable Object | Dottie's own phone bot (`worker/src/phoneRelay.ts`): one-tap pairing link, each Mac's mailbox (long-polled getUpdates) and sends forced to its paired chat. The Mac signs with its install key (`x-dottie-phone-key`) |
