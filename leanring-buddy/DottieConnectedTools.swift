@@ -36,7 +36,7 @@ enum DottieConnectedTools: DottieToolModule {
             ),
             DottieTool(
                 name: "use_app_tool",
-                description: "Runs one tool of a connected app. Check apps_and_tools first for the app's tool names and arguments.",
+                description: "Runs one tool of a connected app. Check apps_and_tools first for the app's tool names and arguments. Try this before doing the same thing on the screen.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -59,6 +59,7 @@ enum DottieConnectedTools: DottieToolModule {
         guard !connectedNames.isEmpty else { return "" }
         return """
         the user connected these apps: \(connectedNames.joined(separator: ", ")). to use one, call apps_and_tools with that app to see its tools, then use_app_tool to run one (never through find_tool or use_tool). say what you're doing in a few words while it runs.
+        connected apps come first: before doing a task by hand (do_task_on_screen, clicking, the browser, a helper) or saying you can't, check whether one of these apps can do it, and if apps_and_tools shows a tool that fits, use it. only go to the screen when no connected app can, or its tool failed twice; then say so in a few words.
         """
     }
 
@@ -99,7 +100,11 @@ enum DottieConnectedTools: DottieToolModule {
             }
         }
 
-        let result = await store.callTool(server: serverName, tool: resolvedToolName, arguments: toolArguments)
+        var result = await store.callTool(server: serverName, tool: resolvedToolName, arguments: toolArguments)
+        if DottieGitHubLogin.isGitHubServer(store.config(for: serverName)),
+           result.range(of: "404", options: .literal) != nil || result.localizedCaseInsensitiveContains("not found") {
+            result += "\n" + DottieGitHubLogin.notFoundHint
+        }
         guard result.count > maximumResultLength else { return result }
         return String(result.prefix(maximumResultLength)) + "\n…(cut short; \(result.count) characters in all)"
     }

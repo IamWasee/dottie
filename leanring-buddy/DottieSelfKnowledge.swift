@@ -559,29 +559,19 @@ extension DottieSelfKnowledge {
                 id: "phone",
                 title: "Texting me from your phone",
                 keywords: ["phone", "telegram", "text", "texting", "phone bridge", "bot", "botfather", "pair", "mobile"],
-                summary: "Text me from your phone with Telegram: a helper called Phone does the job on this Mac and texts you back. Set up your own bot (about two minutes) and pair your phone with a code. The Mac has to be awake with me running.",
+                summary: "Text me from your phone with Telegram: a helper called Phone does the job on this Mac and texts you back. Click Connect in Home → Phone, scan the code with your phone and tap Start in Telegram. Nothing to set up. (Your own BotFather bot still works, under advanced.) The Mac has to be awake with me running.",
                 whereToFind: "Home → Phone.",
                 place: Place(section: .phone),
                 steps: [
                     WalkStep(
-                        target: .text(["Open BotFather"]),
-                        say: "On your phone, open Telegram and message BotFather. This button opens it too.",
-                        isNeeded: { companionManager?.phoneBridge.isConnected != true }
-                    ),
-                    WalkStep(
-                        target: .text(["Bot token"]),
-                        say: "Send BotFather slash newbot, pick a name and a username ending in bot, then paste the token it gives you here.",
-                        isNeeded: { companionManager?.phoneBridge.isConnected != true }
-                    ),
-                    WalkStep(
                         target: .text(["Connect"]),
-                        say: "Now click Connect.",
+                        say: "Click Connect.",
                         wait: .click,
                         isNeeded: { companionManager?.phoneBridge.isConnected != true }
                     ),
                     WalkStep(
-                        target: .text(["send it this code"]),
-                        say: "Open your bot in Telegram and send it this code. That pairs your phone.",
+                        target: .text(["Scan with your phone"]),
+                        say: "Point your phone's camera at this code, open it in Telegram and tap Start. That pairs your phone.",
                         isNeeded: {
                             companionManager?.phoneBridge.isConnected == true && companionManager?.phoneBridge.pairedChatID == nil
                         },
@@ -595,7 +585,7 @@ extension DottieSelfKnowledge {
                         secondsToWaitForNeed: 4
                     )
                 ],
-                doneLine: "That's it. Once you're paired, text your bot a job anytime and I'll do it here."
+                doneLine: "That's it. Once you're paired, text me a job from Telegram anytime and I'll do it here."
             ),
             Feature(
                 id: "smarthome",
@@ -1128,7 +1118,7 @@ extension DottieSelfKnowledge {
         guard let phoneBridge = companionManager?.phoneBridge else { return "unknown." }
         let botName = phoneBridge.botUsername.map { " @\($0)" } ?? ""
         if phoneBridge.pairedChatID != nil { return "paired through\(botName)." }
-        if phoneBridge.isConnected { return "bot\(botName) connected, phone not paired yet (Home → Phone shows the code)." }
+        if phoneBridge.isConnected { return "bot\(botName) connected, phone not paired yet (Home → Phone shows the code to scan)." }
         return "not set up (Home → Phone)."
     }
 

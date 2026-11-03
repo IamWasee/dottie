@@ -282,6 +282,7 @@ enum DottieAwayModeTools: DottieToolModule {
 /// Away mode and the switches for how Dottie works without the user.
 struct HomeWorkingAloneSettings: View {
     @ObservedObject private var awayMode = DottieAwayMode.shared
+    @ObservedObject private var keepAwake = DottieKeepAwake.shared
     @AppStorage(DottieScreenJobClaudeBrain.isEnabledDefaultsKey) private var screenJobsUseClaude = true
     @AppStorage(DottieScreenJobGuesser.isEnabledDefaultsKey) private var screenJobsGuessFirst = true
     @AppStorage(DottieWorkRoutes.helpersCanUseHomeFoldersDefaultsKey) private var helpersCanUseHomeFolders = true
@@ -295,6 +296,10 @@ struct HomeWorkingAloneSettings: View {
             .toggleStyle(.switch)
             .pointerCursor()
             hint("Dottie keeps working while you're gone. Questions, and anything that pays, sends, posts or deletes, go to your phone (Home → Phone) with Allow and Deny buttons. Text \u{201C}report\u{201D} to see what she's done.")
+            Toggle("Keep the screen on while Dottie works", isOn: $keepAwake.keepsScreenOnWhileWorking)
+                .toggleStyle(.switch)
+                .pointerCursor()
+            hint("While a screen job, a helper, a 24/7 job or away mode runs, the screen doesn't dim, the screensaver doesn't start and the Mac doesn't lock itself, so Dottie can keep using it. A screensaver that's already on is closed when work starts. If you lock the Mac yourself, she can't see past the lock (no app can): screen jobs wait and your phone gets a text, everything else carries on.")
             Toggle("Screen jobs think with Claude Sonnet", isOn: $screenJobsUseClaude)
                 .toggleStyle(.switch)
                 .pointerCursor()

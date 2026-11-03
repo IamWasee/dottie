@@ -821,7 +821,7 @@ private struct HomeSettingsView: View {
         "Check everything": "check test diagnose self-check problems broken working",
         "Instant commands": "instant fast speed quick no ai learn learned shortcut shortcuts open app window snap music volume when i say",
         "Instant replays": "replay record recording clip video save",
-        "Working on its own": "away mode phone approve allow deny claude sonnet screen jobs guess folders documents desktop downloads background report",
+        "Working on its own": "away mode phone approve allow deny claude sonnet screen jobs guess folders documents desktop downloads background report screen awake screensaver sleep lock caffeinate",
         "Voice": "voice personality speak sound live classic mode tone talk",
         "Shortcuts": "shortcut hotkey keyboard key talk dictate circle annotate cursor ctrl option",
         "Everyday": "everyday focus shortcuts habits",

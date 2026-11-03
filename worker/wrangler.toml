@@ -11,6 +11,19 @@ compatibility_date = "2024-09-23"
 #   NVIDIA_API_KEY     - optional; free key from https://build.nvidia.com. NIM
 #                        models answer text/picture requests when every Gemini
 #                        model is busy.
+#   TELEGRAM_BOT_TOKEN - optional; Dottie's own Telegram bot (made once with
+#                        @BotFather). People then pair their phone in one tap
+#                        from Home → Phone instead of making a bot themselves.
+
+# Phone pairing (phoneRelay.ts): each Mac's mailbox and the pairing codes.
+# SQLite-backed Durable Objects work on the free Workers plan.
+[[durable_objects.bindings]]
+name = "PHONE_RELAY"
+class_name = "PhoneRelay"
+
+[[migrations]]
+tag = "v1-phone-relay"
+new_sqlite_classes = ["PhoneRelay"]
 
 [vars]
 GEMINI_LIVE_MODEL = "gemini-3.8-live"
