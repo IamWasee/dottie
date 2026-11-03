@@ -1121,6 +1121,27 @@ final class ClickyRoster: ObservableObject {
         }
     }
 
+    /// Keeps connected apps' full tool descriptions out of every Claude
+    /// step. With ENABLE_TOOL_SEARCH on, Claude Code sends only a list of
+    /// tool names; the helper looks a tool up and loads its description
+    /// when a task needs it. Without it, every step of every helper carried
+    /// every connector's tools (about 47k tokens a step on a Mac with ten
+    /// connectors), which is most of why helper steps were slow. MausBot
+    /// keeps project settings, so the helper's own folder carries it.
+    fileprivate static func ensureClaudeToolSearch(inWorkspace agentWorkspaceURL: URL) {
+        let claudeSettingsFolderURL = agentWorkspaceURL.appendingPathComponent(".claude", isDirectory: true)
+        let claudeSettingsFileURL = claudeSettingsFolderURL.appendingPathComponent("settings.json")
+        var settingsObject = (try? JSONSerialization.jsonObject(with: Data(contentsOf: claudeSettingsFileURL))) as? [String: Any] ?? [:]
+        var environmentSettings = settingsObject["env"] as? [String: Any] ?? [:]
+        guard environmentSettings["ENABLE_TOOL_SEARCH"] == nil else { return }
+        environmentSettings["ENABLE_TOOL_SEARCH"] = "true"
+        settingsObject["env"] = environmentSettings
+        try? FileManager.default.createDirectory(at: claudeSettingsFolderURL, withIntermediateDirectories: true)
+        if let settingsData = try? JSONSerialization.data(withJSONObject: settingsObject, options: [.prettyPrinted, .sortedKeys]) {
+            try? settingsData.write(to: claudeSettingsFileURL, options: .atomic)
+        }
+    }
+
     /// Brings an existing Dot's AGENTS.md up to date: it's written when the
     /// Dot is made, and the standing instructions change with app updates.
     /// Everything from the "## Notes" heading on is the Dot's own and stays.
@@ -1257,6 +1278,8 @@ extension ClickyRoster {
         case .ready(let readyLauncher):
             launcher = readyLauncher
         }
+
+        Self.ensureClaudeToolSearch(inWorkspace: URL(fileURLWithPath: spec.workspacePath, isDirectory: true))
 
         var currentSpec = spec
         for attempt in 0..<2 {

@@ -97,11 +97,79 @@ final class DottieBrain: ObservableObject {
         // Off until the user turns it on.
         isScreenJournalEnabled = UserDefaults.standard.bool(forKey: Self.screenJournalDefaultsKey)
         profileText = (try? String(contentsOf: profileFileURL, encoding: .utf8)) ?? ""
+        loadBrainAnswers()
         folderPaths = (try? JSONDecoder().decode([String].self, from: Data(contentsOf: foldersFileURL))) ?? []
         mcpServersJSON = (try? String(contentsOf: Self.mcpFileURL, encoding: .utf8)) ?? ""
         let journalMemories = loadJournal()
         recentMemories = Array(journalMemories.suffix(200))
         trimJournalIfNeeded(journalMemories)
+    }
+
+    // MARK: - The Brain's answers
+
+    /// One question voice Dottie handed to the Brain agent, and its answer.
+    struct BrainAnswer: Codable {
+        let question: String
+        let answer: String
+        let date: Date
+    }
+
+    /// Answers the Brain already gave. Voice Dottie sees them in every
+    /// session and the same question is answered from here, so a fact like
+    /// the user's GitHub account is asked once, not on every message.
+    private(set) var brainAnswers: [BrainAnswer] = []
+    private var brainAnswersFileURL: URL { brainFolderURL.appendingPathComponent("brain-answers.json") }
+    private static let maximumBrainAnswerCount = 20
+    /// Answers older than this are asked again (files and repos change).
+    private static let brainAnswerLifetime: TimeInterval = 14 * 86_400
+
+    private func loadBrainAnswers() {
+        let savedAnswers = (try? JSONDecoder().decode([BrainAnswer].self, from: Data(contentsOf: brainAnswersFileURL))) ?? []
+        brainAnswers = savedAnswers.filter { Date().timeIntervalSince($0.date) < Self.brainAnswerLifetime }
+    }
+
+    func saveBrainAnswer(question: String, answer: String) {
+        let trimmedAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAnswer.isEmpty else { return }
+        let questionWords = Self.searchWords(in: question)
+        // A newer answer to the same question replaces the old one.
+        brainAnswers.removeAll { Self.isSameQuestion(Self.searchWords(in: $0.question), questionWords) }
+        brainAnswers.append(BrainAnswer(question: String(question.prefix(300)), answer: String(trimmedAnswer.prefix(600)), date: Date()))
+        if brainAnswers.count > Self.maximumBrainAnswerCount {
+            brainAnswers.removeFirst(brainAnswers.count - Self.maximumBrainAnswerCount)
+        }
+        if let answersData = try? JSONEncoder().encode(brainAnswers) {
+            try? answersData.write(to: brainAnswersFileURL, options: .atomic)
+        }
+        onProfileChanged?(profileText)
+    }
+
+    /// The saved answer to this question, when it was asked in the last
+    /// few hours. Older ones stay in the voice prompt as facts, but a
+    /// repeated question then gets a fresh look (open pull requests change).
+    func savedBrainAnswer(for question: String) -> BrainAnswer? {
+        let questionWords = Self.searchWords(in: question)
+        return brainAnswers.last { savedAnswer in
+            Date().timeIntervalSince(savedAnswer.date) < 6 * 3_600
+                && Self.isSameQuestion(Self.searchWords(in: savedAnswer.question), questionWords)
+        }
+    }
+
+    /// Most of the words of each question are in the other.
+    private static func isSameQuestion(_ firstWords: Set<String>, _ secondWords: Set<String>) -> Bool {
+        guard !firstWords.isEmpty, !secondWords.isEmpty else { return false }
+        let sharedWordCount = Double(firstWords.intersection(secondWords).count)
+        return sharedWordCount / Double(firstWords.count) >= 0.7 && sharedWordCount / Double(secondWords.count) >= 0.7
+    }
+
+    /// The newest answers, one short line each, for the voice prompt.
+    var brainAnswersForPrompt: String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "d MMM"
+        return brainAnswers.suffix(10).map { savedAnswer in
+            let shortAnswer = savedAnswer.answer.replacingOccurrences(of: "\n", with: " ").prefix(220)
+            return "- (\(dateFormatter.string(from: savedAnswer.date))) \(savedAnswer.question.prefix(120)) → \(shortAnswer)"
+        }.joined(separator: "\n")
     }
 
     // MARK: - Remembering

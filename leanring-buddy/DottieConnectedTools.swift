@@ -69,6 +69,7 @@ enum DottieConnectedTools: DottieToolModule {
         the user connected these apps (with their tools):
         \(appLines.joined(separator: "\n"))
         to use one, call use_app_tool right away when the tool and its arguments are obvious from its name; call apps_and_tools with the app first only when you need its arguments (never use find_tool or use_tool for these). say what you're doing in a few words while it runs.
+        only tell the user what a tool actually returned. if a call failed or returned an error (like 404), say it failed and why; never say you checked something you couldn't.
         connected apps come first: before doing a task by hand (do_task_on_screen, clicking, the browser, a helper) or saying you can't, check whether one of these apps can do it, and if apps_and_tools shows a tool that fits, use it. only go to the screen when no connected app can, or its tool failed twice; then say so in a few words.
         """
     }
