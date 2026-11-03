@@ -1524,7 +1524,10 @@ extension ClickyRoster {
             workspacePath: agentWorkspaceURL.path,
             skillFiles: skillFiles,
             // The Brain's answers are read out loud right away: keep it quick.
-            effort: agent.isBrain == true ? "low" : nil,
+            // Other helpers think at medium: Claude's default effort spent
+            // most of each step thinking, which made helpers feel stuck,
+            // and their everyday jobs don't need it.
+            effort: agent.isBrain == true ? "low" : "medium",
             knownBotID: agent.mausBotID,
             knownBotName: agent.mausBotName,
             knownSpecHash: agent.mausBotSpecHash
