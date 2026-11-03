@@ -280,7 +280,7 @@ private struct HelperEngineBadge: View {
 
     var body: some View {
         if let engineName {
-            Text(engineName == "claude" ? "Claude" : (engineName == "gemini-backup" ? "Gemini backup" : "Gemini"))
+            Text(engineName == "claude" ? "Claude" : (engineName == "gemini-backup" ? "Gemini backup" : (engineName == "groq" ? "Groq" : "Gemini")))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(engineName == "claude" ? DS.Colors.accentText : DS.Colors.textTertiary)
                 .padding(.horizontal, 6)
@@ -637,6 +637,7 @@ private struct ClickyAgentChatView: View {
                 .pointerCursor()
                 .help("See this helper's full view in MausBot")
             }
+            engineMenu
             skillsMenu
 
             Button(action: { clickyRoster.revealWorkspaceInFinder(for: agent) }) {
@@ -667,6 +668,39 @@ private struct ClickyAgentChatView: View {
 
     private var agentRoutines: [ClickyRoutine] {
         routineStore.routines(for: agent.id)
+    }
+
+    /// Which engine runs this helper: automatic (Settings and Dottie's own
+    /// routing), or always Claude, Groq or Gemini.
+    private var engineMenu: some View {
+        let engineChoices: [(value: String?, title: String, detail: String)] = [
+            (nil, "Automatic", "Settings decide; quick jobs may go to Groq or Gemini"),
+            ("claude", "Claude", "Always on your Claude plan through MausBot"),
+            ("groq", "Groq", "Groq first; jobs too big for its free plan go to Gemini"),
+            ("gemini", "Gemini", "Always Gemini")
+        ]
+        let currentChoice = agent.engineChoice
+        let currentTitle = engineChoices.first { $0.value == currentChoice }?.title ?? "Automatic"
+        return Menu {
+            ForEach(engineChoices, id: \.title) { engineChoice in
+                Button(action: { clickyRoster.setEngineChoice(engineChoice.value, forAgentID: agent.id) }) {
+                    if engineChoice.value == currentChoice {
+                        Label("\(engineChoice.title): \(engineChoice.detail)", systemImage: "checkmark")
+                    } else {
+                        Text("\(engineChoice.title): \(engineChoice.detail)")
+                    }
+                }
+            }
+        } label: {
+            Label(currentTitle, systemImage: "cpu")
+                .font(.system(size: 12))
+                .foregroundColor(DS.Colors.textSecondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .pointerCursor()
+        .help("Which AI runs this helper")
     }
 
     /// Turns library skills on and off for this Clicky.

@@ -382,6 +382,22 @@ final class DottieToolsStore: ObservableObject {
 
     // MARK: - Running servers
 
+    private var lastWarmUpDate: Date?
+
+    /// Starts every connected app that isn't running yet, so a voice ask
+    /// doesn't wait for npx and the app's sign-in on the first use. Called
+    /// when the user presses the talk shortcut: the apps start while they
+    /// speak. Running apps stay up, so this costs nothing after that.
+    func warmUpConnectedServers() {
+        if let lastWarmUpDate, Date().timeIntervalSince(lastWarmUpDate) < 60 { return }
+        lastWarmUpDate = Date()
+        for serverName in serverNames where file.isEnabled(serverName) && sessions[serverName] == nil {
+            if case .ready = status(for: serverName) {
+                connectInBackground(serverName)
+            }
+        }
+    }
+
     func connectInBackground(_ serverName: String) {
         guard connectTasks[serverName] == nil else { return }
         connectTasks[serverName] = Task {
@@ -531,10 +547,17 @@ final class DottieToolsStore: ObservableObject {
                 executablePath = DottieCommandLocator.locate(command)
             }
             guard let executablePath else { throw SessionProblem(status: .needsProgram(command)) }
+            var arguments = config.args
+            // npx asks the npm registry about the package on every start
+            // (always for @latest), which is seconds before the app even
+            // runs. Use the copy npm already has when there is one.
+            if command == "npx", !arguments.contains("--prefer-offline") {
+                arguments.insert("--prefer-offline", at: 0)
+            }
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = DottieCommandLocator.searchPATH
             environment.merge(config.env) { _, configured in configured }
-            return .program(executablePath: executablePath, arguments: config.args, environment: environment, workingDirectory: config.cwd)
+            return .program(executablePath: executablePath, arguments: arguments, environment: environment, workingDirectory: config.cwd)
         }
         guard let address = config.url, let url = URL(string: address), url.scheme?.hasPrefix("http") == true else {
             throw SessionProblem(status: .failed("its web address doesn't look right."))
@@ -624,9 +647,19 @@ final class DottieToolsStore: ObservableObject {
         guard let serverName = matchServer(requested) else {
             return "there's no connected app called \(requested). Connected: \(serverNames.joined(separator: ", "))."
         }
+        // The tools saved from last time answer at once; the app starts
+        // meanwhile, so the call that follows finds it running.
+        if let savedTools = toolsByServer[serverName], !savedTools.isEmpty {
+            connectInBackground(serverName)
+            return Self.toolDetailsText(serverName: serverName, tools: savedTools)
+        }
         guard let tools = await connect(serverName) ?? toolsByServer[serverName] else {
             return SessionProblem(status: status(for: serverName)).explanation(title: title(for: serverName))
         }
+        return Self.toolDetailsText(serverName: serverName, tools: tools)
+    }
+
+    private static func toolDetailsText(serverName: String, tools: [DottieMCPToolInfo]) -> String {
         var text = "\(serverName) tools (* = required argument):\n"
         for tool in tools {
             let line = "- \(tool.name)(\(tool.argumentSummary)): \(tool.description.prefix(180))\n"

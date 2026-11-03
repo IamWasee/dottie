@@ -90,13 +90,16 @@ export default {
     // Gemini CLI can only send an "API key", so the agents' passthrough
     // authenticates with that key instead of x-clicky-secret. Google's
     // clients send it as x-goog-api-key or, some of them, as ?key=.
-    if (url.pathname.startsWith("/gemini/")) {
+    // /gemini-only/ is the same passthrough without the Groq-first step,
+    // for a helper the user set to Gemini.
+    const isGeminiOnlyRoute = url.pathname.startsWith("/gemini-only/");
+    if (url.pathname.startsWith("/gemini/") || isGeminiOnlyRoute) {
       const sentKey = request.headers.get("x-goog-api-key") ?? url.searchParams.get("key");
       if (env.APP_SHARED_SECRET && sentKey !== env.APP_SHARED_SECRET) {
         return new Response("Unauthorized", { status: 401 });
       }
       try {
-        return await handleGeminiPassthrough(request, url, env);
+        return await handleGeminiPassthrough(request, url, env, isGeminiOnlyRoute);
       } catch (error) {
         console.error(`[/gemini] Unhandled error:`, error);
         return jsonResponse({ error: String(error) }, 500);
@@ -473,8 +476,8 @@ function groqFromEnv(env: Env): ChatProvider | undefined {
     : undefined;
 }
 
-async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Promise<Response> {
-  const upstreamPath = url.pathname.slice("/gemini".length);
+async function handleGeminiPassthrough(request: Request, url: URL, env: Env, skipsGroq = false): Promise<Response> {
+  const upstreamPath = url.pathname.slice((skipsGroq ? "/gemini-only" : "/gemini").length);
   const upstreamQuery = new URLSearchParams();
   url.searchParams.forEach((value, key) => {
     if (key !== "key") upstreamQuery.set(key, value);
@@ -500,7 +503,7 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Pr
   // Dot turns go to Groq first when they fit (on Groq's free plan most are
   // too big, so those stay on Gemini); the CLI can't tell who answered.
   const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
-  const groq = groqFromEnv(env);
+  const groq = skipsGroq ? undefined : groqFromEnv(env);
   if (groq && generateMethod && requestBody && request.method === "POST") {
     try {
       const geminiBody = JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;

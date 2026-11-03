@@ -62,6 +62,10 @@ struct ClickyAgent: Codable, Identifiable, Equatable {
     var mainSessionLastTurnAt: Date?
     /// The MausBot thread of the chat with the user, once known.
     var claudeMainThreadID: String?
+    /// Which engine the user picked for this helper in Home → Helpers:
+    /// "claude", "groq" or "gemini". Nil follows the Settings choice and
+    /// Dottie's own routing.
+    var engineChoice: String?
 }
 
 /// Which conversation a helper turn continues, on each engine.
@@ -397,7 +401,7 @@ final class ClickyRoster: ObservableObject {
             geminiNeedsHandover: startsFresh || previousEngine == "claude",
             claudeConversation: claudeConversation,
             claudeNeedsHandover: claudeConversation == "new"
-                || previousEngine?.hasPrefix("gemini") == true
+                || (previousEngine != nil && previousEngine != "claude")
                 || (previousEngine == nil && currentAgent.hasStartedSession),
             routineID: nil,
             mayUseClaude: isContinuingClaudeWork || !Self.isEasyWorkForGemini(
@@ -486,14 +490,27 @@ final class ClickyRoster: ObservableObject {
         // What was said before, for an engine that didn't hear it.
         let conversationContext = recentConversationContext(forAgentID: agentID)
 
+        // The engine the user picked for this helper wins over the routing.
+        let engineChoice = self.agent(withID: agentID)?.engineChoice
+        let mayUseClaude: Bool
+        switch engineChoice {
+        case "claude": mayUseClaude = true
+        case "groq", "gemini": mayUseClaude = false
+        default: mayUseClaude = conversation.mayUseClaude
+        }
+        // "gemini" skips the Worker's Groq-first step; "groq" and the
+        // default try Groq first when the request fits its free plan.
+        let workerRoute = engineChoice == "gemini" ? "/gemini-only" : "/gemini"
+
         Task { [weak self] in
             guard let self else { return }
-            if conversation.mayUseClaude, await self.runTurnOnClaudeIfPossible(
+            if mayUseClaude, await self.runTurnOnClaudeIfPossible(
                 agent: agent,
                 spec: claudeSpec,
                 message: fullMessageForAgent,
                 conversation: conversation,
-                conversationContext: conversationContext
+                conversationContext: conversationContext,
+                isChosenByUser: engineChoice == "claude"
             ) {
                 self.finishTurn(agentID: agentID)
                 return
@@ -503,8 +520,8 @@ final class ClickyRoster: ObservableObject {
             // and couldn't, so the badge doesn't call planned Gemini work a
             // backup.
             if routineID == nil {
-                let claudeWasWanted = conversation.mayUseClaude && DottieMausBot.shared.preference == .claudeWithBackup
-                self.setLastHelperEngine(claudeWasWanted ? "gemini-backup" : "gemini", forAgentID: agentID)
+                let claudeWasWanted = mayUseClaude && (engineChoice == "claude" || DottieMausBot.shared.preference == .claudeWithBackup)
+                self.setLastHelperEngine(claudeWasWanted ? "gemini-backup" : (engineChoice == "groq" ? "groq" : "gemini"), forAgentID: agentID)
             }
             let geminiMessage = conversation.geminiNeedsHandover ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {
@@ -516,7 +533,8 @@ final class ClickyRoster: ObservableObject {
                         message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs
+                        additionalDirectoryURLs: additionalDirectoryURLs,
+                        workerRoute: workerRoute
                     )
                 } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
                             where !isFirstTurn && Self.isLostSessionError(standardErrorTail) {
@@ -541,7 +559,8 @@ final class ClickyRoster: ObservableObject {
                         message: handover + fullMessageForAgent,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs
+                        additionalDirectoryURLs: additionalDirectoryURLs,
+                        workerRoute: workerRoute
                     )
                 } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
                             where isFirstTurn && standardErrorTail.lowercased().contains("already exists") {
@@ -554,7 +573,8 @@ final class ClickyRoster: ObservableObject {
                         message: geminiMessage,
                         workspaceURL: agentWorkspaceURL,
                         isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs
+                        additionalDirectoryURLs: additionalDirectoryURLs,
+                        workerRoute: workerRoute
                     )
                 }
             } catch {
@@ -577,7 +597,8 @@ final class ClickyRoster: ObservableObject {
         message: String,
         workspaceURL: URL,
         isComputerUseApproved: Bool,
-        additionalDirectoryURLs: [URL]
+        additionalDirectoryURLs: [URL],
+        workerRoute: String = "/gemini"
     ) async throws {
         let agentID = agent.id
         try await self.runtime.runTurn(
@@ -590,7 +611,8 @@ final class ClickyRoster: ObservableObject {
             model: agent.model,
             isComputerUseApproved: isComputerUseApproved,
             // So the agent's file tools can save skills there.
-            additionalDirectoryURLs: additionalDirectoryURLs
+            additionalDirectoryURLs: additionalDirectoryURLs,
+            workerRoute: workerRoute
         ) { [weak self] event in
             // The main queue is FIFO, so events land in order and
             // before finishTurn.
@@ -1121,6 +1143,27 @@ final class ClickyRoster: ObservableObject {
         }
     }
 
+    /// Keeps connected apps' full tool descriptions out of every Claude
+    /// step. With ENABLE_TOOL_SEARCH on, Claude Code sends only a list of
+    /// tool names; the helper looks a tool up and loads its description
+    /// when a task needs it. Without it, every step of every helper carried
+    /// every connector's tools (about 47k tokens a step on a Mac with ten
+    /// connectors), which is most of why helper steps were slow. MausBot
+    /// keeps project settings, so the helper's own folder carries it.
+    fileprivate static func ensureClaudeToolSearch(inWorkspace agentWorkspaceURL: URL) {
+        let claudeSettingsFolderURL = agentWorkspaceURL.appendingPathComponent(".claude", isDirectory: true)
+        let claudeSettingsFileURL = claudeSettingsFolderURL.appendingPathComponent("settings.json")
+        var settingsObject = (try? JSONSerialization.jsonObject(with: Data(contentsOf: claudeSettingsFileURL))) as? [String: Any] ?? [:]
+        var environmentSettings = settingsObject["env"] as? [String: Any] ?? [:]
+        guard environmentSettings["ENABLE_TOOL_SEARCH"] == nil else { return }
+        environmentSettings["ENABLE_TOOL_SEARCH"] = "true"
+        settingsObject["env"] = environmentSettings
+        try? FileManager.default.createDirectory(at: claudeSettingsFolderURL, withIntermediateDirectories: true)
+        if let settingsData = try? JSONSerialization.data(withJSONObject: settingsObject, options: [.prettyPrinted, .sortedKeys]) {
+            try? settingsData.write(to: claudeSettingsFileURL, options: .atomic)
+        }
+    }
+
     /// Brings an existing Dot's AGENTS.md up to date: it's written when the
     /// Dot is made, and the standing instructions change with app updates.
     /// Everything from the "## Notes" heading on is the Dot's own and stays.
@@ -1244,11 +1287,12 @@ extension ClickyRoster {
         spec: DottieMausBotSpec,
         message: String,
         conversation: ClickyTurnConversation,
-        conversationContext: String
+        conversationContext: String,
+        isChosenByUser: Bool = false
     ) async -> Bool {
         let agentID = agent.id
         let launcher: DottieMausBotLauncher
-        switch await DottieMausBot.shared.readinessForHelperTurn() {
+        switch await DottieMausBot.shared.readinessForHelperTurn(isChosenByUser: isChosenByUser) {
         case .skip:
             return false
         case .fallback(let reason):
@@ -1257,6 +1301,8 @@ extension ClickyRoster {
         case .ready(let readyLauncher):
             launcher = readyLauncher
         }
+
+        Self.ensureClaudeToolSearch(inWorkspace: URL(fileURLWithPath: spec.workspacePath, isDirectory: true))
 
         var currentSpec = spec
         for attempt in 0..<2 {
@@ -1424,6 +1470,13 @@ extension ClickyRoster {
         transcriptsByAgentID[agentID] = transcript
     }
 
+    /// The user's engine pick for one helper (nil: automatic).
+    func setEngineChoice(_ engineChoice: String?, forAgentID agentID: UUID) {
+        guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }) else { return }
+        agents[agentIndex].engineChoice = engineChoice
+        saveRoster()
+    }
+
     fileprivate func setLastHelperEngine(_ engineName: String, forAgentID agentID: UUID) {
         guard let agentIndex = agents.firstIndex(where: { $0.id == agentID }),
               agents[agentIndex].lastHelperEngine != engineName else { return }
@@ -1524,7 +1577,10 @@ extension ClickyRoster {
             workspacePath: agentWorkspaceURL.path,
             skillFiles: skillFiles,
             // The Brain's answers are read out loud right away: keep it quick.
-            effort: agent.isBrain == true ? "low" : nil,
+            // Other helpers think at medium: Claude's default effort spent
+            // most of each step thinking, which made helpers feel stuck,
+            // and their everyday jobs don't need it.
+            effort: agent.isBrain == true ? "low" : "medium",
             knownBotID: agent.mausBotID,
             knownBotName: agent.mausBotName,
             knownSpecHash: agent.mausBotSpecHash

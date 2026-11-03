@@ -810,6 +810,9 @@ final class CompanionManager: ObservableObject {
             if DottieAwayMode.shared.isAway {
                 DottieAwayMode.shared.setAway(false, from: "the talk shortcut")
             }
+            // Connected apps start while the user speaks, not when Dottie
+            // first needs one.
+            DottieToolsStore.shared.warmUpConnectedServers()
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -970,6 +973,10 @@ final class CompanionManager: ObservableObject {
         let profile = brain.profileForPrompt
         if !profile.isEmpty {
             prompt += "\n\nwhat your second brain knows about the user (use it naturally, don't recite it):\n" + profile
+        }
+        let brainAnswers = brain.brainAnswersForPrompt
+        if !brainAnswers.isEmpty {
+            prompt += "\n\nthings your second brain already found out. use lasting facts here (names, accounts, which repo or folder is which) instead of asking it again; things that change (open pull requests, a file's contents) need a fresh look:\n" + brainAnswers
         }
         let threeDaysInSeconds: TimeInterval = 3 * 86_400
         let recentEpisodeCount = DottieEpisodicMemory.shared.episodes.filter { episode in
@@ -2933,11 +2940,18 @@ final class CompanionManager: ObservableObject {
         guard !clickyRoster.isRunning(brainAgent) else {
             return "the brain is still working on the last question: \(clickyRoster.statusLine(for: brainAgent)). tell the user it'll answer that first."
         }
-        let recentChat = conversationHistory.suffix(4)
-            .map { "user: \($0.userTranscript)\ndottie: \($0.assistantResponse)" }
+        // Asked before: the saved answer, at once and with no helper turn.
+        if let savedAnswer = brain.savedBrainAnswer(for: question) {
+            let minutesAgo = max(1, Int(Date().timeIntervalSince(savedAnswer.date) / 60))
+            return "your second brain answered this \(minutesAgo) minutes ago: \(savedAnswer.answer)\ntell the user now in one to three short sentences; don't ask the brain again."
+        }
+        // Only what the question needs: the last couple of exchanges, cut
+        // short, and the two closest memories.
+        let recentChat = conversationHistory.suffix(2)
+            .map { "user: \($0.userTranscript.prefix(300))\ndottie: \($0.assistantResponse.prefix(300))" }
             .joined(separator: "\n")
         let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
-        let relatedEpisodes = DottieEpisodicMemory.shared.recallNow(query: question, limit: 4).episodes
+        let relatedEpisodes = DottieEpisodicMemory.shared.recallNow(query: question, limit: 2).episodes
         let episodesNote = relatedEpisodes.isEmpty ? "" : "\n\nepisodes from Dottie's memory that may be related:\n"
             + relatedEpisodes.map(DottieEpisodicMemory.lineForModel).joined(separator: "\n")
         let messageForBrain = """
@@ -3262,6 +3276,9 @@ final class CompanionManager: ObservableObject {
             self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
             if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
                 self.pendingSpokenBrainQuestion = nil
+                if turnResult.succeeded {
+                    self.brain.saveBrainAnswer(question: brainQuestion, answer: updateText)
+                }
                 self.speakBrainAnswer(question: brainQuestion, answer: updateText)
                 self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
                 return
