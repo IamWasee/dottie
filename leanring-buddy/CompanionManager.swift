@@ -1536,6 +1536,20 @@ final class CompanionManager: ObservableObject {
                 if Task.isCancelled { break }
                 step = step.replacingText(circledChartText)
             }
+            // A free drawing ("a horse") is planned as pen strokes first.
+            if step.kind == .sketch {
+                let sketchDescription = step.text ?? step.caption ?? "a simple drawing"
+                notchPresenter.showScreenTaskStep("sketching \(sketchDescription)", title: "drawing")
+                guard let plannedStrokesText = await DottieSketchArtist.plannedStrokesText(for: sketchDescription) else {
+                    notchPresenter.endScreenTask()
+                    print("✏️ Sketch: couldn't plan \"\(sketchDescription)\"")
+                    missedSteps += 1
+                    continue
+                }
+                notchPresenter.endScreenTask()
+                if Task.isCancelled { break }
+                step = step.replacingText(plannedStrokesText)
+            }
             let usesPlanAnchors = step.points.contains { reference in
                 let name = reference.lowercased()
                 return anchorNames.contains(name) || anchorNames.contains(where: { name.hasPrefix($0 + ".") })
@@ -2152,8 +2166,14 @@ final class CompanionManager: ObservableObject {
         return didStop
     }
 
+    /// Moves Dottie's cursor back and forth for a drag step, like a hand
+    /// showing where to move something. Cancelled at every new step.
+    private var guideGestureDemoTask: Task<Void, Never>?
+
     /// Draws the step's marks, points at its target, and says it.
     private func presentGuideStep(_ step: DottieGuide.Step) async {
+        guideGestureDemoTask?.cancel()
+        guideGestureDemoTask = nil
         drawingOverlayManager.clear()
         for mark in step.marks {
             drawingOverlayManager.add(DottieDrawing(shape: mark.shape, targetRect: mark.rect, note: mark.note), fadesOut: false)
@@ -2171,12 +2191,139 @@ final class CompanionManager: ObservableObject {
         } else {
             keepsPointingUntilCleared = false
         }
+        if let caption = step.caption, step.targetRect != nil {
+            detectedElementBubbleText = caption
+        }
+        if let gesture = step.gesture {
+            presentGuideGesture(gesture, caption: step.caption, displayFrame: step.displayFrame)
+        }
         notchPresenter.showScreenTaskStep(step.say, title: "showing you")
         await narrate(step.say)
     }
 
+    /// Shows a step's motion the way a person's hand would: a drag gets a
+    /// dashed arrow from the thing to where it goes and the cursor moving
+    /// along it again and again; a scroll gets an arrow in its direction;
+    /// a shortcut is written as key caps; typing shows the words by the field.
+    private func presentGuideGesture(_ gesture: DottieGuide.Gesture, caption: String?, displayFrame: CGRect?) {
+        let screenFrame = displayFrame
+            ?? NSScreen.screens.first(where: { screen in
+                (gesture.fromRect ?? gesture.toRect).map { screen.frame.intersects($0) } ?? false
+            })?.frame
+            ?? NSScreen.main?.frame
+            ?? .zero
+        detectedElementDisplayFrame = screenFrame
+        switch gesture.kind {
+        case .drag:
+            guard let fromRect = gesture.fromRect, let toRect = gesture.toRect else { return }
+            let startPoint = CGPoint(x: fromRect.midX, y: fromRect.midY)
+            let endPoint = CGPoint(x: toRect.midX, y: toRect.midY)
+            if !drawingOverlayManager.drawings.contains(where: { $0.targetRect.intersects(fromRect) }) {
+                drawingOverlayManager.add(DottieDrawing(shape: .circle, targetRect: fromRect, note: nil), fadesOut: false)
+            }
+            drawingOverlayManager.add(DottieDrawing(shape: .box, targetRect: toRect, note: nil), fadesOut: false)
+            // A gentle bow upward, so the arrow reads as a motion rather
+            // than a line under the text.
+            let distance = hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y)
+            let bowHeight = min(max(distance * 0.18, 30), 140)
+            let middlePoint = CGPoint(x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 + bowHeight)
+            drawingOverlayManager.addFigures([
+                DottieFigure(
+                    shape: .stroke(points: [startPoint, middlePoint, endPoint], closed: false, smooth: true, dashed: true, arrowAtStart: false, arrowAtEnd: true),
+                    ink: .gold, lineWidth: 4, delay: 0.2, drawDuration: 0.8
+                )
+            ])
+            keepsPointingUntilCleared = true
+            livePointingRefinementTask?.cancel()
+            let grabText = caption ?? "drag this"
+            guideGestureDemoTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    self.detectedElementBubbleText = grabText
+                    self.detectedElementScreenLocation = startPoint
+                    try? await Task.sleep(nanoseconds: 1_600_000_000)
+                    guard !Task.isCancelled else { return }
+                    self.detectedElementBubbleText = "drop here"
+                    self.detectedElementScreenLocation = endPoint
+                    try? await Task.sleep(nanoseconds: 1_900_000_000)
+                }
+            }
+        case .scroll:
+            let areaRect = gesture.fromRect ?? screenFrame.insetBy(dx: screenFrame.width * 0.3, dy: screenFrame.height * 0.3)
+            let centerPoint = CGPoint(x: areaRect.midX, y: areaRect.midY)
+            let arrowHalfLength: CGFloat = 70
+            // AppKit's y grows upward, so scrolling down points to lower y.
+            let (startPoint, endPoint): (CGPoint, CGPoint) = {
+                switch gesture.direction {
+                case .down: return (CGPoint(x: centerPoint.x, y: centerPoint.y + arrowHalfLength), CGPoint(x: centerPoint.x, y: centerPoint.y - arrowHalfLength))
+                case .up: return (CGPoint(x: centerPoint.x, y: centerPoint.y - arrowHalfLength), CGPoint(x: centerPoint.x, y: centerPoint.y + arrowHalfLength))
+                case .left: return (CGPoint(x: centerPoint.x + arrowHalfLength, y: centerPoint.y), CGPoint(x: centerPoint.x - arrowHalfLength, y: centerPoint.y))
+                case .right: return (CGPoint(x: centerPoint.x - arrowHalfLength, y: centerPoint.y), CGPoint(x: centerPoint.x + arrowHalfLength, y: centerPoint.y))
+                }
+            }()
+            drawingOverlayManager.addFigures([
+                DottieFigure(
+                    shape: .stroke(points: [startPoint, endPoint], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
+                    ink: .gold, lineWidth: 5, delay: 0.1, drawDuration: 0.5
+                )
+            ])
+            keepsPointingUntilCleared = true
+            livePointingRefinementTask?.cancel()
+            detectedElementBubbleText = caption ?? "scroll \(gesture.direction.rawValue)"
+            detectedElementScreenLocation = startPoint
+        case .keys:
+            guard let keysText = gesture.keys, !keysText.isEmpty else { return }
+            let keyCapsText = Self.guideKeyCapsText(for: keysText)
+            let fontSize: CGFloat = 64
+            let estimatedTextWidth = CGFloat(keyCapsText.count) * fontSize * 0.55
+            let textOrigin = CGPoint(x: screenFrame.midX - estimatedTextWidth / 2, y: screenFrame.minY + screenFrame.height * 0.22)
+            drawingOverlayManager.addFigures([
+                DottieFigure(shape: .text(keyCapsText, origin: textOrigin, fontSize: fontSize), ink: .gold, lineWidth: 3, delay: 0.1, drawDuration: 0.6)
+            ])
+            if let caption {
+                drawingOverlayManager.addFigures([
+                    DottieFigure(shape: .text(caption, origin: CGPoint(x: textOrigin.x, y: textOrigin.y - 56), fontSize: 30), ink: .white, lineWidth: 2, delay: 0.5, drawDuration: 0.5)
+                ])
+            }
+        case .type:
+            guard let typedText = gesture.text, !typedText.isEmpty else { return }
+            if let fieldRect = gesture.fromRect {
+                drawingOverlayManager.add(DottieDrawing(shape: .box, targetRect: fieldRect, note: nil), fadesOut: false)
+                drawingOverlayManager.addFigures([
+                    DottieFigure(
+                        shape: .text("type \u{201C}\(typedText)\u{201D}", origin: CGPoint(x: fieldRect.maxX + 18, y: fieldRect.midY), fontSize: 28),
+                        ink: .gold, lineWidth: 2, delay: 0.3, drawDuration: 0.6
+                    )
+                ])
+                keepsPointingUntilCleared = true
+                livePointingRefinementTask?.cancel()
+                detectedElementBubbleText = caption ?? "type here"
+                detectedElementScreenLocation = CGPoint(x: fieldRect.midX, y: fieldRect.midY)
+            }
+        }
+    }
+
+    /// "cmd+shift+N" → "⌘ ⇧ N", the way key caps are printed.
+    private static func guideKeyCapsText(for keysText: String) -> String {
+        let keySymbolsByName: [String: String] = [
+            "cmd": "⌘", "command": "⌘", "shift": "⇧", "option": "⌥", "opt": "⌥", "alt": "⌥",
+            "ctrl": "⌃", "control": "⌃", "return": "↩", "enter": "↩", "tab": "⇥", "esc": "esc",
+            "escape": "esc", "delete": "⌫", "backspace": "⌫", "space": "space",
+            "up": "↑", "down": "↓", "left": "←", "right": "→"
+        ]
+        let keyNames = keysText
+            .split(whereSeparator: { $0 == "+" || $0 == " " || $0 == "-" })
+            .map { String($0) }
+            .filter { !$0.isEmpty }
+        return keyNames.map { keyName in
+            keySymbolsByName[keyName.lowercased()] ?? keyName.uppercased()
+        }.joined(separator: " ")
+    }
+
     private func guideDidEnd(spokenGoodbye: String?) {
         print("🧑‍🏫 Guide ended")
+        guideGestureDemoTask?.cancel()
+        guideGestureDemoTask = nil
         if let guideGoal = currentGuideGoal {
             brain.record(.guide, "showed the user how to: \(guideGoal)")
             currentGuideGoal = nil
