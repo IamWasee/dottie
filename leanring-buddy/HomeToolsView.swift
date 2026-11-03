@@ -320,7 +320,7 @@ private struct HomeConnectedAppsSection: View {
                     Text(preset.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(DS.Colors.textPrimary)
-                    if preset.needsKey && !DottieGitHubLogin.isGitHubServer(preset.config) {
+                    if preset.needsKey && !DottieGitHubLogin.isGitHubServer(preset.config) && preset.browserSignInPreset == nil {
                         Text("needs a key")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(DS.Colors.warningText)
@@ -547,6 +547,8 @@ private struct HomeAddPresetSheet: View {
     @State private var isShowingTokenFallback = false
 
     private var isGitHub: Bool { DottieGitHubLogin.isGitHubServer(preset.config) }
+    /// GitHub, or a service with a browser sign-in: the key is the fallback.
+    private var hasSignInFirst: Bool { isGitHub || preset.browserSignInPreset != nil }
 
     private var fieldsList: some View {
         ForEach(preset.fields, id: \.placeholder) { field in
@@ -593,6 +595,35 @@ private struct HomeAddPresetSheet: View {
                     .padding(.top, 6)
                 }
                 .font(.system(size: 11))
+            } else if let signInPreset = preset.browserSignInPreset {
+                // Signing in in the browser first; the key is the other way.
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        if store.config(for: signInPreset.id) == nil {
+                            problem = store.addPreset(signInPreset, values: [:], folders: [:])
+                        }
+                        if problem == nil {
+                            store.connectInBackground(signInPreset.id)
+                            onClose()
+                        }
+                    } label: {
+                        Label("Sign in with \(preset.title)", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .pointerCursor()
+                    HomeHint("Your browser opens \(preset.title)'s own sign-in page. Sign in and press Allow; no key to copy.")
+                }
+                DisclosureGroup("Use a key instead", isExpanded: $isShowingTokenFallback) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        fieldsList
+                        if let keyLink = preset.keyLink, let url = URL(string: keyLink) {
+                            Link("Open \(preset.title)'s key page", destination: url)
+                                .font(.system(size: 11))
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.system(size: 11))
             } else {
                 fieldsList
                 if let keyLink = preset.keyLink, let url = URL(string: keyLink) {
@@ -603,7 +634,7 @@ private struct HomeAddPresetSheet: View {
             if tokenCameFromGitHubCLI {
                 HomeHint("Filled in from your GitHub CLI sign-in, so there's nothing to copy. Just press Add.")
             }
-            if preset.needsKey && (!isGitHub || isShowingTokenFallback) {
+            if preset.needsKey && (!hasSignInFirst || isShowingTokenFallback) {
                 HomeHint("Keys are kept in your Mac's Keychain, not in a file.")
             }
             if let problem {
@@ -616,7 +647,7 @@ private struct HomeAddPresetSheet: View {
                 Spacer()
                 Button("Cancel", action: onClose)
                     .pointerCursor()
-                if !isGitHub || isShowingTokenFallback || tokenCameFromGitHubCLI {
+                if !hasSignInFirst || isShowingTokenFallback || tokenCameFromGitHubCLI {
                     Button("Add") {
                         problem = store.addPreset(preset, values: values, folders: folders)
                         if problem == nil { onClose() }
