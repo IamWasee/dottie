@@ -2758,6 +2758,7 @@ final class CompanionManager: ObservableObject {
         }
         DottieEpisodicMemory.shared.start()
         DottieHabits.shared.start()
+        DottieKnownPlaces.shared.start()
     }
 
     /// Hands a question to the Brain agent; Dottie says the answer when it

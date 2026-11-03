@@ -50,6 +50,8 @@ enum DottieInstantCommand: Equatable {
 
     case openApp(appURL: URL, appName: String)
     case openWebsite(url: URL, siteName: String)
+    /// A file or folder Dottie has seen opened before (DottieKnownPlaces).
+    case openPlace(url: URL, placeName: String)
     case quitApp(processIdentifier: pid_t, appName: String)
     /// nil processIdentifier: the window in front ("put this on the left").
     case placeWindow(processIdentifier: pid_t?, appName: String?, placement: WindowPlacement)
@@ -238,6 +240,13 @@ enum DottieInstantCommands {
         if let knownSite = knownWebsitesBySpokenName[spokenTarget], let knownSiteURL = URL(string: knownSite) {
             return .openWebsite(url: knownSiteURL, siteName: spokenTarget.capitalized)
         }
+        // A file or folder opened before, by its name or the words used
+        // for it last time.
+        if let knownPlace = DottieKnownPlaces.shared.place(matchingSpokenName: spokenTarget) {
+            return .openPlace(url: URL(fileURLWithPath: knownPlace.path), placeName: knownPlace.displayName)
+        }
+        // Not known yet: whatever opens next is what these words meant.
+        DottieKnownPlaces.shared.noteUnrecognizedOpenRequest(spokenTarget: spokenTarget)
         return nil
     }
 
@@ -435,6 +444,12 @@ enum DottieInstantCommands {
             return await openApp(appURL: appURL, appName: appName)
         case .openWebsite(let url, let siteName):
             return NSWorkspace.shared.open(url) ? .done("Opened \(siteName).") : .failed("Couldn't open \(siteName).")
+        case .openPlace(let url, let placeName):
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                DottieKnownPlaces.shared.forget(path: url.path)
+                return .notHandled
+            }
+            return NSWorkspace.shared.open(url) ? .done("Opened \(placeName).") : .failed("Couldn't open \(placeName).")
         case .openSearch(let url, let description):
             return NSWorkspace.shared.open(url) ? .done("Searching \(description).") : .failed("Couldn't open the search.")
         case .quitApp(let processIdentifier, let appName):
