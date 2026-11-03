@@ -1693,7 +1693,7 @@ enum GeminiLiveToolCatalog {
         "save_picture": "save picture remember look image",
         "find_pictures": "pictures picture image saved find showed",
         "change_cursor": "cursor pet shape costume turn into cat dog animal emoji walk roam look",
-        "explain_on_screen": "explain draw teach math geometry graph equation diagram board plot tutor",
+        "explain_on_screen": "explain draw teach math geometry graph equation diagram board plot tutor sketch picture drawing animal horse",
         "code_on_screen": "code build website app project editor vscode cursor type typing human speed on screen commercial demo program write code",
         "read_closely": "read closely zoom close-up small text exponent power superscript math question exam homework formula equation misread",
         "write_notes": "notes note take write notebook study summary working solution steps equation formula chemistry physics science bullet heading",

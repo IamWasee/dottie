@@ -65,6 +65,9 @@ enum DottieTeaching {
     enum Kind: String, CaseIterable {
         case line, arrow, double_arrow, curve, polygon, circle, box, highlight, underline
         case angle, right_angle, point, text, ticks, measure, brace, axes, plot, cross, check, grid, chart
+        /// A free drawing of anything ("a horse"), planned as pen strokes
+        /// by DottieSketchArtist.
+        case sketch
     }
 
     struct Anchor {
@@ -159,9 +162,9 @@ enum DottieTeaching {
             "points": [
                 "type": "ARRAY",
                 "items": ["type": "STRING"],
-                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
+                "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. sketch: the drawing area's top-left and bottom-right (keep it about square), or one center point. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
-            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac). Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on."],
+            "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac), or for sketch what to draw, with the pose and look (\"a horse galloping, side view\", \"a plant cell with its parts\", \"a red sports car\"); it's drawn stroke by stroke like an artist, so use sketch for any picture of a thing (animals, people, objects, places, cells, machines), and text steps beside it for labels. Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on."],
             "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
@@ -171,7 +174,7 @@ enum DottieTeaching {
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use sketch to draw any picture of a thing (\"draw a horse\", a heart, a volcano, a cell), never try to build a picture out of lines and curves yourself. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -439,6 +442,33 @@ enum DottieTeaching {
         let fontSize: CGFloat = step.size == "small" ? 18 : (step.size == "large" ? 38 : 26)
 
         switch step.kind {
+        case .sketch:
+            let sketchStrokes = DottieSketchArtist.strokes(fromStepText: step.text)
+            guard !sketchStrokes.isEmpty else { return nil }
+            let sketchRect: CGRect
+            if points.count >= 2, let givenRect = rectangle(from: step, points: points, in: space) {
+                sketchRect = givenRect
+            } else if let center = points.first {
+                let side: CGFloat = space.boardRect.map { $0.width * 0.6 } ?? 360
+                sketchRect = CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
+            } else {
+                return nil
+            }
+            // Keep the drawing's proportions: fit the square canvas inside
+            // the area, centered.
+            let side = min(sketchRect.width, sketchRect.height)
+            let canvas = CGRect(x: sketchRect.midX - side / 2, y: sketchRect.midY - side / 2, width: side, height: side)
+            func canvasPoint(_ sketchPoint: CGPoint) -> CGPoint {
+                // y runs down on the canvas, up in AppKit.
+                CGPoint(x: canvas.minX + sketchPoint.x / 1000 * canvas.width, y: canvas.maxY - sketchPoint.y / 1000 * canvas.height)
+            }
+            for sketchStroke in sketchStrokes {
+                let strokePoints = sketchStroke.points.map(canvasPoint)
+                drawn.add(.stroke(points: strokePoints, closed: sketchStroke.isClosed, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: sketchStroke.ink ?? ink, lineWidth: 3, pen: strokePoints,
+                          duration: min(max(Double(length(of: strokePoints)) / 900, 0.2), 1.4))
+            }
+
         case .line, .curve, .polygon:
             guard points.count >= 2 else { return nil }
             let closed = step.kind == .polygon

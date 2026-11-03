@@ -61,6 +61,26 @@ final class DottieGuide {
         /// Walkthroughs only: go straight on once it's said, without
         /// waiting for a click or "next" (a tour of Dottie's own app).
         var movesOnWhenSaid = false
+        /// The hand motion a person would make to show it: drag this to
+        /// there, scroll here, these keys, type this.
+        var gesture: Gesture? = nil
+        /// 2-6 words shown right at the gesture or target ("drag this → here").
+        var caption: String? = nil
+    }
+
+    /// What a person sitting next to you would do with their hand.
+    struct Gesture {
+        enum Kind: String { case drag, scroll, keys, type }
+        let kind: Kind
+        /// drag: what to grab. scroll, type: the area or field.
+        let fromRect: CGRect?
+        /// drag: where it goes.
+        let toRect: CGRect?
+        let direction: DottieScreenAction.ScrollDirection
+        /// keys: the shortcut, like "cmd+shift+N".
+        let keys: String?
+        /// type: what to type.
+        let text: String?
     }
 
     struct Reveal {
@@ -106,6 +126,11 @@ final class DottieGuide {
     private var watchesOwnWindows = false
     private var stepWaitContinuation: CheckedContinuation<StepWaitResult, Never>?
     private var activeTargetRect: CGRect?
+    /// A drag step's grab and drop places: a press near the first and a
+    /// release near the second finishes the step by itself.
+    private var activeDragRects: (from: CGRect, to: CGRect)?
+    private var dragPressedNearSource = false
+    private var dragMonitor: Any?
 
     var isActive: Bool { guideTask != nil }
 
@@ -229,8 +254,14 @@ final class DottieGuide {
                 }
 
             case .look:
+                if let gesture = step.gesture, gesture.kind == .drag, let fromRect = gesture.fromRect, let toRect = gesture.toRect {
+                    activeDragRects = (from: fromRect, to: toRect)
+                }
                 let waitResult = await waitForStepCompletion(targetRect: nil, timeout: Self.lookWaitTimeoutSeconds)
+                activeDragRects = nil
                 switch waitResult {
+                case .clickedTarget where step.gesture?.kind == .drag:
+                    history.append("Step \(round): \"\(step.say)\". The user dragged it there.")
                 case .clickedTarget, .userSaidNext, .clickedElsewhere:
                     history.append("Step \(round): \"\(step.say)\". The user says they did it.")
                 case .timedOut:
@@ -444,6 +475,16 @@ final class DottieGuide {
     /// needed for mouse clicks).
     private func installClickMonitor() {
         removeClickMonitor()
+        if activeDragRects != nil {
+            dragPressedNearSource = false
+            dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+                let mouseLocation = NSEvent.mouseLocation
+                let isPress = event.type == .leftMouseDown
+                Task { @MainActor [weak self] in
+                    self?.handleDragEvent(isPress: isPress, at: mouseLocation)
+                }
+            }
+        }
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             let clickLocation = NSEvent.mouseLocation
             Task { @MainActor [weak self] in
@@ -464,7 +505,24 @@ final class DottieGuide {
         }
     }
 
+    private func handleDragEvent(isPress: Bool, at mouseLocation: CGPoint) {
+        guard stepWaitContinuation != nil, let activeDragRects else { return }
+        let tolerance: CGFloat = 40
+        if isPress {
+            dragPressedNearSource = activeDragRects.from.insetBy(dx: -tolerance, dy: -tolerance).contains(mouseLocation)
+        } else if dragPressedNearSource {
+            dragPressedNearSource = false
+            if activeDragRects.to.insetBy(dx: -tolerance * 2, dy: -tolerance * 2).contains(mouseLocation) {
+                resumeStepWait(with: .clickedTarget)
+            }
+        }
+    }
+
     private func removeClickMonitor() {
+        if let dragMonitor {
+            NSEvent.removeMonitor(dragMonitor)
+        }
+        dragMonitor = nil
         if let clickMonitor {
             NSEvent.removeMonitor(clickMonitor)
         }
@@ -495,6 +553,8 @@ final class DottieGuide {
     "say" is spoken out loud: one short, plain sentence (at most about 15 words), friendly, no coordinates, no lists. Name things by their visible text and where they are ("Click Window, up in the menu bar.").
 
     Marks are drawn on the screen: circle (a small control or word), box (a group of controls), underline (text), arrow (point toward something), highlight (a whole area or panel). Use one or two marks per step, never more than three.
+
+    Show it the way a person next to them would with their hand. Whenever the step is more than one click, add a gesture: drag (from_box on the thing to grab, to_box exactly where to drop it: Dottie's hand moves it there over and over), scroll (box_2d on the area to scroll, direction), keys (the shortcut, like cmd+shift+N: the keys are drawn on screen), type (box_2d on the field, text to type: shown beside it). Give every step a caption: 2-6 words shown right at the hand, like "drag this → here", "click File", "scroll down", "press ⌘S", "type your name".
     """
 
     private static func instruction(goal: String, mode: Mode, history: [String], remainingRounds: Int, frontmostApp: String, howToText: String?) -> String {
@@ -514,7 +574,7 @@ final class DottieGuide {
 
             Look at this new screenshot as the truth. Give exactly ONE next step toward the goal, as {"steps": [step]}.
             - kind "click": the next action is a single click on something visible now (a menu, menu item, tab, button, panel). Set target_box tightly on it and target_label to its visible text. "say" names only that one click.
-            - kind "look": the next action is manual work you can't watch for (dragging a clip, typing a name, moving a slider, choosing by taste), or something to notice. Mark the place and say what to do, ending with "say next when you're done".
+            - kind "look": the next action is manual work (dragging a clip, typing a name, moving a slider, scrolling, a keyboard shortcut, choosing by taste), or something to notice. Show it with a gesture (a drag gets from_box and to_box; Dottie notices when they've dragged it there) and say what to do; for anything but a drag, end with "say next when you're done".
             - kind "done": the goal is reached or already visible; "say" is a short, warm wrap-up of how they got there.
             Never make up a control. Only target something you can actually read or clearly recognize on this screenshot, and set target_label to its exact visible text (or its tooltip name for an icon). Follow the app's real way of doing it, from the corrections and how-to above, not a guess about what apps usually have. If what's needed isn't visible, guide them to reveal it the way this app does it (select the clip first, a panel tab, a menu in the menu bar, a right-click menu, a scroll). If you don't know where it is in their version, say so honestly in a "look" step and suggest where to look, instead of pointing somewhere. Treat steps in the history as done unless the screen clearly shows they failed; never repeat the same target. If a menu you pointed at is now open, the next target is inside it. If the screen shows a different app than the goal needs, guide them back to it.
             \(remainingRounds == 0 ? "This is the last step you can give: use kind 'done' and tell them what's left in one sentence." : "")
@@ -554,6 +614,20 @@ final class DottieGuide {
                 "target_box": boxSchema,
                 "target_label": ["type": "STRING"],
                 "marks": ["type": "ARRAY", "items": markSchema],
+                "caption": ["type": "STRING", "description": "2-6 words shown at the hand, like \"drag this → here\"."],
+                "gesture": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "kind": ["type": "STRING", "enum": ["drag", "scroll", "keys", "type"]],
+                        "from_box": boxSchema,
+                        "to_box": boxSchema,
+                        "box_2d": boxSchema,
+                        "direction": ["type": "STRING", "enum": ["up", "down", "left", "right"]],
+                        "keys": ["type": "STRING"],
+                        "text": ["type": "STRING"]
+                    ],
+                    "required": ["kind"]
+                ],
                 "reveal": [
                     "type": "OBJECT",
                     "properties": [
@@ -682,6 +756,12 @@ final class DottieGuide {
             if reveal?.action == .click, let revealBox = rawReveal?["box_2d"] as? [Any] {
                 revealRect = globalRect(fromBox: revealBox, screen: screen)
             }
+            let gesture = (rawStep["gesture"] as? [String: Any]).flatMap { parseGesture($0, screen: screen) }
+            if gesture?.kind == .drag && kind == .click {
+                // A drag is never a single click.
+                kind = .look
+            }
+            let caption = (rawStep["caption"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             return Step(
                 kind: reveal == nil ? kind : .look,
                 say: say,
@@ -689,8 +769,31 @@ final class DottieGuide {
                 targetLabel: targetLabel?.isEmpty == false ? targetLabel : nil,
                 marks: reveal == nil ? marks : [],
                 displayFrame: screen.displayFrame,
-                reveal: reveal
+                reveal: reveal,
+                gesture: reveal == nil ? gesture : nil,
+                caption: caption?.isEmpty == false ? String(caption!.prefix(48)) : nil
             )
+        }
+    }
+
+    private static func parseGesture(_ rawGesture: [String: Any], screen: DottieDisplayCapture.Screenshot) -> Gesture? {
+        guard let kind = (rawGesture["kind"] as? String).flatMap({ Gesture.Kind(rawValue: $0.lowercased()) }) else { return nil }
+        func rect(_ key: String) -> CGRect? {
+            guard let modelRect = (rawGesture[key] as? [Any]).flatMap({ globalRect(fromBox: $0, screen: screen) }) else { return nil }
+            let isAboutOneControl = modelRect.width <= 320 && modelRect.height <= 120
+            return isAboutOneControl ? AccessibilitySnap.refinedFrame(modelRect) : modelRect
+        }
+        let fromRect = rect("from_box") ?? rect("box_2d")
+        let toRect = rect("to_box")
+        let direction = (rawGesture["direction"] as? String).flatMap { DottieScreenAction.ScrollDirection(rawValue: $0.lowercased()) } ?? .down
+        let keys = (rawGesture["keys"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = (rawGesture["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch kind {
+        case .drag where fromRect == nil || toRect == nil: return nil
+        case .scroll where fromRect == nil: return nil
+        case .keys where keys?.isEmpty != false: return nil
+        case .type where text?.isEmpty != false: return nil
+        default: return Gesture(kind: kind, fromRect: fromRect, toRect: toRect, direction: direction, keys: keys, text: text)
         }
     }
 

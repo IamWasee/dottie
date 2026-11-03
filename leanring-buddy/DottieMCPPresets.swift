@@ -44,6 +44,13 @@ struct DottieMCPPreset: Identifiable {
 
     var needsKey: Bool { fields.contains { $0.kind == .secret && !$0.isOptional } }
 
+    /// The same service's sign-in connector (browser sign-in, no key), when
+    /// it has one: Home → Tools offers that first and keeps the key as the
+    /// other way.
+    var browserSignInPreset: DottieMCPPreset? {
+        DottieMCPPresets.browserSignInAlternatives[id].flatMap(DottieMCPPresets.preset(withID:))
+    }
+
     /// The program it runs with, for "needs uv" style hints.
     var launcher: String? { config.command }
 }
@@ -372,6 +379,16 @@ enum DottieMCPPresets {
             config: DottieMCPServerConfig(command: "npx", args: ["-y", "mcp-remote@latest", url], env: [:])
         )
     }
+
+    /// Key-based presets whose service also has a hosted server with a
+    /// browser sign-in (checked against each maker's MCP docs).
+    static let browserSignInAlternatives: [String: String] = [
+        "notion": "notion-connector",
+        "linear": "linear-connector",
+        "stripe": "stripe-connector",
+        "sentry": "sentry-connector",
+        "supabase": "supabase-connector"
+    ]
 
     static func preset(withID presetID: String) -> DottieMCPPreset? {
         all.first { $0.id == presetID }
