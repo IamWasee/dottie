@@ -489,8 +489,21 @@ final class DottieToolsStore: ObservableObject {
     private func session(for serverName: String) async throws -> DottieMCPServerSession {
         guard let config = file.mcpServers[serverName] else { throw SessionProblem(status: .off) }
         guard file.isEnabled(serverName) else { throw SessionProblem(status: .off) }
-        let (filledConfig, missing) = config.filledIn(serverName: serverName)
-        guard missing.isEmpty else { throw SessionProblem(status: .needsKey(missing)) }
+        var (filledConfig, missing) = config.filledIn(serverName: serverName)
+        // GitHub without a saved token: take the GitHub CLI's sign-in now
+        // (it may have signed in after launch) instead of failing.
+        if !missing.isEmpty, DottieGitHubLogin.isGitHubServer(config), let cliToken = await DottieGitHubLogin.cliToken() {
+            for tokenName in missing {
+                DottieToolsKeychain.setValue(cliToken, server: serverName, name: tokenName)
+            }
+            (filledConfig, missing) = config.filledIn(serverName: serverName)
+        }
+        guard missing.isEmpty else {
+            if DottieGitHubLogin.isGitHubServer(config) {
+                throw SessionProblem(status: .failed("not signed in to GitHub. The user can press Sign in with GitHub in Home → Tools → GitHub."))
+            }
+            throw SessionProblem(status: .needsKey(missing))
+        }
 
         let fingerprint = filledConfig.fingerprint
         if let existing = sessions[serverName], sessionFingerprints[serverName] == fingerprint {
