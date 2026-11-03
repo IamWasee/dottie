@@ -716,10 +716,15 @@ final class DottieMausBot: ObservableObject {
 
     /// Decides where the next helper turn runs, starting MausBot's
     /// workspace first if it's set up but not running.
-    func readinessForHelperTurn() async -> DottieClaudeReadiness {
-        guard preference == .claudeWithBackup else { return .skip }
-        if DottieHelperEngine.claudePausedUntil != nil {
-            return .skip
+    /// `isChosenByUser`: the user set this helper to Claude, so Claude runs
+    /// it even when Settings says Gemini only or Claude is paused after an
+    /// earlier problem (a real failure still falls back).
+    func readinessForHelperTurn(isChosenByUser: Bool = false) async -> DottieClaudeReadiness {
+        if !isChosenByUser {
+            guard preference == .claudeWithBackup else { return .skip }
+            if DottieHelperEngine.claudePausedUntil != nil {
+                return .skip
+            }
         }
         guard let launcher = await currentLauncher() else { return .skip }
         if let claudeCheckedAt, Date().timeIntervalSince(claudeCheckedAt) < Self.workspaceCheckLifetime {

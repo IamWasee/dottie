@@ -168,6 +168,7 @@ final class GeminiCLIAgentRuntime {
         model: String,
         isComputerUseApproved: Bool,
         additionalDirectoryURLs: [URL],
+        workerRoute: String = "/gemini",
         onEvent: @escaping @Sendable (GeminiCLIAgentEvent) -> Void
     ) async throws {
         // The first Dot on a new Mac waits while Dottie downloads Gemini
@@ -207,7 +208,9 @@ final class GeminiCLIAgentRuntime {
             let existingPATH = processEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
             processEnvironment["PATH"] = existingPATH + ":" + DotsRuntimeInstaller.nodeBinFolderURL.path
         }
-        processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/gemini"
+        // "/gemini" tries Groq first when the request fits; "/gemini-only"
+        // (a helper set to Gemini) goes straight to Gemini.
+        processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + workerRoute
         // The Worker swaps this for the real key. Without a shared secret
         // configured, any placeholder works.
         processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
