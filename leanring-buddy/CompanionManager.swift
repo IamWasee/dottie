@@ -810,6 +810,9 @@ final class CompanionManager: ObservableObject {
             if DottieAwayMode.shared.isAway {
                 DottieAwayMode.shared.setAway(false, from: "the talk shortcut")
             }
+            // Connected apps start while the user speaks, not when Dottie
+            // first needs one.
+            DottieToolsStore.shared.warmUpConnectedServers()
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()

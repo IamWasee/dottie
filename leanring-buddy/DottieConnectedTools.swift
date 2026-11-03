@@ -57,8 +57,18 @@ enum DottieConnectedTools: DottieToolModule {
         let store = DottieToolsStore.shared
         let connectedNames = store.serverNames.filter { store.isEnabled($0) }
         guard !connectedNames.isEmpty else { return "" }
+        // Each app's tool names from last time, so a clear ask goes
+        // straight to use_app_tool instead of two apps_and_tools round trips.
+        let appLines = connectedNames.map { serverName -> String in
+            guard let tools = store.toolsByServer[serverName], !tools.isEmpty else { return "- \(serverName)" }
+            let toolNames = tools.prefix(30).map(\.name).joined(separator: ", ")
+            let more = tools.count > 30 ? " (+\(tools.count - 30) more)" : ""
+            return "- \(serverName): \(toolNames)\(more)"
+        }
         return """
-        the user connected these apps: \(connectedNames.joined(separator: ", ")). to use one, call apps_and_tools with that app to see its tools, then use_app_tool to run one (never through find_tool or use_tool). say what you're doing in a few words while it runs.
+        the user connected these apps (with their tools):
+        \(appLines.joined(separator: "\n"))
+        to use one, call use_app_tool right away when the tool and its arguments are obvious from its name; call apps_and_tools with the app first only when you need its arguments (never use find_tool or use_tool for these). say what you're doing in a few words while it runs.
         connected apps come first: before doing a task by hand (do_task_on_screen, clicking, the browser, a helper) or saying you can't, check whether one of these apps can do it, and if apps_and_tools shows a tool that fits, use it. only go to the screen when no connected app can, or its tool failed twice; then say so in a few words.
         """
     }
@@ -111,7 +121,42 @@ enum DottieConnectedTools: DottieToolModule {
                 result += "\n" + DottieGitHubLogin.signedInAccountNote(fromGetMeResult: whoAmIResult)
             }
         }
+        result = compactedJSONText(result)
         guard result.count > maximumResultLength else { return result }
         return String(result.prefix(maximumResultLength)) + "\n…(cut short; \(result.count) characters in all)"
+    }
+
+    /// Many apps answer with pretty-printed JSON; the indents and empty
+    /// fields are often half of it, and every character slows the spoken
+    /// answer. Same data, without the padding. Anything else stays as is.
+    private static func compactedJSONText(_ resultText: String) -> String {
+        let trimmedText = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let firstCharacter = trimmedText.first, firstCharacter == "{" || firstCharacter == "[",
+              let resultData = trimmedText.data(using: .utf8),
+              let parsedObject = try? JSONSerialization.jsonObject(with: resultData),
+              let compactData = try? JSONSerialization.data(withJSONObject: withoutEmptyValues(parsedObject), options: [.withoutEscapingSlashes]),
+              let compactText = String(data: compactData, encoding: .utf8),
+              compactText.count < trimmedText.count else { return resultText }
+        return compactText
+    }
+
+    /// Drops nulls, empty strings, empty lists and empty objects.
+    private static func withoutEmptyValues(_ value: Any) -> Any {
+        if let dictionary = value as? [String: Any] {
+            var keptValues: [String: Any] = [:]
+            for (key, childValue) in dictionary {
+                let cleanedValue = withoutEmptyValues(childValue)
+                if cleanedValue is NSNull { continue }
+                if let text = cleanedValue as? String, text.isEmpty { continue }
+                if let list = cleanedValue as? [Any], list.isEmpty { continue }
+                if let object = cleanedValue as? [String: Any], object.isEmpty { continue }
+                keptValues[key] = cleanedValue
+            }
+            return keptValues
+        }
+        if let list = value as? [Any] {
+            return list.map(withoutEmptyValues)
+        }
+        return value
     }
 }
