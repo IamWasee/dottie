@@ -63,6 +63,23 @@ final class ConversationStore: ObservableObject {
         DottieEpisodicMemory.shared.noteExchange(userText: trimmedUserText, dottieText: trimmedClickyText)
     }
 
+    /// Adds more of Dottie's answer to the newest exchange: after a tool
+    /// call, Live keeps answering the same question in a new model turn.
+    func extendLastEntry(clickyText: String) {
+        let trimmedClickyText = clickyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedClickyText.isEmpty, let lastEntry = entries.last else { return }
+        let combinedClickyText = [lastEntry.clickyText, trimmedClickyText].filter { !$0.isEmpty }.joined(separator: " ")
+        entries[entries.count - 1] = ConversationEntry(
+            id: lastEntry.id,
+            createdAt: lastEntry.createdAt,
+            inputKind: lastEntry.inputKind,
+            userText: lastEntry.userText,
+            clickyText: combinedClickyText,
+            imageFileNames: lastEntry.imageFileNames
+        )
+        saveEntriesToDisk()
+    }
+
     func delete(entryID: UUID) {
         entries.removeAll { $0.id == entryID }
         saveEntriesToDisk()

@@ -1093,8 +1093,8 @@ final class CompanionManager: ObservableObject {
             self?.pointAtLiveElement(pointRequest)
         }
 
-        liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript in
-            self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript)
+        liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript, isFollowUp in
+            self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript, isFollowUpAfterTools: isFollowUp)
         }
 
         liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
@@ -2326,7 +2326,10 @@ final class CompanionManager: ObservableObject {
 
     /// Records the exchange, then waits for the last of the audio to play
     /// before returning the cursor to idle.
-    private func finishLiveTurn(userTranscript: String, modelTranscript: String) {
+    /// `isFollowUpAfterTools`: Live answered a tool result for a question
+    /// already recorded; its words join that exchange instead of logging
+    /// the question again.
+    private func finishLiveTurn(userTranscript: String, modelTranscript: String, isFollowUpAfterTools: Bool = false) {
         liveVoiceClient.isAudioOutputMuted = false
         // The Mac already did this one and showed it; Live's answer was
         // silenced.
@@ -2354,7 +2357,19 @@ final class CompanionManager: ObservableObject {
         let isSecretPhraseTurn = !isNarrationTurn
             && DottieAdminMode.shared.handleSecretPhraseIfSaid(userTranscript, companionManager: self)
 
-        if !isNarrationTurn && !isSecretPhraseTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
+        if isFollowUpAfterTools && !isNarrationTurn && !isSecretPhraseTurn {
+            if !modelTranscript.isEmpty {
+                brain.record(.chat, "dottie: \(modelTranscript)")
+                conversationStore.extendLastEntry(clickyText: modelTranscript)
+                if let lastExchange = conversationHistory.popLast() {
+                    let combinedResponse = [lastExchange.assistantResponse, modelTranscript].filter { !$0.isEmpty }.joined(separator: " ")
+                    conversationHistory.append((userTranscript: lastExchange.userTranscript, assistantResponse: combinedResponse))
+                    liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
+                        (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
+                    }
+                }
+            }
+        } else if !isNarrationTurn && !isSecretPhraseTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
             brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")
             conversationStore.append(
                 userText: userTranscript,

@@ -62,6 +62,10 @@ final class GeminiLiveVoiceClient {
     /// A pause this long while the key is still held also ends the turn.
     private static let voiceDetectionSilenceMilliseconds = 2000
     private static let maximumTurnReplays = 2
+    /// Tool calls one question may make before Live is told to stop and
+    /// answer. Each round re-reads the whole session (picture included), so
+    /// a model stuck retrying a failing tool burns tokens fast.
+    private static let maximumToolCallsPerUserTurn = 10
     private static let idleDisconnectDelaySeconds: TimeInterval = 45
 
     // MARK: - Callbacks (all delivered on the main actor)
@@ -69,7 +73,11 @@ final class GeminiLiveVoiceClient {
     /// First audio chunk of a model turn arrived and is about to play.
     var onModelSpeechStarted: (@MainActor () -> Void)?
     /// The model finished its turn. Audio may still be draining from the player.
-    var onModelTurnComplete: (@MainActor (_ userTranscript: String, _ modelTranscript: String) -> Void)?
+    /// After a tool call Live finishes a turn and starts another for the
+    /// same question; those follow-ups pass an empty user transcript,
+    /// only the new part of the answer, and `isFollowUp` true, so one
+    /// question is never recorded more than once.
+    var onModelTurnComplete: (@MainActor (_ userTranscript: String, _ modelTranscript: String, _ isFollowUp: Bool) -> Void)?
     /// The model asked to point at something on screen.
     var onPointRequest: (@MainActor (GeminiLivePointRequest) -> Void)?
     /// Live partial transcript of what the model is saying (for captions).
@@ -209,6 +217,9 @@ final class GeminiLiveVoiceClient {
     /// own words (a click that only starts their goal).
     var userTranscriptSoFar: String { currentTurnUserTranscript }
     private var currentTurnModelTranscript = ""
+    /// The user's words for this turn already went out with a turnComplete.
+    private var hasReportedUserTranscriptThisTurn = false
+    private var toolCallsThisUserTurn = 0
     private var hasModelStartedSpeakingThisTurn = false
     /// Any audio, transcript or tool call from the model this turn. Until
     /// then a dropped session can be retried without the user noticing.
@@ -262,6 +273,8 @@ final class GeminiLiveVoiceClient {
 
         currentTurnUserTranscript = ""
         currentTurnModelTranscript = ""
+        hasReportedUserTranscriptThisTurn = false
+        toolCallsThisUserTurn = 0
         hasModelStartedSpeakingThisTurn = false
         hasReceivedModelContentThisTurn = false
         turnReplayCount = 0
@@ -1054,9 +1067,14 @@ final class GeminiLiveVoiceClient {
             stopRecordingCurrentTurnMessages()
             // An answer cut off with Escape isn't remembered as said.
             let wasCancelledByUser = isDiscardingModelAudioForCurrentTurn
-            let finishedUserTranscript = wasCancelledByUser ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isFollowUp = hasReportedUserTranscriptThisTurn
+            let finishedUserTranscript = (wasCancelledByUser || isFollowUp) ? "" : currentTurnUserTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             let finishedModelTranscript = wasCancelledByUser ? "" : currentTurnModelTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript)
+            hasReportedUserTranscriptThisTurn = true
+            // The next turnComplete (after a tool answer) reports only what
+            // the model says from here on.
+            currentTurnModelTranscript = ""
+            onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript, isFollowUp)
             if isConnectedSessionOnBackupModel {
                 // Back to the main model (and its voice) for the next turn;
                 // the conversation carries over through the history.
@@ -1082,6 +1100,21 @@ final class GeminiLiveVoiceClient {
             let functionName = functionCall["name"] as? String ?? ""
             let functionCallID = functionCall["id"] as? String ?? UUID().uuidString
             let functionArguments = functionCall["args"] as? [String: Any] ?? [:]
+
+            toolCallsThisUserTurn += 1
+            if toolCallsThisUserTurn > Self.maximumToolCallsPerUserTurn {
+                print("🛑 Gemini Live: \(functionName) not run, this question already made \(Self.maximumToolCallsPerUserTurn) tool calls")
+                enqueueOrSend(message: [
+                    "toolResponse": [
+                        "functionResponses": [[
+                            "id": functionCallID,
+                            "name": functionName,
+                            "response": ["error": "not run: this question already used \(Self.maximumToolCallsPerUserTurn) tool calls. stop calling tools now; tell the user in one or two sentences what you found and what went wrong, and what they could try."]
+                        ]]
+                    ]
+                ])
+                continue
+            }
 
             switch functionName {
             case GeminiLiveToolCatalog.findToolFunctionName:
@@ -1420,6 +1453,8 @@ final class GeminiLiveVoiceClient {
         }
 
         turnReplayCount += 1
+        // The replayed audio is transcribed again on the new session.
+        currentTurnUserTranscript = ""
         // The main model's drops are usually one-offs, so the first replay
         // stays on it (same voice); only a second drop moves to the backup.
         shouldUseBackupLiveModel = turnReplayCount >= 2

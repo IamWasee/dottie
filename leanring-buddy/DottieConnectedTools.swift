@@ -104,6 +104,12 @@ enum DottieConnectedTools: DottieToolModule {
         if DottieGitHubLogin.isGitHubServer(store.config(for: serverName)),
            result.range(of: "404", options: .literal) != nil || result.localizedCaseInsensitiveContains("not found") {
             result += "\n" + DottieGitHubLogin.notFoundHint
+            // Who the token belongs to, so the model stops guessing owners
+            // (and a broken sign-in shows up as one).
+            if resolvedToolName != "get_me" {
+                let whoAmIResult = await store.callTool(server: serverName, tool: "get_me", arguments: [:])
+                result += "\n" + DottieGitHubLogin.signedInAccountNote(fromGetMeResult: whoAmIResult)
+            }
         }
         guard result.count > maximumResultLength else { return result }
         return String(result.prefix(maximumResultLength)) + "\n…(cut short; \(result.count) characters in all)"
