@@ -52,7 +52,23 @@ final class DottieKnownPlaces {
         storeURL = applicationSupportURL.appendingPathComponent("Dottie/KnownPlaces.json")
         if let storedData = try? Data(contentsOf: storeURL),
            let storedPlaces = try? JSONDecoder().decode([Place].self, from: storedData) {
-            places = storedPlaces
+            // Older saves could hold one folder twice ("//" in the path) and
+            // code-like names; merge and drop those once.
+            var cleanedPlaces: [Place] = []
+            for var storedPlace in storedPlaces {
+                storedPlace.path = Self.standardizedPath(storedPlace.path)
+                storedPlace.spokenNames.removeAll { Self.looksLikeMachineName($0) }
+                if let existingIndex = cleanedPlaces.firstIndex(where: { $0.path == storedPlace.path }) {
+                    for name in storedPlace.spokenNames where !cleanedPlaces[existingIndex].spokenNames.contains(name) {
+                        cleanedPlaces[existingIndex].spokenNames.append(name)
+                    }
+                    cleanedPlaces[existingIndex].timesOpened += storedPlace.timesOpened
+                    cleanedPlaces[existingIndex].lastOpenedAt = max(cleanedPlaces[existingIndex].lastOpenedAt, storedPlace.lastOpenedAt)
+                } else {
+                    cleanedPlaces.append(storedPlace)
+                }
+            }
+            places = cleanedPlaces
         }
     }
 
@@ -140,12 +156,15 @@ final class DottieKnownPlaces {
 
     // MARK: - Remembering
 
-    func remember(path: String, spokenName: String? = nil) {
+    func remember(path rawPath: String, spokenName: String? = nil) {
+        // "/Users/me//Downloads" and "/Users/me/Downloads" are one place.
+        let path = Self.standardizedPath(rawPath)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else { return }
         let baseName = Self.spokenForm(((path as NSString).lastPathComponent as NSString).deletingPathExtension)
 
-        var namesToAdd = [baseName]
+        // A download named like "57000a64-7d85-…" has no name anyone says.
+        var namesToAdd = Self.looksLikeMachineName(baseName) ? [] : [baseName]
         if let spokenName { namesToAdd.append(Self.spokenForm(spokenName)) }
         if let unrecognizedOpenRequest,
            Date().timeIntervalSince(unrecognizedOpenRequest.askedAt) < Self.secondsToLinkWordsToWhatOpened {
@@ -174,6 +193,19 @@ final class DottieKnownPlaces {
     /// The strict lane didn't know these "open …" words.
     func noteUnrecognizedOpenRequest(spokenTarget: String) {
         unrecognizedOpenRequest = (Self.spokenForm(spokenTarget), Date())
+    }
+
+    static func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Mostly hex digits or numbers (UUIDs, hashes, "IMG 20251103 0412").
+    static func looksLikeMachineName(_ spokenName: String) -> Bool {
+        let letters = spokenName.filter { !$0.isWhitespace }
+        guard letters.count >= 6 else { return false }
+        let hexOrDigitCount = letters.filter { $0.isHexDigit }.count
+        let digitCount = letters.filter { $0.isNumber }.count
+        return Double(hexOrDigitCount) / Double(letters.count) > 0.8 && digitCount >= 3
     }
 
     func forget(path: String) {

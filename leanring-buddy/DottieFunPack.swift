@@ -45,6 +45,36 @@ final class DottieFunPack {
                 DottieKeepAwake.shared.hold(.awayMode, isAway)
             }
             .store(in: &keepAwakeCancellables)
+        companion.meetingRecorder.$isRecording
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { isRecordingMeeting in
+                DottieKeepAwake.shared.hold(.meeting, isRecordingMeeting)
+            }
+            .store(in: &keepAwakeCancellables)
+        DottieGameplayRecorder.shared.$isRecording
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { isRecordingGameplay in
+                DottieKeepAwake.shared.hold(.gameplayRecording, isRecordingGameplay)
+            }
+            .store(in: &keepAwakeCancellables)
+        DottieAutoTyper.shared.$phase
+            .map { phase -> Bool in
+                if case .typing = phase { return true }
+                if case .countingDown = phase { return true }
+                return false
+            }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { isTyping in
+                DottieKeepAwake.shared.hold(.autoTyping, isTyping)
+            }
+            .store(in: &keepAwakeCancellables)
+        // "Always on" set last launch.
+        if DottieKeepAwake.shared.keepsAwakeAlways {
+            DottieKeepAwake.shared.hold(.alwaysOn, true)
+        }
 
         // Level-ups get a card (with confetti) in the notch.
         celebrationCancellable = DottieLevels.shared.$celebration
