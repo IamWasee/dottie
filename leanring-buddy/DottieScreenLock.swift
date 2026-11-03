@@ -91,6 +91,10 @@ final class DottieKeepAwake: ObservableObject {
         case screenJob = "a screen job"
         case helperWork = "a helper's task"
         case awayMode = "away mode"
+        case meeting = "meeting notes"
+        case gameplayRecording = "a gameplay recording"
+        case autoTyping = "typing"
+        case alwaysOn = "keeping the Mac awake (always on)"
     }
 
     static let keepScreenOnDefaultsKey = "dottieKeepScreenOnWhileWorking"
@@ -103,7 +107,25 @@ final class DottieKeepAwake: ObservableObject {
         }
     }
 
+    static let keepAwakeAlwaysDefaultsKey = "dottieKeepMacAwakeAlways"
+
+    /// Off unless the user turns it on: the Mac and its screen stay awake
+    /// the whole time Dottie is open, working or not.
+    @Published var keepsAwakeAlways: Bool = UserDefaults.standard.bool(forKey: DottieKeepAwake.keepAwakeAlwaysDefaultsKey) {
+        didSet {
+            UserDefaults.standard.set(keepsAwakeAlways, forKey: Self.keepAwakeAlwaysDefaultsKey)
+            hold(.alwaysOn, keepsAwakeAlways)
+        }
+    }
+
     @Published private(set) var activeReasons: Set<Reason> = []
+
+    /// A display-sleep assertion keeps the screen lit, but macOS still
+    /// counts the user as idle, so the screensaver (and the lock that comes
+    /// with it) can start anyway. Telling macOS the user is active every
+    /// little while resets that idle clock, the way `caffeinate -u` does.
+    private var userActivityTimer: Timer?
+    private static let userActivityRefreshSeconds: TimeInterval = 30
 
     private var systemSleepAssertionID: IOPMAssertionID = 0
     private var displaySleepAssertionID: IOPMAssertionID = 0
@@ -112,7 +134,12 @@ final class DottieKeepAwake: ObservableObject {
 
     var isHoldingAssertion: Bool { isHoldingSystemAssertion }
 
-    private init() {}
+    private init() {
+        if keepsAwakeAlways {
+            // didSet doesn't run for the stored value at launch.
+            DispatchQueue.main.async { DottieKeepAwake.shared.hold(.alwaysOn, true) }
+        }
+    }
 
     /// The 24/7 jobs' switch (DottieKeepWorking).
     func setActive(_ shouldStayAwake: Bool) {
@@ -126,7 +153,7 @@ final class DottieKeepAwake: ObservableObject {
             activeReasons.insert(reason)
             // Work starting while the screensaver runs (or the display is
             // asleep) brings the screen back first.
-            if keepsScreenOnWhileWorking { wakeScreenIfIdle() }
+            if keepsScreenOnWhileWorking && reason != .alwaysOn { wakeScreenIfIdle() }
         } else {
             activeReasons.remove(reason)
         }
@@ -140,7 +167,7 @@ final class DottieKeepAwake: ObservableObject {
 
     private func updateAssertions() {
         let needsSystemAwake = !activeReasons.isEmpty
-        let needsScreenOn = needsSystemAwake && keepsScreenOnWhileWorking
+        let needsScreenOn = needsSystemAwake && (keepsScreenOnWhileWorking || activeReasons.contains(.alwaysOn))
         setAssertion(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             isNeeded: needsSystemAwake,
@@ -152,6 +179,32 @@ final class DottieKeepAwake: ObservableObject {
             isNeeded: needsScreenOn,
             assertionID: &displaySleepAssertionID,
             isHolding: &isHoldingDisplayAssertion
+        )
+        updateUserActivityTimer(isNeeded: needsScreenOn)
+    }
+
+    private func updateUserActivityTimer(isNeeded: Bool) {
+        if isNeeded {
+            guard userActivityTimer == nil else { return }
+            declareUserActivity()
+            userActivityTimer = Timer.scheduledTimer(withTimeInterval: Self.userActivityRefreshSeconds, repeats: true) { _ in
+                MainActor.assumeIsolated { DottieKeepAwake.shared.declareUserActivity() }
+            }
+        } else {
+            userActivityTimer?.invalidate()
+            userActivityTimer = nil
+        }
+    }
+
+    /// Resets macOS's idle clock (never while locked: Dottie doesn't try to
+    /// get past the lock screen).
+    private func declareUserActivity() {
+        guard !DottieScreenLock.shared.isLocked else { return }
+        var userActivityAssertionID: IOPMAssertionID = 0
+        _ = IOPMAssertionDeclareUserActivity(
+            assertionReasonText as CFString,
+            kIOPMUserActiveLocal,
+            &userActivityAssertionID
         )
     }
 
