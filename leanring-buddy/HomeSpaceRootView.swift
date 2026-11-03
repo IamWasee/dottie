@@ -485,6 +485,12 @@ private struct HomeConversationView: View {
 }
 
 private struct HomeConversationEntryView: View {
+    /// Lines CompanionManager records in parentheses when Dottie starts a
+    /// turn herself (speakWhenFree, startLiveTextTurn).
+    static func isDottieOwnTrigger(_ userText: String) -> Bool {
+        userText.count > 2 && userText.hasPrefix("(") && userText.hasSuffix(")")
+    }
+
     let entry: ConversationEntry
     let imageFolderURL: URL
 
@@ -504,7 +510,16 @@ private struct HomeConversationEntryView: View {
                     }
                 }
             }
-            if !entry.userText.isEmpty {
+            if Self.isDottieOwnTrigger(entry.userText) {
+                // "(brain: …)", "(done: …)", "(job asks: …)": Dottie spoke up
+                // on her own; the user didn't say this.
+                Text(String(entry.userText.dropFirst().dropLast()))
+                    .font(.system(size: 11))
+                    .italic()
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !entry.userText.isEmpty {
                 HStack {
                     Spacer(minLength: 60)
                     Text(entry.userText)

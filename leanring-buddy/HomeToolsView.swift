@@ -190,7 +190,16 @@ private struct HomeConnectedAppsSection: View {
                 HomeHint(summary)
             }
             let keyNames = store.keyNames(for: serverName)
-            if !keyNames.isEmpty {
+            if DottieGitHubLogin.isGitHubServer(store.config(for: serverName)) {
+                HomeGitHubSignInBox(store: store, serverName: serverName, isSignedIn: keyNames.allSatisfy { store.hasKey($0.name, for: serverName) })
+                if !keyNames.isEmpty {
+                    DisclosureGroup("Use a token instead") {
+                        HomeGitHubTokenInstructions()
+                        HomeServerKeysEditor(serverName: serverName, keyNames: keyNames, store: store, keyLink: store.preset(for: serverName)?.keyLink)
+                    }
+                    .font(.system(size: 11))
+                }
+            } else if !keyNames.isEmpty {
                 HomeServerKeysEditor(serverName: serverName, keyNames: keyNames, store: store, keyLink: store.preset(for: serverName)?.keyLink)
             }
             if let tools = store.toolsByServer[serverName], !tools.isEmpty {
@@ -311,7 +320,7 @@ private struct HomeConnectedAppsSection: View {
                     Text(preset.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(DS.Colors.textPrimary)
-                    if preset.needsKey {
+                    if preset.needsKey && !DottieGitHubLogin.isGitHubServer(preset.config) {
                         Text("needs a key")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(DS.Colors.warningText)
@@ -440,6 +449,91 @@ private struct HomeServerKeysEditor: View {
     }
 }
 
+/// "Sign in with GitHub": no token to make. Dottie gets GitHub's own
+/// sign-in tool if needed, copies a one-time code and opens GitHub's page,
+/// where the user pastes it and presses Authorize (DottieGitHubSignIn).
+private struct HomeGitHubSignInBox: View {
+    @ObservedObject var store: DottieToolsStore
+    let serverName: String
+    let isSignedIn: Bool
+    var onConnected: (() -> Void)? = nil
+    @ObservedObject private var gitHubSignIn = DottieGitHubSignIn.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                Task { await gitHubSignIn.signIn(store: store, serverName: serverName, forceNewLogin: isSignedIn) }
+            } label: {
+                Label(isSignedIn ? "Sign in again with GitHub" : "Sign in with GitHub", systemImage: "person.crop.circle.badge.checkmark")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(isSignedIn ? .small : .regular)
+            .disabled(gitHubSignIn.isBusy)
+            .pointerCursor()
+
+            switch gitHubSignIn.phase {
+            case .idle:
+                HomeHint(isSignedIn
+                    ? "Signed in. Sign in again if Dottie can't see a repository, with the account that owns it."
+                    : "Opens GitHub in your browser. You paste a code Dottie copies for you and press Authorize. That's it.")
+            case .working(let message):
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    HomeHint(message)
+                }
+            case .waitingForBrowser(let code):
+                VStack(alignment: .leading, spacing: 6) {
+                    HomeHint("On the GitHub page that just opened, paste this code (it's already copied) and press Authorize:")
+                    Text(code)
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                        .foregroundColor(DS.Colors.textPrimary)
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Button("Copy code") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(code, forType: .string)
+                        }
+                        .controlSize(.small)
+                        .pointerCursor()
+                        Button("Open GitHub") {
+                            NSWorkspace.shared.open(DottieGitHubSignIn.deviceLoginURL)
+                        }
+                        .controlSize(.small)
+                        .pointerCursor()
+                    }
+                }
+            case .connected:
+                Label("Connected to GitHub", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.success)
+            case .failed(let message):
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: gitHubSignIn.phase) { _, newPhase in
+            if newPhase == .connected {
+                store.refreshStatuses()
+                onConnected?()
+            }
+        }
+        .onDisappear { gitHubSignIn.reset() }
+    }
+}
+
+/// The token fallback, in plain steps.
+private struct HomeGitHubTokenInstructions: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HomeHint("1. Open GitHub's token page (link below) and sign in.")
+            HomeHint("2. Name it \"Dottie\". Under Repository access pick All repositories, then under Permissions give Contents, Issues, Pull requests and Metadata read access (read and write if Dottie should change things).")
+            HomeHint("3. Press Generate token, copy it and paste it here.")
+        }
+    }
+}
+
 /// Asks for what a catalog app needs (keys, folders, an address).
 private struct HomeAddPresetSheet: View {
     let preset: DottieMCPPreset
@@ -450,6 +544,23 @@ private struct HomeAddPresetSheet: View {
     @State private var folders: [String: [String]] = [:]
     @State private var problem: String?
     @State private var tokenCameFromGitHubCLI = false
+    @State private var isShowingTokenFallback = false
+
+    private var isGitHub: Bool { DottieGitHubLogin.isGitHubServer(preset.config) }
+
+    private var fieldsList: some View {
+        ForEach(preset.fields, id: \.placeholder) { field in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(field.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+                fieldInput(field)
+                if !field.hint.isEmpty {
+                    HomeHint(field.hint)
+                }
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -467,26 +578,32 @@ private struct HomeAddPresetSheet: View {
                 }
             }
 
-            ForEach(preset.fields, id: \.placeholder) { field in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(field.label)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.textSecondary)
-                    fieldInput(field)
-                    if !field.hint.isEmpty {
-                        HomeHint(field.hint)
+            if isGitHub {
+                // Signing in is the whole setup; a token is only the fallback.
+                HomeGitHubSignInBox(store: store, serverName: preset.id, isSignedIn: false, onConnected: onClose)
+                DisclosureGroup("Use a token instead", isExpanded: $isShowingTokenFallback) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HomeGitHubTokenInstructions()
+                        fieldsList
+                        if let keyLink = preset.keyLink, let url = URL(string: keyLink) {
+                            Link("Open GitHub's token page", destination: url)
+                                .font(.system(size: 11))
+                        }
                     }
+                    .padding(.top, 6)
                 }
-            }
-
-            if let keyLink = preset.keyLink, let url = URL(string: keyLink) {
-                Link("Get a key", destination: url)
-                    .font(.system(size: 11))
+                .font(.system(size: 11))
+            } else {
+                fieldsList
+                if let keyLink = preset.keyLink, let url = URL(string: keyLink) {
+                    Link("Get a key", destination: url)
+                        .font(.system(size: 11))
+                }
             }
             if tokenCameFromGitHubCLI {
                 HomeHint("Filled in from your GitHub CLI sign-in, so there's nothing to copy. Just press Add.")
             }
-            if preset.needsKey {
+            if preset.needsKey && (!isGitHub || isShowingTokenFallback) {
                 HomeHint("Keys are kept in your Mac's Keychain, not in a file.")
             }
             if let problem {
@@ -498,11 +615,15 @@ private struct HomeAddPresetSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onClose)
-                Button("Add") {
-                    problem = store.addPreset(preset, values: values, folders: folders)
-                    if problem == nil { onClose() }
+                    .pointerCursor()
+                if !isGitHub || isShowingTokenFallback || tokenCameFromGitHubCLI {
+                    Button("Add") {
+                        problem = store.addPreset(preset, values: values, folders: folders)
+                        if problem == nil { onClose() }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .pointerCursor()
                 }
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
