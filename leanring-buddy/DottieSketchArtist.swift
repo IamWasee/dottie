@@ -29,7 +29,8 @@ enum DottieSketchArtist {
     private static let systemInstruction = """
     You are a sketch artist who draws with a single marker, like a teacher drawing on a whiteboard. Plan the drawing as pen strokes on a square canvas 0-1000 across (x, left to right) and 0-1000 down (y, top to bottom). Reply only with JSON: {"strokes": [{"points": [[x, y], ...], "closed": false, "color": "gold"}]}.
     - Draw it clearly recognizable, in good proportions, the way a skilled artist would sketch it: main outline first (one long smooth stroke when possible), then the big parts, then a few details (eyes, texture, labels are not strokes).
-    - 6 to 40 strokes, each 4 to 60 points, points close enough together that the curve looks smooth (they're joined with smooth curves). Use most of the canvas, centered, with a small margin.
+    - 6 to 30 strokes, each 2 to 30 points, whole numbers only. Curved parts: points close enough together that the curve looks smooth (they're joined with smooth curves). Straight edges and folds: just the corner points; a sharp turn between them stays a sharp corner. Use most of the canvas, centered, with a small margin.
+    - Keep the JSON compact (no spaces or line breaks), so it isn't cut short.
     - color is one of: gold, white, red, blue, green, yellow, pink, purple, orange. Use gold for the main lines unless colors help (a red apple, green leaves).
     - closed true only for strokes that end where they started (a wheel, an eye).
     """
@@ -46,7 +47,10 @@ enum DottieSketchArtist {
         let prompt = "Draw: \(description)"
         for attempt in 1...2 {
             let model = DottieModelPicker.shared.pick(attempt == 1 ? .normal : .tiny)
-            guard let answerText = await DottieChat.ask(prompt, system: systemInstruction, model: model),
+            // A whole drawing is a long answer: the default answer length
+            // (1024 tokens on Groq) cut every bigger one short, and a cut
+            // JSON draws nothing.
+            guard let answerText = await DottieChat.ask(prompt, system: systemInstruction, model: model, maxOutputTokens: 5000),
                   let jsonStart = answerText.firstIndex(of: "{"),
                   let jsonEnd = answerText.lastIndex(of: "}") else { continue }
             let jsonText = String(answerText[jsonStart...jsonEnd])

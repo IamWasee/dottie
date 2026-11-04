@@ -42,7 +42,7 @@ enum DottieChat {
     }
 
     /// A text-only request with an optional system prompt.
-    static func ask(_ prompt: String, system: String? = nil, model: String, thinkingLevel: String? = nil, callerFile: String = #fileID) async -> String? {
+    static func ask(_ prompt: String, system: String? = nil, model: String, thinkingLevel: String? = nil, maxOutputTokens: Int? = nil, callerFile: String = #fileID) async -> String? {
         var requestBody: [String: Any] = [
             "model": model,
             "contents": [["role": "user", "parts": [["text": prompt]]]]
@@ -50,8 +50,15 @@ enum DottieChat {
         if let system {
             requestBody["systemInstruction"] = ["parts": [["text": system]]]
         }
+        var generationConfig: [String: Any] = [:]
         if let thinkingLevel {
-            requestBody["generationConfig"] = ["thinkingConfig": ["thinkingLevel": thinkingLevel]]
+            generationConfig["thinkingConfig"] = ["thinkingLevel": thinkingLevel]
+        }
+        if let maxOutputTokens {
+            generationConfig["maxOutputTokens"] = maxOutputTokens
+        }
+        if !generationConfig.isEmpty {
+            requestBody["generationConfig"] = generationConfig
         }
         return await send(requestBody, callerFile: callerFile)
     }

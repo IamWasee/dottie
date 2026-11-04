@@ -386,7 +386,17 @@ enum DottieInstantCommands {
     }
 
     private static func parseSearch(_ normalizedRequest: String) -> DottieInstantCommand? {
+        // "go to youtube and search up X", "search up X on youtube",
+        // "look X up on google": the everyday wordings, so they open the
+        // results at once instead of becoming a screen job.
+        let searchVerbs = #"(?:search|look up|find|type in|look for)(?: up)?(?: for)?"#
         let searchShapes: [(pattern: String, site: String)] = [
+            (#"^(?:open |go to |go on |head to |pull up )?youtube(?: and| then|,)? "# + searchVerbs + #" (.+)$"#, "youtube"),
+            (#"^(?:open |go to |go on |head to |pull up )?google(?: and| then|,)? "# + searchVerbs + #" (.+)$"#, "google"),
+            (#"^"# + searchVerbs + #" (.+) on youtube$"#, "youtube"),
+            (#"^"# + searchVerbs + #" (.+) on google$"#, "google"),
+            (#"^look (.+) up on youtube$"#, "youtube"),
+            (#"^look (.+) up on google$"#, "google"),
             (#"^google (.+)$"#, "google"),
             (#"^search google for (.+)$"#, "google"),
             (#"^look up (.+) on google$"#, "google"),

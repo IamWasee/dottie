@@ -298,7 +298,7 @@ final class DottieInstantLane {
         "put", "move", "snap", "send", "throw", "place", "drag", "make", "show", "maximize", "maximise", "center", "centre",
         "play", "pause", "resume", "unpause", "keep", "stop", "next", "skip", "previous", "last", "back",
         "volume", "turn", "louder", "quieter", "lower", "raise", "increase", "decrease", "mute", "unmute", "set",
-        "google", "search", "look", "find", "when", "whenever", "from",
+        "google", "youtube", "search", "look", "find", "head", "when", "whenever", "from",
         // Keyboard shortcuts by name, keys said out loud, and teaching one.
         "minimize", "minimise", "hide", "new", "reopen", "reload", "refresh", "undo", "redo", "save", "select",
         "copy", "paste", "cut", "print", "zoom", "reset", "actual", "enter", "leave", "toggle", "full", "spotlight",

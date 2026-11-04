@@ -164,9 +164,43 @@ enum DottieMacActions {
             if errorText.contains("-1743") || errorText.localizedCaseInsensitiveContains("not authorized") {
                 return "macOS blocked it: the user needs to allow Dottie to control that app (a macOS prompt, or System Settings → Privacy & Security → Automation → Dottie). tell them in one line."
             }
-            return "the script failed: \(shortened(errorText, to: 400)). fix the script and try once more, or tell the user."
+            return "the script failed: \(shortened(errorText, to: 400)). fix the script and try once more; if it fails again, don't keep scripting: call do_task_on_screen with the user's whole goal so it's done on screen."
         }
-        return result.output.isEmpty ? "done." : "done. it returned: \(shortened(result.output, to: 2000))"
+        var resultText = result.output.isEmpty ? "done." : "done. it returned: \(shortened(result.output, to: 2000))"
+        // "Play Louise" used to end here as "done." while Spotify only
+        // showed a search, and Dottie said it was playing. What's actually
+        // playing now goes back with the result, so a miss is seen.
+        if let musicAppName = musicAppNamed(inScript: trimmedScript) {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            resultText += " " + (await nowPlayingLine(inAppNamed: musicAppName))
+        }
+        return resultText
+    }
+
+    /// Spotify or Music when the script talks to one of them.
+    private static func musicAppNamed(inScript script: String) -> String? {
+        let lowercasedScript = script.lowercased()
+        if lowercasedScript.contains("application \"spotify\"") { return "Spotify" }
+        if lowercasedScript.contains("application \"music\"") { return "Music" }
+        return nil
+    }
+
+    /// What the music app says is playing, as a line for the model, with
+    /// what to do when it isn't what the user asked for.
+    static func nowPlayingLine(inAppNamed musicAppName: String) async -> String {
+        let checkScript = """
+        tell application "\(musicAppName)"
+            if player state is playing then
+                return "playing: " & (name of current track) & " by " & (artist of current track)
+            else
+                return "not playing (" & (player state as text) & ")"
+            end if
+        end tell
+        """
+        let checkResult = await runProcess("/usr/bin/osascript", arguments: ["-e", checkScript], timeout: 8)
+        let checkOutput = checkResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stateText = checkResult.exitCode == 0 && !checkOutput.isEmpty ? checkOutput : "couldn't tell what's playing"
+        return "check of \(musicAppName) now: \(stateText). if they asked for something to play, only say it's playing when this shows it. if it doesn't (a search page, the wrong song, paused), \(musicAppName)'s scripting can't pick that song: call do_task_on_screen to search for it in \(musicAppName) and press play on the top result."
     }
 
     static func shortened(_ text: String, to maximumLength: Int) -> String {
