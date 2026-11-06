@@ -78,6 +78,9 @@ final class GeminiLiveVoiceClient {
     /// only the new part of the answer, and `isFollowUp` true, so one
     /// question is never recorded more than once.
     var onModelTurnComplete: (@MainActor (_ userTranscript: String, _ modelTranscript: String, _ isFollowUp: Bool) -> Void)?
+    /// The end of the previous answer's transcript, which arrived after the
+    /// user had already started their next turn.
+    var onLateTranscriptOfPreviousAnswer: (@MainActor (_ lateTranscript: String) -> Void)?
     /// The model asked to point at something on screen.
     var onPointRequest: (@MainActor (GeminiLivePointRequest) -> Void)?
     /// Live partial transcript of what the model is saying (for captions).
@@ -217,6 +220,9 @@ final class GeminiLiveVoiceClient {
     /// own words (a click that only starts their goal).
     var userTranscriptSoFar: String { currentTurnUserTranscript }
     private var currentTurnModelTranscript = ""
+    /// Words of the previous answer that arrived after the user started a
+    /// new turn; see handleServerContent.
+    private var lateTranscriptOfPreviousAnswer = ""
     /// The user's words for this turn already went out with a turnComplete.
     private var hasReportedUserTranscriptThisTurn = false
     private var toolCallsThisUserTurn = 0
@@ -273,6 +279,7 @@ final class GeminiLiveVoiceClient {
 
         currentTurnUserTranscript = ""
         currentTurnModelTranscript = ""
+        lateTranscriptOfPreviousAnswer = ""
         hasReportedUserTranscriptThisTurn = false
         toolCallsThisUserTurn = 0
         hasModelStartedSpeakingThisTurn = false
@@ -358,6 +365,11 @@ final class GeminiLiveVoiceClient {
         guard isUserTurnOpen else { return }
         isUserTurnOpen = false
         userTurnEndedAt = Date()
+        let lateTranscript = lateTranscriptOfPreviousAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        lateTranscriptOfPreviousAnswer = ""
+        if !lateTranscript.isEmpty {
+            onLateTranscriptOfPreviousAnswer?(lateTranscript)
+        }
         if !pendingTurnContextTexts.isEmpty {
             enqueueOrSend(message: ["realtimeInput": ["text": pendingTurnContextTexts.joined(separator: "\n\n")]])
             pendingTurnContextTexts = []
@@ -1024,6 +1036,14 @@ final class GeminiLiveVoiceClient {
         }
 
         if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
+           let transcriptChunk = outputTranscription["text"] as? String,
+           isUserTurnOpen {
+            // The model can't be answering a turn the user is still in, so
+            // this is the tail of the previous answer's transcript, which
+            // often lags behind its turnComplete. Handed over when the turn
+            // ends so it joins that answer, not this one.
+            lateTranscriptOfPreviousAnswer += transcriptChunk
+        } else if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
            let transcriptChunk = outputTranscription["text"] as? String {
             markModelContentReceived()
             currentTurnModelTranscript += transcriptChunk

@@ -627,10 +627,20 @@ final class CompanionManager: ObservableObject {
     private func startPermissionPolling() {
         accessibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshAllPermissions()
+                guard let self else { return }
+                // Each check is a round trip to macOS's permission service
+                // (two every 1.5 s showed in round 1's logs). Once everything
+                // is allowed nothing is waiting on a change, so look every
+                // 15 s instead; while something's missing, stay quick so the
+                // UI updates the moment it's switched on.
+                self.permissionPollTickCount += 1
+                if self.allPermissionsGranted && self.permissionPollTickCount % 10 != 0 { return }
+                self.refreshAllPermissions()
             }
         }
     }
+
+    private var permissionPollTickCount = 0
 
     private func bindAudioPowerLevel() {
         audioPowerCancellable = buddyDictationManager.$currentAudioPowerLevel
@@ -1032,6 +1042,7 @@ final class CompanionManager: ObservableObject {
     doing things on screen: only when the user asks you to do it for them ("click sign in", "open youtube", "go back"), never on your own initiative or just because it would help; pointing is for showing, these are for doing. one quick step: click_on_screen (label exactly as on screen), press_keys (prefer a shortcut whenever one exists), open_url; typing and scrolling are in your other tools; drawing is explain_on_screen (see teaching). then say it's done in a few words, if that one step was the whole request. for anything risky or permanent (sending, buying, deleting, posting), say what you'll do and ask first. never type passwords.
 
     another way when one fails: if a script, link or app tool fails, or its result shows the goal didn't happen (a search page instead of the song playing, an error, an empty answer), don't say it's done and don't repeat the same thing: switch routes once, script or link → do_task_on_screen with the user's whole goal (the screen job sees and clicks like they would). say something is done, playing or drawn only when a tool result shows it; until then say you're trying.
+    asked again: when the user asks for something you already did ("make a note called test" twice, "search lofi" again), they want it done again: do it again with your tools. never answer "that's already done".
     multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
@@ -1103,6 +1114,11 @@ final class CompanionManager: ObservableObject {
 
         liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript, isFollowUp in
             self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript, isFollowUpAfterTools: isFollowUp)
+        }
+
+        liveVoiceClient.onLateTranscriptOfPreviousAnswer = { [weak self] lateTranscript in
+            guard let self else { return }
+            self.conversationStore.extendEntry(withID: self.lastLiveTurnConversationEntryID, clickyText: lateTranscript)
         }
 
         liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
@@ -2154,6 +2170,14 @@ final class CompanionManager: ObservableObject {
         guide.presentStep = { [weak self] step in
             await self?.presentGuideStep(step)
         }
+        guide.onStepTargetMissed = { [weak self] in
+            guard let self else { return }
+            self.guideGestureDemoTask?.cancel()
+            self.guideGestureDemoTask = nil
+            self.keepsPointingUntilCleared = false
+            self.clearDetectedElementLocation()
+            self.drawingOverlayManager.clear()
+        }
         guide.onEnd = { [weak self] spokenGoodbye in
             self?.guideDidEnd(spokenGoodbye: spokenGoodbye)
         }
@@ -2483,6 +2507,12 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// The Home → Conversation entry and words of the newest Live question,
+    /// so its answer after a tool call lands on it and not on whatever was
+    /// logged in between.
+    private var lastLiveTurnConversationEntryID: UUID?
+    private var lastLiveTurnUserTranscript = ""
+
     /// Records the exchange, then waits for the last of the audio to play
     /// before returning the cursor to idle.
     /// `isFollowUpAfterTools`: Live answered a tool result for a question
@@ -2519,10 +2549,15 @@ final class CompanionManager: ObservableObject {
         if isFollowUpAfterTools && !isNarrationTurn && !isSecretPhraseTurn {
             if !modelTranscript.isEmpty {
                 brain.record(.chat, "dottie: \(modelTranscript)")
-                conversationStore.extendLastEntry(clickyText: modelTranscript)
-                if let lastExchange = conversationHistory.popLast() {
-                    let combinedResponse = [lastExchange.assistantResponse, modelTranscript].filter { !$0.isEmpty }.joined(separator: " ")
-                    conversationHistory.append((userTranscript: lastExchange.userTranscript, assistantResponse: combinedResponse))
+                conversationStore.extendEntry(withID: lastLiveTurnConversationEntryID, clickyText: modelTranscript)
+                // The exchange this answer belongs to, even if an instant
+                // command was logged after it while Live was still working.
+                let exchangeIndex = conversationHistory.lastIndex(where: { $0.userTranscript == lastLiveTurnUserTranscript })
+                    ?? (conversationHistory.isEmpty ? nil : conversationHistory.count - 1)
+                if let exchangeIndex {
+                    let exchangeToExtend = conversationHistory[exchangeIndex]
+                    let combinedResponse = [exchangeToExtend.assistantResponse, modelTranscript].filter { !$0.isEmpty }.joined(separator: " ")
+                    conversationHistory[exchangeIndex] = (userTranscript: exchangeToExtend.userTranscript, assistantResponse: combinedResponse)
                     liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
                         (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
                     }
@@ -2530,12 +2565,13 @@ final class CompanionManager: ObservableObject {
             }
         } else if !isNarrationTurn && !isSecretPhraseTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
             brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")
-            conversationStore.append(
+            lastLiveTurnConversationEntryID = conversationStore.append(
                 userText: userTranscript,
                 clickyText: modelTranscript,
                 inputKind: typedTextForThisTurn == nil ? .voice : .typed,
                 imageFileNames: typedTextForThisTurn == nil ? [] : currentTurnImageFileNames
             )
+            lastLiveTurnUserTranscript = userTranscript
             currentTurnImageFileNames = []
             conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
             if conversationHistory.count > Self.rememberedExchangeCount {

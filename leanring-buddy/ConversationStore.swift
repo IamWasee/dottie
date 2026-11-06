@@ -42,13 +42,17 @@ final class ConversationStore: ObservableObject {
         loadEntriesFromDisk()
     }
 
-    func append(userText: String, clickyText: String, inputKind: ConversationEntry.InputKind, imageFileNames: [String] = []) {
+    /// Returns the new entry's id, so a later part of the same answer can be
+    /// added to it even after other exchanges were logged.
+    @discardableResult
+    func append(userText: String, clickyText: String, inputKind: ConversationEntry.InputKind, imageFileNames: [String] = []) -> UUID? {
         let trimmedUserText = userText.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedClickyText = clickyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedUserText.isEmpty || !trimmedClickyText.isEmpty else { return }
+        guard !trimmedUserText.isEmpty || !trimmedClickyText.isEmpty else { return nil }
 
+        let newEntryID = UUID()
         entries.append(ConversationEntry(
-            id: UUID(),
+            id: newEntryID,
             createdAt: Date(),
             inputKind: inputKind,
             userText: trimmedUserText,
@@ -61,21 +65,27 @@ final class ConversationStore: ObservableObject {
         saveEntriesToDisk()
         // Becomes episodes once the conversation goes quiet.
         DottieEpisodicMemory.shared.noteExchange(userText: trimmedUserText, dottieText: trimmedClickyText)
+        return newEntryID
     }
 
     /// Adds more of Dottie's answer to the newest exchange: after a tool
     /// call, Live keeps answering the same question in a new model turn.
-    func extendLastEntry(clickyText: String) {
+    /// `entryID` names the exchange the answer belongs to; without it (or when
+    /// it's gone) the newest exchange is extended. An instant command logged
+    /// while Live was still answering must not get that late answer.
+    func extendEntry(withID entryID: UUID?, clickyText: String) {
         let trimmedClickyText = clickyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedClickyText.isEmpty, let lastEntry = entries.last else { return }
-        let combinedClickyText = [lastEntry.clickyText, trimmedClickyText].filter { !$0.isEmpty }.joined(separator: " ")
-        entries[entries.count - 1] = ConversationEntry(
-            id: lastEntry.id,
-            createdAt: lastEntry.createdAt,
-            inputKind: lastEntry.inputKind,
-            userText: lastEntry.userText,
+        guard !trimmedClickyText.isEmpty, !entries.isEmpty else { return }
+        let entryIndex = entryID.flatMap { wantedEntryID in entries.lastIndex(where: { $0.id == wantedEntryID }) } ?? (entries.count - 1)
+        let entryToExtend = entries[entryIndex]
+        let combinedClickyText = [entryToExtend.clickyText, trimmedClickyText].filter { !$0.isEmpty }.joined(separator: " ")
+        entries[entryIndex] = ConversationEntry(
+            id: entryToExtend.id,
+            createdAt: entryToExtend.createdAt,
+            inputKind: entryToExtend.inputKind,
+            userText: entryToExtend.userText,
             clickyText: combinedClickyText,
-            imageFileNames: lastEntry.imageFileNames
+            imageFileNames: entryToExtend.imageFileNames
         )
         saveEntriesToDisk()
     }

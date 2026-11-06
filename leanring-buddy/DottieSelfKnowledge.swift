@@ -1024,6 +1024,12 @@ extension DottieSelfKnowledge {
         if !unknownKinds.isEmpty {
             description += " macOS doesn't say for: " + unknownKinds.map(\.title).joined(separator: ", ") + "."
         }
+        if !missingKinds.isEmpty {
+            // Round 1 testing: asked how to turn on Local Network, voice
+            // Dottie said macOS has no setting for it. Every one of these
+            // can be turned on; say how.
+            description += " To turn any of them on: Dottie's Settings → Permissions has an Allow button for each (ask_permission starts it), or System Settings → Privacy & Security → that permission's page (Local Network included), then switch Dottie on there. Never say one can't be turned on."
+        }
         return description
     }
 

@@ -200,7 +200,7 @@ final class DottieScreenJobGuesser {
 
     Rules:
     - can_guess is false when the steps depend on what's on screen (pick a result, read a value, find a specific message, a game, a site whose layout you don't know). Then leave steps empty.
-    - Prefer, in order: a direct link (a site's search or page URL), a menu path, a keyboard shortcut, then clicking by name. Typing goes into whatever is focused, so focus the field first (a shortcut like cmd+l or a click on the field by name).
+    - Prefer, in order: a direct link (a site's search or page URL), a menu path, a keyboard shortcut, then clicking by name. Typing goes into whatever is focused, so focus the field first (a shortcut like cmd+l or a click on the field by name). To visit a site in a browser, use open_url (it opens a new tab) or press cmd+t first; never type an address over the tab the user already has open.
     - needs_look is true when the user wants something read off the screen or the result can't be checked by visible text.
     - Never plan a step that pays, sends, posts or deletes unless the task asks for exactly that, and never type a password.
     - Keep it short: at most 15 steps.

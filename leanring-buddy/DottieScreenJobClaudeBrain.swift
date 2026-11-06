@@ -39,8 +39,10 @@ final class DottieScreenJobClaudeBrain {
         UserDefaults.standard.object(forKey: isEnabledDefaultsKey) as? Bool ?? true
     }
 
-    /// Sonnet looking at a screenshot usually answers in 4-15 s.
-    private static let stepTimeoutSeconds: Double = 40
+    /// Sonnet looking at a screenshot usually answers in 4-15 s. Round 1
+    /// testing saw a 36 s wait before step 1, so after this the job moves
+    /// to Gemini/Groq (one miss already moves the rest of the job there).
+    private static let stepTimeoutSeconds: Double = 20
     private static let placeholderThoughtSignature = "skip_thought_signature_validator"
 
     private var bot: DottieClaudeBot?

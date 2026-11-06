@@ -23,9 +23,10 @@ final class DottieGuideBrain {
 
     private let mausBotRuntime = DottieMausBotRuntime()
     private static let guideAgentID = UUID(uuidString: "8C5A1B3E-6D4F-4A0C-9E2B-3F4A5B6C7D8E") ?? UUID()
-    /// Sonnet looking at a screenshot (and maybe the app's help pages)
-    /// usually answers in 5-15 s.
-    private static let claudeAnswerTimeoutSeconds: Double = 35
+    /// Sonnet looking at a screenshot usually answers in 5-15 s. Round 1
+    /// testing saw guides sit on "looking at your screen" for 60-90 s, so
+    /// past this Gemini/Groq takes the step instead.
+    private static let claudeAnswerTimeoutSeconds: Double = 18
     /// After Claude failed, guides use Gemini until this time.
     private var claudeSkippedUntil: Date?
     private(set) var lastEngineName = "claude"
@@ -181,7 +182,7 @@ final class DottieGuideBrain {
 
     /// The answer's shape, which Gemini gets as a response schema.
     private static let claudeExtraInstructions = """
-    You get one screenshot per message, as a file to open, and its size in pixels. Look at it carefully before answering; zoom into small text if you need to. If you're not sure how this app does something, look it up in the app's own help pages or a recent guide for it before answering (keep that quick: the user is waiting). Never invent a button, menu or panel: only point at what you can see on the screenshot.
+    You get one screenshot per message, as a file to open, and its size in pixels. Look at it carefully before answering; zoom into small text if you need to. The how-to from the web, when there is one, is already in the message: use it instead of searching yourself, because the user is waiting on every second. Never invent a button, menu or panel: only point at what you can see on the screenshot.
 
     Boxes: ignore the 0-1000 box_2d format described above. Give every box in pixels of the screenshot as [left, top, right, bottom], under target_box_px (instead of target_box) and box_px (instead of box_2d). Measure on the image itself; don't convert anything. A click target's box hugs that one control (a button or tab is usually under 250 pixels wide), never its whole row or toolbar, and target_label is its exact visible text.
 

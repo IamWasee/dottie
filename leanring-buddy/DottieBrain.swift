@@ -318,7 +318,24 @@ final class DottieBrain: ObservableObject {
         guard let jsonData = try? Data(contentsOf: mcpFileURL),
               let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else { return [:] }
         let servers = (jsonObject["mcpServers"] as? [String: Any]) ?? jsonObject
-        return servers.filter { $0.value is [String: Any] }
+        var serversWithoutSecretsInArguments: [String: Any] = [:]
+        for (serverName, serverValue) in servers {
+            guard var serverSettings = serverValue as? [String: Any] else { continue }
+            // An mcp-remote header token moves from the command line (seen
+            // by `ps`) into the server's environment.
+            if let arguments = serverSettings["args"] as? [String] {
+                let argumentsWithoutSecrets = DottieMCPStdioTransport.movingMCPRemoteHeaderValuesIntoEnvironment(
+                    arguments: arguments,
+                    environment: (serverSettings["env"] as? [String: String]) ?? [:]
+                )
+                serverSettings["args"] = argumentsWithoutSecrets.arguments
+                if !argumentsWithoutSecrets.environment.isEmpty {
+                    serverSettings["env"] = argumentsWithoutSecrets.environment
+                }
+            }
+            serversWithoutSecretsInArguments[serverName] = serverSettings
+        }
+        return serversWithoutSecretsInArguments
     }
 
     private func saveFolders() {

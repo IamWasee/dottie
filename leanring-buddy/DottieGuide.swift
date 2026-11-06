@@ -116,6 +116,10 @@ final class DottieGuide {
     var onEnd: (@MainActor (_ spokenGoodbye: String?) -> Void)?
     /// Short status for the notch.
     var onProgress: (@MainActor (_ text: String) -> Void)?
+    /// The user clicked somewhere other than the step's target: take the
+    /// old step's circle and pointer down at once, so the screen doesn't
+    /// keep showing a step that's no longer true while the next look runs.
+    var onStepTargetMissed: (@MainActor () -> Void)?
 
     private(set) var currentGoal: String?
     private var guideTask: Task<Void, Never>?
@@ -198,6 +202,12 @@ final class DottieGuide {
     private func runSteps(goal: String) async -> String? {
         var history: [String] = []
         var consecutiveClicksElsewhere = 0
+        // "how do I add an event in Calendar" while System Settings covers
+        // Calendar: guiding from that screenshot pointed at other apps'
+        // buttons. Bring the app the goal names to the front first.
+        if let namedAppName = await Self.bringAppNamedInGoalToFront(goal) {
+            print("🧑‍🏫 Guide: brought \(namedAppName) to the front")
+        }
         let frontmostAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
         // How this app really does it, from the web, looked up while the
         // first screenshot is taken. Guessing from one screenshot is how
@@ -245,9 +255,11 @@ final class DottieGuide {
                     history.append("Step \(round): \"\(step.say)\" (target: \(step.targetLabel ?? "it")). The user clicked it.")
                 case .clickedElsewhere:
                     consecutiveClicksElsewhere += 1
+                    onStepTargetMissed?()
                     // Clicky ends the guide here so it never nags; give one
                     // more look in case they did it another way.
                     if consecutiveClicksElsewhere >= 2 { return nil }
+                    onProgress?("you clicked something else, checking what changed")
                     history.append("Step \(round): \"\(step.say)\" (target: \(step.targetLabel ?? "it")). The user clicked somewhere else instead; they may have done it another way or gotten lost.")
                 case .timedOut:
                     return nil
@@ -275,6 +287,49 @@ final class DottieGuide {
         }
         return "That's as far as I can take you for now."
     }
+
+    /// Finds an app named in the goal ("add an event in calendar", "where's
+    /// the export button in final cut pro"), running first, then installed,
+    /// and brings it to the front unless it already is. Returns its name, or
+    /// nil when the goal names no app or it was already in front.
+    private static func bringAppNamedInGoalToFront(_ goal: String) async -> String? {
+        let goalWords = DottieInstalledApps.comparableName(goal).split(separator: " ").map(String.init)
+        guard !goalWords.isEmpty else { return nil }
+        // Longest names first, so "final cut pro" wins over "final".
+        for wordCount in stride(from: min(4, goalWords.count), through: 1, by: -1) {
+            for startIndex in 0...(goalWords.count - wordCount) {
+                let candidateName = goalWords[startIndex..<(startIndex + wordCount)].joined(separator: " ")
+                // Everyday words that are also app names would grab the
+                // wrong app ("how do I add a note" isn't about Notes when
+                // the user is in Bear).
+                // "in notes" or "on photos" still names the app.
+                let previousWord = startIndex > 0 ? goalWords[startIndex - 1] : ""
+                let isIntroducedAsAnApp = ["in", "on", "inside", "using", "open", "with"].contains(previousWord)
+                if wordCount == 1 && !isIntroducedAsAnApp && Self.wordsTooCommonToMeanAnApp.contains(candidateName) { continue }
+                if candidateName == "dottie" || candidateName == "a" || candidateName == "i" { continue }
+                if let runningApp = DottieInstalledApps.shared.runningApp(matchingSpokenName: candidateName) {
+                    if runningApp.isActive { return nil }
+                    runningApp.unhide()
+                    runningApp.activate(options: [.activateAllWindows])
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    return runningApp.localizedName
+                }
+                if let installedApp = DottieInstalledApps.shared.installedApp(matchingSpokenName: candidateName),
+                   await DottieScreenTaskRunner.openApplication(named: installedApp.name) {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    return installedApp.name
+                }
+            }
+        }
+        return nil
+    }
+
+    private static let wordsTooCommonToMeanAnApp: Set<String> = [
+        "notes", "note", "music", "photos", "photo", "mail", "messages", "message", "maps", "map", "news",
+        "books", "home", "clock", "weather", "calculator", "preview", "contacts", "reminders", "shortcuts",
+        "code", "settings", "preferences", "word", "teams", "games", "stocks", "podcasts", "tv", "freeform",
+        "chess", "keynote", "pages", "numbers", "dictionary", "font", "voice", "terminal", "console", "a", "i"
+    ]
 
     /// The web's how-to for this app (its own help pages first), as text
     /// for the step prompt, or nil when the search fails or takes too long.

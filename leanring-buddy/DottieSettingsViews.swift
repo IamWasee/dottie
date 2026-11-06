@@ -19,7 +19,12 @@ struct HomePermissionsSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(permissions.allowedCount) of \(DottiePermissions.Kind.allCases.count) allowed")
+                    // Until the first check finishes nothing is known yet;
+                    // "0 of 12 allowed" with every Allow button showed
+                    // for a few seconds in round 1 testing.
+                    Text(permissions.statuses.isEmpty
+                         ? "Checking…"
+                         : "\(permissions.allowedCount) of \(DottiePermissions.Kind.allCases.count) allowed")
                         .font(.system(size: 13))
                         .foregroundColor(DS.Colors.textPrimary)
                     if let asking = permissions.currentlyAsking {
@@ -35,8 +40,10 @@ struct HomePermissionsSettings: View {
                 .disabled(permissions.isAskingForAll)
                 .pointerCursor()
             }
-            ForEach(DottiePermissions.Kind.allCases) { kind in
-                permissionRow(kind)
+            if !permissions.statuses.isEmpty {
+                ForEach(DottiePermissions.Kind.allCases) { kind in
+                    permissionRow(kind)
+                }
             }
             Text("macOS asks for each one in turn. For Accessibility, Screen Recording and Input Monitoring it opens System Settings: switch Dottie on there and the next one follows. Anything you said no to before opens its page in System Settings.")
                 .font(.system(size: 11))
