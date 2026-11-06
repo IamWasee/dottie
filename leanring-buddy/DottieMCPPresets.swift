@@ -77,6 +77,12 @@ enum DottieMCPPresets {
                 config: uvx("mcp-server-fetch")
             ),
             DottieMCPPreset(
+                id: "scrapling", title: "Scrapling",
+                summary: "Reads pages other tools can't: shops, JavaScript-heavy sites and pages that block bots, with a hidden browser when needed. Good for helpers and for routines that watch a page.",
+                symbolName: "doc.text.magnifyingglass",
+                config: scraplingConfig()
+            ),
+            DottieMCPPreset(
                 id: "git", title: "Git",
                 summary: "Looks through and works with the history of your code projects.",
                 symbolName: "arrow.triangle.branch",
@@ -400,6 +406,19 @@ enum DottieMCPPresets {
 
     private static func uvx(_ package: String, extra: [String] = [], env: [String: String] = [:]) -> DottieMCPServerConfig {
         DottieMCPServerConfig(command: "uvx", args: [package] + extra, env: env)
+    }
+
+    /// Scrapling's MCP server (BSD-3, github.com/D4Vinci/Scrapling) through
+    /// uvx. Its browser tools use the Mac's own Google Chrome when it's
+    /// there, so nothing big is downloaded; plain page requests need no
+    /// browser at all.
+    private static func scraplingConfig() -> DottieMCPServerConfig {
+        let googleChromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        var scraplingArguments = ["--from", "scrapling[ai]", "scrapling-mcp"]
+        if FileManager.default.isExecutableFile(atPath: googleChromePath) {
+            scraplingArguments += ["--executable-path", googleChromePath]
+        }
+        return DottieMCPServerConfig(command: "uvx", args: scraplingArguments, env: [:])
     }
 
     private static func web(_ url: String, token: String) -> DottieMCPServerConfig {

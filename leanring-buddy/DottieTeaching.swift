@@ -174,7 +174,7 @@ enum DottieTeaching {
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use sketch to draw any picture of a thing (\"draw a horse\", a heart, a volcano, a cell), never try to build a picture out of lines and curves yourself. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use sketch to draw any picture of a thing (\"draw a horse\", a heart, a volcano, a cell), never try to build a picture out of lines and curves yourself. A how-to with stages (folding an envelope, a craft, a recipe) is several small sketch steps side by side on a board, one per stage ('1. a square sheet, corners marked', '2. side corners folded to the middle'…), each with a short numbered text label under it and an arrow to the next; never one sketch of the whole tutorial. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
@@ -464,9 +464,16 @@ enum DottieTeaching {
             }
             for sketchStroke in sketchStrokes {
                 let strokePoints = sketchStroke.points.map(canvasPoint)
-                drawn.add(.stroke(points: strokePoints, closed: sketchStroke.isClosed, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: sketchStroke.ink ?? ink, lineWidth: 3, pen: strokePoints,
-                          duration: min(max(Double(length(of: strokePoints)) / 900, 0.2), 1.4))
+                // A smooth curve through a sharp corner (a fold, a box's
+                // edge) swings out into a loop, so strokes are split at
+                // their corners and each piece is smoothed on its own.
+                let strokePieces = Self.piecesSplitAtSharpCorners(strokePoints, isClosed: sketchStroke.isClosed)
+                let keepsClosedCurve = sketchStroke.isClosed && strokePieces.count == 1
+                for strokePiece in strokePieces {
+                    drawn.add(.stroke(points: strokePiece, closed: keepsClosedCurve, smooth: strokePiece.count >= 3, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                              ink: sketchStroke.ink ?? ink, lineWidth: 3, pen: keepsClosedCurve ? strokePiece + [strokePiece[0]] : strokePiece,
+                              duration: min(max(Double(length(of: strokePiece)) / 900, 0.15), 1.4))
+                }
             }
 
         case .line, .curve, .polygon:
@@ -913,6 +920,45 @@ enum DottieTeaching {
     static func offset(_ point: CGPoint, perpendicularTo start: CGPoint, _ end: CGPoint, by amount: CGFloat) -> CGPoint {
         let along = unit(from: start, to: end)
         return CGPoint(x: point.x - along.dy * amount, y: point.y + along.dx * amount)
+    }
+
+    /// A sketch stroke cut at every turn sharper than about 50°, each piece
+    /// sharing the corner point with the next. A closed stroke with corners
+    /// comes back open, ending where it started.
+    static func piecesSplitAtSharpCorners(_ strokePoints: [CGPoint], isClosed: Bool) -> [[CGPoint]] {
+        guard strokePoints.count >= 3 else { return [strokePoints] }
+        let sharpTurnRadians = CGFloat.pi * 50 / 180
+        func turnRadians(atIndex pointIndex: Int, in points: [CGPoint]) -> CGFloat {
+            let previous = points[(pointIndex - 1 + points.count) % points.count]
+            let current = points[pointIndex]
+            let next = points[(pointIndex + 1) % points.count]
+            let incomingAngle = atan2(current.y - previous.y, current.x - previous.x)
+            let outgoingAngle = atan2(next.y - current.y, next.x - current.x)
+            var turn = abs(outgoingAngle - incomingAngle)
+            if turn > .pi { turn = 2 * .pi - turn }
+            return turn
+        }
+        var points = strokePoints
+        if isClosed {
+            guard let cornerIndex = points.indices.first(where: { turnRadians(atIndex: $0, in: strokePoints) > sharpTurnRadians }) else {
+                return [strokePoints]
+            }
+            // Start the loop at a corner, then walk it as an open stroke
+            // back to that corner.
+            points = Array(strokePoints[cornerIndex...]) + Array(strokePoints[..<cornerIndex]) + [strokePoints[cornerIndex]]
+        }
+        var pieces: [[CGPoint]] = []
+        var currentPiece: [CGPoint] = [points[0]]
+        for pointIndex in 1..<points.count {
+            currentPiece.append(points[pointIndex])
+            let isInteriorPoint = pointIndex < points.count - 1
+            if isInteriorPoint && turnRadians(atIndex: pointIndex, in: points) > sharpTurnRadians {
+                pieces.append(currentPiece)
+                currentPiece = [points[pointIndex]]
+            }
+        }
+        if currentPiece.count >= 2 { pieces.append(currentPiece) }
+        return pieces
     }
 
     static func length(of points: [CGPoint]) -> CGFloat {

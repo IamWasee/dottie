@@ -629,7 +629,6 @@ private struct HomeSettingsView: View {
                         Text(companionManager.voiceMode == .live ? "Gemini Live" : "Classic")
                             .foregroundColor(DS.Colors.textSecondary)
                     }
-                    settingsHint("Change CompanionVoiceMode in Info.plist to switch between live and classic.")
                 }
 
                 settingsGroup(title: "Shortcuts") {

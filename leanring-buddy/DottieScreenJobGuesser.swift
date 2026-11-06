@@ -4,8 +4,8 @@
 //
 //  Guess first, look second. Most apps barely change between versions and
 //  their layouts are well known (menus, shortcuts, where things live), so
-//  before a screen job sends its first screenshot to a model, Claude (or
-//  Gemini when Claude isn't there) is asked, in words only, for the steps
+//  before a screen job sends its first screenshot to a model, Groq (then
+//  Gemini, then Claude with a short wait) is asked, in words only, for the steps
 //  it would take in that app: open an app or a link, pick a menu item by
 //  its path, press a shortcut, type, click a control by its name. The Mac
 //  then does them itself:
@@ -48,7 +48,7 @@ final class DottieScreenJobGuesser {
         case notTried
     }
 
-    private static let claudeTimeoutSeconds: Double = 25
+    private static let claudeTimeoutSeconds: Double = 8
     /// How long a step waits for its menu item or button to show up (apps
     /// and pages can take a moment), looking again every tenth of a second
     /// and going the moment it's there.
@@ -138,13 +138,20 @@ final class DottieScreenJobGuesser {
 
     // MARK: - Asking for the plan
 
+    /// Groq first: a plan in words comes back from it in a second or two,
+    /// while the Claude planner often took the full wait and sent nothing
+    /// (25 s of the user watching "working out the steps"). Claude, with a
+    /// short wait, only when Groq and Gemini gave no plan.
     private func askForPlan(_ question: String) async -> [String: Any]? {
+        if let plan = await askGeminiForPlan(question) {
+            return plan
+        }
         if plannerBot.isWorthTrying,
            let replyText = await plannerBot.send(question, newConversation: true, timeoutSeconds: Self.claudeTimeoutSeconds),
            let plan = DottieClaudeBot.jsonObject(in: replyText) {
             return plan
         }
-        return await askGeminiForPlan(question)
+        return nil
     }
 
     private func askGeminiForPlan(_ question: String) async -> [String: Any]? {
@@ -164,7 +171,7 @@ final class DottieScreenJobGuesser {
         ]
         guard let requestData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
         request.httpBody = requestData
-        guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: Self.geminiPlanModel, totalSeconds: 18),
+        guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: Self.geminiPlanModel, totalSeconds: 8),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let replyText = GeminiServerSentEvents.parts(from: responseData)
             .filter { ($0["thought"] as? Bool) != true }
@@ -193,7 +200,7 @@ final class DottieScreenJobGuesser {
 
     Rules:
     - can_guess is false when the steps depend on what's on screen (pick a result, read a value, find a specific message, a game, a site whose layout you don't know). Then leave steps empty.
-    - Prefer, in order: a direct link (a site's search or page URL), a menu path, a keyboard shortcut, then clicking by name. Typing goes into whatever is focused, so focus the field first (a shortcut like cmd+l or a click on the field by name).
+    - Prefer, in order: a direct link (a site's search or page URL), a menu path, a keyboard shortcut, then clicking by name. Typing goes into whatever is focused, so focus the field first (a shortcut like cmd+l or a click on the field by name). To visit a site in a browser, use open_url (it opens a new tab) or press cmd+t first; never type an address over the tab the user already has open.
     - needs_look is true when the user wants something read off the screen or the result can't be checked by visible text.
     - Never plan a step that pays, sends, posts or deletes unless the task asks for exactly that, and never type a password.
     - Keep it short: at most 15 steps.

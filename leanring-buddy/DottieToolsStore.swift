@@ -781,10 +781,15 @@ enum DottieHelperMCPSync {
             }
             guard !isMissingKey else { continue }
             if let command = renamedConfig.command {
+                // Header tokens stay off the command line (see the transport).
+                let argumentsWithoutSecrets = DottieMCPStdioTransport.movingMCPRemoteHeaderValuesIntoEnvironment(
+                    arguments: renamedConfig.args,
+                    environment: renamedConfig.env
+                )
                 var serverSettings: [String: Any] = [
                     "command": DottieCommandLocator.locate(command) ?? command,
-                    "args": renamedConfig.args,
-                    "env": renamedConfig.env.merging(["PATH": DottieCommandLocator.searchPATH]) { configured, _ in configured }
+                    "args": argumentsWithoutSecrets.arguments,
+                    "env": argumentsWithoutSecrets.environment.merging(["PATH": DottieCommandLocator.searchPATH]) { configured, _ in configured }
                 ]
                 if let cwd = renamedConfig.cwd { serverSettings["cwd"] = cwd }
                 servers[serverName] = serverSettings
@@ -826,10 +831,14 @@ enum DottieHelperMCPSync {
     /// The server in Claude Code's / OpenMausBot's shape, keys filled in.
     private static func externalEntry(for config: DottieMCPServerConfig, includeTypeForPrograms: Bool) -> [String: Any] {
         if let command = config.command {
+            let argumentsWithoutSecrets = DottieMCPStdioTransport.movingMCPRemoteHeaderValuesIntoEnvironment(
+                arguments: config.args,
+                environment: config.env
+            )
             var entry: [String: Any] = [
                 "command": DottieCommandLocator.locate(command) ?? command,
-                "args": config.args,
-                "env": config.env.merging(["PATH": DottieCommandLocator.searchPATH]) { configured, _ in configured }
+                "args": argumentsWithoutSecrets.arguments,
+                "env": argumentsWithoutSecrets.environment.merging(["PATH": DottieCommandLocator.searchPATH]) { configured, _ in configured }
             ]
             if includeTypeForPrograms { entry["type"] = "stdio" }
             return entry

@@ -298,7 +298,7 @@ final class DottieInstantLane {
         "put", "move", "snap", "send", "throw", "place", "drag", "make", "show", "maximize", "maximise", "center", "centre",
         "play", "pause", "resume", "unpause", "keep", "stop", "next", "skip", "previous", "last", "back",
         "volume", "turn", "louder", "quieter", "lower", "raise", "increase", "decrease", "mute", "unmute", "set",
-        "google", "search", "look", "find", "when", "whenever", "from",
+        "google", "youtube", "search", "look", "find", "head", "when", "whenever", "from",
         // Keyboard shortcuts by name, keys said out loud, and teaching one.
         "minimize", "minimise", "hide", "new", "reopen", "reload", "refresh", "undo", "redo", "save", "select",
         "copy", "paste", "cut", "print", "zoom", "reset", "actual", "enter", "leave", "toggle", "full", "spotlight",
@@ -532,7 +532,8 @@ final class DottieInstantLane {
             guard let firstRequest = normalizedRequests.first,
                   onlyPressedKeys || normalizedRequests.allSatisfy({ !DottieInstantText.containsMomentWord($0) }),
                   ((onlyPressedKeys ? 1 : 2)...Self.longestLearnedPhraseWordCount).contains(firstRequest.split(separator: " ").count),
-                  DottieInstantCommands.parseAll(firstRequest) == nil else { return nil }
+                  DottieInstantCommands.parseAll(firstRequest) == nil,
+                  !Self.isUnclearPhraseToLearn(firstRequest) else { return nil }
             primaryPhrase = firstRequest
         }
         guard !primaryPhrase.isEmpty else { return nil }
@@ -546,6 +547,21 @@ final class DottieInstantLane {
             isNamedByUser: namedShortcutName != nil
         )
         return (isNewPhrase || namedShortcutName != nil) ? primaryPhrase : nil
+    }
+
+    /// Phrases round 1 testing found saved as junk: speech that corrects
+    /// itself ("open blood code sorry actually open terminal not icloud
+    /// code") and a bare app name ("activity monitor", saved as quitting
+    /// it). Neither says what to do the next time it's heard.
+    private static func isUnclearPhraseToLearn(_ normalizedPhrase: String) -> Bool {
+        let selfCorrectionWords = [" sorry ", " actually ", " i mean ", " no wait ", " wait no ", " scratch that ", " not "]
+        let paddedPhrase = " \(normalizedPhrase) "
+        if selfCorrectionWords.contains(where: { paddedPhrase.contains($0) }) { return true }
+        if DottieInstalledApps.shared.installedApp(matchingSpokenName: normalizedPhrase) != nil
+            || DottieInstalledApps.shared.runningApp(matchingSpokenName: normalizedPhrase) != nil {
+            return true
+        }
+        return false
     }
 
     private func isReplayable(_ finishedToolCall: FinishedToolCall) -> Bool {

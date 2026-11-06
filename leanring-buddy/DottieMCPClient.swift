@@ -333,6 +333,45 @@ final class DottieMCPStdioTransport: @unchecked Sendable {
     private var errorOutput = Data()
     private var running = false
 
+    /// A connector imported as `mcp-remote <url> --header "Authorization: Bearer <token>"`
+    /// puts the token on the command line, where any program on the Mac can
+    /// read it with `ps` (found in round 1 testing with the Kaggle connector).
+    /// mcp-remote fills `${NAME}` in a header from its environment, so each
+    /// header's value moves into an environment variable and the command
+    /// line only names it. Anything that isn't mcp-remote is left alone.
+    static func movingMCPRemoteHeaderValuesIntoEnvironment(
+        arguments: [String],
+        environment: [String: String]
+    ) -> (arguments: [String], environment: [String: String]) {
+        guard arguments.contains(where: { $0.contains("mcp-remote") }) else { return (arguments, environment) }
+        var rewrittenArguments: [String] = []
+        var rewrittenEnvironment = environment
+        var movedHeaderCount = 0
+        var argumentIndex = 0
+        while argumentIndex < arguments.count {
+            let argument = arguments[argumentIndex]
+            if argument == "--header", argumentIndex + 1 < arguments.count {
+                let headerText = arguments[argumentIndex + 1]
+                if let colonIndex = headerText.firstIndex(of: ":") {
+                    let headerName = String(headerText[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+                    let headerValue = String(headerText[headerText.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+                    if !headerName.isEmpty, !headerValue.isEmpty, !headerValue.contains("${") {
+                        movedHeaderCount += 1
+                        let variableName = "DOTTIE_MCP_REMOTE_HEADER_\(movedHeaderCount)"
+                        rewrittenEnvironment[variableName] = headerValue
+                        rewrittenArguments.append(argument)
+                        rewrittenArguments.append("\(headerName):${\(variableName)}")
+                        argumentIndex += 2
+                        continue
+                    }
+                }
+            }
+            rewrittenArguments.append(argument)
+            argumentIndex += 1
+        }
+        return (rewrittenArguments, rewrittenEnvironment)
+    }
+
     init(serverName: String, executablePath: String, arguments: [String], environment: [String: String], workingDirectory: String?) throws {
         self.serverName = serverName
         // A server that quits while Dottie writes to it must not take
@@ -340,8 +379,9 @@ final class DottieMCPStdioTransport: @unchecked Sendable {
         signal(SIGPIPE, SIG_IGN)
 
         process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-        process.environment = environment
+        let argumentsWithoutSecrets = Self.movingMCPRemoteHeaderValuesIntoEnvironment(arguments: arguments, environment: environment)
+        process.arguments = argumentsWithoutSecrets.arguments
+        process.environment = argumentsWithoutSecrets.environment
         if let workingDirectory, FileManager.default.fileExists(atPath: workingDirectory) {
             process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
         } else {
