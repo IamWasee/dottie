@@ -25,6 +25,14 @@ class_name = "PhoneRelay"
 tag = "v1-phone-relay"
 new_sqlite_classes = ["PhoneRelay"]
 
+# Most requests one address may make a minute (the app's own bursts, like a
+# screen job's steps, stay well under it). Counted at Cloudflare's edge with
+# no extra wait. namespace_id is any number unique in the account.
+[[ratelimits]]
+name = "REQUEST_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 300, period = 60 }
+
 [vars]
 GEMINI_LIVE_MODEL = "gemini-3.8-live"
 GEMINI_CHAT_MODEL = "gemini-3.8-flash"

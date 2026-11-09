@@ -161,8 +161,12 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieBuiltInSkills.swift` | ~90 | Building, Mac-app and app-operating instructions as skills helpers load only when needed (Gemini CLI user skills; Claude bot skills). |
 | `WindowPositionManager.swift` | ~130 | Accessibility and Screen Recording permission checks and prompts (system prompt first, then System Settings), and `NSScreen.displayID`. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~870 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat` (Groq first when asked), `/tts`, `/dictate`, `/gemini/*`, `/search`, `/config`. |
-| `worker/src/chatCompletions.ts` | ~630 | Groq and NVIDIA NIM through OpenAI's chat format: Gemini body → chat request → Gemini response, which requests fit Groq's free plan. |
+| `worker/src/index.ts` | ~620 | Cloudflare Worker proxy for Gemini: `/live-token`, `/chat` (Groq first when asked), `/tts`, `/dictate`, `/gemini/*`, `/config`, `/health`. Checks the shared secret, body size (413), the rate limit (429) and which Gemini paths the passthrough forwards (`isAllowedPassthrough`). |
+| `worker/src/search.ts` | ~290 | `/search`: Bing (page and RSS), DuckDuckGo, Wikipedia and Roblox lookups, query-word coverage scoring, readable page text. |
+| `worker/src/geminiFallback.ts` | ~75 | Which Gemini models to try in order, the per-attempt time limit, and the calls. |
+| `worker/src/http.ts` | ~50 | Shared helpers: JSON answers, reading a JSON object body, passing upstream errors on, constant-time secret compare. |
+| `worker/src/phoneRelay.ts` | ~420 | Dottie's shared Telegram bot: pairing codes, the `PhoneRelay` Durable Object (directory and per-Mac mailboxes), sends forced to the paired chat. |
+| `worker/src/chatCompletions.ts` | ~655 | Groq and NVIDIA NIM through OpenAI's chat format: Gemini body → chat request → Gemini response, which requests fit Groq's free plan. |
 | `DictationCorrectionLearner.swift` | ~440 | Learns your spellings from the fixes you make. When you retype a word dictation got wrong, your spelling goes into a personal dictionary and the notch says "Added … to your dictionary". Later dictation is told those spellings. |
 | `DictationLanguage.swift` | ~64 | Which language dictation listens for. Auto-detect is on by default and follows you across languages mid-sentence; pinning one language gives the most accurate results when you only speak that one. |
 | `DictationLiveTranscriber.swift` | ~220 | Shows your words in the notch while you're still dictating. It runs Apple's speech recognizer on the Mac (on-device when available) next to the recording and shows its partial results. |
@@ -291,7 +295,12 @@ npx wrangler deploy
 
 # Local dev (create worker/.dev.vars with your keys)
 npx wrangler dev
+
+# Before pushing a Worker change (the Worker workflow runs the same)
+npm run check   # type check, tests with coverage floor, speed checks, trial bundle
 ```
+
+Worker tests live in `worker/test/` (Vitest inside the Workers runtime; `worker/test/performance/` holds speed checks run in Node). Worker rules: every change comes with tests (coverage floor in `vitest.config.mts`: 97% lines, 93% branches). Tests never reach the internet; fake every outside call with `fakeFetch`. The Gemini passthrough forwards only model calls and model listing (`isAllowedPassthrough`); add a path there, with a test, before the app or Gemini CLI uses a new one. Requests are limited per address by the `REQUEST_RATE_LIMITER` binding in `wrangler.toml` (300 a minute). Needs Node 22 (wrangler 4).
 
 ## Code Style & Conventions
 
