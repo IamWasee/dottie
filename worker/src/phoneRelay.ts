@@ -18,6 +18,8 @@
  *   derived from the bot token. The webhook is set by the first /phone/pair.
  */
 
+import { isSameSecret, jsonResponse as json } from "./http";
+
 export interface PhoneRelayEnv {
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -36,29 +38,90 @@ const SEND_METHODS = new Set([
 const PAIRING_CODE_LIFETIME_MS = 15 * 60 * 1000;
 /** Most messages kept for a Mac that's asleep. */
 const MAXIMUM_QUEUED_UPDATES = 200;
+/**
+ * Most the waiting messages may take up together. A mailbox's queue is one
+ * stored value, and a value over the storage limit fails to save.
+ */
+const MAXIMUM_QUEUED_BYTES = 1_000_000;
 /** How long getUpdates waits for something new before answering empty. */
 const LONG_POLL_MS = 25_000;
+/** Letters and digits a pairing code is made of (no look-alikes such as 0/O and 1/l/I). */
+const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+const PAIRING_CODE_LENGTH = 12;
+
+/** The parts of a Telegram answer this file reads. */
+interface TelegramAnswer {
+  ok: boolean;
+  description?: string;
+  result?: { username?: string };
+}
+
+/** The parts of a Telegram update this file reads; the rest passes through to the Mac untouched. */
+interface TelegramChat {
+  id: number;
+  type?: string;
+}
+interface TelegramUpdate {
+  update_id?: number;
+  message?: { text?: string; chat?: TelegramChat };
+  callback_query?: { id?: string; message?: { chat?: TelegramChat } };
+  [otherField: string]: unknown;
+}
+
+/** What the Durable Object answers, by action. Every field is optional because one class answers them all. */
+interface PhoneRelayAnswer {
+  ok?: boolean;
+  username?: string;
+  mailboxName?: string | null;
+  previousMailboxName?: string;
+  chatID?: number | null;
+}
+
+interface SavedBotInfo {
+  tokenFingerprint: string;
+  webhookURL: string;
+  username: string;
+}
+
+interface SavedPairingCode {
+  mailboxName: string;
+  expiresAt: number;
+}
+
+/**
+ * A random pairing code: unguessable, and fits Telegram's start parameter
+ * (A-Z, a-z, 0-9, _ and -). Bytes past the last whole run of the alphabet
+ * are thrown away, so every character is equally likely.
+ */
+export function makePairingCode(): string {
+  const largestUnbiasedByte = 256 - (256 % PAIRING_CODE_ALPHABET.length);
+  let pairingCode = "";
+  while (pairingCode.length < PAIRING_CODE_LENGTH) {
+    for (const randomByte of crypto.getRandomValues(new Uint8Array(PAIRING_CODE_LENGTH * 2))) {
+      if (randomByte >= largestUnbiasedByte) continue;
+      pairingCode += PAIRING_CODE_ALPHABET[randomByte % PAIRING_CODE_ALPHABET.length];
+      if (pairingCode.length === PAIRING_CODE_LENGTH) break;
+    }
+  }
+  return pairingCode;
+}
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
-
 function telegramURL(env: PhoneRelayEnv, method: string): string {
   return `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 }
 
-async function callTelegram(env: PhoneRelayEnv, method: string, parameters: Record<string, unknown>): Promise<any> {
+async function callTelegram(env: PhoneRelayEnv, method: string, parameters: Record<string, unknown>): Promise<TelegramAnswer> {
   const response = await fetch(telegramURL(env, method), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(parameters),
   });
-  return response.json().catch(() => ({ ok: false }));
+  return response.json<TelegramAnswer>().catch(() => ({ ok: false }));
 }
 
 /** Telegram sends this back on every webhook call, so strangers can't post fake updates. */
@@ -74,20 +137,20 @@ function mailbox(env: PhoneRelayEnv, mailboxName: string): DurableObjectStub {
   return env.PHONE_RELAY.get(env.PHONE_RELAY.idFromName(`mailbox:${mailboxName}`));
 }
 
-async function askObject(stub: DurableObjectStub, action: string, body: unknown = {}): Promise<any> {
+async function askObject(stub: DurableObjectStub, action: string, body: unknown = {}): Promise<PhoneRelayAnswer> {
   const response = await stub.fetch(`https://phone-relay/${action}`, { method: "POST", body: JSON.stringify(body) });
-  return response.json();
+  return response.json<PhoneRelayAnswer>();
 }
 
 /** Routes under /phone/ (the Mac) and /telegram/webhook (Telegram). Returns null for other paths. */
 export async function handlePhoneRelay(request: Request, url: URL, env: PhoneRelayEnv): Promise<Response | null> {
   if (url.pathname === "/telegram/webhook") {
     if (!env.TELEGRAM_BOT_TOKEN) return new Response("Not found", { status: 404 });
-    if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== (await webhookSecret(env))) {
+    if (!isSameSecret(request.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "", await webhookSecret(env))) {
       return new Response("Unauthorized", { status: 401 });
     }
-    const update = await request.json().catch(() => null);
-    if (update) await routeTelegramUpdate(update, env);
+    const update = await request.json<TelegramUpdate | null>().catch(() => null);
+    if (update && typeof update === "object") await routeTelegramUpdate(update, env);
     return json({ ok: true });
   }
 
@@ -123,22 +186,19 @@ async function startPairing(url: URL, env: PhoneRelayEnv, mailboxName: string): 
   let botInfo = await askObject(directoryStub, "getBotInfo", { tokenFingerprint, webhookURL });
   if (!botInfo.username) {
     const me = await callTelegram(env, "getMe", {});
-    if (!me.ok) return json({ ok: false, description: "Telegram didn't accept the bot token." }, 502);
+    const botUsername = me.result?.username;
+    if (!me.ok || !botUsername) return json({ ok: false, description: "Telegram didn't accept the bot token." }, 502);
     const webhook = await callTelegram(env, "setWebhook", {
       url: webhookURL,
       secret_token: await webhookSecret(env),
       allowed_updates: ["message", "callback_query"],
     });
     if (!webhook.ok) return json({ ok: false, description: `Telegram didn't take the webhook: ${webhook.description ?? ""}` }, 502);
-    botInfo = { username: me.result.username };
-    await askObject(directoryStub, "setBotInfo", { tokenFingerprint, webhookURL, username: me.result.username });
+    botInfo = { username: botUsername };
+    await askObject(directoryStub, "setBotInfo", { tokenFingerprint, webhookURL, username: botUsername });
   }
 
-  // 12 random letters and digits: unguessable, and fits Telegram's start
-  // parameter (A-Z, a-z, 0-9, _ and -).
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const randomBytes = crypto.getRandomValues(new Uint8Array(12));
-  const pairingCode = [...randomBytes].map((byte) => alphabet[byte % alphabet.length]).join("");
+  const pairingCode = makePairingCode();
   await askObject(directoryStub, "addCode", { pairingCode, mailboxName });
   return json({
     ok: true,
@@ -149,7 +209,7 @@ async function startPairing(url: URL, env: PhoneRelayEnv, mailboxName: string): 
 }
 
 /** A Telegram update from the webhook: pairing, or into the paired Mac's mailbox. */
-async function routeTelegramUpdate(update: any, env: PhoneRelayEnv): Promise<void> {
+async function routeTelegramUpdate(update: TelegramUpdate, env: PhoneRelayEnv): Promise<void> {
   const message = update.message;
   const callbackQuery = update.callback_query;
   const chat = message?.chat ?? callbackQuery?.message?.chat;
@@ -193,7 +253,7 @@ async function routeTelegramUpdate(update: any, env: PhoneRelayEnv): Promise<voi
 async function relayBotMethod(request: Request, method: string, env: PhoneRelayEnv, mailboxName: string): Promise<Response> {
   const mailboxStub = mailbox(env, mailboxName);
   if (method === "getUpdates") {
-    const parameters = await request.json<any>().catch(() => ({}));
+    const parameters = await request.json<{ offset?: unknown }>().catch((): { offset?: unknown } => ({}));
     const answer = await mailboxStub.fetch("https://phone-relay/updates", {
       method: "POST",
       body: JSON.stringify({ offset: Number(parameters.offset ?? 0) }),
@@ -211,18 +271,18 @@ async function relayBotMethod(request: Request, method: string, env: PhoneRelayE
   const contentType = request.headers.get("Content-Type") ?? "";
   let upstream: Response;
   if (contentType.startsWith("multipart/form-data")) {
-    // Photos and files (up to 50 MB) stream straight through instead of
-    // being parsed here; the chat goes in the address, and the Mac leaves
-    // it out of the form.
-    const target = new URL(telegramURL(env, method));
-    target.searchParams.set("chat_id", String(paired.chatID));
-    upstream = await fetch(target.toString(), {
-      method: "POST",
-      headers: { "Content-Type": contentType },
-      body: request.body,
-    });
+    // Photos and files (up to 50 MB). The form is read here so the chat
+    // can be set to the Mac's own, whatever the form itself names.
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return json({ ok: false, description: "The file didn't arrive whole." }, 400);
+    }
+    form.set("chat_id", String(paired.chatID));
+    upstream = await fetch(telegramURL(env, method), { method: "POST", body: form });
   } else {
-    const parameters = await request.json<Record<string, unknown>>().catch(() => ({}));
+    const parameters = await request.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}));
     if (method !== "answerCallbackQuery") parameters.chat_id = paired.chatID;
     upstream = await fetch(telegramURL(env, method), {
       method: "POST",
@@ -245,25 +305,46 @@ export class PhoneRelay {
 
   async fetch(request: Request): Promise<Response> {
     const action = new URL(request.url).pathname.slice(1);
-    const body = await request.json<any>().catch(() => ({}));
+    const body = await request
+      .json<{
+        tokenFingerprint?: string;
+        webhookURL?: string;
+        username?: string;
+        pairingCode?: string;
+        mailboxName?: string;
+        chatID?: number;
+        update?: TelegramUpdate;
+        offset?: number;
+        /** Only tests send this, straight to the object, so they needn't wait 25 seconds. */
+        longPollMilliseconds?: number;
+      }>()
+      .catch(() => ({}) as Record<string, undefined>);
     const storage = this.state.storage;
 
     switch (action) {
       // Directory
       case "getBotInfo": {
-        const saved = await storage.get<any>("botInfo");
+        const saved = await storage.get<SavedBotInfo>("botInfo");
         const isCurrent = saved && saved.tokenFingerprint === body.tokenFingerprint && saved.webhookURL === body.webhookURL;
         return json(isCurrent ? { username: saved.username } : {});
       }
       case "setBotInfo":
         await storage.put("botInfo", body);
         return json({ ok: true });
-      case "addCode":
+      case "addCode": {
+        // Codes nobody used are cleared here, or they would pile up forever.
+        const savedCodes = await storage.list<SavedPairingCode>({ prefix: "code:" });
+        const expiredCodeKeys = [...savedCodes].filter(([, savedCode]) => savedCode.expiresAt < Date.now()).map(([codeKey]) => codeKey);
+        // Storage deletes at most 128 keys a call.
+        for (let firstIndex = 0; firstIndex < expiredCodeKeys.length; firstIndex += 128) {
+          await storage.delete(expiredCodeKeys.slice(firstIndex, firstIndex + 128));
+        }
         await storage.put(`code:${body.pairingCode}`, { mailboxName: body.mailboxName, expiresAt: Date.now() + PAIRING_CODE_LIFETIME_MS });
         return json({ ok: true });
+      }
       case "claimCode": {
         const codeKey = `code:${body.pairingCode}`;
-        const saved = await storage.get<any>(codeKey);
+        const saved = await storage.get<SavedPairingCode>(codeKey);
         await storage.delete(codeKey);
         if (!saved || saved.expiresAt < Date.now()) return json({});
         const chatKey = `chat:${body.chatID}`;
@@ -290,11 +371,13 @@ export class PhoneRelay {
         return json({ chatID: (await storage.get<number>("chatID")) ?? null });
       case "push": {
         const nextUpdateID = ((await storage.get<number>("nextUpdateID")) ?? 1);
-        const queue = (await storage.get<any[]>("queue")) ?? [];
+        const queue = (await storage.get<TelegramUpdate[]>("queue")) ?? [];
         // Each Mac gets its own numbering, so its getUpdates offset works
         // the way Telegram's does.
         queue.push({ ...body.update, update_id: nextUpdateID });
         while (queue.length > MAXIMUM_QUEUED_UPDATES) queue.shift();
+        // The oldest go first when the queue is too big to save; the newest always stays.
+        while (queue.length > 1 && JSON.stringify(queue).length > MAXIMUM_QUEUED_BYTES) queue.shift();
         await storage.put({ queue, nextUpdateID: nextUpdateID + 1 });
         const waiting = this.waiters;
         this.waiters = [];
@@ -304,8 +387,8 @@ export class PhoneRelay {
       case "updates": {
         const offset = Number(body.offset ?? 0);
         const pending = async () => {
-          let queue = (await storage.get<any[]>("queue")) ?? [];
-          const remaining = queue.filter((update) => update.update_id >= offset);
+          let queue = (await storage.get<TelegramUpdate[]>("queue")) ?? [];
+          const remaining = queue.filter((update) => (update.update_id ?? 0) >= offset);
           if (remaining.length !== queue.length) await storage.put("queue", remaining);
           queue = remaining;
           return queue.slice(0, 50);
@@ -313,11 +396,17 @@ export class PhoneRelay {
         let result = await pending();
         if (result.length === 0) {
           await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, LONG_POLL_MS);
-            this.waiters.push(() => {
+            const wake = () => {
               clearTimeout(timer);
               resolve();
-            });
+            };
+            // A wait that times out takes itself off the list, so an idle
+            // mailbox doesn't collect one finished waiter per poll.
+            const timer = setTimeout(() => {
+              this.waiters = this.waiters.filter((waiter) => waiter !== wake);
+              resolve();
+            }, body.longPollMilliseconds ?? LONG_POLL_MS);
+            this.waiters.push(wake);
           });
           result = await pending();
         }

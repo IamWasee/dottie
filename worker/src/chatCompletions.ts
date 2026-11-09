@@ -30,6 +30,12 @@ export interface ChatProvider {
   maximumImages: number;
   /** Rough token budget (prompt + answer) a request must fit in. */
   maximumTokens: number;
+  /**
+   * How long one model may take to answer before the next one is tried.
+   * Without it a provider that stops answering would hold the request and
+   * Gemini would never get its turn.
+   */
+  attemptTimeoutMilliseconds: number;
   /** Model-specific switches (thinking off); retried without them on a 400. */
   extrasForModel: (model: string) => Record<string, unknown>;
 }
@@ -59,6 +65,7 @@ export function groqProvider(apiKey: string, textModels?: string, visionModels?:
     textModels: modelList(textModels || DEFAULT_GROQ_TEXT_MODELS),
     visionModels: modelList(visionModels || DEFAULT_GROQ_VISION_MODELS),
     maximumImages: 3,
+    attemptTimeoutMilliseconds: 30_000,
     maximumTokens: Number.isFinite(configuredMaximumTokens) && configuredMaximumTokens > 0
       ? configuredMaximumTokens
       : DEFAULT_GROQ_MAX_REQUEST_TOKENS,
@@ -81,6 +88,8 @@ export function nimProvider(apiKey: string, models?: string): ChatProvider {
     visionModels: nimModels,
     maximumImages: 8,
     maximumTokens: 100_000,
+    // NIM's free endpoints are slow to start.
+    attemptTimeoutMilliseconds: 60_000,
     extrasForModel: () => ({ chat_template_kwargs: { enable_thinking: false, thinking: false } }),
   };
 }
@@ -116,7 +125,7 @@ type ChatMessage = {
 const PLACEHOLDER_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
 
 /** How many pictures a Gemini body carries. */
-function imageCount(geminiBody: Record<string, unknown>): number {
+export function imageCount(geminiBody: Record<string, unknown>): number {
   let count = 0;
   for (const content of (geminiBody.contents ?? []) as GeminiContent[]) {
     for (const part of content.parts ?? []) {
@@ -144,7 +153,7 @@ function involvesAudio(geminiBody: Record<string, unknown>): boolean {
  * A rough token count: text at about four characters a token, pictures at
  * about 1,100 tokens each (Groq counts up to 1,026), plus the answer.
  */
-function estimatedTokens(geminiBody: Record<string, unknown>): number {
+export function estimatedTokens(geminiBody: Record<string, unknown>): number {
   let characterCount = 0;
   for (const content of (geminiBody.contents ?? []) as GeminiContent[]) {
     for (const part of content.parts ?? []) {
@@ -241,17 +250,26 @@ export async function answerWithProvider(
   }
   for (const model of models) {
     for (const extras of [provider.extrasForModel(model), {}]) {
-      const response = await fetch(provider.apiURL, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${provider.apiKey}`,
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify({ ...chatRequest, ...extras, model, stream: false }),
-      });
+      let response: Response;
+      try {
+        response = await fetch(provider.apiURL, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${provider.apiKey}`,
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({ ...chatRequest, ...extras, model, stream: false }),
+          signal: AbortSignal.timeout(provider.attemptTimeoutMilliseconds),
+        });
+      } catch (error) {
+        // Too slow or unreachable: the next model, or the caller's backup.
+        console.warn(`[${provider.name}] ${model} didn't answer: ${error}`);
+        break;
+      }
       if (response.ok) {
-        const chatResponse = (await response.json()) as Record<string, unknown>;
+        const chatResponse = await response.json<Record<string, unknown>>().catch(() => undefined);
+        if (!chatResponse) break;
         let geminiResponse = toGeminiResponse(chatResponse, `${provider.name}/${model}`);
         if (!geminiResponse) break;
         if (boxConversion) geminiResponse = boxConversion.responseForGemini(geminiResponse);
@@ -275,7 +293,7 @@ export async function answerWithProvider(
 
 // MARK: - Gemini → chat
 
-function toChatRequest(geminiBody: Record<string, unknown>): Record<string, unknown> {
+export function toChatRequest(geminiBody: Record<string, unknown>): Record<string, unknown> {
   const messages: ChatMessage[] = [];
 
   let systemText = partsText(((geminiBody.systemInstruction ?? {}) as GeminiContent).parts);
@@ -374,7 +392,7 @@ function partsText(parts: GeminiPart[] | undefined): string {
 }
 
 /** Gemini schemas use OBJECT/STRING; JSON Schema wants object/string. */
-function lowercaseSchema(schema: unknown): unknown {
+export function lowercaseSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(lowercaseSchema);
   if (!schema || typeof schema !== "object") return schema;
   const converted: Record<string, unknown> = {};
@@ -392,7 +410,7 @@ function lowercaseSchema(schema: unknown): unknown {
 
 // MARK: - chat → Gemini
 
-function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel: string): Record<string, unknown> | undefined {
+export function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel: string): Record<string, unknown> | undefined {
   const choice = ((chatResponse.choices ?? []) as Array<Record<string, unknown>>)[0];
   const message = (choice?.message ?? {}) as Record<string, unknown>;
   const parts: GeminiPart[] = [];
@@ -408,10 +426,12 @@ function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel:
     if (typeof call.name !== "string") continue;
     let args: unknown = {};
     try {
-      args = typeof call.arguments === "string" && call.arguments ? JSON.parse(call.arguments) : call.arguments ?? {};
+      args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : call.arguments;
     } catch {
       args = {};
     }
+    // Gemini only takes an object here; "" or null from a model would be turned down.
+    if (!args || typeof args !== "object" || Array.isArray(args)) args = {};
     parts.push({
       functionCall: { name: call.name, args, ...(typeof toolCall.id === "string" ? { id: toolCall.id } : {}) },
       thoughtSignature: PLACEHOLDER_THOUGHT_SIGNATURE,
@@ -444,7 +464,7 @@ function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel:
  * calls in the history, and the answer's "_px" boxes are turned back into
  * the keys and 0-1000 boxes the app asked for.
  */
-function pixelBoxConversion(geminiBody: Record<string, unknown>):
+export function pixelBoxConversion(geminiBody: Record<string, unknown>):
   | { bodyForProvider: Record<string, unknown>; responseForGemini: (response: Record<string, unknown>) => Record<string, unknown> }
   | undefined {
   const bodyText = JSON.stringify(geminiBody);
@@ -553,7 +573,7 @@ function pixelBoxConversion(geminiBody: Record<string, unknown>):
 }
 
 /** "box_px": [l, t, r, b] in an answer's text (JSON or close to it) → Gemini's key and box. */
-function textWithGeminiBoxes(
+export function textWithGeminiBoxes(
   text: string,
   toGeminiBox: (box: unknown) => unknown,
   geminiKey: (key: string) => string | undefined
@@ -602,7 +622,9 @@ export function pictureSize(bytes: Uint8Array): { width: number; height: number 
   // PNG: the IHDR chunk right after the signature.
   if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return { width: view.getUint32(16), height: view.getUint32(20) };
+    const width = view.getUint32(16);
+    const height = view.getUint32(20);
+    return width > 0 && height > 0 ? { width, height } : undefined;
   }
   // JPEG: walk the markers to the start-of-frame one.
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;

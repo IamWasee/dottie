@@ -1,0 +1,70 @@
+name: Worker
+
+# Checks the Cloudflare Worker (worker/) on every pull request and on main:
+# strict type check, unit and integration tests inside the real Workers
+# runtime with a coverage floor, speed checks, and a trial bundle. Nothing
+# here deploys or needs a secret; the Release workflow deploys.
+on:
+  push:
+    branches: [main]
+    paths: ["worker/**", ".github/workflows/worker.yml"]
+  pull_request:
+    paths: ["worker/**", ".github/workflows/worker.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Known vulnerabilities
+        run: npm audit --audit-level=high
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Tests with coverage
+        # Fails when a test fails or coverage drops under the floor in
+        # vitest.config.mts.
+        run: npm run test:coverage
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            {
+              echo "### Worker test coverage"
+              echo ""
+              echo "| | Covered |"
+              echo "| --- | --- |"
+              jq -r '.total | "| Lines | \(.lines.pct)% |\n| Branches | \(.branches.pct)% |\n| Functions | \(.functions.pct)% |"' coverage/coverage-summary.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Speed checks
+        run: npm run test:performance
+
+      - name: Trial bundle
+        # Bundles the Worker the way a deploy would, without deploying.
+        run: npm run build:check
