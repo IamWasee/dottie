@@ -5,13 +5,13 @@
 
 ## Overview
 
-Dottie is a macOS menu bar companion app with every AI call on Google Gemini's free tier. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Push-to-talk (ctrl+option) streams the user's voice and one frame of their screen(s) to Gemini Live, which answers in streamed audio. A blue cursor overlay can fly to and point at UI elements Gemini picks via a tool call, on any connected monitor.
+Dottie is a macOS menu bar companion app with every AI call on Google Gemini's free tier. A normal Mac app (Dock icon, Cmd+Tab, Force Quit) whose main window is Home; it also lives in the menu bar and the notch. Clicking the menu bar icon opens a custom floating panel with companion voice controls. Push-to-talk (ctrl+option) streams the user's voice and one frame of their screen(s) to Gemini Live, which answers in streamed audio. A blue cursor overlay can fly to and point at UI elements Gemini picks via a tool call, on any connected monitor.
 
 The only key is a Gemini API key, and it lives on a Cloudflare Worker proxy — nothing sensitive ships in the app. See ROADMAP.md for which features exist so far.
 
 ## Architecture
 
-- **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
+- **App Type**: Regular app (`LSUIElement=false`): Dock icon, app menu, Cmd+Tab and Force Quit. Opening it (Dock, Finder, Spotlight) shows Home; a login-item launch stays in the menu bar. Closing Home doesn't quit, the Dock icon brings it back, and cmd+, opens Home → Settings
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
 - **Voice companion (live mode, default)**: Gemini Live (`gemini-3.8-live`) over a WebSocket opened with a single-use ephemeral token from the Worker. Manual activity detection: hotkey press sends `activityStart` + a JPEG frame, release sends `activityEnd`. Output is 24kHz PCM played as it streams. Pointing is the `point_at_element` tool (0–1000 coordinates on the frame). Only about 20 everyday tools are declared (`GeminiLiveToolCatalog.directFunctionNames`); the rest are found with `find_tool` and run with `use_tool` through the same dispatch, so a rarely used tool's how-and-when belongs in its description, not the voice prompt.
@@ -82,7 +82,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
+| `leanring_buddyApp.swift` | ~150 | App entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate`, which creates `MenuBarPanelManager`, starts `CompanionManager`, opens Home when the user opens the app (not at login), and handles the Dock icon, its menu and cmd+, (Home → Settings). |
 | `CompanionManager.swift` | ~4170 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Gemini Live client (live mode) or Gemini chat + TTS (classic mode), and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, voice selection, and cursor visibility. |
 | `GeminiLiveVoiceClient.swift` | ~1725 | Gemini Live WebSocket client: ephemeral-token connect, setup (voice, tools, manual activity detection, transcription, context compression), queued sends, turn API (`beginUserTurn`/`sendMicrophoneAudio`/`endUserTurn`), tool calls, idle close, watchdog. Also `GeminiLivePCMPlayer` for streamed 24kHz playback and `GeminiLiveToolCatalog` (which tools are declared directly, `find_tool`/`use_tool` for the rest). |
 | `GeminiLiveCompanionTranscriptionProvider.swift` | ~150 | Bridges `BuddyDictationManager`'s mic pipeline into the Live session. |

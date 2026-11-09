@@ -1194,8 +1194,9 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
             homeWindow = window
         }
 
-        // Menu-bar-only apps must activate explicitly for a normal window to
-        // come forward and take keyboard focus.
+        // Opened from the menu bar panel or the notch, Dottie isn't the
+        // active app, so it has to activate for the window to come forward
+        // and take keyboard focus.
         NSApp.activate(ignoringOtherApps: true)
         homeWindow?.makeKeyAndOrderFront(nil)
     }
