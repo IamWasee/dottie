@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>ClickyWorkerBaseURL</key>
 	<string>https://your-worker-name.your-subdomain.workers.dev</string>
 	<key>ClickyAppSharedSecret</key>
