@@ -75,7 +75,7 @@ final class DottieGuideBrain {
         let identity: DottieMausBotIdentity
         switch await mausBotRuntime.ensureBot(for: spec, launcher: launcher) {
         case .failure(let reason):
-            print("⚠️ Guide: Claude bot not ready (\(reason)), using Gemini")
+            DottieLog.warning("⚠️ Guide: Claude bot not ready (\(reason)), using Gemini")
             skipClaudeForAWhile()
             return nil
         case .success(let readyIdentity):
@@ -118,13 +118,13 @@ final class DottieGuideBrain {
                 fromPixelBoxReply: replyCollector.text,
                 screenshotPixelSize: screenshotPixelSize
             ) else {
-                print("⚠️ Guide: Claude's answer wasn't readable JSON, using Gemini for this step")
+                DottieLog.warning("⚠️ Guide: Claude's answer wasn't readable JSON, using Gemini for this step")
                 return nil
             }
             lastEngineName = "claude"
             return convertedReply
         case .stopped:
-            print("⚠️ Guide: Claude took over \(Int(Self.claudeAnswerTimeoutSeconds)) s, using Gemini for this step")
+            DottieLog.warning("⚠️ Guide: Claude took over \(Int(Self.claudeAnswerTimeoutSeconds)) s, using Gemini for this step")
             return nil
         default:
             skipClaudeForAWhile()

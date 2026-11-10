@@ -97,7 +97,7 @@ final class DottieAwayMode: ObservableObject {
             defaults.set(true, forKey: Self.isAwayDefaultsKey)
             defaults.set(awaySince, forKey: Self.awaySinceDefaultsKey)
             record(.note, title: "Away mode on", detail: "turned on from \(source)")
-            print("🚶 Away mode on (\(source))")
+            DottieLog.notice("🚶 Away mode on (\(source))")
             let phoneIsPaired = phoneBridge?.pairedChatID != nil
             if phoneIsPaired, source != "phone" {
                 Task { await phoneBridge?.send("Away mode is on. I'll keep working, text you before anything that pays, sends, posts or deletes, and text \"report\" any time to see what I've done.") }
@@ -112,7 +112,7 @@ final class DottieAwayMode: ObservableObject {
         record(.note, title: "Away mode off", detail: "turned off from \(source)")
         awaySince = nil
         defaults.removeObject(forKey: Self.awaySinceDefaultsKey)
-        print("🏠 Away mode off (\(source))")
+        DottieLog.notice("🏠 Away mode off (\(source))")
         // Questions still waiting on the phone are answered at the Mac now.
         phoneBridge?.resolvePendingQuestion(with: nil)
         onCameBack?(reportText)

@@ -340,7 +340,7 @@ final class DottieGitHubSignIn: ObservableObject {
             .first { $0.hasSuffix(archive.name) }
         let actualHash = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
         guard let expectedLine, expectedLine.hasPrefix(actualHash) else {
-            print("⚠️ gh download didn't match its checksum; not installing it")
+            DottieLog.warning("⚠️ gh download didn't match its checksum; not installing it")
             return nil
         }
 
@@ -370,7 +370,7 @@ final class DottieGitHubSignIn: ObservableObject {
         }
         // Downloaded files are quarantined; this one was checked above.
         _ = await DottieProcessRunner.run("/usr/bin/xattr", arguments: ["-d", "com.apple.quarantine", installedURL.path], timeout: 10)
-        print("✅ Installed GitHub CLI to \(installedURL.path)")
+        DottieLog.notice("✅ Installed GitHub CLI to \(installedURL.path)")
         return installedURL.path
     }
 }

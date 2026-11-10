@@ -420,7 +420,7 @@ final class DottieScreenTaskRunner {
                 slowAnswerNotice.cancel()
                 if Task.isCancelled { return .stopped }
                 consecutiveRequestFailures += 1
-                print("⚠️ Screen task step \(stepNumber) failed: \(error.localizedDescription)")
+                DottieLog.warning("⚠️ Screen task step \(stepNumber) failed: \(error.localizedDescription)")
                 // A game waits out a per-minute limit rather than giving up.
                 let isRateLimited = (error as NSError).code == 429
                 if consecutiveRequestFailures >= (isGameMode && isRateLimited ? 6 : 3) {
@@ -499,7 +499,7 @@ final class DottieScreenTaskRunner {
                        let problem = await doneCheckProblem(actedThisTurn: actedThisTurn, doneCheck: arguments.dottieString("done_check")) {
                         if Task.isCancelled { return .stopped }
                         finishRejectionCount += 1
-                        print("🧭 Not finished yet: \(problem)")
+                        DottieLog.notice("🧭 Not finished yet: \(problem)")
                         onProgress?(stepNumber, "making sure it's really done")
                         respond("not finished: \(problem)")
                         continue
@@ -603,7 +603,7 @@ final class DottieScreenTaskRunner {
     }
 
     private func playReplay(_ replay: DottieReplay) async -> ReplayResult {
-        print("⚡ Replaying \"\(replay.name)\" (\(replay.steps.count) steps)")
+        DottieLog.notice("⚡ Replaying \"\(replay.name)\" (\(replay.steps.count) steps)")
         let startedAt = Date()
         let player = DottieReplayPlayer()
         player.onProgress = { [weak self] text in self?.onProgress?(0, text) }
@@ -625,7 +625,7 @@ final class DottieScreenTaskRunner {
                 let seconds = Date().timeIntervalSince(startedAt)
                 DottieReplayStore.shared.noteUsed(replay.id, seconds: seconds)
                 lastReplayReport = "⚡ done from memory in " + String(format: "%.1fs", seconds)
-                print("⚡ Replay done in \(String(format: "%.1f", seconds))s")
+                DottieLog.notice("⚡ Replay done in \(String(format: "%.1f", seconds))s")
                 return .finished(answer: replay.answer, playedSteps: playedSteps)
             }
             return .finished(answer: nil, playedSteps: playedSteps)
@@ -719,7 +719,7 @@ final class DottieScreenTaskRunner {
         guard !isGameMode, jobTier == .tiny else { return }
         jobTier = .normal
         jobModel = DottieModelPicker.shared.pick(.normal)
-        print("🧭 Screen task: moving to \(jobModel ?? "the normal model")")
+        DottieLog.notice("🧭 Screen task: moving to \(jobModel ?? "the normal model")")
     }
 
     // MARK: - Goals and plans (DottieTaskGoal)
@@ -737,7 +737,7 @@ final class DottieScreenTaskRunner {
             currentGoal = commonGoal
         }
         if let currentGoal {
-            print("🎯 Goal (\(currentGoal.source.rawValue)): \(currentGoal.goal). Done when: \(currentGoal.doneWhen)")
+            DottieLog.notice("🎯 Goal (\(currentGoal.source.rawValue)): \(currentGoal.goal). Done when: \(currentGoal.doneWhen)")
             onPlanChanged?(currentGoal.steps, currentGoal.currentStepIndex)
         }
     }
@@ -798,11 +798,11 @@ final class DottieScreenTaskRunner {
         // answered from memory, without asking again.
         let formField = kind == "missing_info" ? arguments.dottieString("field") : nil
         if let formField, let savedValue = DottieFormDetails.shared.value(forField: formField) {
-            print("🙋 Screen job asked for \(formField); answered from saved form details")
+            DottieLog.notice("🙋 Screen job asked for \(formField); answered from saved form details")
             onProgress?(stepNumber, "using your saved \(DottieFormDetails.fieldKey(formField).replacingOccurrences(of: "_", with: " "))")
             return "from the user's saved form details, \(DottieFormDetails.fieldKey(formField)): \(savedValue). Use it; don't ask the user."
         }
-        print("🙋 Screen job asks: \(question)")
+        DottieLog.notice("🙋 Screen job asks: \(question)")
         onProgress?(stepNumber, "waiting for you: \(question)")
         onAskUser?(question, kind)
         // Away, the question is on the user's phone and may take a while.
@@ -1600,7 +1600,7 @@ final class DottieScreenTaskRunner {
             if Task.isCancelled { throw CancellationError() }
             // Claude would be missing this step from now on, so Gemini,
             // which reads the whole conversation, does the rest of the job.
-            print("⚠️ Screen task: Claude didn't answer, Gemini carries on")
+            DottieLog.warning("⚠️ Screen task: Claude didn't answer, Gemini carries on")
             usesClaudeForThisJob = false
         }
         do {
@@ -1609,7 +1609,7 @@ final class DottieScreenTaskRunner {
             // The Worker answers with another model when the first is busy,
             // and Gemini 3 can reject a function call signed by a different
             // model. Google's documented placeholder skips that check.
-            print("⚠️ Screen task: retrying without thought signatures")
+            DottieLog.warning("⚠️ Screen task: retrying without thought signatures")
             return try await requestNextActionsOnce(contents: Self.contentsWithPlaceholderSignatures(contents))
         }
     }

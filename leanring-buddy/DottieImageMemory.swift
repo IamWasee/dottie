@@ -55,7 +55,7 @@ final class DottieImageMemory: ObservableObject {
         do {
             try jpegData.write(to: folderURL.appendingPathComponent(fileName), options: .atomic)
         } catch {
-            print("⚠️ Couldn't save picture: \(error.localizedDescription)")
+            DottieLog.warning("⚠️ Couldn't save picture: \(error.localizedDescription)")
             return nil
         }
 
@@ -91,7 +91,7 @@ final class DottieImageMemory: ObservableObject {
         do {
             try jpegData.write(to: folderURL.appendingPathComponent(fileName), options: .atomic)
         } catch {
-            print("⚠️ Couldn't save picture: \(error.localizedDescription)")
+            DottieLog.warning("⚠️ Couldn't save picture: \(error.localizedDescription)")
             return nil
         }
         let trimmedName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))

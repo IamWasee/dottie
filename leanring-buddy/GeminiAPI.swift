@@ -144,7 +144,7 @@ final class GeminiAPI {
         )
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
-        print("🌐 Gemini streaming request: \(String(format: "%.1f", Double(bodyData.count) / 1_048_576.0))MB, \(images.count) image(s)")
+        DottieLog.notice("🌐 Gemini streaming request: \(String(format: "%.1f", Double(bodyData.count) / 1_048_576.0))MB, \(images.count) image(s)")
 
         let requestedModel = modelOverride ?? model ?? "default"
         let (byteStream, response) = try await session.bytes(for: request)

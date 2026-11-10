@@ -168,7 +168,7 @@ final class DottieReplayStore: ObservableObject {
         while replays.count > Self.maximumReplays, let oldest = replays.min(by: { $0.lastUsedAt < $1.lastUsedAt }) {
             forget(oldest.id)
         }
-        print("⚡ Saved replay \"\(newReplay.name)\" (\(newReplay.steps.count) steps)")
+        DottieLog.notice("⚡ Saved replay \"\(newReplay.name)\" (\(newReplay.steps.count) steps)")
     }
 
     func noteUsed(_ replayID: UUID, seconds: Double) {

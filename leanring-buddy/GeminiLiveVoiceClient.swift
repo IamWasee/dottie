@@ -458,7 +458,7 @@ final class GeminiLiveVoiceClient {
             do {
                 try await self.openSession()
             } catch {
-                print("⚠️ Gemini Live: connection failed: \(error)")
+                DottieLog.warning("⚠️ Gemini Live: connection failed: \(error)")
                 self.handleConnectionLost(error: error)
             }
         }
@@ -482,7 +482,7 @@ final class GeminiLiveVoiceClient {
         // straight to the socket, bypassing the pending queue.
         let setupMessageData = try JSONSerialization.data(withJSONObject: buildSetupMessage(liveModel: liveModel))
         try await newWebSocketTask.send(.string(String(decoding: setupMessageData, as: UTF8.self)))
-        print("🔌 Gemini Live: setup sent (model \(liveModel), voice \(voiceName))")
+        DottieLog.notice("🔌 Gemini Live: setup sent (model \(liveModel), voice \(voiceName))")
 
         startReceiveLoop(for: newWebSocketTask)
     }
@@ -920,7 +920,7 @@ final class GeminiLiveVoiceClient {
         guard isReady, let socketTask else { return }
         socketTask.send(.string(messageText)) { error in
             if let error {
-                print("⚠️ Gemini Live: send failed: \(error.localizedDescription)")
+                DottieLog.warning("⚠️ Gemini Live: send failed: \(error.localizedDescription)")
             }
         }
     }
@@ -936,11 +936,11 @@ final class GeminiLiveVoiceClient {
         for messageText in messagesToFlush {
             readyWebSocketTask.send(.string(messageText)) { error in
                 if let error {
-                    print("⚠️ Gemini Live: flush send failed: \(error.localizedDescription)")
+                    DottieLog.warning("⚠️ Gemini Live: flush send failed: \(error.localizedDescription)")
                 }
             }
         }
-        print("🔌 Gemini Live: ready, flushed \(messagesToFlush.count) queued message(s)")
+        DottieLog.notice("🔌 Gemini Live: ready, flushed \(messagesToFlush.count) queued message(s)")
     }
 
     // MARK: - Receiving
@@ -953,7 +953,7 @@ final class GeminiLiveVoiceClient {
                     message = try await receivingWebSocketTask.receive()
                 } catch {
                     guard let self, self.webSocketTask === receivingWebSocketTask else { return }
-                    print("🔌 Gemini Live: socket closed: \(error.localizedDescription)")
+                    DottieLog.notice("🔌 Gemini Live: socket closed: \(error.localizedDescription)")
                     self.handleConnectionLost(error: error)
                     return
                 }
@@ -1019,7 +1019,7 @@ final class GeminiLiveVoiceClient {
         if serverMessage["goAway"] != nil {
             // The server will close soon. Finish the current turn if one is
             // running, then reconnect fresh on the next press.
-            print("🔌 Gemini Live: goAway received, will reconnect on next turn")
+            DottieLog.notice("🔌 Gemini Live: goAway received, will reconnect on next turn")
             if isModelTurnInProgress {
                 shouldDisconnectAfterCurrentTurn = true
             } else {
@@ -1123,7 +1123,7 @@ final class GeminiLiveVoiceClient {
 
             toolCallsThisUserTurn += 1
             if toolCallsThisUserTurn > Self.maximumToolCallsPerUserTurn {
-                print("🛑 Gemini Live: \(functionName) not run, this question already made \(Self.maximumToolCallsPerUserTurn) tool calls")
+                DottieLog.notice("🛑 Gemini Live: \(functionName) not run, this question already made \(Self.maximumToolCallsPerUserTurn) tool calls")
                 enqueueOrSend(message: [
                     "toolResponse": [
                         "functionResponses": [[
@@ -1478,7 +1478,7 @@ final class GeminiLiveVoiceClient {
         // The main model's drops are usually one-offs, so the first replay
         // stays on it (same voice); only a second drop moves to the backup.
         shouldUseBackupLiveModel = turnReplayCount >= 2
-        print("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays))\(shouldUseBackupLiveModel ? " on \(Self.backupLiveModel)" : "")")
+        DottieLog.notice("🔁 Gemini Live: session dropped before answering, replaying the turn (\(turnReplayCount)/\(Self.maximumTurnReplays))\(shouldUseBackupLiveModel ? " on \(Self.backupLiveModel)" : "")")
 
         let wasUserTurnOpen = isUserTurnOpen
         disconnect()
@@ -1529,7 +1529,7 @@ final class GeminiLiveVoiceClient {
                 guard self.pendingFunctionCallTasks.isEmpty else { continue }
                 let lastActivity = max(turnEndedAt, self.lastServerMessageReceivedAt)
                 if Date().timeIntervalSince(lastActivity) > Self.responseTimeoutSeconds {
-                    print("⚠️ Gemini Live: no response for \(Int(Self.responseTimeoutSeconds))s, dropping connection")
+                    DottieLog.warning("⚠️ Gemini Live: no response for \(Int(Self.responseTimeoutSeconds))s, dropping connection")
                     self.handleConnectionLost(error: NSError(
                         domain: "GeminiLive", code: -20,
                         userInfo: [NSLocalizedDescriptionKey: "gemini live stopped responding"]
@@ -1551,7 +1551,7 @@ final class GeminiLiveVoiceClient {
             try? await Task.sleep(nanoseconds: UInt64(Self.idleDisconnectDelaySeconds * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             guard !self.isModelTurnInProgress, !self.isUserTurnOpen else { return }
-            print("🔌 Gemini Live: idle, closing socket (keeping the session to resume)")
+            DottieLog.notice("🔌 Gemini Live: idle, closing socket (keeping the session to resume)")
             self.sessionResumptionHandleKeptAt = Date()
             self.disconnect()
         }
@@ -1612,7 +1612,7 @@ final class GeminiLivePCMPlayer {
             do {
                 try audioEngine.start()
             } catch {
-                print("⚠️ Gemini Live player: engine failed to start: \(error)")
+                DottieLog.warning("⚠️ Gemini Live player: engine failed to start: \(error)")
                 return
             }
         }

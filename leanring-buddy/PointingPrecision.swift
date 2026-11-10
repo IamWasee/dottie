@@ -275,7 +275,7 @@ enum MarkTargetExtender {
         let gapToWord = textFrame.minX - iconRightEdgeInPoints
         guard gapToWord <= textHeight * 1.1, textFrame.minX - iconLeftEdgeInPoints <= searchWidthToTheLeft else { return textFrame }
         let grownFrame = CGRect(x: iconLeftEdgeInPoints, y: textFrame.minY, width: textFrame.maxX - iconLeftEdgeInPoints, height: textFrame.height)
-        print("🎯 Mark grown from the word to the icon beside it: \(Int(textFrame.minX)) → \(Int(grownFrame.minX))")
+        DottieLog.notice("🎯 Mark grown from the word to the icon beside it: \(Int(textFrame.minX)) → \(Int(grownFrame.minX))")
         return grownFrame
     }
 

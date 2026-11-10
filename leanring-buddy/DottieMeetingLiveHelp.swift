@@ -252,7 +252,7 @@ final class DottieMeetingLiveHelp: ObservableObject {
             return
         }
         guard isUserAsking || askTimesInLastMinute.count < Self.maximumAsksPerMinute else {
-            print("🎧 Live help: skipped a question, \(askTimesInLastMinute.count) asks in the last minute already")
+            DottieLog.notice("🎧 Live help: skipped a question, \(askTimesInLastMinute.count) asks in the last minute already")
             return
         }
         askTimesInLastMinute.append(now)

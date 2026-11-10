@@ -308,7 +308,7 @@ actor DottieGameSurfaceMap {
         do {
             try asset.export(to: fileURL)
         } catch {
-            print("⚠️ Couldn't write \(fileURL.lastPathComponent): \(error.localizedDescription)")
+            DottieLog.warning("⚠️ Couldn't write \(fileURL.lastPathComponent): \(error.localizedDescription)")
         }
         return FileManager.default.fileExists(atPath: fileURL.path)
     }

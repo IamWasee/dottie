@@ -122,7 +122,7 @@ final class DottieScreenLessons {
         }
         let forgottenCount = lessons.filter(\.hasProvenUseless).count
         lessons.removeAll(where: \.hasProvenUseless)
-        if forgottenCount > 0 { print("🧠 Forgot \(forgottenCount) screen tip(s) that kept failing") }
+        if forgottenCount > 0 { DottieLog.notice("🧠 Forgot \(forgottenCount) screen tip(s) that kept failing") }
         save()
     }
 

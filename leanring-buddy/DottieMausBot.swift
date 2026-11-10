@@ -962,9 +962,9 @@ final class DottieMausBot: ObservableObject {
             let installedAppURL = try await DottieMausBotAppInstaller.install { [weak self] stage in
                 self?.busyText = stage.statusText
             }
-            print("✅ MausBot app installed at \(installedAppURL.path)")
+            DottieLog.notice("✅ MausBot app installed at \(installedAppURL.path)")
         } catch {
-            print("⚠️ MausBot app install failed: \(error.localizedDescription)")
+            DottieLog.warning("⚠️ MausBot app install failed: \(error.localizedDescription)")
             UserDefaults.standard.set(Date(), forKey: Self.desktopAppInstallFailedAtDefaultsKey)
             didDesktopAppInstallFail = true
             // Set up goes on to the npm fallback; this stays as the reason
@@ -1109,7 +1109,7 @@ final class DottieMausBot: ObservableObject {
         if foundLauncher == nil {
             // The fallback: the npm package, run with Dottie's own Node.js.
             if !hasDesktopApp {
-                print("⚠️ MausBot app unavailable, installing the openmausbot npm package instead")
+                DottieLog.warning("⚠️ MausBot app unavailable, installing the openmausbot npm package instead")
             }
             busyText = "Getting Node.js ready…"
             do {
@@ -1124,7 +1124,7 @@ final class DottieMausBot: ObservableObject {
             foundLauncher = await currentLauncher()
             if foundLauncher == nil {
                 problemText = "Couldn't install MausBot. Check your internet connection and try again."
-                print("⚠️ MausBot install failed: \(installResult.standardErrorTail)")
+                DottieLog.warning("⚠️ MausBot install failed: \(installResult.standardErrorTail)")
                 return
             }
         }
@@ -1145,7 +1145,7 @@ final class DottieMausBot: ObservableObject {
             let installResult = await installNpmPackage("@anthropic-ai/claude-code")
             guard FileManager.default.isExecutableFile(atPath: DottieMausBotPaths.dottieInstalledClaudeURL.path) else {
                 problemText = "Couldn't install Claude Code. Check your internet connection and try again."
-                print("⚠️ Claude Code install failed: \(installResult.standardErrorTail)")
+                DottieLog.warning("⚠️ Claude Code install failed: \(installResult.standardErrorTail)")
                 return
             }
             linkClaudeIntoLocalBin()

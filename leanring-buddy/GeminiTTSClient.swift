@@ -57,7 +57,7 @@ final class GeminiTTSClient {
         let player = try AVAudioPlayer(data: wavAudioData)
         self.audioPlayer = player
         player.play()
-        print("🔊 Gemini TTS: playing \(pcmAudioData.count / 1024)KB audio")
+        DottieLog.notice("🔊 Gemini TTS: playing \(pcmAudioData.count / 1024)KB audio")
     }
 
     var isPlaying: Bool {

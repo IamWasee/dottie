@@ -38,7 +38,7 @@ enum DottieWebSearch {
                 .map({ (engineName: $0.engineName, results: $0.results, coverage: questionWordCoverage(query: query, results: $0.results)) })
                 .filter({ !$0.results.isEmpty && $0.coverage > workerCoverage })
                 .max(by: { $0.coverage < $1.coverage }) {
-                print("🔎 Web search: the Worker's results missed \"\(query)\", used \(bestMacAnswer.engineName) from this Mac")
+                DottieLog.notice("🔎 Web search: the Worker's results missed \"\(query)\", used \(bestMacAnswer.engineName) from this Mac")
                 return formatResults(["results": bestMacAnswer.results])
             }
         }
@@ -71,7 +71,7 @@ enum DottieWebSearch {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             return try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
         } catch {
-            print("⚠️ Web search failed: \(error.localizedDescription)")
+            DottieLog.warning("⚠️ Web search failed: \(error.localizedDescription)")
             return nil
         }
     }
