@@ -34,9 +34,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version number (leave empty for 1.0.<run number>)"
+        description: "Version number (leave empty for the one after the newest release)"
         required: false
         default: ""
+      release_without_green_build:
+        description: "Emergency only: release even when the Build workflow isn't green for this commit"
+        type: boolean
+        required: false
+        default: false
   push:
     tags: ["v*"]
   # A trial run on pull requests that touch the release: builds the DMG and
@@ -46,28 +51,45 @@ on:
       - ".github/workflows/release.yml"
       - "scripts/**"
 
+# Read-only unless a job asks for more: only "publish" may write.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+# The order matters. Nothing people use changes until everything that can
+# fail has passed:
+#   1. prepare        checks the Worker's tests, that the Build workflow is
+#                     green for this commit, picks the version and finds the
+#                     Worker's address (without deploying)
+#   2. build-dmg      builds, signs and checks Dottie.dmg
+#   3. deploy-worker  only now puts the new Worker live, tries it, and goes
+#                     back to the one before if it doesn't answer properly
+#   4. publish        publishes the release
+# A pull request runs 1 and 2 only, as a trial.
 jobs:
-  deploy-worker:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      checks: read
     env:
-      HAS_DEPLOY_SECRETS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.GEMINI_API_KEY != '' }}
+      RELEASES_REPOSITORY: ${{ vars.DOTTIE_RELEASES_REPOSITORY || github.repository }}
     outputs:
       worker_url: ${{ steps.address.outputs.worker_url }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # wrangler 4 needs Node 22.
           node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
 
       - name: Check the Worker
         # A Worker that fails its type check or tests is never deployed.
@@ -77,66 +99,127 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Deploy the Worker
-        id: deploy
-        if: env.HAS_DEPLOY_SECRETS == 'true' && github.event_name != 'pull_request'
-        working-directory: worker
+      - name: The Build workflow must be green for this commit
+        # The Build workflow compiles the app and runs its unit tests on
+        # every push to main. A release of a commit it didn't pass (or never
+        # saw) stops here. If Build is still running, this waits for it.
+        if: github.event_name != 'pull_request'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # Only needed when the token can reach more than one account.
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
-          # Optional free key from build.nvidia.com: NVIDIA models answer
-          # when every Gemini model is busy.
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          # Optional free key from console.groq.com: quick asks and live
-          # meeting help answer on Groq first.
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          # Optional: Dottie's own Telegram bot, so people pair their phone
-          # in one tap (Home → Phone) instead of making a bot themselves.
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_WITHOUT_GREEN_BUILD: ${{ inputs.release_without_green_build }}
         run: |
-          npm ci
-          npx wrangler deploy 2>&1 | tee deploy.log
-          printf '%s' "$GEMINI_API_KEY" | npx wrangler secret put GEMINI_API_KEY
-          if [ -n "$DOTTIE_APP_SECRET" ]; then
-            printf '%s' "$DOTTIE_APP_SECRET" | npx wrangler secret put APP_SHARED_SECRET
+          if [ "$RELEASE_WITHOUT_GREEN_BUILD" = "true" ]; then
+            echo "::warning::Releasing without checking the Build workflow, as asked."
+            exit 0
           fi
-          if [ -n "$NVIDIA_API_KEY" ]; then
-            printf '%s' "$NVIDIA_API_KEY" | npx wrangler secret put NVIDIA_API_KEY
-          fi
-          if [ -n "$GROQ_API_KEY" ]; then
-            printf '%s' "$GROQ_API_KEY" | npx wrangler secret put GROQ_API_KEY
-          fi
-          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
-            printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN
-          fi
-          worker_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
-          echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
+          # Up to 30 minutes: a Mac build takes about 10.
+          for attempt in $(seq 1 60); do
+            build_check="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=build-macos" \
+              --jq '.check_runs | sort_by(.started_at) | last | "\(.status) \(.conclusion)"' || true)"
+            case "$build_check" in
+              "completed success")
+                echo "Build is green for $GITHUB_SHA."
+                exit 0
+                ;;
+              completed*)
+                echo "::error::The Build workflow ended with \"${build_check#completed }\" for this commit. Fix it (or re-run it) before releasing."
+                exit 1
+                ;;
+              "null null"|"")
+                if [ "$attempt" -ge 4 ]; then
+                  echo "::error::The Build workflow never ran for commit $GITHUB_SHA. Release from main after its Build finished, or run Build on this commit first (Actions → Build → Run workflow)."
+                  exit 1
+                fi
+                ;;
+            esac
+            echo "Build is \"$build_check\" for this commit, waiting…"
+            sleep 30
+          done
+          echo "::error::Build didn't finish in 30 minutes."
+          exit 1
 
-      - name: Pick the Worker address
+      - name: Pick the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_TOKEN: ${{ secrets.DOTTIE_RELEASES_TOKEN }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          # The newest version published in a repository, or nothing.
+          newest_release_version() {
+            gh api "repos/$1/releases?per_page=30" --jq '.[].tag_name' 2>/dev/null \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1
+          }
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            # One after the newest release, wherever it was published, so
+            # versions go 1.0.72, 1.0.73, … and never jump with the number
+            # of workflow runs.
+            newest_version="$(newest_release_version "$GITHUB_REPOSITORY")"
+            if [ "$RELEASES_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+              releases_repository_version="$(GH_TOKEN="${RELEASES_TOKEN:-$GH_TOKEN}" newest_release_version "$RELEASES_REPOSITORY")"
+              newest_version="$(printf '%s\n%s\n' "$newest_version" "$releases_repository_version" | grep . | sort -V | tail -1 || true)"
+            fi
+            if [ -n "$newest_version" ]; then
+              version="${newest_version%.*}.$(( ${newest_version##*.} + 1 ))"
+            else
+              version="1.0.0"
+            fi
+            echo "Newest release: ${newest_version:-none}"
+          fi
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::\"$version\" isn't a version like 1.2.3."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version"
+          echo "### Dottie $version" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Find the Worker address
+        # The app is built with the Worker's address inside, and it is built
+        # before the Worker is deployed, so the address is looked up here:
+        # the DOTTIE_WORKER_URL variable, or else Cloudflare is asked for the
+        # account's workers.dev name (a read, nothing is deployed).
         id: address
         env:
-          DEPLOYED_URL: ${{ steps.deploy.outputs.worker_url }}
           CONFIGURED_URL: ${{ vars.DOTTIE_WORKER_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          worker_url="${CONFIGURED_URL:-$DEPLOYED_URL}"
-          worker_url="${worker_url%/}"
-          if [ -z "$worker_url" ]; then
-            echo "::warning::No Worker address. Add the GEMINI_API_KEY and CLOUDFLARE_API_TOKEN secrets (see INSTALL.md), or set the DOTTIE_WORKER_URL variable. Dottie will ask for the address in Settings."
-          else
-            echo "Worker: $worker_url"
-            # Check the Worker answers before baking its address into the app.
-            curl -fsS --max-time 20 "$worker_url/health" || echo "::warning::$worker_url/health didn't answer."
+          worker_url="${CONFIGURED_URL%/}"
+          if [ -z "$worker_url" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            cloudflare_api="https://api.cloudflare.com/client/v4"
+            account_id="$CLOUDFLARE_ACCOUNT_ID"
+            if [ -z "$account_id" ]; then
+              account_id="$(curl -fsS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$cloudflare_api/accounts" | jq -r '.result[0].id // empty' || true)"
+            fi
+            if [ -n "$account_id" ]; then
+              workers_subdomain="$(curl -fsS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$cloudflare_api/accounts/$account_id/workers/subdomain" | jq -r '.result.subdomain // empty' || true)"
+            fi
+            worker_name="$(grep -E '^name *= *' worker/wrangler.toml | head -1 | sed -E 's/^name *= *"([^"]+)".*/\1/')"
+            if [ -n "${workers_subdomain:-}" ] && [ -n "$worker_name" ]; then
+              worker_url="https://$worker_name.$workers_subdomain.workers.dev"
+            fi
           fi
+          if [ -n "$worker_url" ]; then
+            echo "Worker: $worker_url"
+          elif [ -n "$CLOUDFLARE_API_TOKEN" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "::error::Couldn't find the Worker's address before deploying. Set the DOTTIE_WORKER_URL repository variable to it (like https://dottie.yourname.workers.dev) and run the release again. Nothing was deployed or published."
+            exit 1
+          else
+            echo "::warning::No Worker address. Add the GEMINI_API_KEY and CLOUDFLARE_API_TOKEN secrets (see INSTALL.md), or set the DOTTIE_WORKER_URL variable. Dottie will ask for the address in Settings."
+          fi
+          # Trial builds are public artifacts and never carry the address.
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             worker_url=""
           fi
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
 
   build-dmg:
-    needs: deploy-worker
+    needs: prepare
     runs-on: macos-15
     timeout-minutes: 40
     env:
@@ -144,7 +227,7 @@ jobs:
       # repository when one is set, otherwise this one.
       RELEASES_REPOSITORY: ${{ vars.DOTTIE_RELEASES_REPOSITORY || github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Pick Xcode
         # The newest Xcode 26 on the runner, so Dottie can use Apple's
@@ -160,26 +243,11 @@ jobs:
           fi
           xcodebuild -version
 
-      - name: Pick the version
-        id: version
-        env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          elif [ -n "$INPUT_VERSION" ]; then
-            version="${INPUT_VERSION#v}"
-          else
-            version="1.0.${GITHUB_RUN_NUMBER}"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Version $version"
-
       - name: Put the Worker address in the app
         # Trial builds are public artifacts, so they never carry the secret.
         if: github.event_name != 'pull_request'
         env:
-          WORKER_URL: ${{ needs.deploy-worker.outputs.worker_url }}
+          WORKER_URL: ${{ needs.prepare.outputs.worker_url }}
           DOTTIE_APP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
         run: |
           plist=leanring-buddy/Info.plist
@@ -194,7 +262,7 @@ jobs:
 
       - name: Build Dottie.app
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -o pipefail
           # "Sign to Run Locally" (ad-hoc): no Apple Developer account
@@ -295,18 +363,144 @@ jobs:
           hdiutil create -volname Dottie -srcfolder dmg -ov -format UDZO Dottie.dmg
           shasum -a 256 Dottie.dmg | tee Dottie.dmg.sha256
 
-      - name: Keep the trial DMG
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+      - name: Keep the DMG for the next jobs
+        # On a pull request this is the trial DMG to download and try.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Dottie-trial-dmg
-          path: Dottie.dmg
+          name: ${{ github.event_name == 'pull_request' && 'Dottie-trial-dmg' || 'Dottie-dmg' }}
+          path: |
+            Dottie.dmg
+            Dottie.dmg.sha256
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-build-log
+          path: build.log
+
+  deploy-worker:
+    # After the app built, so a release that can't build never changes the
+    # Worker everyone is already using.
+    needs: [prepare, build-dmg]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HAS_DEPLOY_SECRETS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.GEMINI_API_KEY != '' }}
+      WORKER_URL: ${{ needs.prepare.outputs.worker_url }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Only needed when the token can reach more than one account.
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Deploy the Worker
+        id: deploy
+        if: env.HAS_DEPLOY_SECRETS == 'true'
+        working-directory: worker
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          APP_SHARED_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+          # Optional free key from build.nvidia.com: NVIDIA models answer
+          # when every Gemini model is busy.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          # Optional free key from console.groq.com: quick asks and live
+          # meeting help answer on Groq first.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Optional: Dottie's own Telegram bot, so people pair their phone
+          # in one tap (Home → Phone) instead of making a bot themselves.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          npm ci
+          # The code and its secrets go live together as one version, so
+          # going back means one step. Secrets left empty are not sent, and
+          # ones set on the Worker before stay as they are.
+          secrets_file="$RUNNER_TEMP/worker-secrets.json"
+          jq -n '
+            {
+              GEMINI_API_KEY: env.GEMINI_API_KEY,
+              APP_SHARED_SECRET: env.APP_SHARED_SECRET,
+              NVIDIA_API_KEY: env.NVIDIA_API_KEY,
+              GROQ_API_KEY: env.GROQ_API_KEY,
+              TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN
+            } | with_entries(select(.value != null and .value != ""))
+          ' > "$secrets_file"
+          npx wrangler deploy --secrets-file "$secrets_file" 2>&1 | tee deploy.log
+          rm -f "$secrets_file"
+          deployed_url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)"
+          echo "Deployed: $deployed_url"
+          if [ -n "$deployed_url" ] && [ -n "$WORKER_URL" ] && [ "${WORKER_URL#https://}" != "${deployed_url#https://}" ] && [[ "$WORKER_URL" == *.workers.dev ]]; then
+            echo "::warning::The app was built for $WORKER_URL but the Worker was deployed to $deployed_url."
+          fi
+
+      - name: Try the new Worker
+        # The same calls the app makes first. If the new Worker doesn't
+        # answer them, the one before is put back and the release stops
+        # before anything is published.
+        id: smoke
+        if: steps.deploy.outcome == 'success' && env.WORKER_URL != ''
+        env:
+          APP_SHARED_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+        run: |
+          try_worker() {
+            health="$(curl -fsS --max-time 20 "$WORKER_URL/health")" || return 1
+            echo "$health" | jq -e '.ok == true and .hasGeminiKey == true' >/dev/null || { echo "Unexpected /health: $health"; return 1; }
+            configuration="$(curl -fsS --max-time 20 -H "x-clicky-secret: $APP_SHARED_SECRET" "$WORKER_URL/config")" || return 1
+            echo "$configuration" | jq -e '.liveModel != null and .chatModel != null' >/dev/null || { echo "Unexpected /config: $configuration"; return 1; }
+            # A request without the secret must be turned away when one is set.
+            if [ -n "$APP_SHARED_SECRET" ]; then
+              status_without_secret="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$WORKER_URL/config")"
+              [ "$status_without_secret" = "401" ] || { echo "/config answered $status_without_secret without the secret"; return 1; }
+            fi
+          }
+          # A new version takes a few seconds to reach every Cloudflare edge.
+          for attempt in 1 2 3 4 5 6; do
+            if try_worker; then
+              echo "The new Worker answers at $WORKER_URL."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The new Worker at $WORKER_URL doesn't answer properly."
+          exit 1
+
+      - name: Go back to the Worker before
+        if: failure() && steps.smoke.outcome == 'failure'
+        working-directory: worker
+        run: |
+          npx wrangler rollback --yes --message "Release $GITHUB_RUN_NUMBER: the new version failed its checks" \
+            || echo "::error::Couldn't go back automatically. In the Cloudflare dashboard open Workers → dottie → Deployments and roll back by hand."
+
+  publish:
+    needs: [prepare, build-dmg, deploy-worker]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASES_REPOSITORY: ${{ vars.DOTTIE_RELEASES_REPOSITORY || github.repository }}
+    steps:
+      - name: Get the DMG
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Dottie-dmg
+
+      - name: Check the DMG arrived whole
+        run: shasum -a 256 -c Dottie.dmg.sha256
 
       - name: Publish the release
-        if: github.event_name != 'pull_request'
         env:
           RELEASES_TOKEN: ${{ secrets.DOTTIE_RELEASES_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           if [ "$RELEASES_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
             export GH_TOKEN="${{ github.token }}"
@@ -350,10 +544,3 @@ jobs:
           if [ "$RELEASES_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
             GH_TOKEN="${{ github.token }}" publish_release "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
           fi
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-build-log
-          path: build.log

@@ -7,14 +7,11 @@ name: Tools lab
 # command-line tools. Run it by hand (Actions → Tools lab) after changing
 # connectors or bumping the Dots runtime.
 on:
-  push:
-    branches: [claude/project-thread-7ihqhr]
-    paths: ["scripts/tools-lab/**", ".github/workflows/tools-lab.yml"]
   workflow_dispatch:
     inputs:
       app_ref:
-        description: "Tag or branch whose app code to test"
-        default: "v1.0.44"
+        description: "Tag or branch whose app code to test (empty: the code of the branch this runs on)"
+        default: ""
 
 permissions:
   contents: read
@@ -24,18 +21,25 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     env:
-      APP_REF: ${{ inputs.app_ref || 'v1.0.44' }}
+      APP_REF: ${{ inputs.app_ref }}
+      # Bump on purpose, so a new release of it can't change a lab run.
+      CLAUDE_CODE_VERSION: "2.1.322"
       WORKER_URL: https://dottie.vidershub.workers.dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Use the app code from the release
         run: |
+          if [ -z "$APP_REF" ]; then
+            echo "Testing this branch's own app code."
+            git log -1 --format='%h %s'
+            exit 0
+          fi
           git checkout "$APP_REF" -- leanring-buddy
           git log -1 --format='%h %s' "$APP_REF"
       - name: Install Claude Code (to check Dottie adds its apps there)
-        run: npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && command -v claude
+        run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" >/dev/null 2>&1 && command -v claude
       - name: Build the lab
         run: |
           cd leanring-buddy

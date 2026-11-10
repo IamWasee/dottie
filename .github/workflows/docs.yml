@@ -11,22 +11,34 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only unless a job asks for more: a pull request only checks.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  docs:
+  check:
+    if: github.event_name == 'pull_request'
+    # Named "docs" so the check keeps the name it always had.
+    name: docs
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check CLAUDE.md
-        if: github.event_name == 'pull_request'
         run: python3 scripts/docs/update-docs.py
 
+  update:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only job that may write: it commits the fixed table to main.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Update CLAUDE.md on main
-        if: github.event_name != 'pull_request'
         run: |
           python3 scripts/docs/update-docs.py --fix
           if git diff --quiet -- CLAUDE.md; then

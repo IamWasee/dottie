@@ -1,0 +1,28 @@
+# Dependabot opens a pull request when something Dottie builds with has an
+# update or a known security hole. One grouped pull request a week per kind,
+# so it stays readable. Security fixes come on their own, right away.
+version: 2
+updates:
+  # The Worker's packages (wrangler, vitest, TypeScript).
+  - package-ecosystem: npm
+    directory: /worker
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      worker-packages:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The actions the workflows run. They are pinned to exact commits, and
+  # this moves the pins.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      workflow-actions:
+        patterns: ["*"]

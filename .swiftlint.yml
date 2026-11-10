@@ -1,0 +1,40 @@
+# SwiftLint rules for Dottie, run by the Build workflow. Only rules that
+# catch real problems are on (crashes, functions and files too big to
+# follow, names too short to understand), so every finding is worth fixing.
+# The existing code has findings; scripts/ci/budgets.env holds the ceiling
+# and it only goes down.
+included:
+  - leanring-buddy
+  - leanring-buddyTests
+
+only_rules:
+  - force_cast
+  - force_try
+  - function_body_length
+  - file_length
+  - cyclomatic_complexity
+  - identifier_name
+
+function_body_length:
+  warning: 100
+  error: 1000
+
+file_length:
+  warning: 1500
+  error: 10000
+  ignore_comment_only_lines: true
+
+cyclomatic_complexity:
+  warning: 25
+  error: 500
+
+# CLAUDE.md: no single-character names. Long names are welcome.
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 200
+    error: 300
+  allowed_symbols: ["_"]
+  validates_start_with_lowercase: off

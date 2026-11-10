@@ -280,6 +280,12 @@ open leanring-buddy.xcodeproj
 
 **Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
 
+### What CI checks
+
+Every pull request runs the Build workflow on a Mac: it builds the app, runs the unit tests in `leanring-buddyTests/` (the app hosts them but starts nothing, see `isHostingUnitTests` in `leanring_buddyApp.swift`), counts compiler warnings and runs SwiftLint (`.swiftlint.yml`). Warnings and SwiftLint findings may not go over the ceilings in `scripts/ci/budgets.env`; when cleanup lowers a number, lower its ceiling in the same pull request. New pure logic comes with unit tests.
+
+The Release workflow runs in this order so nothing people use changes until everything passed: `prepare` (Worker tests, the Build workflow must be green for the commit, version = one after the newest release, the Worker's address), `build-dmg`, `deploy-worker` (deploys, tries `/health` and `/config`, goes back to the Worker before if they fail), `publish`. Actions are pinned to commits; Dependabot (`.github/dependabot.yml`) moves the pins and the Worker's packages.
+
 ## Cloudflare Worker
 
 ```bash
