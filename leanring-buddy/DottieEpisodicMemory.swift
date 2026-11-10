@@ -760,7 +760,7 @@ enum DottieMemoryNetwork {
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         guard let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return .failed }
         request.httpBody = requestBodyData
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = await DottieLoggedRequest.send(request),
               let statusCode = (response as? HTTPURLResponse)?.statusCode else { return .failed }
         if [429, 500, 502, 503, 504].contains(statusCode) { return .busy }
         guard statusCode == 200 else { return .failed }
@@ -782,7 +782,7 @@ enum DottieMemoryNetwork {
         }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = bodyData
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONSerialization.jsonObject(with: responseData) as? [String: Any]
     }

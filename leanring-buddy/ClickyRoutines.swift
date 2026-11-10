@@ -621,7 +621,7 @@ enum ClickyRoutineWatchedPage {
         var request = URLRequest(url: watchURL)
         request.timeoutInterval = 20
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Dottie", forHTTPHeaderField: "User-Agent")
-        guard let (pageData, response) = try? await URLSession.shared.data(for: request),
+        guard let (pageData, response) = await DottieLoggedRequest.send(request),
               let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else { return nil }
         // Scripts, styles and markup change on every load (nonces, build

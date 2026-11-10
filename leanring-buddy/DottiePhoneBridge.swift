@@ -140,7 +140,7 @@ final class DottiePhoneBridge: ObservableObject {
     private func requestDottieBotPairingLink() async -> String? {
         guard var request = relayRequest(route: "/phone/pair", timeout: 20) else { return "Dottie's server isn't set up." }
         request.httpBody = Data("{}".utf8)
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
+        guard let (data, _) = await DottieLoggedRequest.send(request),
               let answer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (answer["ok"] as? Bool) == true,
               let code = answer["pairingCode"] as? String,
@@ -238,7 +238,7 @@ final class DottiePhoneBridge: ObservableObject {
     private func tellDottieServerToUnpair() async {
         guard var request = relayRequest(route: "/phone/unpair", timeout: 20) else { return }
         request.httpBody = Data("{}".utf8)
-        _ = try? await URLSession.shared.data(for: request)
+        _ = await DottieLoggedRequest.send(request)
     }
 
     private static func newPairingCode() -> String {
@@ -296,7 +296,7 @@ final class DottiePhoneBridge: ObservableObject {
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
+        guard let (_, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return "Telegram didn't take it." }
         appendLog(isFromPhone: false, "(sent \(uploadURL.lastPathComponent))")
         return nil
@@ -399,7 +399,7 @@ final class DottiePhoneBridge: ObservableObject {
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-        _ = try? await URLSession.shared.data(for: request)
+        _ = await DottieLoggedRequest.send(request)
         appendLog(isFromPhone: false, "(sent a screenshot)")
     }
 
@@ -415,7 +415,8 @@ final class DottiePhoneBridge: ObservableObject {
                 let updates = await self.callTelegram(
                     method: "getUpdates",
                     parameters: ["timeout": 50, "offset": offset, "allowed_updates": ["message", "callback_query"]],
-                    timeout: 65
+                    timeout: 65,
+                    logsRequestFailure: false
                 ) as? [[String: Any]]
                 if Task.isCancelled { return }
                 guard let updates else {
@@ -578,12 +579,26 @@ final class DottiePhoneBridge: ObservableObject {
     }
 
     /// Calls a Bot API method and returns its "result", or nil.
-    private func callTelegram(method: String, parameters: [String: Any], timeout: TimeInterval = 30) async -> Any? {
+    /// The waiting-for-messages loop passes logsRequestFailure false: it asks
+    /// again every 5 seconds while the Mac is offline, which would fill the
+    /// log with the same line.
+    private func callTelegram(
+        method: String,
+        parameters: [String: Any],
+        timeout: TimeInterval = 30,
+        logsRequestFailure: Bool = true
+    ) async -> Any? {
         guard var request = methodRequest(method, timeout: timeout),
               let body = try? JSONSerialization.data(withJSONObject: parameters) else { return nil }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
+        let dataAndResponse: (Data, URLResponse)?
+        if logsRequestFailure {
+            dataAndResponse = await DottieLoggedRequest.send(request)
+        } else {
+            dataAndResponse = try? await URLSession.shared.data(for: request)
+        }
+        guard let (data, _) = dataAndResponse,
               let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (response["ok"] as? Bool) == true else { return nil }
         return response["result"]

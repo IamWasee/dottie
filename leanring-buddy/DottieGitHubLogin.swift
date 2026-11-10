@@ -313,7 +313,7 @@ final class DottieGitHubSignIn: ObservableObject {
     /// most shells already look in). No password needed.
     nonisolated private static func downloadOfficialGitHubCLI() async -> String? {
         guard let releaseURL = URL(string: "https://api.github.com/repos/cli/cli/releases/latest"),
-              let (releaseData, _) = try? await URLSession.shared.data(from: releaseURL),
+              let (releaseData, _) = await DottieLoggedRequest.fetch(from: releaseURL),
               let release = try? JSONSerialization.jsonObject(with: releaseData) as? [String: Any],
               let assets = release["assets"] as? [[String: Any]] else { return nil }
         func assetURL(named matches: (String) -> Bool) -> (name: String, url: URL)? {
@@ -331,7 +331,7 @@ final class DottieGitHubSignIn: ObservableObject {
         #endif
         guard let archive = assetURL(named: { $0.hasSuffix("_macOS_universal.zip") }) ?? assetURL(named: { $0.hasSuffix(architectureSuffix) }),
               let checksums = assetURL(named: { $0.hasSuffix("_checksums.txt") }),
-              let (checksumData, _) = try? await URLSession.shared.data(from: checksums.url),
+              let (checksumData, _) = await DottieLoggedRequest.fetch(from: checksums.url),
               let (archiveFileURL, _) = try? await URLSession.shared.download(from: archive.url),
               let archiveData = try? Data(contentsOf: archiveFileURL) else { return nil }
 

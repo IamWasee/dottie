@@ -411,7 +411,7 @@ final class DottieBrain: ObservableObject {
         guard let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
         request.httpBody = requestBodyData
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         // /chat streams server-sent events.
         let answerText = GeminiServerSentEvents.text(from: responseData)

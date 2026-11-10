@@ -190,7 +190,7 @@ final class DottieVoicePreview: ObservableObject {
         ]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = bodyData
-        guard let reply = try? await URLSession.shared.data(for: request),
+        guard let reply = await DottieLoggedRequest.send(request),
               (reply.1 as? HTTPURLResponse)?.statusCode == 200,
               let payload = try? JSONSerialization.jsonObject(with: reply.0) as? [String: Any],
               let candidates = payload["candidates"] as? [[String: Any]],
@@ -215,7 +215,7 @@ final class DottieVoicePreview: ObservableObject {
         var tokenRequest = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/live-token"))
         tokenRequest.httpMethod = "POST"
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &tokenRequest)
-        guard let tokenReply = try? await URLSession.shared.data(for: tokenRequest),
+        guard let tokenReply = await DottieLoggedRequest.send(tokenRequest),
               (tokenReply.1 as? HTTPURLResponse)?.statusCode == 200,
               let tokenPayload = try? JSONSerialization.jsonObject(with: tokenReply.0) as? [String: Any],
               let token = tokenPayload["token"] as? String else {

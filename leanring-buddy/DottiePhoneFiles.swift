@@ -159,7 +159,7 @@ final class DottiePhoneFiles {
         ]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = bodyData
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let parts = GeminiServerSentEvents.parts(from: data)
         return parts.isEmpty ? nil : parts

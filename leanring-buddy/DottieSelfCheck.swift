@@ -252,7 +252,7 @@ final class DottieSelfCheck: ObservableObject {
         request.timeoutInterval = 15
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let startedAt = Date()
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request) else {
+        guard let (responseData, response) = await DottieLoggedRequest.send(request) else {
             return Item(id: "live", title: "Voice connection", level: .problem, detail: "Couldn't get a voice token from the server.",
                         fix: .checkAgain, fixLabel: "Try again")
         }
