@@ -114,8 +114,7 @@ final class DottieKnownPlaces {
         let applicationElement = AXUIElementCreateApplication(processIdentifier)
         var focusedWindowValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
-              let focusedWindowValue else { return nil }
-        let focusedWindow = focusedWindowValue as! AXUIElement
+              let focusedWindow = DottieAccessibilityCast.element(focusedWindowValue) else { return nil }
         var documentValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(focusedWindow, kAXDocumentAttribute as CFString, &documentValue) == .success,
               let documentAddress = documentValue as? String,
@@ -131,8 +130,7 @@ final class DottieKnownPlaces {
         let applicationElement = AXUIElementCreateApplication(processIdentifier)
         var focusedWindowValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
-              let focusedWindowValue else { return nil }
-        let focusedWindow = focusedWindowValue as! AXUIElement
+              let focusedWindow = DottieAccessibilityCast.element(focusedWindowValue) else { return nil }
         var documentValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(focusedWindow, kAXDocumentAttribute as CFString, &documentValue) == .success,
            let documentAddress = documentValue as? String, let documentURL = URL(string: documentAddress), documentURL.isFileURL {

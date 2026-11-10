@@ -406,8 +406,8 @@ enum DottieScreenContextReader {
     nonisolated private static func webAddress(of webArea: AXUIElement) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(webArea, kAXURLAttribute as CFString, &value) == .success, let value else { return nil }
-        if CFGetTypeID(value) == CFURLGetTypeID() {
-            return (value as! URL).absoluteString
+        if let webAddressURL = value as? URL {
+            return webAddressURL.absoluteString
         }
         return value as? String
     }
@@ -416,7 +416,7 @@ enum DottieScreenContextReader {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        return DottieAccessibilityCast.element(value)
     }
 
     nonisolated private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
@@ -440,8 +440,8 @@ enum DottieScreenContextReader {
               CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &position),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &size) else { return nil }
         return CGRect(origin: position, size: size)
     }
 }

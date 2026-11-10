@@ -297,8 +297,8 @@ private enum AccessibilityElementSearch {
               CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &position),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &size) else { return nil }
         return CGRect(origin: position, size: size)
     }
 
@@ -313,7 +313,7 @@ private enum AccessibilityElementSearch {
         guard AXUIElementCopyAttributeValue(element, attributeName as CFString, &attributeValue) == .success,
               let attributeValue,
               CFGetTypeID(attributeValue) == AXUIElementGetTypeID() else { return nil }
-        return (attributeValue as! AXUIElement)
+        return DottieAccessibilityCast.element(attributeValue)
     }
 
     /// Accessibility uses a top-left origin on the primary display; AppKit

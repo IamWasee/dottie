@@ -204,7 +204,7 @@ enum DottieFixText {
         let systemWideElement = AXUIElementCreateSystemWide()
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
-              let focusedValue, CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+              let element = DottieAccessibilityCast.element(focusedValue) else {
             // Nothing focused that Accessibility can see: Cmd+C may still
             // find a selection, and pasting is the way back.
             return Selection(
@@ -216,7 +216,6 @@ enum DottieFixText {
                 selectedText: ""
             )
         }
-        let element = focusedValue as! AXUIElement
         var processIdentifier = frontmostApplication.processIdentifier
         AXUIElementGetPid(element, &processIdentifier)
 

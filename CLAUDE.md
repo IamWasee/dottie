@@ -266,6 +266,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieKnownPlaces.swift` | ~230 | Where things are on this Mac, learned as they're opened, so "open my resume" or "open the coffee site folder" is instant the second time. Whenever a document or a Finder folder comes to the front (opened by the user, by Dottie, by a screen job, anything), its path is noted with its name. |
 | `DottieSketchArtist.swift` | ~87 | Free drawing for explain_on_screen's "sketch" step: "draw a horse", "a plant cell", "a guitar". A quick model call plans the picture as pen strokes (outline first, then details) inside a 0-1000 square, and DottieTeaching draws them one by one like a marker, so Dottie can draw anything, not only lines, shapes and graphs. |
 | `DottieLog.swift` | ~100 | Dottie's log. Lines go to the Mac's own log (Console, or `log show --predicate 'process == "Dottie"'`), with a level and the file they came from as the category; print() lines never reached it. The words written in the code always show. |
+| `DottieAccessibilityCast.swift` | ~33 | Turns a value an app handed back through Accessibility into the type Dottie expected, or nil when the app handed back something else. Swift can't check these Core Foundation types with "as?", so every caller used to force the cast, and an app answering with the wrong kind of value would have crashed Dottie. The check lives here once. |
 
 ## Build & Run
 

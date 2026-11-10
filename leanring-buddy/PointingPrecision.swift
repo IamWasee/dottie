@@ -208,7 +208,7 @@ enum AccessibilitySnap {
         var parentValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parentValue) == .success,
               let parentValue, CFGetTypeID(parentValue) == AXUIElementGetTypeID() else { return nil }
-        return (parentValue as! AXUIElement)
+        return DottieAccessibilityCast.element(parentValue)
     }
 
     private static func frame(of element: AXUIElement) -> CGRect? {
@@ -221,8 +221,8 @@ enum AccessibilitySnap {
               CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &position),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &size) else { return nil }
         return CGRect(origin: position, size: size)
     }
 }

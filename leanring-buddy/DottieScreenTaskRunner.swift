@@ -1284,7 +1284,7 @@ final class DottieScreenTaskRunner {
         var titleValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
               let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID(),
-              AXUIElementCopyAttributeValue(focusedWindowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+              let focusedWindowElement = DottieAccessibilityCast.element(focusedWindowValue), AXUIElementCopyAttributeValue(focusedWindowElement, kAXTitleAttribute as CFString, &titleValue) == .success,
               let windowTitle = titleValue as? String, !windowTitle.isEmpty, windowTitle != applicationName else {
             return applicationName
         }
@@ -1365,7 +1365,7 @@ final class DottieScreenTaskRunner {
         if AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
            let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() {
             var titleValue: CFTypeRef?
-            if AXUIElementCopyAttributeValue(focusedWindowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+            if let focusedWindowElement = DottieAccessibilityCast.element(focusedWindowValue), AXUIElementCopyAttributeValue(focusedWindowElement, kAXTitleAttribute as CFString, &titleValue) == .success,
                let title = titleValue as? String, !title.isEmpty {
                 description += ", window: \(title.prefix(120))"
             }
@@ -1818,8 +1818,7 @@ enum DottieDisplayCapture {
         let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
         var focusedWindowValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
-              let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else { return nil }
-        let focusedWindow = focusedWindowValue as! AXUIElement
+              let focusedWindow = DottieAccessibilityCast.element(focusedWindowValue) else { return nil }
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute as CFString, &positionValue) == .success,
@@ -1828,8 +1827,8 @@ enum DottieDisplayCapture {
               CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &position),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &size) else { return nil }
         // Accessibility is top-left origin on the primary display.
         let primaryDisplayHeight = NSScreen.screens.first?.frame.maxY ?? 0
         let windowCenter = CGPoint(x: position.x + size.width / 2, y: primaryDisplayHeight - (position.y + size.height / 2))
