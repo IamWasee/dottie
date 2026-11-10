@@ -38,8 +38,8 @@ enum CompanionVoiceMode: String {
 
 @MainActor
 final class CompanionManager: ObservableObject {
-    @Published private(set) var voiceState: CompanionVoiceState = .idle
-    @Published private(set) var lastTranscript: String?
+    @Published var voiceState: CompanionVoiceState = .idle
+    @Published var lastTranscript: String?
     @Published private(set) var currentAudioPowerLevel: CGFloat = 0
     @Published private(set) var hasAccessibilityPermission = false
     @Published private(set) var hasScreenRecordingPermission = false
@@ -65,8 +65,8 @@ final class CompanionManager: ObservableObject {
     @Published var onboardingVideoPlayer: AVPlayer?
     @Published var showOnboardingVideo: Bool = false
     @Published var onboardingVideoOpacity: Double = 0.0
-    private var onboardingVideoEndObserver: NSObjectProtocol?
-    private var onboardingDemoTimeObserver: Any?
+    var onboardingVideoEndObserver: NSObjectProtocol?
+    var onboardingDemoTimeObserver: Any?
 
     // MARK: - Onboarding Prompt Bubble
 
@@ -131,18 +131,18 @@ final class CompanionManager: ObservableObject {
     let phoneBridge = DottiePhoneBridge()
     /// Finds, sends and uploads files asked for by text.
     let phoneFiles = DottiePhoneFiles()
-    private var meetingCancellable: AnyCancellable?
+    var meetingCancellable: AnyCancellable?
     /// Hold right Option to dictate into any app.
     let dictationController = ClickyDictationController()
     private var dictationCancellables: Set<AnyCancellable> = []
-    private var clickyRosterCancellable: AnyCancellable?
-    private var notchHoverCancellable: AnyCancellable?
-    private var peekFilesRefreshTask: Task<Void, Never>?
+    var clickyRosterCancellable: AnyCancellable?
+    var notchHoverCancellable: AnyCancellable?
+    var peekFilesRefreshTask: Task<Void, Never>?
     /// State of the notch surface (listening, speaking, typed input, …).
     let notchPresenter = NotchPresenter()
     /// macOS notifications when a Dot finishes or needs an answer.
     let dotNotifications = ClickyNotifications()
-    private lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
+    lazy var notchWindowManager = NotchWindowManager(notchPresenter: notchPresenter)
     private lazy var homeWindowManager = HomeWindowManager(
         companionManager: self,
         conversationStore: conversationStore,
@@ -150,73 +150,73 @@ final class CompanionManager: ObservableObject {
     )
     /// Text the user typed for the current live turn, if it was typed rather
     /// than spoken. Live only transcribes audio, so we remember it ourselves.
-    private var currentLiveTurnTypedText: String?
+    var currentLiveTurnTypedText: String?
     /// Apple's speech recognizer hearing each push-to-talk turn on the Mac,
     /// for the instant lane (DottieInstantLane).
-    private let liveTurnOnDeviceTranscriber = DictationLiveTranscriber()
+    let liveTurnOnDeviceTranscriber = DictationLiveTranscriber()
     /// Keeps a short push-to-talk turn's audio for Whistle when Apple's
     /// speech recognizer can't run (DottieNeedleRouter).
-    private let liveTurnWhistleRecorder = DottieWhistleTurnRecorder()
+    let liveTurnWhistleRecorder = DottieWhistleTurnRecorder()
     /// What the Mac heard for the current voice turn, once released.
-    private var currentLiveTurnOnDeviceText: String?
+    var currentLiveTurnOnDeviceText: String?
     /// Tool calls Gemini made in the current Live turn, with their results,
     /// so a turn that worked can become a learned shortcut.
-    private var currentLiveTurnFinishedToolCalls: [DottieInstantLane.FinishedToolCall] = []
+    var currentLiveTurnFinishedToolCalls: [DottieInstantLane.FinishedToolCall] = []
     /// "when I say X, …" in the current turn: what Gemini does is saved as X.
-    private var currentLiveTurnNamedShortcutName: String?
+    var currentLiveTurnNamedShortcutName: String?
     /// The Mac did the current voice turn itself, so Live's (silenced)
     /// answer to it is ignored when it finishes.
-    private var currentLiveTurnWasHandledInstantly = false
+    var currentLiveTurnWasHandledInstantly = false
     /// Counts talk-shortcut presses, so a slow instant-lane check can't act
     /// on a newer turn.
-    private var liveVoicePressCount = 0
+    var liveVoicePressCount = 0
     /// Saved pictures sent with the current typed turn, for its conversation
     /// entry.
-    private var currentTurnImageFileNames: [String] = []
+    var currentTurnImageFileNames: [String] = []
     /// The second look at where Live pointed; replaced by the next point request.
     private var livePointingRefinementTask: Task<Void, Never>?
     /// What voice Dottie draws on screen when asked.
     private let drawingOverlayManager = DottieDrawingOverlayManager()
     /// Multi-step jobs on the screen ("open opera, find my kaggle rank").
-    private let screenTaskRunner = DottieScreenTaskRunner()
+    let screenTaskRunner = DottieScreenTaskRunner()
     /// Teaching the app on screen, step by step or as a tour.
-    private let guide = DottieGuide()
+    let guide = DottieGuide()
     /// While a guide waits for the user to click its target, the cursor
     /// keeps pointing at it instead of flying back after a few seconds.
     private(set) var keepsPointingUntilCleared = false
     /// The question Dottie handed the Brain, so she says its answer.
-    private var pendingSpokenBrainQuestion: String?
+    var pendingSpokenBrainQuestion: String?
     private var currentGuideGoal: String?
-    private var brainCancellables = Set<AnyCancellable>()
-    private var cursorPetCancellable: AnyCancellable?
+    var brainCancellables = Set<AnyCancellable>()
+    var cursorPetCancellable: AnyCancellable?
     /// Counts narrated lines so a stale safety timeout can't end a newer one.
-    private var narrationCount = 0
+    var narrationCount = 0
     /// Called once when the current Live turn has finished speaking (or
     /// failed), for narration that waits on it.
-    private var liveTurnFinishedHandler: (() -> Void)?
+    var liveTurnFinishedHandler: (() -> Void)?
     /// The current Live turn only speaks a guide line; it isn't saved to the
     /// conversation and doesn't leave an answer card.
-    private var currentLiveTurnIsNarration = false
-    private var notchVoiceStateCancellable: AnyCancellable?
+    var currentLiveTurnIsNarration = false
+    var notchVoiceStateCancellable: AnyCancellable?
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
     /// Gemini Flash vision chat via the Worker. Used by the onboarding demo
     /// and by classic mode.
-    private lazy var geminiAPI: GeminiAPI = {
+    lazy var geminiAPI: GeminiAPI = {
         return GeminiAPI(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/chat"))
     }()
 
     /// Classic mode only. Live mode speaks through the Live session itself.
-    private lazy var geminiTTSClient: GeminiTTSClient = {
+    lazy var geminiTTSClient: GeminiTTSClient = {
         return GeminiTTSClient(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/tts"))
     }()
 
     /// Conversation history so the companion remembers prior exchanges within
     /// a session. Each entry is the user's transcript and the spoken reply.
-    private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
+    var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
     /// Exchanges carried into each new conversation, including across relaunches.
-    private static let rememberedExchangeCount = 20
+    static let rememberedExchangeCount = 20
 
     /// The screenshot frame sent with the current live turn. Pointing tool
     /// calls are in this frame's coordinate space.
@@ -226,29 +226,29 @@ final class CompanionManager: ObservableObject {
     /// Circle to ask: the cursor trail while the talk shortcut is held.
     let screenAnnotationManager = ScreenAnnotationManager()
     /// What the user circled during the latest voice turn, if anything.
-    private var currentTurnAnnotation: ScreenAnnotation?
+    var currentTurnAnnotation: ScreenAnnotation?
 
     /// True from push-to-talk press until the live answer has finished
     /// playing. Keeps the dictation state observer from flipping the cursor
     /// back to idle in the gap between "user stopped talking" and "Gemini
     /// started talking".
-    private var isLiveTurnInFlight = false
-    private var liveTurnPlaybackDrainTask: Task<Void, Never>?
-    private var currentClassicTurnInputKind: ConversationEntry.InputKind = .voice
+    var isLiveTurnInFlight = false
+    var liveTurnPlaybackDrainTask: Task<Void, Never>?
+    var currentClassicTurnInputKind: ConversationEntry.InputKind = .voice
 
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
-    private var currentResponseTask: Task<Void, Never>?
+    var currentResponseTask: Task<Void, Never>?
 
     private var shortcutTransitionCancellable: AnyCancellable?
     private var escapeKeyCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
-    private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
+    var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
     /// speaks again before the delay elapses.
-    private var transientHideTask: Task<Void, Never>?
+    var transientHideTask: Task<Void, Never>?
 
     /// True when all three required permissions (accessibility, screen recording,
     /// microphone) are granted. Used by the panel to show a single "all good" state.
@@ -258,7 +258,7 @@ final class CompanionManager: ObservableObject {
 
     /// Whether the blue cursor overlay is currently visible on screen.
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
-    @Published private(set) var isOverlayVisible: Bool = false
+    @Published var isOverlayVisible: Bool = false
 
     /// The Gemini Live voice the companion speaks with. Persisted to
     /// UserDefaults. Takes effect from her next answer.
@@ -960,7 +960,7 @@ final class CompanionManager: ObservableObject {
     """
 
     /// The personality goes first, so it frames everything after it.
-    private static func classicVoiceSystemPrompt(personality: DottiePersonality) -> String {
+    static func classicVoiceSystemPrompt(personality: DottiePersonality) -> String {
         personality.promptSection + "\n\n" + companionVoiceResponseSystemPrompt
     }
 
@@ -978,7 +978,7 @@ final class CompanionManager: ObservableObject {
     /// Long lists (pictures, projects, memories, devices) are a count and a
     /// pointer to the tool that returns them, since every character here is
     /// read again at the start of each session.
-    private func currentLiveSystemPrompt() -> String {
+    func currentLiveSystemPrompt() -> String {
         var prompt = Self.liveVoiceSystemPrompt(personality: selectedPersonality)
         let profile = brain.profileForPrompt
         if !profile.isEmpty {
@@ -1230,7 +1230,7 @@ final class CompanionManager: ObservableObject {
 
     /// Called by the live transcription provider when push-to-talk opens.
     /// Grabs the screen frame and opens the user's turn on the Live session.
-    private func beginLiveTurnWithScreenFrame(includesScreenFrame: Bool = true) async {
+    func beginLiveTurnWithScreenFrame(includesScreenFrame: Bool = true) async {
         currentLiveTurnFinishedToolCalls = []
         // So a web page's elements can be found by name if Dottie points.
         PointingRefiner.prepareFrontmostApplicationForSearch()
@@ -1267,7 +1267,7 @@ final class CompanionManager: ObservableObject {
     /// "I'm on it" when the user asks for it again.
     private var notesForNextLiveTurn: [String] = []
 
-    private func noteStoppedJob(_ description: String) {
+    func noteStoppedJob(_ description: String) {
         notesForNextLiveTurn.append("[note] \(description) was stopped and is not running anymore. if the user asks for it again, start it again with the tool; never say you're still working on it.")
     }
 
@@ -1286,7 +1286,7 @@ final class CompanionManager: ObservableObject {
 
     /// Screenshot images for the classic and higher models, with the turn's
     /// circled area drawn on the screen it's on.
-    private func labeledScreenImages(
+    func labeledScreenImages(
         from screenCaptures: [CompanionScreenCapture],
         annotation: ScreenAnnotation?
     ) -> [(data: Data, label: String)] {
@@ -1303,7 +1303,7 @@ final class CompanionManager: ObservableObject {
 
     /// Carries out a click, typing, keys, scroll, page or drawing the user
     /// asked voice Dottie for, and says what happened for Live to relay.
-    private func performScreenAction(_ screenAction: DottieScreenAction) async -> String {
+    func performScreenAction(_ screenAction: DottieScreenAction) async -> String {
         let needsEventPermission: Bool
         switch screenAction {
         case .click, .typeText, .pressKeys, .scroll: needsEventPermission = true
@@ -1390,7 +1390,7 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Teaching with drawings
 
-    private var teachingTask: Task<Void, Never>?
+    var teachingTask: Task<Void, Never>?
     /// The step line being said, so a stopped explanation doesn't keep
     /// talking after the user does.
     private var teachingNarrationTask: Task<Void, Never>?
@@ -1640,7 +1640,7 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Stops drawing an explanation. The drawing itself can stay up.
-    private func stopTeaching(clearingDrawing: Bool) {
+    func stopTeaching(clearingDrawing: Bool) {
         teachingTask?.cancel()
         teachingTask = nil
         teachingNarrationTask?.cancel()
@@ -1655,7 +1655,7 @@ final class CompanionManager: ObservableObject {
 
     /// A job for the screen task runner: what to do, whether it's a game,
     /// and which saved pictures it's about.
-    private struct ScreenJob {
+    struct ScreenJob {
         let text: String
         var isGame = false
         var referenceImageNames: [String] = []
@@ -1732,7 +1732,7 @@ final class CompanionManager: ObservableObject {
 
     /// The same check for helpers: a helper doing the same task, or one
     /// whose last task got no answer because Dottie quit.
-    private func repeatedHelperTaskQuestion(for taskText: String) -> String? {
+    func repeatedHelperTaskQuestion(for taskText: String) -> String? {
         for agent in clickyRoster.agents where agent.isBrain != true {
             let transcript = clickyRoster.transcriptsByAgentID[agent.id] ?? []
             guard let lastUserMessage = transcript.last(where: { $0.kind == .user }),
@@ -1750,7 +1750,7 @@ final class CompanionManager: ObservableObject {
 
     /// Starts a multi-step job, or lines it up behind the running one.
     /// Returns a short status for Live to relay.
-    private func startScreenTask(_ job: ScreenJob) -> String {
+    func startScreenTask(_ job: ScreenJob) -> String {
         guard DottieScreenActionPerformer.canPostEvents else {
             return "I can't control the mouse and keyboard yet: Dottie needs Accessibility permission in System Settings → Privacy & Security."
         }
@@ -1943,7 +1943,7 @@ final class CompanionManager: ObservableObject {
     /// Stops the running job and drops every waiting one. Returns true if
     /// anything was running or waiting.
     @discardableResult
-    private func stopScreenTask() -> Bool {
+    func stopScreenTask() -> Bool {
         let hadQueuedTasks = !queuedScreenTasks.isEmpty
         for queuedTask in queuedScreenTasks {
             noteStoppedJob("the waiting on-screen job \"\(queuedTask.text)\"")
@@ -2019,7 +2019,7 @@ final class CompanionManager: ObservableObject {
     }
 
     /// What's running and waiting, for list_screen_jobs.
-    private func screenTaskQueueSummary() -> String {
+    func screenTaskQueueSummary() -> String {
         var lines: [String] = []
         if screenTaskRunner.isRunning, let currentScreenTaskText {
             lines.append("doing now: \(currentScreenTaskText) (\(notchPresenter.screenTaskStepText))")
@@ -2123,7 +2123,7 @@ final class CompanionManager: ObservableObject {
 
     /// Dottie says how the job went, as a turn of its own, so it reads like
     /// her answer and lands in the conversation history.
-    private func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
+    func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
         let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
         var instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
             + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
@@ -2193,7 +2193,7 @@ final class CompanionManager: ObservableObject {
     }
 
     @discardableResult
-    private func stopGuide() -> Bool {
+    func stopGuide() -> Bool {
         let stoppedGoal = currentGuideGoal
         let didStop = guide.stop()
         if didStop {
@@ -2385,7 +2385,7 @@ final class CompanionManager: ObservableObject {
 
     /// Where a 0-1000 point in this turn's frame is on screen, after the
     /// same second look pointing gets.
-    private func refinedScreenLocation(
+    func refinedScreenLocation(
         normalizedX: Double,
         normalizedY: Double,
         label: String?
@@ -2617,1565 +2617,6 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    // MARK: - Clickys (background agents)
-
-    /// Starts a background task from voice. Uses the named Clicky (creating
-    /// it if it doesn't exist yet), or a general "Helper" Clicky.
-    /// Returns a short status for the voice model to relay.
-    func startClickyTask(clickyName: String?, taskText: String, projectName: String? = nil, restart: Bool = true) -> String {
-        guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
-        }
-        if !restart, let question = repeatedHelperTaskQuestion(for: taskText) {
-            return question
-        }
-        var notes: [String] = []
-        var messageForHelper = taskText
-        var projectForTask: DottieProjects.Project?
-        if let projectName, !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let (project, isNew) = projects.findOrCreate(named: projectName, summary: String(taskText.prefix(140)))
-            projectForTask = project
-            messageForHelper = projects.taskPreamble(for: project, isNew: isNew) + taskText
-            notes.append(isNew ? "made a new project, \"\(project.name)\"." : "this continues the project \"\(project.name)\".")
-            if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
-        }
-        // Back on a project: the Dot that last worked on it remembers it.
-        let projectHelper = projectForTask?.helperNames.last.flatMap { helperName in
-            clickyRoster.agents.first { $0.name == helperName && !clickyRoster.isRunning($0) }
-        }
-        let targetAgent: ClickyAgent
-        if clickyName == nil, let projectHelper {
-            targetAgent = projectHelper
-        } else if let clickyName, let existingAgent = clickyRoster.agent(matchingName: clickyName) {
-            targetAgent = existingAgent
-        } else if let clickyName {
-            let wasDeleted = clickyRoster.recentlyDeletedAgentNames.contains { $0.caseInsensitiveCompare(clickyName) == .orderedSame }
-            targetAgent = clickyRoster.createAgent(name: clickyName, purpose: "")
-            notes.append(wasDeleted
-                ? "the old \(clickyName) was deleted, so this is a new helper with that name."
-                : "there was no helper called \(clickyName), so a new one was made.")
-        } else if let idleHelper = clickyRoster.agents.first(where: { $0.isBrain != true && !clickyRoster.isRunning($0) && clickyRoster.pendingComputerUseRequest(for: $0) == nil }) {
-            // The most recently made idle helper, usually the one the user
-            // just set up in the app.
-            targetAgent = idleHelper
-        } else {
-            let helperCount = clickyRoster.agents.filter { $0.name.hasPrefix("Helper") }.count
-            targetAgent = clickyRoster.createAgent(
-                name: helperCount == 0 ? "Helper" : "Helper \(helperCount + 1)",
-                purpose: "General background tasks the user hands off by voice."
-            )
-            if !clickyRoster.agents.dropFirst().isEmpty {
-                notes.append("the other helpers were busy, so a new one was made.")
-            }
-        }
-
-        if let projectForTask {
-            projects.noteWork(on: projectForTask.id, by: targetAgent.name)
-        }
-        // A busy helper the user named takes the task next, in order.
-        let tasksAhead = clickyRoster.sendOrQueueMessage(messageForHelper, to: targetAgent)
-        if tasksAhead > 0 {
-            return "\(targetAgent.name) is busy, so this is lined up: it starts after \(tasksAhead == 1 ? "its current task" : "\(tasksAhead - 1) more tasks after its current one"). say that in a few words."
-        }
-        guard clickyRoster.isRunning(targetAgent) else {
-            return "couldn't start \(targetAgent.name). tell the user to try again from the Home window."
-        }
-        ClickyAnalytics.trackClickyTaskStarted()
-        if !DotsRuntimeInstaller.isInstalled {
-            notes.append("this is the first helper task on this mac, so it's setting up first (a one-time download), which takes a minute.")
-        }
-        notes.append("check_helper shows how it's going.")
-        return "started. \(targetAgent.name) is working on it and will report back in the notch. " + notes.joined(separator: " ")
-    }
-
-    // MARK: - Projects, teams and pictures (DottieWorkTools)
-
-    private func performWorkTool(functionName: String, arguments: [String: Any]) async -> String {
-        func text(_ key: String) -> String? {
-            let value = (arguments[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return value?.isEmpty == true ? nil : value
-        }
-        switch functionName {
-        case "list_projects":
-            return projects.listForVoice()
-        case "start_team":
-            let parts = ((arguments["parts"] as? [Any]) ?? []).compactMap { rawPart -> (helper: String, task: String)? in
-                guard let part = rawPart as? [String: Any],
-                      let helper = (part["helper"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !helper.isEmpty,
-                      let task = (part["task"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !task.isEmpty else { return nil }
-                return (helper, task)
-            }
-            return startTeam(goal: text("goal") ?? "", projectName: text("project"), parts: parts)
-        case "save_picture":
-            guard let name = text("name") else { return "give the picture a name." }
-            return await savePictureFromScreen(
-                name: name,
-                description: text("description") ?? "",
-                normalizedX: (arguments["x"] as? NSNumber)?.doubleValue,
-                normalizedY: (arguments["y"] as? NSNumber)?.doubleValue,
-                label: text("label")
-            )
-        case "find_pictures":
-            let matches = imageMemory.search(text("query") ?? "")
-            guard !matches.isEmpty else { return "no saved pictures match that." }
-            return matches.map { item in
-                "- \(item.name)\(item.savedByDottie == true ? " (you saved it)" : "")" + (item.description.isEmpty ? "" : ": \(item.description)")
-            }.joined(separator: "\n")
-        default:
-            return "unknown tool."
-        }
-    }
-
-    /// Hands each part of a big job to its own Dot, all in one project
-    /// folder, with every Dot told who else is doing what.
-    private func startTeam(goal: String, projectName: String?, parts: [(helper: String, task: String)]) -> String {
-        guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            return "helpers can't run yet: Dottie isn't connected to its server. tell the user to check Settings → Connection."
-        }
-        let teamParts = Array(parts.prefix(5))
-        guard teamParts.count >= 2 else {
-            return teamParts.first.map { startClickyTask(clickyName: $0.helper, taskText: $0.task, projectName: projectName) }
-                ?? "give the team at least two parts."
-        }
-        let fallbackProjectName = goal.split(separator: " ").prefix(4).joined(separator: " ")
-        let (project, isNew) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
-        if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
-
-        let roster = teamParts.map { "- \($0.helper): \($0.task)" }.joined(separator: "\n")
-        var startedLines: [String] = []
-        for part in teamParts {
-            let memberName = part.helper
-            let member = clickyRoster.agents.first { $0.isBrain != true && $0.name.caseInsensitiveCompare(memberName) == .orderedSame }
-                ?? clickyRoster.createAgent(name: memberName, purpose: "Team member: \(memberName).")
-            let teamNote = """
-            You're the \(member.name) part of a team working on this together, all at the same time, in the same project folder. The whole job: \(goal)
-            The team:
-            \(roster)
-            Only do your own part. Don't delete or rewrite files that belong to another part; if your part depends on theirs (a file name, a class name, an API), agree on it by writing it in TEAM-NOTES.md in the project folder, and read that file before you start and before you finish.
-            """
-            let message = projects.taskPreamble(for: project, isNew: isNew, teamNote: teamNote) + part.task
-            projects.noteWork(on: project.id, by: member.name)
-            let tasksAhead = clickyRoster.sendOrQueueMessage(message, to: member)
-            startedLines.append(tasksAhead > 0 ? "\(member.name) (after its current task)" : member.name)
-        }
-        ClickyAnalytics.trackClickyTaskStarted()
-        return "started a team on \"\(project.name)\"\(isNew ? " (new project)" : ""): \(startedLines.joined(separator: ", ")). each reports back in the notch when its part is done. say who's on what in a few words."
-    }
-
-    /// Crops the thing at (x, y) on this turn's screen, or saves the whole
-    /// screen, into the picture library under the given name.
-    private func savePictureFromScreen(name: String, description: String, normalizedX: Double?, normalizedY: Double?, label: String?) async -> String {
-        var cropFrame: CGRect?
-        var displayFrame: CGRect?
-        if let normalizedX, let normalizedY,
-           let location = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label ?? name) {
-            displayFrame = location.displayFrame
-            // The thing's outline when it was found, else a square around
-            // the point, with some surroundings so it can be recognized.
-            let thingFrame = location.elementFrame ?? CGRect(x: location.point.x - 90, y: location.point.y - 90, width: 180, height: 180)
-            let padding = max(24, max(thingFrame.width, thingFrame.height) * 0.25)
-            cropFrame = thingFrame.insetBy(dx: -padding, dy: -padding).intersection(location.displayFrame)
-        }
-        let captureFrame = displayFrame
-            ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.frame
-            ?? NSScreen.main?.frame
-        guard let captureFrame,
-              let screenImage = await DottieDisplayCapture.captureImage(displayFrame: captureFrame, maximumDimension: 2880) else {
-            return "couldn't see the screen to save it."
-        }
-        var savedImage = screenImage
-        if let cropFrame, !cropFrame.isEmpty {
-            let pixelsPerPoint = CGFloat(screenImage.width) / captureFrame.width
-            let pixelRect = CGRect(
-                x: (cropFrame.minX - captureFrame.minX) * pixelsPerPoint,
-                y: (captureFrame.maxY - cropFrame.maxY) * pixelsPerPoint,
-                width: cropFrame.width * pixelsPerPoint,
-                height: cropFrame.height * pixelsPerPoint
-            ).integral
-            if let croppedImage = screenImage.cropping(to: pixelRect) {
-                savedImage = croppedImage
-            }
-        }
-        guard let pngData = NSBitmapImageRep(cgImage: savedImage).representation(using: .png, properties: [:]),
-              let item = imageMemory.add(imageData: pngData, name: name, description: description, savedByDottie: true) else {
-            return "couldn't save the picture."
-        }
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        return "saved as \"\(item.name)\"\(cropFrame == nil ? " (the whole screen)" : ""). it's in Home → Pictures, and you can find it by that name later. say so in a few words."
-    }
-
-    /// list_helpers, check_helper, stop_helper and open_helper_result.
-    private func answerHelperTool(functionName: String, helperName: String?) -> String {
-        if functionName == "list_helpers" {
-            return clickyRoster.helperListSummary()
-        }
-        let requestedAgent: ClickyAgent?
-        if let helperName, !helperName.isEmpty {
-            requestedAgent = clickyRoster.agent(matchingName: helperName)
-        } else {
-            // No name: the helper the user most likely means is the one
-            // that did something most recently.
-            requestedAgent = clickyRoster.agents.max { $0.lastActivityAt < $1.lastActivityAt }
-        }
-        guard let agent = requestedAgent else {
-            if let helperName, clickyRoster.recentlyDeletedAgentNames.contains(where: { $0.caseInsensitiveCompare(helperName) == .orderedSame }) {
-                return "\(helperName) was deleted by the user. helpers now:\n\(clickyRoster.helperListSummary())"
-            }
-            return "no helper by that name. helpers now:\n\(clickyRoster.helperListSummary())"
-        }
-        switch functionName {
-        case "stop_helper":
-            let droppedCount = clickyRoster.queuedMessages(for: agent).count
-            clickyRoster.clearQueuedMessages(for: agent)
-            guard clickyRoster.isRunning(agent) else {
-                return droppedCount > 0
-                    ? "cleared \(agent.name)'s \(droppedCount) waiting tasks."
-                    : "\(agent.name) isn't working on anything: \(clickyRoster.statusLine(for: agent))."
-            }
-            clickyRoster.stopAgent(agent)
-            return "stopped \(agent.name)\(droppedCount > 0 ? " and cleared its \(droppedCount) waiting tasks" : "")."
-        case "open_helper_result":
-            return clickyRoster.openHelperResult(for: agent)
-        default:
-            return clickyRoster.helperDetail(for: agent)
-        }
-    }
-
-    // MARK: - Smart home (DottieSmartHome)
-
-    private func performSmartHomeTool(functionName: String, arguments: [String: Any]) async -> String {
-        switch functionName {
-        case "home_devices":
-            return await smartHome.listForVoice()
-        case "control_device":
-            return await smartHome.control(arguments: arguments)
-        case "tv_task":
-            return startTVTask(task: (arguments["task"] as? String) ?? "", tvName: arguments["tv"] as? String)
-        default:
-            return "unknown home tool."
-        }
-    }
-
-    private func startTVTask(task: String, tvName: String?) -> String {
-        guard !task.isEmpty else { return "what should I do on the TV?" }
-        guard let tv = smartHome.tv(named: tvName) else {
-            return smartHome.setup.tvs.isEmpty
-                ? "no TV is set up yet. tell the user to add it in your Home window, under Smart Home."
-                : "which TV? the user has: \(smartHome.setup.tvs.map(\.name).joined(separator: ", "))."
-        }
-        guard smartHome.canSee(tv) else {
-            return "you can't see \(tv.name)'s screen (it needs a capture card), so do it with control_device presses instead."
-        }
-        let runner = smartHome.tvTaskRunner
-        runner.stop()
-        let showsInNotch = !screenTaskRunner.isRunning
-        runner.onProgress = { [weak self] stepText in
-            guard showsInNotch else { return }
-            self?.notchPresenter.showScreenTaskStep(stepText, title: "on the TV")
-        }
-        if showsInNotch { notchPresenter.showScreenTaskStep("looking at the TV", title: "on the TV") }
-        DottieLog.notice("📺 TV task on \(tv.name): \(task)")
-        runner.start(task: task, controls: smartHome.tvControls(for: tv)) { [weak self] outcome in
-            guard let self else { return }
-            if showsInNotch && !self.screenTaskRunner.isRunning { self.notchPresenter.endScreenTask() }
-            let resultText: String
-            switch outcome {
-            case .finished(let answer): resultText = answer
-            case .failed(let reason): resultText = "it couldn't be finished: \(reason)"
-            case .stopped: return
-            }
-            DottieLog.notice("📺 TV task result: \(resultText)")
-            self.brain.record(.screenJob, "did on the TV (\(tv.name)): \(task). result: \(resultText)")
-            Task { [weak self] in
-                for _ in 0..<60 {
-                    guard let self else { return }
-                    let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle
-                        || self.buddyDictationManager.isDictationInProgress || self.notchPresenter.surface == .textInput
-                    if !isBusy { break }
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                }
-                self?.speakScreenTaskResult(taskText: "on the TV: \(task)", resultText: resultText)
-            }
-        }
-        return "started on \(tv.name). say you're on it in a few words, then stop; the result comes back in a later message."
-    }
-
-    private func configureCursorPet() {
-        // The pet comes to the mouse while the user talks to Dottie, while
-        // she points, and during guides and screen jobs.
-        cursorPet.shouldPause = { [weak self] in
-            guard let self else { return true }
-            return self.voiceState != .idle
-                || self.detectedElementScreenLocation != nil
-                || self.screenTaskRunner.isRunning
-                || self.guide.isActive
-        }
-        cursorPet.start()
-        // A pet out roaming has to be seen even with the cursor set to hide.
-        cursorPetCancellable = cursorPet.$costume
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] costume in
-                guard let self, costume?.roams == true, !self.isOverlayVisible, self.hasCompletedOnboarding else { return }
-                self.overlayWindowManager.hasShownOverlayBefore = true
-                self.overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                self.isOverlayVisible = true
-            }
-    }
-
-    private func performCursorTool(arguments: [String: Any]) -> String {
-        cursorPet.perform(arguments: arguments)
-    }
-
-    private func configureBrain() {
-        clickyRoster.brainFolderURLsProvider = { [weak self] in
-            self?.brain.folderURLs ?? []
-        }
-        // Projects first (ClickyRoster reads the first as the projects
-        // folder); then the user's own folders, when they let helpers in.
-        clickyRoster.sharedFolderURLs = [projects.rootFolderURL] + DottieWorkRoutes.homeFolderURLs
-        // Pictures, projects and smart home devices edited in Home reach
-        // voice Dottie on her next connection.
-        Publishers.Merge3(
-            imageMemory.$items.map { _ in () }.dropFirst(),
-            projects.$projects.map { _ in () }.dropFirst(),
-            smartHome.$setup.map { _ in () }.dropFirst()
-        )
-        .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
-        .sink { [weak self] in
-            guard let self else { return }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-        }
-        .store(in: &brainCancellables)
-        brain.onProfileChanged = { [weak self] _ in
-            guard let self else { return }
-            // Takes effect on the next Live connection.
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-        }
-        brain.$isScreenJournalEnabled
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] isEnabled in
-                self?.notchPresenter.isScreenJournalOn = isEnabled
-            }
-            .store(in: &brainCancellables)
-        // Episodes: screen ones go in the brain's journal too, and the
-        // recent ones reach voice Dottie on her next connection.
-        DottieEpisodicMemory.shared.onEpisodesChanged = { [weak self] newEpisodes in
-            guard let self else { return }
-            for episode in newEpisodes where episode.source == .screen {
-                self.brain.record(.screen, "\(episode.title): \(episode.summary.prefix(300))")
-            }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-        }
-        DottieEpisodicMemory.shared.start()
-        DottieHabits.shared.start()
-        DottieKnownPlaces.shared.start()
-    }
-
-    /// Hands a question to the Brain agent; Dottie says the answer when it
-    /// comes back.
-    private func askBrain(question: String) -> String {
-        guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            return "the brain can't run yet: Dottie isn't connected to its server."
-        }
-        let brainAgent = clickyRoster.brainAgent()
-        guard !clickyRoster.isRunning(brainAgent) else {
-            return "the brain is still working on the last question: \(clickyRoster.statusLine(for: brainAgent)). tell the user it'll answer that first."
-        }
-        // Asked before: the saved answer, at once and with no helper turn.
-        if let savedAnswer = brain.savedBrainAnswer(for: question) {
-            let minutesAgo = max(1, Int(Date().timeIntervalSince(savedAnswer.date) / 60))
-            return "your second brain answered this \(minutesAgo) minutes ago: \(savedAnswer.answer)\ntell the user now in one to three short sentences; don't ask the brain again."
-        }
-        // Only what the question needs: the last couple of exchanges, cut
-        // short, and the two closest memories.
-        let recentChat = conversationHistory.suffix(2)
-            .map { "user: \($0.userTranscript.prefix(300))\ndottie: \($0.assistantResponse.prefix(300))" }
-            .joined(separator: "\n")
-        let frontmostApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
-        let relatedEpisodes = DottieEpisodicMemory.shared.recallNow(query: question, limit: 2).episodes
-        let episodesNote = relatedEpisodes.isEmpty ? "" : "\n\nepisodes from Dottie's memory that may be related:\n"
-            + relatedEpisodes.map(DottieEpisodicMemory.lineForModel).joined(separator: "\n")
-        let messageForBrain = """
-        Dottie's question for you: \(question)
-
-        (context: the user is in \(frontmostApp). recent conversation with Dottie:
-        \(recentChat.isEmpty ? "none" : recentChat))\(episodesNote)
-        """
-        clickyRoster.sendMessage(messageForBrain, to: brainAgent)
-        guard clickyRoster.isRunning(brainAgent) else {
-            return "couldn't reach the brain right now."
-        }
-        pendingSpokenBrainQuestion = question
-        return "the brain is on it. say only a few words like 'let me think on that'; its answer comes to you in a later message."
-    }
-
-    private func speakBrainAnswer(question: String, answer: String) {
-        let instructionText = "your second brain answered the user's question \"\(question)\": \(answer)\n"
-            + "tell the user now, in your own voice, in one to three short sentences. if it asks the user something, ask it."
-        speakWhenFree(recordedUserText: "(brain: \(question))", instructionText: instructionText)
-    }
-
-    /// Has Dottie say something on her own once any turn in progress ends.
-    private func speakWhenFree(recordedUserText: String, instructionText: String) {
-        transientHideTask?.cancel()
-        transientHideTask = nil
-        Task { [weak self] in
-            // Wait for any turn in progress to finish first.
-            for _ in 0..<60 {
-                guard let self else { return }
-                if !self.isLiveTurnInFlight && self.voiceState == .idle { break }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            guard let self else { return }
-            switch self.voiceMode {
-            case .classic:
-                self.sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
-            case .live:
-                self.startLiveTextTurn(recordedUserText: recordedUserText, turnText: instructionText)
-            }
-        }
-    }
-
-    // MARK: - Meeting mode
-
-    private func configureMeetingMode() {
-        meetingCancellable = meetingRecorder.$isRecording
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] isRecording in
-                self?.notchPresenter.isMeetingRecording = isRecording
-            }
-        // Live help shows its suggestions in the notch as they come.
-        notchPresenter.onAskMeetingHelp = { [weak self] in
-            self?.meetingRecorder.liveHelp.askNow()
-        }
-        var lastShownSuggestion: DottieMeetingLiveHelp.Suggestion?
-        meetingRecorder.liveHelp.onDisplayChanged = { [weak self] in
-            guard let self else { return }
-            let liveHelp = self.meetingRecorder.liveHelp
-            guard liveHelp.isRunning else {
-                lastShownSuggestion = nil
-                self.notchPresenter.endMeetingHelp()
-                return
-            }
-            let suggestion = liveHelp.latestSuggestion
-            let hasNewSuggestion = suggestion != nil && suggestion != lastShownSuggestion
-            lastShownSuggestion = suggestion
-            var heading = "live help · ⌘⇧↩ to ask"
-            if let questionText = suggestion?.questionText {
-                heading = "they asked: \(questionText)"
-            } else if suggestion != nil {
-                heading = "you could say"
-            }
-            var suggestedLines = suggestion?.suggestedLines ?? []
-            if suggestedLines.isEmpty, let statusNote = liveHelp.statusNote {
-                suggestedLines = [statusNote]
-            }
-            self.notchPresenter.showMeetingHelp(
-                heading: heading,
-                lines: suggestedLines,
-                talkingPoints: liveHelp.talkingPointsText,
-                isThinking: liveHelp.isThinking,
-                hasNewSuggestion: hasNewSuggestion
-            )
-        }
-        meetingRecorder.onMeetingSaved = { [weak self] title, summary, _ in
-            guard let self else { return }
-            self.brain.record(.meeting, "meeting \"\(title)\":\n\(summary.prefix(3000))")
-            self.notchPresenter.showAgentUpdate(title: "Meeting notes · \(title)", text: summary)
-            self.speakWhenFree(
-                recordedUserText: "(meeting notes ready)",
-                instructionText: "the meeting notes are ready and saved in home → meetings:\n\(summary.prefix(2500))\n"
-                    + "tell the user in one or two short sentences: the gist, and how many action items there are. don't read it all out."
-            )
-        }
-    }
-
-    // MARK: - Speed pack
-
-    /// Instant replays by voice, and the self-check's Telegram check.
-    private func configureSpeedPack() {
-        DottieSelfCheck.shared.phoneBridge = phoneBridge
-        DottieSpeedTools.startReplayJob = { [weak self] replay in
-            guard let self else { return "Dottie isn't ready yet." }
-            return self.startScreenTask(ScreenJob(text: replay.taskText, replayID: replay.id))
-        }
-        // A learned shortcut's steps run exactly as Gemini's calls did.
-        DottieInstantLane.shared.runSavedToolStep = { [weak self] functionName, arguments in
-            guard let self else { return "couldn't do that right now." }
-            if DottieScreenAction.functionNames.contains(functionName) {
-                guard let screenAction = DottieScreenAction(functionName: functionName, arguments: arguments) else {
-                    return "couldn't do that right now."
-                }
-                return await self.performScreenAction(screenAction)
-            }
-            if DottieToolRegistry.handles(functionName, for: .voice) {
-                return await DottieToolRegistry.run(functionName, arguments: arguments, for: .voice) ?? "couldn't do that right now."
-            }
-            guard let onMacTool = self.liveVoiceClient.onMacTool else { return "couldn't do that right now." }
-            return await onMacTool(functionName, arguments)
-        }
-        // Starts listening for Spotify and Music playing or pausing, so
-        // "pause" knows whether there's music to pause.
-        _ = DottieInstalledApps.shared
-        DottieEveryday.shared.watches.onFollowUpDue = { [weak self] followUpText, firedText in
-            self?.runWatchFollowUp(followUpText, firedText: firedText)
-        }
-        DottieSmartReplayTools.startSmartReplayJob = { [weak self] smartReplay, details in
-            guard let self else { return "Dottie isn't ready yet." }
-            DottieSmartReplayStore.shared.noteRun(smartReplay.id)
-            return self.startScreenTask(ScreenJob(
-                text: smartReplay.screenJobTaskText(details: details),
-                closingMessage: smartReplay.closingMessage,
-                isCommercial: smartReplay.kind == .commercial
-            ))
-        }
-    }
-
-    // MARK: - Phone
-
-    private static let phoneHelperName = "Phone"
-
-    private func configurePhoneBridge() {
-        phoneBridge.onMessage = { [weak self] text in
-            self?.handlePhoneMessage(text)
-        }
-        DottieAwayMode.shared.phoneBridge = phoneBridge
-        DottieAwayMode.shared.onCameBack = { [weak self] reportText in
-            self?.notchPresenter.showAgentUpdate(title: "While you were away", text: reportText)
-        }
-        DottieWatchAndLearn.shared.onStatus = { [weak self] title, text in
-            self?.notchPresenter.showAgentUpdate(title: title, text: text)
-        }
-        phoneBridge.onAwayCommand = { isAway in
-            DottieAwayMode.shared.setAway(isAway, from: "phone")
-        }
-        phoneBridge.reportProvider = {
-            DottieAwayMode.shared.report()
-        }
-        phoneFiles.sendText = { [weak self] text in
-            await self?.phoneBridge.send(text)
-        }
-        phoneFiles.sendFileToPhone = { [weak self] fileURL, caption in
-            guard let self else { return "the phone isn't connected." }
-            return await self.phoneBridge.sendDocument(fileURL, caption: caption)
-        }
-        phoneFiles.uploadToDriveOnScreen = { [weak self] fileURL in
-            guard let self else { return "can't reach Google Drive." }
-            let jobText = "Upload the file \(fileURL.path) to the user's Google Drive: open drive.google.com in the browser, click New, then File upload. "
-                + "In the file picker press cmd+shift+g, type the path exactly, press return, then click Open (or Upload). "
-                + "Wait until Drive says the upload is complete, then finish."
-            let status = self.startScreenTask(ScreenJob(text: jobText, repliesToPhone: true))
-            return "Google Drive for desktop isn't installed, so Dottie is uploading it in the browser on the Mac (\(status)). A text follows when it's done."
-        }
-        phoneBridge.statusProvider = { [weak self] in
-            guard let self else { return "" }
-            var lines = ["Helpers:", self.clickyRoster.helperListSummary()]
-            if self.screenTaskRunner.isRunning {
-                lines.append("On screen: " + self.screenTaskQueueSummary())
-            }
-            if self.meetingRecorder.isRecording {
-                lines.append("Meeting notes are on (\(self.meetingRecorder.elapsedText)).")
-            }
-            return lines.joined(separator: "\n")
-        }
-        phoneBridge.screenshotProvider = {
-            let screenCaptures = try? await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-            return (screenCaptures?.first { $0.isCursorScreen } ?? screenCaptures?.first)?.imageData
-        }
-        phoneBridge.onPermissionAnswer = { [weak self] isAllowed in
-            guard let self,
-                  let phoneAgent = self.clickyRoster.agents.first(where: { $0.name == Self.phoneHelperName }),
-                  self.clickyRoster.pendingComputerUseRequest(for: phoneAgent) != nil else {
-                return "Nothing is waiting for permission."
-            }
-            self.notchPresenter.dropComputerUseRequest(forAgentID: phoneAgent.id)
-            if isAllowed {
-                self.clickyRoster.approveComputerUse(for: phoneAgent, alwaysAllow: false)
-                return "Allowed. Carrying on."
-            }
-            self.clickyRoster.declineComputerUse(for: phoneAgent)
-            return "Okay, it won't use the Mac."
-        }
-    }
-
-    /// A text from the user's phone becomes a task for the Phone helper,
-    /// whose reply is texted back from onAgentTurnFinished.
-    private func handlePhoneMessage(_ text: String) {
-        guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            Task { await phoneBridge.send("Dottie isn't connected to its server, so helpers can't run. Check Settings → Connection on the Mac.") }
-            return
-        }
-        // Files ("find my howto presentation", "put it on my Drive") are
-        // answered right here; everything else goes to the Phone helper.
-        Task { [weak self] in
-            guard let self else { return }
-            if await self.phoneFiles.handle(text) {
-                self.brain.record(.phone, "texted from phone: \(text)")
-                return
-            }
-            self.handPhoneMessageToHelper(text)
-        }
-    }
-
-    private func handPhoneMessageToHelper(_ text: String) {
-        let phoneAgent = clickyRoster.agents.first { $0.name == Self.phoneHelperName }
-            ?? clickyRoster.createAgent(name: Self.phoneHelperName, purpose: "Jobs the user texts from their phone while away from the Mac.")
-        brain.record(.phone, "texted from phone: \(text)")
-        let taskText = """
-        (texted by the user from their phone; they may be away from the Mac.) \(text)
-
-        do it, then end with a short reply that reads well as a text message: a few plain lines, no markdown tables.
-        """
-        let tasksAhead = clickyRoster.sendOrQueueMessage(taskText, to: phoneAgent)
-        let receipt = tasksAhead > 0
-            ? "Got it. That's lined up after \(tasksAhead) other task\(tasksAhead == 1 ? "" : "s")."
-            : (DotsRuntimeInstaller.isInstalled ? "On it." : "On it. First run on this Mac, so it's setting up first.")
-        Task { await phoneBridge.send(receipt) }
-    }
-
-    private func configureClickyRoster() {
-        configureBrain()
-        configureCursorPet()
-        configureMeetingMode()
-        configurePhoneBridge()
-        DottieFunPack.shared.attach(to: self)
-        configureSpeedPack()
-        clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
-            guard let self else { return }
-            DottieFunPack.shared.helperTurnFinished(
-                agentID: turnResult.agent.id,
-                reply: turnResult.finalReply,
-                succeeded: turnResult.succeeded,
-                routineTitle: turnResult.routineTitle
-            )
-            // A routine run with nothing new stays out of the notch.
-            guard !turnResult.foundNothingNew else { return }
-            let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
-            let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
-            // The helper did what it could in the background and left the
-            // on-screen steps to Dottie (DottieWorkRoutes).
-            if turnResult.succeeded, let screenJobRequest = DottieWorkRoutes.screenJobRequest(in: turnResult.finalReply) {
-                DottieLog.notice("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
-                let status = self.startScreenTask(ScreenJob(text: screenJobRequest.steps, returnsToHelperAgentID: turnResult.agent.id))
-                let progressText = screenJobRequest.replyWithoutBlock.isEmpty ? "Doing the on-screen part now." : screenJobRequest.replyWithoutBlock
-                self.notchPresenter.showAgentUpdate(title: updateTitle, text: progressText)
-                if isPhoneHelper {
-                    Task { await self.phoneBridge.send("Doing the on-screen part on your Mac now (\(status.prefix(80))).") }
-                }
-                return
-            }
-            if let computerUseRequest = turnResult.computerUseRequest {
-                // From the phone, or while the user is away: asked on the
-                // phone with Allow / Deny buttons, as well as in the notch.
-                if isPhoneHelper || DottieAwayMode.shared.questionsGoToPhone {
-                    let requestingAgent = turnResult.agent
-                    Task { [weak self] in
-                        let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
-                            "\(updateTitle) needs to use your Mac's screen for this: \(computerUseRequest)",
-                            screenshotJPEG: nil
-                        )
-                        guard let self, self.clickyRoster.pendingComputerUseRequest(for: requestingAgent) != nil else { return }
-                        self.notchPresenter.dropComputerUseRequest(forAgentID: requestingAgent.id)
-                        self.dotNotifications.removeNotification(forAgentID: requestingAgent.id)
-                        if isAllowed {
-                            self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
-                        } else {
-                            self.clickyRoster.declineComputerUse(for: requestingAgent)
-                        }
-                    }
-                }
-                // Ask in the notch and in a notification; the answer comes
-                // back through onAnswerComputerUseRequest below.
-                self.notchPresenter.showAgentUpdate(
-                    title: updateTitle,
-                    text: computerUseRequest,
-                    computerUseRequestAgentID: turnResult.agent.id
-                )
-                self.dotNotifications.notifyComputerUseRequest(
-                    agentID: turnResult.agent.id,
-                    title: "\(updateTitle) wants to use your Mac",
-                    text: computerUseRequest
-                )
-                return
-            }
-            let updateText = turnResult.finalReply.isEmpty
-                ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
-                : turnResult.finalReply
-            if isPhoneHelper {
-                Task { await self.phoneBridge.send(updateText) }
-            }
-            if DottieAwayMode.shared.isAway {
-                DottieAwayMode.shared.noteResult(
-                    title: updateTitle,
-                    detail: updateText,
-                    succeeded: turnResult.succeeded,
-                    alreadyTextedToPhone: isPhoneHelper
-                )
-            }
-            let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
-            self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
-            if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
-                self.pendingSpokenBrainQuestion = nil
-                if turnResult.succeeded {
-                    self.brain.saveBrainAnswer(question: brainQuestion, answer: updateText)
-                }
-                self.speakBrainAnswer(question: brainQuestion, answer: updateText)
-                self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
-                return
-            }
-            self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
-            self.refreshNotchPeekFiles()
-            self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
-        }
-
-        dotNotifications.configure()
-        dotNotifications.onOpenDot = { [weak self] agentID in
-            guard let self else { return }
-            self.clickyRoster.requestShowInHome(agentID: agentID)
-            self.openHomeWindow()
-        }
-        dotNotifications.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed in
-            guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
-            self.notchPresenter.dropComputerUseRequest(forAgentID: agentID)
-            if isAllowed {
-                self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
-            } else {
-                self.clickyRoster.declineComputerUse(for: requestingAgent)
-            }
-        }
-
-        // objectWillChange fires before the change lands; hopping to the
-        // next main-queue turn reads the new values.
-        clickyRosterCancellable = clickyRoster.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateNotchDotSummaries()
-            }
-        updateNotchDotSummaries()
-
-        notchPresenter.onOpenDot = { [weak self] agentID in
-            guard let self else { return }
-            self.clickyRoster.requestShowInHome(agentID: agentID)
-            self.notchPresenter.isHovering = false
-            self.openHomeWindow()
-        }
-
-        notchPresenter.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed, alwaysAllow in
-            guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
-            self.dotNotifications.removeNotification(forAgentID: agentID)
-            if isAllowed {
-                self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: alwaysAllow)
-            } else {
-                self.clickyRoster.declineComputerUse(for: requestingAgent)
-            }
-        }
-    }
-
-    /// What the notch shows about the Dots: working ones first, then ones
-    /// with something new, then the most recently active.
-    private func updateNotchDotSummaries() {
-        let dotSummaries = clickyRoster.agents.map { agent -> NotchDotSummary in
-            let status: NotchDotSummary.Status
-            if clickyRoster.isRunning(agent) {
-                status = .working
-            } else if agent.hasUnreadReply == true {
-                status = .hasNew
-            } else {
-                status = .idle
-            }
-            return NotchDotSummary(
-                id: agent.id,
-                name: agent.name,
-                status: status,
-                lastLine: notchLastLine(for: agent, status: status)
-            )
-        }
-        let statusOrder: [NotchDotSummary.Status: Int] = [.working: 0, .hasNew: 1, .idle: 2]
-        let lastActivityByAgentID = Dictionary(uniqueKeysWithValues: clickyRoster.agents.map { ($0.id, $0.lastActivityAt) })
-        let sortedDotSummaries = dotSummaries.sorted { firstSummary, secondSummary in
-            let firstOrder = statusOrder[firstSummary.status] ?? 2
-            let secondOrder = statusOrder[secondSummary.status] ?? 2
-            if firstOrder != secondOrder { return firstOrder < secondOrder }
-            return (lastActivityByAgentID[firstSummary.id] ?? .distantPast) > (lastActivityByAgentID[secondSummary.id] ?? .distantPast)
-        }
-        if sortedDotSummaries != notchPresenter.dotSummaries {
-            notchPresenter.dotSummaries = sortedDotSummaries
-        }
-
-        // A Dot's notification goes once its reply is read or it's deleted.
-        // Waiting computer-use questions count as unread until answered.
-        if dotNotifications.hasNotificationsShowing {
-            let agentIDsStillOwed = Set(clickyRoster.agents.filter { agent in
-                agent.hasUnreadReply == true || clickyRoster.pendingComputerUseRequest(for: agent) != nil
-            }.map(\.id))
-            dotNotifications.removeNotifications(keepingAgentIDs: agentIDsStillOwed)
-        }
-    }
-
-    /// Reads the newest files in the Dots' output folders off the main
-    /// thread and hands them to the notch.
-    private func refreshNotchPeekFiles() {
-        let workspaces = clickyRoster.agents.map { agent in
-            (agentID: agent.id, agentName: agent.name, workspaceURL: clickyRoster.workspaceURL(for: agent))
-        }
-        peekFilesRefreshTask?.cancel()
-        peekFilesRefreshTask = Task { [weak self] in
-            let newestFiles = await Task.detached(priority: .utility) {
-                NotchPeekFileIndex.newestFiles(inWorkspaces: workspaces, limit: NotchPresenter.maximumPeekFileCount)
-            }.value
-            guard !Task.isCancelled, let self else { return }
-            if newestFiles != self.notchPresenter.peekFiles {
-                self.notchPresenter.peekFiles = newestFiles
-            }
-        }
-    }
-
-    private func notchLastLine(for agent: ClickyAgent, status: NotchDotSummary.Status) -> String {
-        let transcript = clickyRoster.transcriptsByAgentID[agent.id] ?? []
-        if status == .working {
-            // While working, the latest tool it ran says the most.
-            if let latestTool = transcript.last(where: { $0.kind == .tool }) {
-                return latestTool.text
-            }
-            return "working…"
-        }
-        let latestItem = transcript.last { $0.kind == .assistant || $0.kind == .error || $0.kind == .computerUseRequest }
-        guard let latestItem else { return agent.purpose.isEmpty ? "no work yet" : agent.purpose }
-        let firstLine = latestItem.text
-            .components(separatedBy: .newlines)
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
-        return latestItem.kind == .computerUseRequest ? "wants to use your Mac" : firstLine
-    }
-
-    // MARK: - Notch and Typed Messages
-
-    private func configureNotch() {
-        configureClickyRoster()
-        notchPresenter.onSubmitTypedMessage = { [weak self] messageText in
-            guard let self else { return }
-            // Typed in the notch: the answer shows as text unless the user
-            // wants it read out (DottieTypeBar).
-            DottieEveryday.shared.typeBar.remember(messageText)
-            self.liveVoiceClient.isAudioOutputMuted = !DottieTypeBar.speaksAnswers
-            self.sendTypedMessage(messageText)
-        }
-        DottieEveryday.shared.attach(to: self)
-        notchPresenter.onOpenHome = { [weak self] in
-            self?.openHomeWindow()
-        }
-        notchPresenter.onStopScreenTask = { [weak self] in
-            // The same stop button serves jobs and guides.
-            self?.stopScreenTask()
-            self?.stopGuide()
-            if self?.smartHome.tvTaskRunner.stop() == true {
-                self?.noteStoppedJob("the TV job")
-            }
-        }
-        notchPresenter.onOpenPeekFile = { [weak self] peekFile in
-            self?.notchPresenter.isHovering = false
-            NSWorkspace.shared.open(peekFile.url)
-        }
-        notchPresenter.onRevealPeekFile = { [weak self] peekFile in
-            self?.notchPresenter.isHovering = false
-            NSWorkspace.shared.activateFileViewerSelecting([peekFile.url])
-        }
-
-        // The files row is ready before the first hover, and checked again
-        // each time the peek opens in case a Dot wrote something since.
-        refreshNotchPeekFiles()
-        notchHoverCancellable = notchPresenter.$isHovering
-            .removeDuplicates()
-            .filter { $0 }
-            .sink { [weak self] _ in
-                self?.refreshNotchPeekFiles()
-            }
-
-        // Mirror the voice state onto the notch.
-        notchVoiceStateCancellable = $voiceState
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newVoiceState in
-                guard let self else { return }
-                switch newVoiceState {
-                case .listening:
-                    self.notchPresenter.showListening()
-                case .processing:
-                    self.notchPresenter.showThinking()
-                case .responding:
-                    self.notchPresenter.showSpeaking()
-                case .idle:
-                    // The finished-answer card is shown by the pipelines
-                    // themselves; an idle with no answer (e.g. a tap with
-                    // nothing said) just folds the notch back up.
-                    if self.notchPresenter.surface == .listening || self.notchPresenter.surface == .thinking {
-                        if !self.isLiveTurnInFlight && self.currentResponseTask == nil {
-                            self.notchPresenter.collapse()
-                        }
-                    }
-                }
-            }
-
-        if hasCompletedOnboarding && isNotchEnabled {
-            notchWindowManager.show()
-        }
-    }
-
-    /// Sends a typed message (from the notch or Home) as a turn, with a
-    /// screenshot like a spoken one. Clicky answers out loud as usual.
-    /// A typed message with pictures: each is saved to image memory (named
-    /// and described by Gemini) first, then the message tells Live what was
-    /// saved, so "go grab that sword" works now and in later sessions.
-    func sendTypedMessage(_ messageText: String, imageDataList: [Data]) {
-        guard !imageDataList.isEmpty else {
-            sendTypedMessage(messageText)
-            return
-        }
-        let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        notchPresenter.showThinking(label: "looking at your picture")
-        Task { [weak self] in
-            guard let self else { return }
-            var savedItems: [DottieImageMemory.Item] = []
-            for imageData in imageDataList {
-                if let savedItem = await self.imageMemory.add(imageData: imageData, userText: trimmedMessageText) {
-                    savedItems.append(savedItem)
-                }
-            }
-            guard !savedItems.isEmpty else {
-                self.notchPresenter.collapse()
-                if !trimmedMessageText.isEmpty { self.sendTypedMessage(trimmedMessageText) }
-                return
-            }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-            let pictureNotes = savedItems.map { item in
-                "\"\(item.name)\"" + (item.description.isEmpty ? "" : " (\(item.description))")
-            }.joined(separator: ", ")
-            let turnText = "[the user added \(savedItems.count == 1 ? "a picture" : "pictures"), now saved as \(pictureNotes). "
-                + "when they ask about it or to find, point at or grab it, pass its name to do_task_on_screen's reference_images, or use it as the label when pointing.] "
-                + (trimmedMessageText.isEmpty ? "say in a few words that you've saved it and what it is." : trimmedMessageText)
-            let recordedText = trimmedMessageText.isEmpty ? "(picture)" : trimmedMessageText
-            self.currentTurnImageFileNames = savedItems.map(\.fileName)
-            self.sendTypedMessage(recordedText, turnText: turnText)
-        }
-    }
-
-    func sendTypedMessage(_ messageText: String, turnText: String? = nil) {
-        let trimmedMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedMessageText.isEmpty else { return }
-        guard !buddyDictationManager.isDictationInProgress else { return }
-        // A typed secret phrase opens Home → Admin without ever reaching Gemini.
-        if turnText == nil && DottieAdminMode.shared.handleSecretPhraseIfSaid(trimmedMessageText, companionManager: self) {
-            return
-        }
-        if turnText == nil { currentTurnImageFileNames = [] }
-        // Open an app, move a window, a learned shortcut: done on the Mac,
-        // with Gemini only if it turns out not to fit.
-        if turnText == nil, let instantPlan = instantLanePlanIfAllowed(for: trimmedMessageText) {
-            runTypedInstantPlan(instantPlan, messageText: trimmedMessageText)
-            return
-        }
-        // Wording the strict lane doesn't know: Needle has a quick look
-        // (a fraction of a second) before Gemini.
-        if turnText == nil, isInstantLaneAllowedNow, DottieNeedleRouter.shared.isAvailable {
-            Task { [weak self] in
-                guard let self else { return }
-                if let needlePlan = await DottieNeedleRouter.shared.plan(for: trimmedMessageText) {
-                    self.runTypedInstantPlan(needlePlan, messageText: trimmedMessageText)
-                    return
-                }
-                self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: trimmedMessageText)?.name
-                self.sendTypedMessageToGemini(trimmedMessageText, turnText: nil)
-            }
-            return
-        }
-        if turnText == nil { currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: trimmedMessageText)?.name }
-        sendTypedMessageToGemini(trimmedMessageText, turnText: turnText)
-    }
-
-    private func runTypedInstantPlan(_ instantPlan: DottieInstantLane.Plan, messageText: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            switch await DottieInstantLane.shared.run(instantPlan) {
-            case .done(let doneText):
-                self.finishInstantLaneTurn(userText: messageText, doneText: doneText, inputKind: .typed)
-            case .askGemini:
-                self.sendTypedMessageToGemini(messageText, turnText: nil)
-            }
-        }
-    }
-
-    private func sendTypedMessageToGemini(_ trimmedMessageText: String, turnText: String?) {
-        transientHideTask?.cancel()
-        transientHideTask = nil
-        showOverlayTransientlyIfNeeded()
-        currentResponseTask?.cancel()
-        stopAllSpeechPlayback()
-        clearDetectedElementLocation()
-        lastTranscript = trimmedMessageText
-        ClickyAnalytics.trackUserMessageSent(transcript: trimmedMessageText)
-
-        switch voiceMode {
-        case .classic:
-            sendTranscriptToGeminiWithScreenshot(transcript: turnText ?? trimmedMessageText, inputKind: .typed)
-        case .live:
-            startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: turnText ?? trimmedMessageText)
-        }
-    }
-
-    // MARK: - Instant lane (no AI)
-
-    /// Not while a screen job, guide or drawing lesson is listening for
-    /// the user's words ("next", "pause" mean something else there).
-    private var isInstantLaneAllowedNow: Bool {
-        hasCompletedOnboarding
-            && !screenTaskRunner.isRunning
-            && !guide.isActive
-            && teachingTask == nil
-            && !DottieScreenJobQuestions.shared.wasAskedAloud
-    }
-
-    private func instantLanePlanIfAllowed(for requestText: String) -> DottieInstantLane.Plan? {
-        guard isInstantLaneAllowedNow else { return nil }
-        return DottieInstantLane.shared.plan(for: requestText)
-    }
-
-    /// At release: whether what the Mac heard so far might be something it
-    /// does itself, so Live's answer is held back while it checks.
-    private func liveVoiceTurnCouldBeInstant() -> Bool {
-        guard isInstantLaneAllowedNow else { return false }
-        // Heard by Whistle: there are no words yet, so a short turn is
-        // held (instant asks are short) and a long one never waits.
-        if !liveTurnOnDeviceTranscriber.isRunning {
-            return liveTurnWhistleRecorder.isRecording
-                && liveTurnWhistleRecorder.recordedSeconds <= DottieWhistleTurnRecorder.longestHeldTurnSeconds
-        }
-        return DottieInstantLane.shared.couldBecomeInstant(partialText: liveTurnOnDeviceTranscriber.latestText)
-    }
-
-    /// After a voice turn is released: waits a moment for the Mac's
-    /// transcript of it. When it's an instant command or a learned
-    /// shortcut, Live's answer is silenced and the Mac does it; otherwise
-    /// Live's held answer plays as usual.
-    private func checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: Bool) {
-        let whistleAudio = liveTurnWhistleRecorder.takeRecording()
-        guard liveTurnOnDeviceTranscriber.isRunning || whistleAudio != nil else {
-            liveVoiceClient.isHoldingModelAnswer = false
-            return
-        }
-        let pressNumber = liveVoicePressCount
-        Task { [weak self] in
-            guard let self else { return }
-            let heardText: String
-            if let whistleAudio {
-                // No Apple speech recognition: Whistle hears the short
-                // turn on the Mac (tens of milliseconds).
-                heardText = await DottieNeedleRouter.shared.hear(pcm16AudioData: whistleAudio)
-            } else {
-                // Short while Live's answer waits; longer otherwise, since then
-                // nothing is held up and the text is only for learning.
-                heardText = await self.liveTurnOnDeviceTranscriber.finishAndWaitForFinalText(
-                    timeoutSeconds: holdsLiveAnswer ? 0.6 : 1.5
-                )
-            }
-            guard self.liveVoicePressCount == pressNumber else { return }
-            self.currentLiveTurnOnDeviceText = heardText.isEmpty ? nil : heardText
-
-            var instantPlanOrNil = self.instantLanePlanIfAllowed(for: heardText)
-            // Needle only while Live's answer is held: otherwise it's
-            // already playing and the Mac shouldn't do something else too.
-            if instantPlanOrNil == nil, holdsLiveAnswer, self.isInstantLaneAllowedNow {
-                instantPlanOrNil = await DottieNeedleRouter.shared.plan(for: heardText)
-                guard self.liveVoicePressCount == pressNumber else { return }
-            }
-            guard let instantPlan = instantPlanOrNil else {
-                self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: heardText)?.name
-                self.liveVoiceClient.isHoldingModelAnswer = false
-                return
-            }
-
-            // Only a turn still running on the server will finish later;
-            // its (silenced) end must then be ignored.
-            self.currentLiveTurnWasHandledInstantly = self.liveVoiceClient.isModelTurnInProgress
-            self.liveVoiceClient.cancelCurrentModelResponse()
-            self.liveTurnPlaybackDrainTask?.cancel()
-            self.voiceState = .processing
-            switch await DottieInstantLane.shared.run(instantPlan) {
-            case .done(let doneText):
-                self.finishInstantLaneTurn(userText: heardText, doneText: doneText, inputKind: .voice)
-            case .askGemini:
-                guard self.liveVoicePressCount == pressNumber else { return }
-                self.currentLiveTurnWasHandledInstantly = false
-                self.startLiveTextTurn(recordedUserText: heardText, turnText: heardText)
-            }
-        }
-    }
-
-    /// "Tell me when the tests finish, then open the report": the watch
-    /// fired, so do the "then" part, on the Mac when it's instant, else
-    /// through Gemini.
-    private func runWatchFollowUp(_ followUpText: String, firedText: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            // Don't talk over the user: wait (up to a minute) for a turn in
-            // progress to end.
-            for _ in 0..<120 {
-                let isBusy = self.isLiveTurnInFlight || self.voiceState != .idle || self.buddyDictationManager.isDictationInProgress
-                if !isBusy { break }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            if self.isInstantLaneAllowedNow,
-               let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: followUpText),
-               case .done(let doneText) = await DottieInstantLane.shared.run(instantPlan) {
-                self.finishInstantLaneTurn(userText: "(after \(firedText)) \(followUpText)", doneText: doneText, inputKind: .typed)
-                return
-            }
-            self.sendTypedMessage(
-                "(watch fired) \(followUpText)",
-                turnText: "[a watch the user set just fired: \(firedText). they asked you to do this once it did, so do it now with your tools and tell them in a few words:] \(followUpText)"
-            )
-        }
-    }
-
-    /// Shows and remembers an ask the Mac did itself, like any other turn.
-    private func finishInstantLaneTurn(userText: String, doneText: String, inputKind: ConversationEntry.InputKind) {
-        isLiveTurnInFlight = false
-        voiceState = .idle
-        lastTranscript = userText
-        brain.record(.chat, "user: \(userText)\ndottie: \(doneText)")
-        conversationStore.append(userText: userText, clickyText: doneText, inputKind: inputKind)
-        conversationHistory.append((userTranscript: userText, assistantResponse: doneText))
-        if conversationHistory.count > Self.rememberedExchangeCount {
-            conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
-        }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
-        NSSound(named: "Pop")?.play()
-        notchPresenter.showFinishedResponse(doneText)
-        fireLiveTurnFinishedHandler()
-        scheduleTransientHideIfNeeded()
-    }
-
-    /// Saves what Gemini did this turn as a shortcut when it can be done
-    /// again the same way. Returns a line for the answer card when the
-    /// user named the shortcut.
-    private func learnShortcutFromFinishedLiveTurn(userTranscript: String, typedText: String?, modelTranscript: String) -> String? {
-        guard !currentLiveTurnFinishedToolCalls.isEmpty, !userTranscript.hasPrefix("(") else { return nil }
-        var requestTexts: [String] = []
-        // The Mac's own transcript first: it's what future asks are
-        // matched against.
-        for candidateText in [typedText, currentLiveTurnOnDeviceText, userTranscript] {
-            let trimmedCandidate = (candidateText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedCandidate.isEmpty && !requestTexts.contains(trimmedCandidate) {
-                requestTexts.append(trimmedCandidate)
-            }
-        }
-        let namedShortcutName = currentLiveTurnNamedShortcutName
-        guard let savedPhrase = DottieInstantLane.shared.learnFromFinishedTurn(
-            requestTexts: requestTexts,
-            finishedToolCalls: currentLiveTurnFinishedToolCalls,
-            modelReply: modelTranscript,
-            namedShortcutName: namedShortcutName
-        ), namedShortcutName != nil else { return nil }
-        return "Saved: say “\(savedPhrase)” any time."
-    }
-
-    /// A Live turn from text instead of the mic, with a fresh screen frame.
-    /// `recordedUserText` is what the conversation history keeps.
-    private func startLiveTextTurn(recordedUserText: String, turnText: String, isNarration: Bool = false) {
-        liveTurnPlaybackDrainTask?.cancel()
-        isLiveTurnInFlight = true
-        currentLiveTurnTypedText = recordedUserText
-        currentLiveTurnIsNarration = isNarration
-        voiceState = .processing
-        Task { [weak self] in
-            guard let self else { return }
-            // A guide line needs no new look at the screen.
-            await self.beginLiveTurnWithScreenFrame(includesScreenFrame: !isNarration)
-            self.liveVoiceClient.sendTurnContextText(turnText)
-            self.liveVoiceClient.endUserTurn()
-        }
-    }
-
-    private func fireLiveTurnFinishedHandler() {
-        let handler = liveTurnFinishedHandler
-        liveTurnFinishedHandler = nil
-        handler?()
-    }
-
-    /// Says one line in Dottie's voice and returns once it has been said.
-    /// Waits for any turn in progress to finish first.
-    private func narrate(_ line: String) async {
-        for _ in 0..<80 {
-            let isBusy = isLiveTurnInFlight || voiceState != .idle || buddyDictationManager.isDictationInProgress
-            if !isBusy { break }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-        }
-        if Task.isCancelled { return }
-
-        switch voiceMode {
-        case .classic:
-            notchPresenter.updateLiveCaption(line)
-            speakWithSystemVoice(line)
-            let wordCount = line.split(separator: " ").count
-            try? await Task.sleep(nanoseconds: UInt64(max(1.5, Double(wordCount) * 0.38) * 1_000_000_000))
-            voiceState = .idle
-        case .live:
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                var hasResumed = false
-                let resumeOnce = {
-                    guard !hasResumed else { return }
-                    hasResumed = true
-                    continuation.resume()
-                }
-                fireLiveTurnFinishedHandler()
-                liveTurnFinishedHandler = resumeOnce
-                narrationCount += 1
-                let thisNarration = narrationCount
-                // Never hang the guide on a turn that goes quiet.
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 25_000_000_000)
-                    guard let self, self.narrationCount == thisNarration else { return }
-                    if self.liveTurnFinishedHandler != nil {
-                        self.fireLiveTurnFinishedHandler()
-                    }
-                }
-                startLiveTextTurn(
-                    recordedUserText: "",
-                    turnText: "[dottie guide] this step is already drawn on the screen. say exactly this line out loud, in your own warm voice, and nothing else. no tools.\n\"\(line)\"",
-                    isNarration: true
-                )
-            }
-        }
-    }
-
-    /// With "Show Clicky" off, the cursor overlay appears only for the
-    /// length of an interaction, so pointing is still visible.
-    private func showOverlayTransientlyIfNeeded() {
-        guard !isClickyCursorEnabled && !isOverlayVisible else { return }
-        overlayWindowManager.hasShownOverlayBefore = true
-        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-        isOverlayVisible = true
-    }
-
-    // MARK: - Escape Interrupt
-
-    /// Escape cuts the companion off: stops speech, abandons the answer in
-    /// flight, and drops a recording without sending it. Does nothing while
-    /// the companion is idle, so Escape keeps working normally elsewhere.
-    private func handleEscapeInterrupt() {
-        let isCompanionBusy = voiceState != .idle || isLiveTurnInFlight || isAnySpeechPlaying || screenTaskRunner.isRunning || guide.isActive
-            || teachingTask != nil
-        guard isCompanionBusy else { return }
-
-        DottieLog.notice("⎋ Escape interrupt")
-        ClickyAnalytics.trackEscapeInterrupt()
-
-        pendingKeyboardShortcutStartTask?.cancel()
-        pendingKeyboardShortcutStartTask = nil
-        if buddyDictationManager.isDictationInProgress {
-            buddyDictationManager.cancelCurrentDictation()
-        }
-
-        currentResponseTask?.cancel()
-        currentResponseTask = nil
-        liveTurnPlaybackDrainTask?.cancel()
-        liveVoiceClient.cancelCurrentModelResponse()
-        stopAllSpeechPlayback()
-        clearDetectedElementLocation()
-        screenAnnotationManager.clear()
-        stopScreenTask()
-        stopGuide()
-        stopTeaching(clearingDrawing: true)
-        fireLiveTurnFinishedHandler()
-
-        isLiveTurnInFlight = false
-        currentLiveTurnTypedText = nil
-        voiceState = .idle
-        notchPresenter.collapse()
-        scheduleTransientHideIfNeeded()
-    }
-
-    // MARK: - Higher Model Hand-off
-
-    /// System prompt for the stronger model that answers send_to_higher_model.
-    /// Its text goes back to Gemini Live, which says it out loud.
-    private static let higherModelSystemPrompt = """
-    you're the careful, thorough brain behind dottie, a voice companion on the user's mac. the fast voice model handed you a question it wanted a closer look at. you get full screenshots of every screen. your answer goes back to the voice model, which will say it out loud to the user.
-
-    rules:
-    - answer the question directly and correctly. read small text, code and dense ui carefully.
-    - write for the ear: plain sentences, no markdown, no lists, no code blocks. describe code changes in words.
-    - be as short as the question allows: usually one to three sentences in plain, friendly words. give precise steps only when steps are needed.
-    - if what they want isn't on these screenshots, don't say it's not there or give up: it's usually a click or two away (another tab, a menu, further down, another page of the site or app). say where it most likely is and the first thing to click to get there, and point at that. if you can't tell from the screen, say so and suggest searching the web for it; never make up what isn't visible.
-
-    pointing: if pointing at one ui element would help, append a tag at the very end: [POINT:x,y:label] with integer pixel coordinates in that screenshot's coordinate space (top-left is 0,0; images are labeled with their dimensions), and :screenN if it isn't on the cursor screen. otherwise append [POINT:none].
-    """
-
-    /// Answers a hand-off from Gemini Live with a stronger model and fresh
-    /// screenshots. Points the cursor if the answer says to, and returns the
-    /// text for Live to speak. Errors come back as instructions for Live to
-    /// relay, so the user always hears something.
-    /// Answered the box and text probes in about 2s when the default models
-    /// stalled (checked on a Mac runner, Oct 2026).
-    nonisolated private static let quickBackupModel = "gemini-3.5-flash"
-
-    /// Runs primary; if it hasn't answered after backupAfterSeconds, starts
-    /// backup too and returns whichever answers first.
-    nonisolated private static func firstAnswer<Answer: Sendable>(
-        backupAfterSeconds: Double,
-        primary: @escaping @Sendable () async throws -> Answer,
-        backup: @escaping @Sendable () async throws -> Answer
-    ) async throws -> Answer {
-        try await withThrowingTaskGroup(of: Answer.self) { group in
-            group.addTask { try await primary() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(backupAfterSeconds * 1_000_000_000))
-                return try await backup()
-            }
-            var firstError: Error?
-            while !group.isEmpty {
-                do {
-                    let nextAnswer = try await group.next()
-                    if let nextAnswer {
-                        group.cancelAll()
-                        return nextAnswer
-                    }
-                } catch {
-                    if firstError == nil { firstError = error }
-                }
-            }
-            throw firstError ?? CancellationError()
-        }
-    }
-
-    private func answerWithHigherModel(question: String) async -> String {
-        DottieLog.notice("🧠 Higher model hand-off: \(question)")
-        ClickyAnalytics.trackHigherModelHandoff()
-
-        do {
-            // Sharp enough to read small print and exponents: at 1280 px a
-            // Retina screen's superscripts are a few pixels tall (3 read as 2).
-            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG(maximumDimension: 2560)
-            let labeledImages = labeledScreenImages(from: screenCaptures, annotation: currentTurnAnnotation)
-            // The last few exchanges are enough context for one hard
-            // question, and every screen image already rides along.
-            let historyForAPI = conversationHistory.suffix(6).map { entry in
-                (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-            }
-
-            // The smart model sometimes sits in Google's queue for a minute
-            // or more; if it hasn't answered in 20s, a quick model races it.
-            let geminiAPI = self.geminiAPI
-            let higherModelSystemPrompt = Self.higherModelSystemPrompt
-            let askModel: @Sendable (String) async throws -> (text: String, duration: TimeInterval) = { modelName in
-                try await geminiAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: higherModelSystemPrompt,
-                    conversationHistory: historyForAPI,
-                    userPrompt: question,
-                    modelOverride: modelName,
-                    maxOutputTokens: 2048,
-                    onTextChunk: { _ in }
-                )
-            }
-            // The fastest model that's good enough and not busy right now.
-            let primaryModel = DottieModelPicker.shared.pick(await DottieModelPicker.tier(forQuestion: question))
-            let backupModel = DottieModelPicker.shared.isCoolingDown(Self.quickBackupModel)
-                ? DottieModelPicker.shared.pick(.normal, avoiding: [primaryModel])
-                : Self.quickBackupModel
-            let (fullResponseText, responseDuration) = try await Self.firstAnswer(
-                backupAfterSeconds: 20,
-                primary: { try await askModel(primaryModel) },
-                backup: { try await askModel(backupModel) }
-            )
-            DottieLog.notice("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
-
-            let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
-            let targetScreenCapture: CompanionScreenCapture? = {
-                if let screenNumber = parseResult.screenNumber,
-                   screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                    return screenCaptures[screenNumber - 1]
-                }
-                return screenCaptures.first(where: { $0.isCursorScreen })
-            }()
-            if let pointCoordinate = parseResult.coordinate, let targetScreenCapture, isLiveTurnInFlight {
-                detectedElementScreenLocation = Self.globalScreenLocation(
-                    forScreenshotPixel: pointCoordinate,
-                    in: targetScreenCapture
-                )
-                detectedElementDisplayFrame = targetScreenCapture.displayFrame
-                ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-            }
-
-            let answerText = parseResult.spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return answerText.isEmpty
-                ? "the deeper look came back empty. tell the user briefly and answer as best you can from what you see."
-                : answerText
-        } catch {
-            DottieLog.warning("⚠️ Higher model hand-off failed: \(error)")
-            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-            return "the deeper look failed (\(error.localizedDescription)). tell the user in one short line, then answer as best you can from what you see."
-        }
-    }
-
-    // MARK: - Classic Voice Pipeline (Apple Speech → Gemini Flash → Gemini TTS)
-
-    /// Captures a screenshot, sends it along with the transcript to Gemini,
-    /// and plays the response aloud via Gemini TTS. The cursor stays in
-    /// the spinner/processing state until TTS audio begins playing.
-    /// The response may include a [POINT:x,y:label] tag which triggers
-    /// the buddy to fly to that element on screen.
-    private func sendTranscriptToGeminiWithScreenshot(
-        transcript: String,
-        inputKind: ConversationEntry.InputKind = .voice,
-        checksInstantLane: Bool = true
-    ) {
-        // Typed turns were already checked in sendTypedMessage.
-        if inputKind == .voice && DottieAdminMode.shared.handleSecretPhraseIfSaid(transcript, companionManager: self) {
-            voiceState = .idle
-            return
-        }
-        if inputKind == .voice, checksInstantLane, isInstantLaneAllowedNow,
-           DottieInstantLane.shared.plan(for: transcript) != nil || DottieNeedleRouter.shared.isAvailable {
-            Task { [weak self] in
-                guard let self else { return }
-                guard let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: transcript) else {
-                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
-                    return
-                }
-                switch await DottieInstantLane.shared.run(instantPlan) {
-                case .done(let doneText):
-                    self.finishInstantLaneTurn(userText: transcript, doneText: doneText, inputKind: .voice)
-                case .askGemini:
-                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
-                }
-            }
-            return
-        }
-        currentClassicTurnInputKind = inputKind
-        notchPresenter.updateLiveCaption("")
-        currentResponseTask?.cancel()
-        stopAllSpeechPlayback()
-
-        currentResponseTask = Task {
-            // Stay in processing (spinner) state — no streaming text displayed
-            voiceState = .processing
-
-            do {
-                // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-
-                guard !Task.isCancelled else { return }
-
-                // Label each image with its pixel dimensions so the model's
-                // coordinate space matches the image it sees. A voice turn
-                // where the user circled something gets the ring drawn in.
-                let turnAnnotation = inputKind == .voice ? currentTurnAnnotation : nil
-                let labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
-                let promptForModel = turnAnnotation == nil
-                    ? transcript
-                    : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
-
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.classicVoiceSystemPrompt(personality: selectedPersonality)
-                        + (brain.profileForPrompt.isEmpty ? "" : "\n\nwhat your second brain knows about the user:\n" + brain.profileForPrompt),
-                    conversationHistory: historyForAPI,
-                    userPrompt: promptForModel,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
-                    }
-                )
-
-                guard !Task.isCancelled else { return }
-
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
-                let spokenText = parseResult.spokenText
-
-                // Switch to idle BEFORE setting the location so the triangle
-                // becomes visible and can fly to the target. The spinner
-                // hides the triangle otherwise.
-                let hasPointCoordinate = parseResult.coordinate != nil
-                if hasPointCoordinate {
-                    voiceState = .idle
-                }
-
-                // Pick the screen capture matching the screen number,
-                // falling back to the cursor screen if not specified.
-                let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                        return screenCaptures[screenNumber - 1]
-                    }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
-                }()
-
-                if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
-                    detectedElementScreenLocation = Self.globalScreenLocation(
-                        forScreenshotPixel: pointCoordinate,
-                        in: targetScreenCapture
-                    )
-                    detectedElementDisplayFrame = targetScreenCapture.displayFrame
-                    ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    DottieLog.notice("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-                } else {
-                    DottieLog.notice("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
-                }
-
-                // Save the exchange with the point tag stripped so it doesn't
-                // confuse future context.
-                conversationHistory.append((
-                    userTranscript: transcript,
-                    assistantResponse: spokenText
-                ))
-                if conversationHistory.count > Self.rememberedExchangeCount {
-                    conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
-                }
-
-                DottieLog.notice("🧠 Conversation history: \(conversationHistory.count) exchanges")
-
-                ClickyAnalytics.trackAIResponseReceived(response: spokenText)
-                brain.record(.chat, "user: \(transcript)\ndottie: \(spokenText)")
-                conversationStore.append(
-                    userText: transcript,
-                    clickyText: spokenText,
-                    inputKind: currentClassicTurnInputKind
-                )
-                notchPresenter.updateLiveCaption(spokenText)
-
-                // Keep the spinner until audio actually starts playing.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await geminiTTSClient.speakText(spokenText)
-                        voiceState = .responding
-                    } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        DottieLog.warning("⚠️ Gemini TTS error, falling back to system voice: \(error)")
-                        speakWithSystemVoice(spokenText)
-                    }
-                }
-            } catch is CancellationError {
-                // User spoke again — response was interrupted
-            } catch {
-                ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-                DottieLog.warning("⚠️ Companion response error: \(error)")
-                doOnMacOrSpeakConnectionError(requestText: transcript, inputKind: currentClassicTurnInputKind)
-            }
-
-            if !Task.isCancelled {
-                voiceState = .idle
-                notchPresenter.showFinishedResponse(notchPresenter.liveCaptionText)
-                scheduleTransientHideIfNeeded()
-            }
-        }
-    }
-
     // MARK: - Shared Helpers
 
     /// Converts a pixel position in a screenshot (top-left origin) to a global
@@ -4206,7 +2647,7 @@ final class CompanionManager: ObservableObject {
         )
     }
 
-    private var isAnySpeechPlaying: Bool {
+    var isAnySpeechPlaying: Bool {
         switch voiceMode {
         case .live:
             return liveVoiceClient.isModelAudioPlaying
@@ -4215,7 +2656,7 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private func stopAllSpeechPlayback() {
+    func stopAllSpeechPlayback() {
         liveVoiceClient.interruptModelSpeech()
         if voiceMode == .classic {
             geminiTTSClient.stopPlayback()
@@ -4227,7 +2668,7 @@ final class CompanionManager: ObservableObject {
     /// waits for speech and any pointing animation to finish, then
     /// fades out the overlay after a 1-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
-    private func scheduleTransientHideIfNeeded() {
+    func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
         // A roaming pet keeps the overlay up.
         if cursorPet.costume?.roams == true { return }
@@ -4258,7 +2699,7 @@ final class CompanionManager: ObservableObject {
     /// still hears what went wrong.
     private let systemSpeechSynthesizer = NSSpeechSynthesizer()
 
-    private func speakWithSystemVoice(_ text: String) {
+    func speakWithSystemVoice(_ text: String) {
         systemSpeechSynthesizer.startSpeaking(text)
         voiceState = .responding
     }
@@ -4266,7 +2707,7 @@ final class CompanionManager: ObservableObject {
     /// Gemini couldn't answer. When the ask was a Mac action (open an app,
     /// music, a reminder…), Needle does it anyway and says so; otherwise
     /// the usual "try again" line.
-    private func doOnMacOrSpeakConnectionError(requestText: String, inputKind: ConversationEntry.InputKind) {
+    func doOnMacOrSpeakConnectionError(requestText: String, inputKind: ConversationEntry.InputKind) {
         let trimmedRequestText = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRequestText.isEmpty, isInstantLaneAllowedNow, DottieInstantLane.areInstantCommandsEnabled else {
             speakConnectionErrorFallback()
@@ -4288,271 +2729,5 @@ final class CompanionManager: ObservableObject {
             ? "Gemini's swamped right now. Give it a second and try me again."
             : "I'm not connected yet. Open Settings, add the server address under Connection, and try again."
         speakWithSystemVoice(utterance)
-    }
-
-    // MARK: - Point Tag Parsing
-
-    /// Result of parsing a [POINT:...] tag from the model's response.
-    struct PointingParseResult {
-        /// The response text with the [POINT:...] tag removed — this is what gets spoken.
-        let spokenText: String
-        /// The parsed pixel coordinate, or nil if the model said "none" or no tag was found.
-        let coordinate: CGPoint?
-        /// Short label describing the element (e.g. "run button"), or "none".
-        let elementLabel: String?
-        /// Which screen the coordinate refers to (1-based), or nil to default to cursor screen.
-        let screenNumber: Int?
-    }
-
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of the model's response.
-    /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
-    static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
-        let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
-
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) else {
-            // No tag found at all
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
-        }
-
-        // Remove the tag from the spoken text
-        let tagRange = Range(match.range, in: responseText)!
-        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Check if it's [POINT:none]
-        guard match.numberOfRanges >= 3,
-              let xRange = Range(match.range(at: 1), in: responseText),
-              let yRange = Range(match.range(at: 2), in: responseText),
-              let x = Double(responseText[xRange]),
-              let y = Double(responseText[yRange]) else {
-            return PointingParseResult(spokenText: spokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
-        }
-
-        var elementLabel: String? = nil
-        if match.numberOfRanges >= 4, let labelRange = Range(match.range(at: 3), in: responseText) {
-            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
-        }
-
-        var screenNumber: Int? = nil
-        if match.numberOfRanges >= 5, let screenRange = Range(match.range(at: 4), in: responseText) {
-            screenNumber = Int(responseText[screenRange])
-        }
-
-        return PointingParseResult(
-            spokenText: spokenText,
-            coordinate: CGPoint(x: x, y: y),
-            elementLabel: elementLabel,
-            screenNumber: screenNumber
-        )
-    }
-
-    // MARK: - Onboarding Video
-
-    /// Sets up the onboarding video player, starts playback, and schedules
-    /// the demo interaction at 40s. Called by BlueCursorView when onboarding starts.
-    ///
-    /// The video URL comes from Info.plist (OnboardingVideoURL); with none set, it skips the video
-    /// and runs the pointing demo and the "try talking" prompt straight away.
-    func setupOnboardingVideo() {
-        guard let videoURLString = AppBundleConfiguration.stringValue(forKey: "OnboardingVideoURL"),
-              let videoURL = URL(string: videoURLString) else {
-            runOnboardingWithoutVideo()
-            return
-        }
-
-        let player = AVPlayer(url: videoURL)
-        player.isMuted = false
-        player.volume = 0.0
-        self.onboardingVideoPlayer = player
-        self.showOnboardingVideo = true
-        self.onboardingVideoOpacity = 0.0
-
-        // Start playback immediately — the video plays while invisible,
-        // then we fade in both the visual and audio over 1s.
-        player.play()
-
-        // Wait for SwiftUI to mount the view, then set opacity to 1.
-        // The .animation modifier on the view handles the actual animation.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            self.onboardingVideoOpacity = 1.0
-            // Fade audio volume from 0 → 1 over 2s to match visual fade
-            self.fadeInVideoAudio(player: player, targetVolume: 1.0, duration: 2.0)
-        }
-
-        // At 40 seconds into the video, trigger the onboarding demo where
-        // Clicky flies to something interesting on screen and comments on it
-        let demoTriggerTime = CMTime(seconds: 40, preferredTimescale: 600)
-        onboardingDemoTimeObserver = player.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: demoTriggerTime)],
-            queue: .main
-        ) { [weak self] in
-            ClickyAnalytics.trackOnboardingDemoTriggered()
-            self?.performOnboardingDemoInteraction()
-        }
-
-        // Fade out and clean up when the video finishes
-        onboardingVideoEndObserver = NotificationCenter.default.addObserver(
-            forName: AVPlayerItem.didPlayToEndTimeNotification,
-            object: player.currentItem,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            ClickyAnalytics.trackOnboardingVideoCompleted()
-            self.onboardingVideoOpacity = 0.0
-            // Wait for the 2s fade-out animation to complete before tearing down
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.tearDownOnboardingVideo()
-                // After the video disappears, stream in the prompt to try talking
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    self.startOnboardingPromptStream()
-                }
-            }
-        }
-    }
-
-    private func runOnboardingWithoutVideo() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            ClickyAnalytics.trackOnboardingDemoTriggered()
-            self?.performOnboardingDemoInteraction()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) { [weak self] in
-            self?.startOnboardingPromptStream()
-        }
-    }
-
-    func tearDownOnboardingVideo() {
-        showOnboardingVideo = false
-        if let timeObserver = onboardingDemoTimeObserver {
-            onboardingVideoPlayer?.removeTimeObserver(timeObserver)
-            onboardingDemoTimeObserver = nil
-        }
-        onboardingVideoPlayer?.pause()
-        onboardingVideoPlayer = nil
-        if let observer = onboardingVideoEndObserver {
-            NotificationCenter.default.removeObserver(observer)
-            onboardingVideoEndObserver = nil
-        }
-    }
-
-    private func startOnboardingPromptStream() {
-        let message = "press \(globalPushToTalkShortcutMonitor.talkHotkey.displayText) and introduce yourself"
-        onboardingPromptText = ""
-        showOnboardingPrompt = true
-        onboardingPromptOpacity = 0.0
-
-        withAnimation(.easeIn(duration: 0.4)) {
-            onboardingPromptOpacity = 1.0
-        }
-
-        var currentIndex = 0
-        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { timer in
-            guard currentIndex < message.count else {
-                timer.invalidate()
-                // Auto-dismiss after 10 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    guard self.showOnboardingPrompt else { return }
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.onboardingPromptOpacity = 0.0
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        self.showOnboardingPrompt = false
-                        self.onboardingPromptText = ""
-                    }
-                }
-                return
-            }
-            let index = message.index(message.startIndex, offsetBy: currentIndex)
-            self.onboardingPromptText.append(message[index])
-            currentIndex += 1
-        }
-    }
-
-    /// Gradually raises an AVPlayer's volume from its current level to the
-    /// target over the specified duration, creating a smooth audio fade-in.
-    private func fadeInVideoAudio(player: AVPlayer, targetVolume: Float, duration: Double) {
-        let steps = 20
-        let stepInterval = duration / Double(steps)
-        let volumeIncrement = (targetVolume - player.volume) / Float(steps)
-        var stepsRemaining = steps
-
-        Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { timer in
-            stepsRemaining -= 1
-            player.volume += volumeIncrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.volume = targetVolume
-            }
-        }
-    }
-
-    // MARK: - Onboarding Demo Interaction
-
-    private static let onboardingDemoSystemPrompt = """
-    you're dottie, a small blue cursor buddy living on the user's screen. you're showing off during onboarding — look at their screen and find ONE specific, concrete thing to point at. pick something with a clear name or identity: a specific app icon (say its name), a specific word or phrase of text you can read, a specific filename, a specific button label, a specific tab title, a specific image you can describe. do NOT point at vague things like "a window" or "some text" — be specific about exactly what you see.
-
-    make a short quirky 3-6 word observation about the specific thing you picked — something fun, playful, or curious that shows you actually read/recognized it. no emojis ever. NEVER quote or repeat text you see on screen — just react to it. keep it to 6 words max, no exceptions.
-
-    CRITICAL COORDINATE RULE: you MUST only pick elements near the CENTER of the screen. your x coordinate must be between 20%-80% of the image width. your y coordinate must be between 20%-80% of the image height. do NOT pick anything in the top 20%, bottom 20%, left 20%, or right 20% of the screen. no menu bar items, no dock icons, no sidebar items, no items near any edge. only things clearly in the middle area of the screen. if the only interesting things are near the edges, pick something boring in the center instead.
-
-    respond with ONLY your short comment followed by the coordinate tag. nothing else. all lowercase.
-
-    format: your comment [POINT:x,y:label]
-
-    the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. origin (0,0) is top-left. x increases rightward, y increases downward.
-    """
-
-    /// Captures a screenshot and asks Gemini to find something interesting to
-    /// point at, then triggers the buddy's flight animation. Used during
-    /// onboarding to demo the pointing feature while the intro video plays.
-    func performOnboardingDemoInteraction() {
-        // Don't interrupt an active voice response
-        guard voiceState == .idle || voiceState == .responding else { return }
-
-        Task {
-            do {
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-
-                // Only send the cursor screen so the model can't pick something
-                // on a different monitor that we can't point at.
-                guard let cursorScreenCapture = screenCaptures.first(where: { $0.isCursorScreen }) else {
-                    DottieLog.notice("🎯 Onboarding demo: no cursor screen found")
-                    return
-                }
-
-                let dimensionInfo = " (image dimensions: \(cursorScreenCapture.screenshotWidthInPixels)x\(cursorScreenCapture.screenshotHeightInPixels) pixels)"
-                let labeledImages = [(data: cursorScreenCapture.imageData, label: cursorScreenCapture.label + dimensionInfo)]
-
-                let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.onboardingDemoSystemPrompt,
-                    userPrompt: "look around my screen and find something interesting to point at",
-                    onTextChunk: { _ in }
-                )
-
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
-
-                guard let pointCoordinate = parseResult.coordinate else {
-                    DottieLog.notice("🎯 Onboarding demo: no element to point at")
-                    return
-                }
-
-                let globalLocation = Self.globalScreenLocation(
-                    forScreenshotPixel: pointCoordinate,
-                    in: cursorScreenCapture
-                )
-                let displayFrame = cursorScreenCapture.displayFrame
-
-                // Set custom bubble text so the pointing animation uses the model's
-                // comment instead of a random phrase
-                detectedElementBubbleText = parseResult.spokenText
-                detectedElementScreenLocation = globalLocation
-                detectedElementDisplayFrame = displayFrame
-                DottieLog.notice("🎯 Onboarding demo: pointing at \"\(parseResult.elementLabel ?? "element")\" — \"\(parseResult.spokenText)\"")
-            } catch {
-                DottieLog.warning("⚠️ Onboarding demo error: \(error)")
-            }
-        }
     }
 }
