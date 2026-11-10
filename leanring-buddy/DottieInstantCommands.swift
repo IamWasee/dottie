@@ -658,7 +658,7 @@ enum DottieInstantCommands {
         var focusedWindowValue: AnyObject?
         if AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
            let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() {
-            return (focusedWindowValue as! AXUIElement)
+            return DottieAccessibilityCast.element(focusedWindowValue)
         }
         var windowListValue: AnyObject?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXWindowsAttribute as CFString, &windowListValue) == .success,
@@ -680,8 +680,8 @@ enum DottieInstantCommands {
               let positionValue, let sizeValue else { return nil }
         var axPosition = CGPoint.zero
         var windowSize = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &axPosition),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &windowSize) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &axPosition),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &windowSize) else { return nil }
         return CGRect(x: axPosition.x, y: primaryScreenHeight - axPosition.y - windowSize.height,
                       width: windowSize.width, height: windowSize.height)
     }

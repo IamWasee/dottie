@@ -42,8 +42,7 @@ struct DictationFocusContext {
         let systemWideElement = AXUIElementCreateSystemWide()
         var focusedElementValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElementValue) == .success,
-              let focusedElementValue,
-              CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() else {
+              let focusedElement = DottieAccessibilityCast.element(focusedElementValue) else {
             return DictationFocusContext(
                 element: nil,
                 processIdentifier: frontmostApplication.processIdentifier,
@@ -54,7 +53,6 @@ struct DictationFocusContext {
                 textBeforeCursor: ""
             )
         }
-        let focusedElement = focusedElementValue as! AXUIElement
 
         var elementProcessIdentifier: pid_t = frontmostApplication.processIdentifier
         AXUIElementGetPid(focusedElement, &elementProcessIdentifier)
@@ -96,7 +94,7 @@ struct DictationFocusContext {
            let selectedRangeValue,
            CFGetTypeID(selectedRangeValue) == AXValueGetTypeID() {
             var selectedRange = CFRange()
-            if AXValueGetValue(selectedRangeValue as! AXValue, .cfRange, &selectedRange) {
+            if let selectedRangeAXValue = DottieAccessibilityCast.axValue(selectedRangeValue), AXValueGetValue(selectedRangeAXValue, .cfRange, &selectedRange) {
                 cursorLocation = min(max(0, selectedRange.location), fullText.utf16.count)
             }
         }

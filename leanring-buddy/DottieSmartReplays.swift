@@ -333,8 +333,7 @@ final class DottieSmartReplayRecorder {
     private static func isPasswordFieldFocused() -> Bool {
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
-              let focusedValue, CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else { return false }
-        let focusedElement = focusedValue as! AXUIElement
+              let focusedElement = DottieAccessibilityCast.element(focusedValue) else { return false }
         return DottieAX.string(focusedElement, kAXSubroleAttribute) == (kAXSecureTextFieldSubrole as String)
     }
 

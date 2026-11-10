@@ -359,7 +359,7 @@ final class DottieFocus: ObservableObject {
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
               let windowValue, CFGetTypeID(windowValue) == AXUIElementGetTypeID() else { return nil }
         var titleValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success else { return nil }
+        guard let windowElement = DottieAccessibilityCast.element(windowValue), AXUIElementCopyAttributeValue(windowElement, kAXTitleAttribute as CFString, &titleValue) == .success else { return nil }
         return titleValue as? String
     }
 

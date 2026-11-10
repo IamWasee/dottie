@@ -468,9 +468,9 @@ final class DottieCursorPet: ObservableObject {
         AXUIElementSetMessagingTimeout(applicationElement, 0.2)
         var focusedWindowValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
-              let focusedWindowValue, CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID() else { return nil }
+              let focusedWindowElement = DottieAccessibilityCast.element(focusedWindowValue) else { return nil }
 
-        var queue: [(element: AXUIElement, depth: Int)] = [(focusedWindowValue as! AXUIElement, 0)]
+        var queue: [(element: AXUIElement, depth: Int)] = [(focusedWindowElement, 0)]
         var visitedCount = 0
         while !queue.isEmpty && visitedCount < 500 {
             let (element, depth) = queue.removeFirst()
@@ -511,8 +511,8 @@ final class DottieCursorPet: ObservableObject {
               let positionValue, let sizeValue else { return nil }
         var position = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        guard let positionAXValue = DottieAccessibilityCast.axValue(positionValue), AXValueGetValue(positionAXValue, .cgPoint, &position),
+              let sizeAXValue = DottieAccessibilityCast.axValue(sizeValue), AXValueGetValue(sizeAXValue, .cgSize, &size) else { return nil }
         return CGRect(origin: position, size: size)
     }
 }

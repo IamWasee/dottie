@@ -233,9 +233,7 @@ enum DottieScreenActionPerformer {
         let systemWideElement = AXUIElementCreateSystemWide()
         var focusedElementValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElementValue) == .success,
-              let focusedElementValue,
-              CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() else { return false }
-        let focusedElement = focusedElementValue as! AXUIElement
+              let focusedElement = DottieAccessibilityCast.element(focusedElementValue) else { return false }
         for attributeName in [kAXRoleAttribute, kAXSubroleAttribute] {
             var attributeValue: CFTypeRef?
             if AXUIElementCopyAttributeValue(focusedElement, attributeName as CFString, &attributeValue) == .success,
