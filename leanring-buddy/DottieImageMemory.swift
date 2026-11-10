@@ -276,6 +276,6 @@ final class DottieImageMemory: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let indexData = try? encoder.encode(items) else { return }
-        try? indexData.write(to: indexURL, options: .atomic)
+        DottieFileSaver.save(indexData, to: indexURL)
     }
 }

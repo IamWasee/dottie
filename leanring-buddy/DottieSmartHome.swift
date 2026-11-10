@@ -853,7 +853,7 @@ final class DottieSmartHome: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         if let data = try? encoder.encode(setup) {
-            try? data.write(to: setupURL, options: .atomic)
+            DottieFileSaver.save(data, to: setupURL)
         }
     }
 

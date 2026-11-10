@@ -139,7 +139,7 @@ final class DottieBrain: ObservableObject {
             brainAnswers.removeFirst(brainAnswers.count - Self.maximumBrainAnswerCount)
         }
         if let answersData = try? JSONEncoder().encode(brainAnswers) {
-            try? answersData.write(to: brainAnswersFileURL, options: .atomic)
+            DottieFileSaver.save(answersData, to: brainAnswersFileURL)
         }
         onProfileChanged?(profileText)
     }
@@ -233,7 +233,7 @@ final class DottieBrain: ObservableObject {
 
     func saveProfile(_ newProfileText: String) {
         profileText = newProfileText.trimmingCharacters(in: .whitespacesAndNewlines)
-        try? profileText.write(to: profileFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: profileText, to: profileFileURL)
         onProfileChanged?(profileText)
     }
 
@@ -305,7 +305,7 @@ final class DottieBrain: ObservableObject {
             }
         }
         mcpServersJSON = trimmedJSON
-        try? trimmedJSON.write(to: Self.mcpFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: trimmedJSON, to: Self.mcpFileURL)
         // Claude helpers read their servers from Claude Code's own list, so
         // the Tools store copies these there too.
         DottieToolsStore.shared.scheduleHelperSync(delay: 1.5)
@@ -340,7 +340,7 @@ final class DottieBrain: ObservableObject {
 
     private func saveFolders() {
         if let foldersData = try? JSONEncoder().encode(folderPaths) {
-            try? foldersData.write(to: foldersFileURL, options: .atomic)
+            DottieFileSaver.save(foldersData, to: foldersFileURL)
         }
     }
 
@@ -365,7 +365,7 @@ final class DottieBrain: ObservableObject {
             _ = try? fileHandle.seekToEnd()
             try? fileHandle.write(contentsOf: lineData)
         } else {
-            try? lineData.write(to: journalFileURL, options: .atomic)
+            DottieFileSaver.save(lineData, to: journalFileURL)
         }
     }
 
@@ -381,7 +381,7 @@ final class DottieBrain: ObservableObject {
             trimmedJournalData.append(lineData)
             trimmedJournalData.append(UInt8(ascii: "\n"))
         }
-        try? trimmedJournalData.write(to: journalFileURL, options: .atomic)
+        DottieFileSaver.save(trimmedJournalData, to: journalFileURL)
     }
 
     private func loadJournal() -> [Memory] {

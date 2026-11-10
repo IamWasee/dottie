@@ -201,7 +201,7 @@ final class DottieNotesBoard: ObservableObject {
         }
         guard let notesFileURL else { return }
         try? FileManager.default.createDirectory(at: Self.notesFolderURL, withIntermediateDirectories: true)
-        try? markdown.write(to: notesFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: markdown, to: notesFileURL)
     }
 
     func revealSavedNotes() {

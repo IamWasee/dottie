@@ -491,7 +491,7 @@ final class ClickyRoutineStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let routinesData = try? encoder.encode(routines) else { return }
-        try? routinesData.write(to: routinesFileURL, options: .atomic)
+        DottieFileSaver.save(routinesData, to: routinesFileURL)
     }
 }
 

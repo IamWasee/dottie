@@ -187,7 +187,7 @@ final class DottieScreenLessons {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(lessons) {
-            try? data.write(to: fileURL, options: .atomic)
+            DottieFileSaver.save(data, to: fileURL)
         }
     }
 

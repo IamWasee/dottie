@@ -130,7 +130,7 @@ final class DottieLearnedShortcutStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let shortcutsData = try? encoder.encode(shortcuts) else { return }
         // Atomic, so a crash mid-write can't wipe what was learned before.
-        try? shortcutsData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(shortcutsData, to: fileURL)
     }
 
     func shortcut(matching normalizedRequest: String) -> DottieLearnedShortcut? {

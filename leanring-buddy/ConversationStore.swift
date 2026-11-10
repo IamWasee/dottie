@@ -111,6 +111,6 @@ final class ConversationStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let encodedData = try? encoder.encode(entries) else { return }
-        try? encodedData.write(to: storageFileURL, options: .atomic)
+        DottieFileSaver.save(encodedData, to: storageFileURL)
     }
 }

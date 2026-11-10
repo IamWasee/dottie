@@ -315,7 +315,7 @@ final class DottieMeetingRecorder: ObservableObject {
         let header = "_\(meetingStart.formatted(date: .complete, time: .shortened)) · \(minutes) min_\n\n"
         let fileText = summary.replacingOccurrences(of: "\n", with: "\n" + header, options: [], range: summary.range(of: "\n"))
             + "\n\n## Transcript\n" + transcript + "\n"
-        try? fileText.write(to: fileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: fileText, to: fileURL)
         reloadPastMeetings()
         onMeetingSaved?(title, summary, fileURL)
     }

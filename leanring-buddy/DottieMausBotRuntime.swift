@@ -219,7 +219,7 @@ final class DottieMausBotRuntime {
 
         DottieMausBotPaths.ensureFoldersExist()
         let messageFileURL = DottieMausBotPaths.messageFilesFolderURL.appendingPathComponent("\(UUID().uuidString).md")
-        try? message.write(to: messageFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: message, to: messageFileURL)
 
         let eventStream = self.eventStream
         let result = await DottieMausBotCLI.run(

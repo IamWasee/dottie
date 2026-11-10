@@ -242,6 +242,6 @@ final class DottieGameMovement {
 
     private func save() {
         guard let contentsData = try? JSONEncoder().encode(contents) else { return }
-        try? contentsData.write(to: saveURL, options: .atomic)
+        DottieFileSaver.save(contentsData, to: saveURL)
     }
 }

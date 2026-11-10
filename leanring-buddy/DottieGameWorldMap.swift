@@ -513,7 +513,7 @@ final class DottieGameWorldMap {
         landmarks.append(landmark)
         landmarkPrints[landmark.fileName] = newestSeenView.featurePrint
         if let landmarksData = try? JSONEncoder().encode(landmarks) {
-            try? landmarksData.write(to: landmarksFolderURL.appendingPathComponent("landmarks.json"), options: .atomic)
+            DottieFileSaver.save(landmarksData, to: landmarksFolderURL.appendingPathComponent("landmarks.json"))
         }
     }
 
@@ -553,7 +553,7 @@ final class DottieGameWorldMap {
         spawnViews.append(spawnView)
         spawnViewPrints[spawnView.fileName] = featurePrint
         if let spawnData = try? JSONEncoder().encode(spawnViews) {
-            try? spawnData.write(to: spawnFolderURL.appendingPathComponent("views.json"), options: .atomic)
+            DottieFileSaver.save(spawnData, to: spawnFolderURL.appendingPathComponent("views.json"))
         }
     }
 
@@ -987,7 +987,7 @@ final class DottieGameWorldMap {
             learnedBlockedCells: learnedBlockedCells.map { [$0.gridX, $0.gridY] }
         )
         if let summaryData = try? encoder.encode(summary) {
-            try? summaryData.write(to: mapFolderURL.appendingPathComponent("map.json"), options: .atomic)
+            DottieFileSaver.save(summaryData, to: mapFolderURL.appendingPathComponent("map.json"))
         }
         // Turning a million blocks into bytes took the main thread for a
         // moment every two minutes, freezing the game. The blocks are
@@ -1058,7 +1058,7 @@ final class DottieGameWorldMap {
             let color = detailColors[key] ?? 0x808080
             detailData.append(contentsOf: [UInt8((color >> 16) & 0xFF), UInt8((color >> 8) & 0xFF), UInt8(color & 0xFF)])
         }
-        try? detailData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(detailData, to: fileURL)
     }
 
     private static func loadDetailVoxels(from fileURL: URL) -> (hits: [Int64: UInt16], colors: [Int64: UInt32]) {
@@ -1089,7 +1089,7 @@ final class DottieGameWorldMap {
             withUnsafeBytes(of: key.littleEndian) { voxelData.append(contentsOf: $0) }
             withUnsafeBytes(of: hits.littleEndian) { voxelData.append(contentsOf: $0) }
         }
-        try? voxelData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(voxelData, to: fileURL)
     }
 
     private static func loadVoxels(from fileURL: URL) -> [Int64: UInt16] {

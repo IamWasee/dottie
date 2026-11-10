@@ -554,7 +554,7 @@ final class DottieGameplaySessionWriter: @unchecked Sendable {
 
     nonisolated private func saveSessionDetails() {
         guard let detailsData = try? JSONSerialization.data(withJSONObject: sessionDetails, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? detailsData.write(to: sessionFolderURL.appendingPathComponent("session.json"), options: .atomic)
+        DottieFileSaver.save(detailsData, to: sessionFolderURL.appendingPathComponent("session.json"))
     }
 
     nonisolated private func appendLine(_ line: [String: Any], to fileHandle: FileHandle) {

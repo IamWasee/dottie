@@ -187,7 +187,7 @@ final class DottieHabits: ObservableObject {
             _ = try? fileHandle.seekToEnd()
             try? fileHandle.write(contentsOf: line)
         } else {
-            try? line.write(to: fileURL, options: .atomic)
+            DottieFileSaver.save(line, to: fileURL)
         }
     }
 
@@ -384,7 +384,7 @@ final class DottieHabits: ObservableObject {
                 rewrittenData.append(lineData)
                 rewrittenData.append(0x0A)
             }
-            try? rewrittenData.write(to: appUseFileURL, options: .atomic)
+            DottieFileSaver.save(rewrittenData, to: appUseFileURL)
         }
         return keptAppUses
     }
@@ -399,7 +399,7 @@ final class DottieHabits: ObservableObject {
     private func saveHabits() {
         let saved = SavedHabits(habits: habits, forgottenKeys: Array(forgottenKeys).sorted())
         guard let fileData = try? Self.makeEncoder().encode(saved) else { return }
-        try? fileData.write(to: habitsFileURL, options: .atomic)
+        DottieFileSaver.save(fileData, to: habitsFileURL)
     }
 
     /// Clears every routine and the app log ("forget everything").

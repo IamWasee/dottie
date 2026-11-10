@@ -47,7 +47,7 @@ enum DottieGameMapPicture {
     static func write(for worldMap: DottieGameWorldMap) {
         let floorPlan = DottieGameNavigator.floorPlan(of: worldMap)
         if let pictureData = picture(of: worldMap, floorPlan: floorPlan) {
-            try? pictureData.write(to: worldMap.mapFolderURL.appendingPathComponent(pictureFileName), options: .atomic)
+            DottieFileSaver.save(pictureData, to: worldMap.mapFolderURL.appendingPathComponent(pictureFileName))
         }
         try? reportText(of: worldMap, floorPlan: floorPlan)
             .write(to: worldMap.mapFolderURL.appendingPathComponent(reportFileName), atomically: true, encoding: .utf8)
@@ -155,8 +155,8 @@ enum DottieGameMapPicture {
             addBox(minX: -0.2, minY: -0.2, minHeight: 0, width: 0.4, depth: 0.4, height: 4)
             modelLines.append("usemtl dottie")
             addBox(minX: dottiePosition.x - 0.15, minY: dottiePosition.y - 0.15, minHeight: 0, width: 0.3, depth: 0.3, height: 3)
-            try? (materialLines.joined(separator: "\n") + "\n").write(to: materialsURL, atomically: true, encoding: .utf8)
-            try? (modelLines.joined(separator: "\n") + "\n").write(to: modelURL, atomically: true, encoding: .utf8)
+            DottieFileSaver.save(text: (materialLines.joined(separator: "\n") + "\n"), to: materialsURL)
+            DottieFileSaver.save(text: (modelLines.joined(separator: "\n") + "\n"), to: modelURL)
             writeOpenableCopy(ofObjModel: modelURL)
         }
     }
