@@ -62,8 +62,7 @@ final class DottieFormDetails: ObservableObject {
         try? FileManager.default.createDirectory(at: dottieFolderURL, withIntermediateDirectories: true)
         fileURL = dottieFolderURL.appendingPathComponent("FormDetails.json")
         isRememberingEnabled = UserDefaults.standard.object(forKey: Self.rememberingEnabledDefaultsKey) as? Bool ?? true
-        details = (try? Data(contentsOf: fileURL))
-            .flatMap { try? JSONDecoder().decode([Detail].self, from: $0) } ?? []
+        details = DottieFileLoader.load([Detail].self, from: fileURL) ?? []
     }
 
     // MARK: - Reading

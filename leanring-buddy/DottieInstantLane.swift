@@ -103,8 +103,7 @@ final class DottieLearnedShortcutStore: ObservableObject {
     private func load() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let savedData = try? Data(contentsOf: fileURL),
-              let savedShortcuts = try? decoder.decode([DottieLearnedShortcut].self, from: savedData) else { return }
+        guard let savedShortcuts = DottieFileLoader.load([DottieLearnedShortcut].self, from: fileURL, decoder: decoder) else { return }
         let oldestKeptDate = Date().addingTimeInterval(-Self.unusedLearnedShortcutLifetime)
         shortcuts = savedShortcuts.filter { shortcut in
             shortcut.isNamedByUser

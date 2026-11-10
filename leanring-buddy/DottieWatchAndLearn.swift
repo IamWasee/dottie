@@ -323,8 +323,7 @@ final class DottieWatchAndLearn: ObservableObject {
     private func load() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let storeData = try? Data(contentsOf: Self.storeURL),
-              let savedHowTos = try? decoder.decode([DottieWatchedHowTo].self, from: storeData) else { return }
+        guard let savedHowTos = DottieFileLoader.load([DottieWatchedHowTo].self, from: Self.storeURL, decoder: decoder) else { return }
         howTos = savedHowTos
     }
 

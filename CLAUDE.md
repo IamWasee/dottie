@@ -268,6 +268,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieLog.swift` | ~100 | Dottie's log. Lines go to the Mac's own log (Console, or `log show --predicate 'process == "Dottie"'`), with a level and the file they came from as the category; print() lines never reached it. The words written in the code always show. |
 | `DottieAccessibilityCast.swift` | ~33 | Turns a value an app handed back through Accessibility into the type Dottie expected, or nil when the app handed back something else. Swift can't check these Core Foundation types with "as?", so every caller used to force the cast, and an app answering with the wrong kind of value would have crashed Dottie. The check lives here once. |
 | `DottieFileSaver.swift` | ~35 | Saves Dottie's own files (settings, memories, lists) and says so in the log when a save fails. Saves used to be "try?", so a full disk or a missing folder lost what the user had just changed with no trace anywhere. Every save here is atomic: the file is written beside the old one and swapped in, so a crash mid-save can't leave half a file. |
+| `DottieFileLoader.swift` | ~62 | Loads Dottie's own saved lists (helpers, routines, shortcuts, the conversation). Loads used to be "try?": a file that could not be read as expected looked the same as no file at all, the list started empty, and the next save wrote that empty list over everything the user had. |
 
 ## Build & Run
 

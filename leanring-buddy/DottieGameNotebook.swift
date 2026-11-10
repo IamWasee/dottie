@@ -89,8 +89,7 @@ final class DottieGameNotebook {
         try? FileManager.default.createDirectory(at: folderURL.appendingPathComponent("places"), withIntermediateDirectories: true)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let savedData = try? Data(contentsOf: folderURL.appendingPathComponent("notebook.json")),
-           let savedContents = try? decoder.decode(Contents.self, from: savedData) {
+        if let savedContents = DottieFileLoader.load(Contents.self, from: folderURL.appendingPathComponent("notebook.json"), decoder: decoder) {
             contents = savedContents
         } else {
             contents = Contents(gameName: gameName)

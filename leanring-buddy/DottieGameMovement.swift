@@ -76,8 +76,7 @@ final class DottieGameMovement {
 
     init(gameFolderURL: URL) {
         saveURL = gameFolderURL.appendingPathComponent("movement.json")
-        if let savedData = try? Data(contentsOf: saveURL),
-           let savedContents = try? JSONDecoder().decode(Contents.self, from: savedData) {
+        if let savedContents = DottieFileLoader.load(Contents.self, from: saveURL) {
             contents = savedContents
         } else {
             contents = Contents()

@@ -482,8 +482,7 @@ final class ClickyRoutineStore: ObservableObject {
     private func load() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let routinesData = try? Data(contentsOf: routinesFileURL),
-              let savedRoutines = try? decoder.decode([ClickyRoutine].self, from: routinesData) else { return }
+        guard let savedRoutines = DottieFileLoader.load([ClickyRoutine].self, from: routinesFileURL, decoder: decoder) else { return }
         routines = savedRoutines
     }
 

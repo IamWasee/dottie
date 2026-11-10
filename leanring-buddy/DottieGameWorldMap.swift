@@ -219,8 +219,7 @@ final class DottieGameWorldMap {
         var loadedNextKeyframeID = 0
         var loadedSessionCount = 0
         var loadedBlockedCells: Set<FloorCell> = []
-        if let summaryData = try? Data(contentsOf: loadedMapFolderURL.appendingPathComponent("map.json")),
-           let savedSummary = try? decoder.decode(SavedSummary.self, from: summaryData) {
+        if let savedSummary = DottieFileLoader.load(SavedSummary.self, from: loadedMapFolderURL.appendingPathComponent("map.json"), decoder: decoder) {
             loadedKeyframes = savedSummary.keyframes
             loadedPlaces = savedSummary.places
             loadedNextKeyframeID = savedSummary.nextKeyframeID
@@ -252,8 +251,7 @@ final class DottieGameWorldMap {
         detailVoxelHits = loadedDetail.hits
         detailVoxelColors = loadedDetail.colors
         isFamiliar = !loadedKeyframes.isEmpty
-        if let spawnData = try? Data(contentsOf: spawnFolderURL.appendingPathComponent("views.json")),
-           let loadedSpawnViews = try? JSONDecoder().decode([SpawnView].self, from: spawnData) {
+        if let loadedSpawnViews = DottieFileLoader.load([SpawnView].self, from: spawnFolderURL.appendingPathComponent("views.json")) {
             for spawnView in loadedSpawnViews {
                 if let printData = try? Data(contentsOf: spawnFolderURL.appendingPathComponent(spawnView.fileName + ".print")),
                    let spawnPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {
@@ -262,8 +260,7 @@ final class DottieGameWorldMap {
                 }
             }
         }
-        if let landmarksData = try? Data(contentsOf: landmarksFolderURL.appendingPathComponent("landmarks.json")),
-           let loadedLandmarks = try? JSONDecoder().decode([Landmark].self, from: landmarksData) {
+        if let loadedLandmarks = DottieFileLoader.load([Landmark].self, from: landmarksFolderURL.appendingPathComponent("landmarks.json")) {
             for landmark in loadedLandmarks {
                 if let printData = try? Data(contentsOf: landmarksFolderURL.appendingPathComponent(landmark.fileName + ".print")),
                    let landmarkPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: printData) {

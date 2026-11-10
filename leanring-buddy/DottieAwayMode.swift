@@ -226,8 +226,7 @@ final class DottieAwayMode: ObservableObject {
     private func loadLog() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let logData = try? Data(contentsOf: Self.logFileURL),
-              let savedLog = try? decoder.decode([LogEntry].self, from: logData) else { return }
+        guard let savedLog = DottieFileLoader.load([LogEntry].self, from: Self.logFileURL, decoder: decoder) else { return }
         log = savedLog
     }
 
