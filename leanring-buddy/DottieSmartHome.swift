@@ -572,7 +572,7 @@ final class DottieSmartHome: ObservableObject {
         var request = URLRequest(url: requestURL)
         request.timeoutInterval = 15
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return data
     }
@@ -829,7 +829,7 @@ final class DottieSmartHome: ObservableObject {
             ]]]
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return "couldn't look right now." }
         let answer = GeminiServerSentEvents.text(from: data).trimmingCharacters(in: .whitespacesAndNewlines)
         return answer.isEmpty ? "couldn't tell." : answer
@@ -845,7 +845,7 @@ final class DottieSmartHome: ObservableObject {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, response) = await DottieLoggedRequest.send(request) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data), (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 

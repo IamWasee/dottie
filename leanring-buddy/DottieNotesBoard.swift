@@ -547,7 +547,7 @@ enum DottieNotesPictures {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (responseData, response) = await DottieLoggedRequest.send(request) else { return nil }
         let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
         if contentType.hasPrefix("image/") || !contentType.contains("html"), let image = NSImage(data: responseData) {
             return image
@@ -557,7 +557,7 @@ enum DottieNotesPictures {
               let previewAddress = previewPictureAddress(in: pageText),
               let previewURL = URL(string: previewAddress, relativeTo: url)?.absoluteURL,
               previewURL != url else { return nil }
-        guard let (pictureData, _) = try? await URLSession.shared.data(from: previewURL) else { return nil }
+        guard let (pictureData, _) = await DottieLoggedRequest.fetch(from: previewURL) else { return nil }
         return NSImage(data: pictureData)
     }
 

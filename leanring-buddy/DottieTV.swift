@@ -261,7 +261,7 @@ enum DottieTV {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 5
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, response) = await DottieLoggedRequest.send(request) else { return nil }
         return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 

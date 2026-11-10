@@ -31,7 +31,7 @@ enum DottieChat {
         }
         request.httpBody = requestBodyData
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (responseData, response) = await DottieLoggedRequest.send(request) else { return nil }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             DottieLog.warning("⚠️ DottieChat request failed: \(String(decoding: responseData.prefix(300), as: UTF8.self))")
             return nil

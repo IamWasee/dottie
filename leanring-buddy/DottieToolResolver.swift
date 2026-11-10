@@ -559,7 +559,7 @@ enum DottieToolResolver {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // crates.io asks every client to say who it is.
         request.setValue("Dottie (https://github.com/IamWasee/dottie)", forHTTPHeaderField: "User-Agent")
-        guard let dataAndResponse = try? await URLSession.shared.data(for: request),
+        guard let dataAndResponse = await DottieLoggedRequest.send(request),
               (dataAndResponse.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONSerialization.jsonObject(with: dataAndResponse.0) as? [String: Any]
     }

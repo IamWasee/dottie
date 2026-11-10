@@ -120,7 +120,7 @@ enum DottieWebSearch {
         formComponents.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "kl", value: "us-en")]
         request.httpBody = formComponents.percentEncodedQuery?.data(using: .utf8)
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
         return duckDuckGoResults(fromResultsPage: String(decoding: responseData, as: UTF8.self))
     }
@@ -136,7 +136,7 @@ enum DottieWebSearch {
         request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
 
-        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+        guard let (responseData, response) = await DottieLoggedRequest.send(request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
         return bingResults(fromResultsPage: String(decoding: responseData, as: UTF8.self))
     }
