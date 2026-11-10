@@ -83,7 +83,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | File | Lines | Purpose |
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~150 | App entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate`, which creates `MenuBarPanelManager`, starts `CompanionManager`, opens Home when the user opens the app (not at login), and handles the Dock icon, its menu and cmd+, (Home → Settings). |
-| `CompanionManager.swift` | ~4170 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Gemini Live client (live mode) or Gemini chat + TTS (classic mode), and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, voice selection, and cursor visibility. |
+| `CompanionManager.swift` | ~2730 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Gemini Live client (live mode) or Gemini chat + TTS (classic mode), and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, voice selection, and cursor visibility. |
 | `GeminiLiveVoiceClient.swift` | ~1725 | Gemini Live WebSocket client: ephemeral-token connect, setup (voice, tools, manual activity detection, transcription, context compression), queued sends, turn API (`beginUserTurn`/`sendMicrophoneAudio`/`endUserTurn`), tool calls, idle close, watchdog. Playback is `GeminiLivePCMPlayer.swift`; which tools are declared is `GeminiLiveToolCatalog.swift`. |
 | `GeminiLiveCompanionTranscriptionProvider.swift` | ~150 | Bridges `BuddyDictationManager`'s mic pipeline into the Live session. |
 | `DottieMeetingLiveHelp.swift` | ~650 | Live meeting help: two-sided live Apple speech transcript, question detection, Groq-first suggested answers and talking points for the notch's `.meetingHelp` card, ⌘⇧Return, screenshot only when the screen changed. |
@@ -276,6 +276,11 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieMathText.swift` | ~290 | Turns typed math and science into what you'd write by hand: x^2 → x², sqrt(x) → √(x), \theta → θ, >= → ≥, H2O → H₂O. Everything Dottie writes on the board, the screen and in notes goes through it. |
 | `GeminiLivePCMPlayer.swift` | ~94 | Plays Gemini Live's 24kHz mono PCM16 audio as it streams in, so the answer starts before Gemini has finished saying it. Used by GeminiLiveVoiceClient. |
 | `GeminiLiveToolCatalog.swift` | ~250 | Which tools Gemini Live gets declared up front and how it reaches the rest: only the everyday tools are declared directly, the others are found with find_tool and run with use_tool. |
+| `CompanionManager+ClassicVoice.swift` | ~350 | Classic voice mode (Apple Speech, then Gemini Flash, then Gemini TTS), handing a question to the higher model, and reading [POINT:] tags out of an answer. Part of CompanionManager, split out by topic. |
+| `CompanionManager+Helpers.swift` | ~240 | The voice tools that hand work to the helpers (Dots) and answer about them: starting a helper task, projects, teams of helpers and the picture library. Part of CompanionManager, split out by topic. |
+| `CompanionManager+HomeAndPhone.swift` | ~620 | The voice tools for the smart home, meeting mode, the speed pack (replays and the self-check) and texting Dottie from the phone. Part of CompanionManager, split out by topic. |
+| `CompanionManager+Onboarding.swift` | ~220 | The onboarding video and the short demo that plays the first time Dottie is opened. Part of CompanionManager, split out by topic. |
+| `CompanionManager+TypedAndInstant.swift` | ~460 | Typed messages from the notch and Home, the instant lane that answers without AI, and stopping everything with Escape. Part of CompanionManager, split out by topic. |
 
 ## Build & Run
 
