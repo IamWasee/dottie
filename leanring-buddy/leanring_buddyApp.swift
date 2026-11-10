@@ -46,7 +46,21 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
     private let companionManager = CompanionManager()
 
+    /// True when Xcode opened the app only to host the unit tests. The tests
+    /// check pure logic, so nothing should start: no menu bar icon, no login
+    /// item, no update checks, no permission prompts on the test machine.
+    private static var isHostingUnitTests: Bool {
+        let processEnvironment = ProcessInfo.processInfo.environment
+        return processEnvironment["XCTestConfigurationFilePath"] != nil
+            || processEnvironment["XCTestBundlePath"] != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Self.isHostingUnitTests {
+            print("🎯 Dottie: Hosting unit tests, not starting the companion")
+            return
+        }
+
         print("🎯 Dottie: Starting...")
         print("🎯 Dottie: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
 
@@ -130,6 +144,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if Self.isHostingUnitTests { return }
         companionManager.stop()
         DottieGameplayRecorder.shared.stopRecording()
     }

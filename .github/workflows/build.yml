@@ -6,14 +6,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer push to the same pull request replaces the run before it. Runs on
+# main always finish, because a release waits for this commit's result.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-macos:
-    # Compile check only: no signing, no running. The app needs a real Mac
-    # with Microphone, Screen Recording and Accessibility permissions to run.
+    # Builds the app without signing and runs the unit tests. The app itself
+    # is never used here: it needs a real Mac with Microphone, Screen
+    # Recording and Accessibility permissions, so the tests only host it.
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Pick Xcode
         # The newest Xcode 26 on the runner, so Dottie can use Apple's
@@ -47,8 +57,19 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
-            2>&1 | tee build.log | grep -E "error:|warning: .*(concurrency|Sendable|actor)|BUILD (SUCCEEDED|FAILED)|cua-driver|Permission denied|Command .* failed" || true
+            2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)|cua-driver|Permission denied|Command .* failed" || true
           grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Compiler warnings
+        # The build prints only errors so they are easy to find; this counts
+        # the warnings so new ones can't slip in unseen. The full text is in
+        # the uploaded build log.
+        run: |
+          grep -E "\.swift:[0-9]+:[0-9]+: warning: " build.log | sort -u > compiler-warnings.txt || true
+          warning_count="$(wc -l < compiler-warnings.txt | tr -d ' ')"
+          echo "Most common warnings:"
+          sed -E 's/^.*: warning: //' compiler-warnings.txt | sort | uniq -c | sort -rn | head -15
+          scripts/ci/check-budget.sh SWIFT_COMPILER_WARNING_BUDGET "$warning_count" "different compiler warnings"
 
       - name: Check the bundled cua-driver
         run: |
@@ -70,29 +91,74 @@ jobs:
           test -f "$app_path/Contents/Resources/Needle/whistle.cact"
           lipo -archs "$app_path/Contents/Frameworks/libneedle3.dylib"
 
-      - name: Build the unit tests
-        # Compiles the test target against the app without running it (the
-        # tests host the whole app, which needs a real Mac's permissions).
+      - name: Run the unit tests
+        # Dottie hosts the tests but starts nothing (see isHostingUnitTests in
+        # leanring_buddyApp.swift), so no permission is needed on the runner.
+        timeout-minutes: 15
         run: |
           set -o pipefail
-          xcodebuild build-for-testing \
+          xcodebuild test \
             -project leanring-buddy.xcodeproj \
             -scheme leanring-buddy \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -resultBundlePath test-results.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
             SWIFT_APPROACHABLE_CONCURRENCY=NO \
-            2>&1 | tee test-build.log | grep -E "error:|TEST BUILD (SUCCEEDED|FAILED)|BUILD (SUCCEEDED|FAILED)" || true
-          grep -qE "TEST BUILD SUCCEEDED|BUILD SUCCEEDED" test-build.log
+            2>&1 | tee test.log | grep -E "error:|Test (Suite|Case|run)|✔|✘|◇ Test run|passed|failed|TEST (SUCCEEDED|FAILED)|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "TEST SUCCEEDED" test.log
+
+      - name: Test summary
+        if: always()
+        run: |
+          if [ -f test.log ]; then
+            {
+              echo "### App unit tests"
+              echo ""
+              grep -E "Test run with|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" test.log | tail -5 | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-log
           path: |
             build.log
-            test-build.log
+            test.log
+            compiler-warnings.txt
+            test-results.xcresult
+
+  lint-swift:
+    # SwiftLint with the rules in .swiftlint.yml. The number of findings may
+    # not go over the ceiling in scripts/ci/budgets.env.
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Find SwiftLint
+        run: |
+          if ! command -v swiftlint >/dev/null; then
+            brew install swiftlint
+          fi
+          swiftlint version
+
+      - name: Lint
+        run: |
+          swiftlint lint --quiet --reporter json > swiftlint-findings.json || true
+          finding_count="$(jq length swiftlint-findings.json)"
+          echo "Findings by rule:"
+          jq -r '.[].rule_id' swiftlint-findings.json | sort | uniq -c | sort -rn
+          scripts/ci/check-budget.sh SWIFTLINT_FINDING_BUDGET "$finding_count" "SwiftLint findings"
+
+      - name: Upload the findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swiftlint-findings
+          path: swiftlint-findings.json

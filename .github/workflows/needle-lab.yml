@@ -24,9 +24,12 @@ jobs:
       NEEDLE_TELEMETRY: "0"
       DO_NOT_TRACK: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Fetch Needle
-        run: scripts/needle-lab/fetch.sh "$RUNNER_TEMP/needle" "${{ inputs.files || 'pinned' }}"
+        env:
+          # Passed as a variable so typed text is never run as a command.
+          NEEDLE_FILES: ${{ inputs.files || 'pinned' }}
+        run: scripts/needle-lab/fetch.sh "$RUNNER_TEMP/needle" "$NEEDLE_FILES"
       - name: Build the lab
         run: |
           swiftc -O -o "$RUNNER_TEMP/needle-lab" scripts/needle-lab/main.swift leanring-buddy/DottieNeedleEngine.swift leanring-buddy/DottieNeedleToolsets.swift
