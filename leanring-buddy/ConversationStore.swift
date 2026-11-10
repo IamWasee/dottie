@@ -101,10 +101,9 @@ final class ConversationStore: ObservableObject {
     }
 
     private func loadEntriesFromDisk() {
-        guard let storedData = try? Data(contentsOf: storageFileURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        entries = (try? decoder.decode([ConversationEntry].self, from: storedData)) ?? []
+        entries = DottieFileLoader.load([ConversationEntry].self, from: storageFileURL, decoder: decoder) ?? []
     }
 
     private func saveEntriesToDisk() {

@@ -567,8 +567,7 @@ final class DottieEpisodeEmbeddings {
 
     init(fileURL: URL) {
         self.fileURL = fileURL
-        if let fileData = try? Data(contentsOf: fileURL),
-           let saved = try? JSONDecoder().decode([String: [Float]].self, from: fileData) {
+        if let saved = DottieFileLoader.load([String: [Float]].self, from: fileURL) {
             vectors = saved
         }
     }

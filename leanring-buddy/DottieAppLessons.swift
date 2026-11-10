@@ -27,8 +27,7 @@ final class DottieAppLessons {
         let dottieFolderURL = applicationSupportURL.appendingPathComponent("Dottie", isDirectory: true)
         try? FileManager.default.createDirectory(at: dottieFolderURL, withIntermediateDirectories: true)
         fileURL = dottieFolderURL.appendingPathComponent("AppLessons.json")
-        lessonsByAppName = (try? Data(contentsOf: fileURL))
-            .flatMap { try? JSONDecoder().decode([String: [String]].self, from: $0) } ?? [:]
+        lessonsByAppName = DottieFileLoader.load([String: [String]].self, from: fileURL) ?? [:]
     }
 
     private static func key(for appName: String) -> String {

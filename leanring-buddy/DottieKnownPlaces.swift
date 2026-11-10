@@ -50,8 +50,7 @@ final class DottieKnownPlaces {
         let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         storeURL = applicationSupportURL.appendingPathComponent("Dottie/KnownPlaces.json")
-        if let storedData = try? Data(contentsOf: storeURL),
-           let storedPlaces = try? JSONDecoder().decode([Place].self, from: storedData) {
+        if let storedPlaces = DottieFileLoader.load([Place].self, from: storeURL) {
             // Older saves could hold one folder twice ("//" in the path) and
             // code-like names; merge and drop those once.
             var cleanedPlaces: [Place] = []

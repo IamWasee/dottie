@@ -1239,13 +1239,11 @@ final class ClickyRoster: ObservableObject {
     private func loadRoster() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let rosterData = try? Data(contentsOf: rosterFileURL),
-              let savedAgents = try? decoder.decode([ClickyAgent].self, from: rosterData) else { return }
+        guard let savedAgents = DottieFileLoader.load([ClickyAgent].self, from: rosterFileURL, decoder: decoder) else { return }
         agents = savedAgents
         for savedAgent in savedAgents {
             let transcriptURL = workspaceURL(for: savedAgent).appendingPathComponent("transcript.json")
-            if let transcriptData = try? Data(contentsOf: transcriptURL),
-               let savedTranscript = try? decoder.decode([ClickyAgentTranscriptItem].self, from: transcriptData) {
+            if let savedTranscript = DottieFileLoader.load([ClickyAgentTranscriptItem].self, from: transcriptURL, decoder: decoder) {
                 transcriptsByAgentID[savedAgent.id] = savedTranscript
             }
         }
@@ -1648,8 +1646,7 @@ extension ClickyRoster {
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let indexData = try? Data(contentsOf: indexURL),
-              let projects = try? decoder.decode([DottieProjects.Project].self, from: indexData) else { return [] }
+        guard let projects = DottieFileLoader.load([DottieProjects.Project].self, from: indexURL, decoder: decoder) else { return [] }
         cachedProjectIndex = (modifiedAt, projects)
         return projects
     }

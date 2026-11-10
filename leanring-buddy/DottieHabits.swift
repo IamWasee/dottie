@@ -390,8 +390,7 @@ final class DottieHabits: ObservableObject {
     }
 
     private func loadHabits() {
-        guard let fileData = try? Data(contentsOf: habitsFileURL),
-              let saved = try? Self.makeDecoder().decode(SavedHabits.self, from: fileData) else { return }
+        guard let saved = DottieFileLoader.load(SavedHabits.self, from: habitsFileURL, decoder: Self.makeDecoder()) else { return }
         habits = saved.habits
         forgottenKeys = Set(saved.forgottenKeys)
     }
