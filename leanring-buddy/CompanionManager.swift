@@ -353,7 +353,7 @@ final class CompanionManager: ObservableObject {
         loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
         refreshAllPermissions()
-        print("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        DottieLog.notice("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
@@ -368,7 +368,7 @@ final class CompanionManager: ObservableObject {
         _ = geminiAPI
 
         if !ClickyWorkerConfiguration.isWorkerConfigured {
-            print("⚠️ Dottie: no server address (Info.plist ClickyWorkerBaseURL or Settings → Connection) — voice won't work until one is set.")
+            DottieLog.warning("⚠️ Dottie: no server address (Info.plist ClickyWorkerBaseURL or Settings → Connection) — voice won't work until one is set.")
         }
 
         // Get Dots ready in the background (a one-time download), so the
@@ -379,7 +379,7 @@ final class CompanionManager: ObservableObject {
             do {
                 try await DotsRuntimeInstaller.shared.installIfNeeded()
             } catch {
-                print("⚠️ Dottie: couldn't set up the Dots runtime yet: \(error.localizedDescription)")
+                DottieLog.warning("⚠️ Dottie: couldn't set up the Dots runtime yet: \(error.localizedDescription)")
             }
         }
 
@@ -445,7 +445,7 @@ final class CompanionManager: ObservableObject {
     private func startOnboardingMusic() {
         stopOnboardingMusic()
         guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3") else {
-            print("⚠️ Dottie: ff.mp3 not found in bundle")
+            DottieLog.warning("⚠️ Dottie: ff.mp3 not found in bundle")
             return
         }
 
@@ -460,7 +460,7 @@ final class CompanionManager: ObservableObject {
                 self?.fadeOutOnboardingMusic()
             }
         } catch {
-            print("⚠️ Dottie: Failed to play onboarding music: \(error)")
+            DottieLog.warning("⚠️ Dottie: Failed to play onboarding music: \(error)")
         }
     }
 
@@ -550,7 +550,7 @@ final class CompanionManager: ObservableObject {
         if previouslyHadAccessibility != hasAccessibilityPermission
             || previouslyHadScreenRecording != hasScreenRecordingPermission
             || previouslyHadMicrophone != hasMicrophonePermission {
-            print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
+            DottieLog.notice("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
         }
 
         // Track individual permission grants as they happen
@@ -597,7 +597,7 @@ final class CompanionManager: ObservableObject {
                 // Verify the capture actually returned real content — a 0x0 or
                 // fully-empty image means the user denied the prompt.
                 let didCapture = image.width > 0 && image.height > 0
-                print("🔑 Screen content capture result — width: \(image.width), height: \(image.height), didCapture: \(didCapture)")
+                DottieLog.notice("🔑 Screen content capture result — width: \(image.width), height: \(image.height), didCapture: \(didCapture)")
                 await MainActor.run {
                     isRequestingScreenContent = false
                     guard didCapture else { return }
@@ -613,7 +613,7 @@ final class CompanionManager: ObservableObject {
                     }
                 }
             } catch {
-                print("⚠️ Screen content permission request failed: \(error)")
+                DottieLog.warning("⚠️ Screen content permission request failed: \(error)")
                 await MainActor.run { isRequestingScreenContent = false }
             }
         }
@@ -879,7 +879,7 @@ final class CompanionManager: ObservableObject {
                     submitDraftText: { [weak self] finalTranscript in
                         guard let self else { return }
                         self.lastTranscript = finalTranscript
-                        print("🗣️ Companion received transcript: \(finalTranscript)")
+                        DottieLog.notice("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
                         // In live mode Gemini already heard the audio and is
                         // answering; the transcript is just for display/history.
@@ -1213,7 +1213,7 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onTurnError = { [weak self] error in
             guard let self else { return }
             ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-            print("⚠️ Gemini Live turn error: \(error)")
+            DottieLog.warning("⚠️ Gemini Live turn error: \(error)")
             self.isLiveTurnInFlight = false
             self.currentLiveTurnIsNarration = false
             self.liveVoiceClient.isAudioOutputMuted = false
@@ -1239,7 +1239,7 @@ final class CompanionManager: ObservableObject {
             do {
                 compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
             } catch {
-                print("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
+                DottieLog.warning("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
             }
         }
 
@@ -1375,7 +1375,7 @@ final class CompanionManager: ObservableObject {
                 let height: CGFloat = max(22, min(width * 0.4, 120))
                 markedRect = CGRect(x: target.point.x - width / 2, y: target.point.y - height / 2, width: width, height: height)
             }
-            print("✏️ draw_on_screen \(shape.rawValue) \"\(label ?? "")\": found \(target.elementFrame == nil ? "nothing, rough box" : "the element") at \(Int(markedRect.midX)),\(Int(markedRect.midY)) size \(Int(markedRect.width))×\(Int(markedRect.height))")
+            DottieLog.notice("✏️ draw_on_screen \(shape.rawValue) \"\(label ?? "")\": found \(target.elementFrame == nil ? "nothing, rough box" : "the element") at \(Int(markedRect.midX)),\(Int(markedRect.midY)) size \(Int(markedRect.width))×\(Int(markedRect.height))")
             drawingOverlayManager.add(DottieDrawing(shape: shape, targetRect: markedRect, note: note))
             return "drew a \(shape.rawValue) on screen."
 
@@ -1430,7 +1430,7 @@ final class CompanionManager: ObservableObject {
         let hasSpokenLines = plan.steps.contains { $0.say != nil }
         let circledArea = recentCircledArea
         let circledRowsTask = circledArea == nil ? nil : lastCircledAreaRowsTask
-        print("✏️ Teaching: \(plan.steps.count) steps on \(plan.surface.rawValue), \(plan.anchors.count) anchors")
+        DottieLog.notice("✏️ Teaching: \(plan.steps.count) steps on \(plan.surface.rawValue), \(plan.anchors.count) anchors")
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -1556,7 +1556,7 @@ final class CompanionManager: ObservableObject {
             if step.kind == .chart, let chartText = step.text, chartText.lowercased().contains("circled") {
                 let circledRows = await circledRowsTask?.value ?? []
                 let circledChartText = DottieChartData.chartText(fromRows: circledRows)
-                print("✏️ Circled table: \(circledRows.count) rows → \(circledChartText.prefix(200))")
+                DottieLog.notice("✏️ Circled table: \(circledRows.count) rows → \(circledChartText.prefix(200))")
                 if Task.isCancelled { break }
                 step = step.replacingText(circledChartText)
             }
@@ -1566,7 +1566,7 @@ final class CompanionManager: ObservableObject {
                 notchPresenter.showScreenTaskStep("sketching \(sketchDescription)", title: "drawing")
                 guard let plannedStrokesText = await DottieSketchArtist.plannedStrokesText(for: sketchDescription) else {
                     notchPresenter.endScreenTask()
-                    print("✏️ Sketch: couldn't plan \"\(sketchDescription)\"")
+                    DottieLog.notice("✏️ Sketch: couldn't plan \"\(sketchDescription)\"")
                     missedSteps += 1
                     // Said "drawing it now" already, so the miss is shown
                     // instead of nothing appearing.
@@ -1619,7 +1619,7 @@ final class CompanionManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64((drawn.duration + captionSeconds) * 1_000_000_000))
             } else {
                 missedSteps += 1
-                print("✏️ Couldn't draw a \(step.kind.rawValue) step: \(step.points)")
+                DottieLog.notice("✏️ Couldn't draw a \(step.kind.rawValue) step: \(step.points)")
             }
             await narration?.value
         }
@@ -1633,7 +1633,7 @@ final class CompanionManager: ObservableObject {
             teachingNarrationTask = nil
         }
         if missedSteps > 0 {
-            print("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
+            DottieLog.notice("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
         }
         drawingOverlayManager.fadeFigures(after: plan.keepsDrawing ? 600 : 60)
         scheduleTransientHideIfNeeded()
@@ -1777,7 +1777,7 @@ final class CompanionManager: ObservableObject {
         }
         if screenTaskRunner.isRunning {
             queuedScreenTasks.append(job)
-            print("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
+            DottieLog.notice("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
             refreshScreenTaskTitle()
             let position = queuedScreenTasks.count
             let runningJobText = currentScreenTaskText.map { "\"\($0.prefix(80))\"" } ?? "the current job"
@@ -1790,11 +1790,11 @@ final class CompanionManager: ObservableObject {
     private func runScreenTask(_ job: ScreenJob) {
         let taskText = job.text
         stopGuide()
-        print("🧭 Screen task\(job.isGame ? " (game)" : ""): \(taskText)")
+        DottieLog.notice("🧭 Screen task\(job.isGame ? " (game)" : ""): \(taskText)")
         showOverlayTransientlyIfNeeded()
 
         screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
-            print("🧭 Step \(stepNumber): \(stepDescription)")
+            DottieLog.notice("🧭 Step \(stepNumber): \(stepDescription)")
             self?.lastScreenJobProgressAt = Date()
             self?.notchPresenter.showScreenTaskStep(stepDescription)
         }
@@ -1908,7 +1908,7 @@ final class CompanionManager: ObservableObject {
             repliesToPhone: runningJob.repliesToPhone,
             restart: true
         ), at: 0)
-        print("🔒 Paused the screen job until unlock: \(runningText)")
+        DottieLog.notice("🔒 Paused the screen job until unlock: \(runningText)")
         return runningText
     }
 
@@ -1936,7 +1936,7 @@ final class CompanionManager: ObservableObject {
     private func startNextQueuedScreenTask() {
         guard !screenTaskRunner.isRunning, !queuedScreenTasks.isEmpty, !DottieScreenLock.shared.isLocked else { return }
         let nextJob = queuedScreenTasks.removeFirst()
-        print("🧭 Next queued screen task: \(nextJob.text)")
+        DottieLog.notice("🧭 Next queued screen task: \(nextJob.text)")
         runScreenTask(nextJob)
     }
 
@@ -1953,7 +1953,7 @@ final class CompanionManager: ObservableObject {
         guard screenTaskRunner.stop() else { return hadQueuedTasks }
         currentScreenTaskText = nil
         noteStoppedJob("the on-screen job \"\(stoppedTaskText ?? "you started")\"")
-        print("🧭 Screen task stopped")
+        DottieLog.notice("🧭 Screen task stopped")
         notchPresenter.endScreenTask()
         clearDetectedElementLocation()
         scheduleTransientHideIfNeeded()
@@ -1980,7 +1980,7 @@ final class CompanionManager: ObservableObject {
                     continue
                 }
                 guard Date().timeIntervalSince(self.lastScreenJobProgressAt) > Self.secondsBeforeScreenJobCountsAsStuck else { continue }
-                print("🧭 Screen task stuck with no step for \(Int(Self.secondsBeforeScreenJobCountsAsStuck)) s, stopping it: \(taskText)")
+                DottieLog.notice("🧭 Screen task stuck with no step for \(Int(Self.secondsBeforeScreenJobCountsAsStuck)) s, stopping it: \(taskText)")
                 self.noteStoppedJob("the on-screen job \"\(taskText)\" (it got stuck)")
                 self.screenTaskRunner.stop()
                 self.currentScreenTaskText = nil
@@ -2037,7 +2037,7 @@ final class CompanionManager: ObservableObject {
         let resultText: String
         switch outcome {
         case .finished(let answer):
-            print("🧭 Screen task finished: \(answer)")
+            DottieLog.notice("🧭 Screen task finished: \(answer)")
             resultText = answer
             DottieLevels.shared.award(.screenJob)
             // "⚡ done from memory in 2.1s"
@@ -2045,7 +2045,7 @@ final class CompanionManager: ObservableObject {
                 notchPresenter.showAgentUpdate(title: replayReport, text: answer)
             }
         case .failed(let reason):
-            print("🧭 Screen task failed: \(reason)")
+            DottieLog.notice("🧭 Screen task failed: \(reason)")
             // Away, nobody is there to say "try again", so a job that
             // failed gets one more go, told what went wrong, before the
             // failure is reported.
@@ -2159,7 +2159,7 @@ final class CompanionManager: ObservableObject {
         stopScreenTask()
         let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
         currentGuideGoal = goal
-        print("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")
+        DottieLog.notice("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
@@ -2357,7 +2357,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func guideDidEnd(spokenGoodbye: String?) {
-        print("🧑‍🏫 Guide ended")
+        DottieLog.notice("🧑‍🏫 Guide ended")
         guideGestureDemoTask?.cancel()
         guideGestureDemoTask = nil
         if let guideGoal = currentGuideGoal {
@@ -2420,7 +2420,7 @@ final class CompanionManager: ObservableObject {
                 normalizedX: pointRequest.normalizedX,
                 normalizedY: pointRequest.normalizedY
               ) else {
-            print("🎯 Live pointing ignored: no frame for this turn")
+            DottieLog.notice("🎯 Live pointing ignored: no frame for this turn")
             return
         }
 
@@ -2430,7 +2430,7 @@ final class CompanionManager: ObservableObject {
         )
         let displayFrame = resolvedPoint.screenCapture.displayFrame
         ClickyAnalytics.trackElementPointed(elementLabel: pointRequest.elementLabel)
-        print("🎯 Live pointing: (\(Int(pointRequest.normalizedX)), \(Int(pointRequest.normalizedY)))/1000 → \"\(pointRequest.elementLabel ?? "element")\"")
+        DottieLog.notice("🎯 Live pointing: (\(Int(pointRequest.normalizedX)), \(Int(pointRequest.normalizedY)))/1000 → \"\(pointRequest.elementLabel ?? "element")\"")
 
         // Live's guess comes from a small frame; take a second, sharper look
         // before the cursor flies, so it lands on the thing itself.
@@ -2479,7 +2479,7 @@ final class CompanionManager: ObservableObject {
             guard self.detectedElementScreenLocation == roughScreenLocation,
                   let foundScreenLocation,
                   hypot(foundScreenLocation.x - roughScreenLocation.x, foundScreenLocation.y - roughScreenLocation.y) > Self.livePointingSmallestCorrection else { return }
-            print("🎯 Pointing corrected after the rough guess: \(Int(roughScreenLocation.x)),\(Int(roughScreenLocation.y)) → \(Int(foundScreenLocation.x)),\(Int(foundScreenLocation.y))")
+            DottieLog.notice("🎯 Pointing corrected after the rough guess: \(Int(roughScreenLocation.x)),\(Int(roughScreenLocation.y)) → \(Int(foundScreenLocation.x)),\(Int(foundScreenLocation.y))")
             self.detectedElementScreenLocation = foundScreenLocation
         }
     }
@@ -2874,7 +2874,7 @@ final class CompanionManager: ObservableObject {
             self?.notchPresenter.showScreenTaskStep(stepText, title: "on the TV")
         }
         if showsInNotch { notchPresenter.showScreenTaskStep("looking at the TV", title: "on the TV") }
-        print("📺 TV task on \(tv.name): \(task)")
+        DottieLog.notice("📺 TV task on \(tv.name): \(task)")
         runner.start(task: task, controls: smartHome.tvControls(for: tv)) { [weak self] outcome in
             guard let self else { return }
             if showsInNotch && !self.screenTaskRunner.isRunning { self.notchPresenter.endScreenTask() }
@@ -2884,7 +2884,7 @@ final class CompanionManager: ObservableObject {
             case .failed(let reason): resultText = "it couldn't be finished: \(reason)"
             case .stopped: return
             }
-            print("📺 TV task result: \(resultText)")
+            DottieLog.notice("📺 TV task result: \(resultText)")
             self.brain.record(.screenJob, "did on the TV (\(tv.name)): \(task). result: \(resultText)")
             Task { [weak self] in
                 for _ in 0..<60 {
@@ -3256,7 +3256,7 @@ final class CompanionManager: ObservableObject {
             // The helper did what it could in the background and left the
             // on-screen steps to Dottie (DottieWorkRoutes).
             if turnResult.succeeded, let screenJobRequest = DottieWorkRoutes.screenJobRequest(in: turnResult.finalReply) {
-                print("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
+                DottieLog.notice("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
                 let status = self.startScreenTask(ScreenJob(text: screenJobRequest.steps, returnsToHelperAgentID: turnResult.agent.id))
                 let progressText = screenJobRequest.replyWithoutBlock.isEmpty ? "Doing the on-screen part now." : screenJobRequest.replyWithoutBlock
                 self.notchPresenter.showAgentUpdate(title: updateTitle, text: progressText)
@@ -3868,7 +3868,7 @@ final class CompanionManager: ObservableObject {
             || teachingTask != nil
         guard isCompanionBusy else { return }
 
-        print("⎋ Escape interrupt")
+        DottieLog.notice("⎋ Escape interrupt")
         ClickyAnalytics.trackEscapeInterrupt()
 
         pendingKeyboardShortcutStartTask?.cancel()
@@ -3950,7 +3950,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func answerWithHigherModel(question: String) async -> String {
-        print("🧠 Higher model hand-off: \(question)")
+        DottieLog.notice("🧠 Higher model hand-off: \(question)")
         ClickyAnalytics.trackHigherModelHandoff()
 
         do {
@@ -3989,7 +3989,7 @@ final class CompanionManager: ObservableObject {
                 primary: { try await askModel(primaryModel) },
                 backup: { try await askModel(backupModel) }
             )
-            print("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
+            DottieLog.notice("🧠 Higher model answered in \(Int(responseDuration * 1000))ms")
 
             let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
             let targetScreenCapture: CompanionScreenCapture? = {
@@ -4013,7 +4013,7 @@ final class CompanionManager: ObservableObject {
                 ? "the deeper look came back empty. tell the user briefly and answer as best you can from what you see."
                 : answerText
         } catch {
-            print("⚠️ Higher model hand-off failed: \(error)")
+            DottieLog.warning("⚠️ Higher model hand-off failed: \(error)")
             ClickyAnalytics.trackResponseError(error: error.localizedDescription)
             return "the deeper look failed (\(error.localizedDescription)). tell the user in one short line, then answer as best you can from what you see."
         }
@@ -4123,9 +4123,9 @@ final class CompanionManager: ObservableObject {
                     )
                     detectedElementDisplayFrame = targetScreenCapture.displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
+                    DottieLog.notice("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
                 } else {
-                    print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+                    DottieLog.notice("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
 
                 // Save the exchange with the point tag stripped so it doesn't
@@ -4138,7 +4138,7 @@ final class CompanionManager: ObservableObject {
                     conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
                 }
 
-                print("🧠 Conversation history: \(conversationHistory.count) exchanges")
+                DottieLog.notice("🧠 Conversation history: \(conversationHistory.count) exchanges")
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
                 brain.record(.chat, "user: \(transcript)\ndottie: \(spokenText)")
@@ -4156,7 +4156,7 @@ final class CompanionManager: ObservableObject {
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ Gemini TTS error, falling back to system voice: \(error)")
+                        DottieLog.warning("⚠️ Gemini TTS error, falling back to system voice: \(error)")
                         speakWithSystemVoice(spokenText)
                     }
                 }
@@ -4164,7 +4164,7 @@ final class CompanionManager: ObservableObject {
                 // User spoke again — response was interrupted
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-                print("⚠️ Companion response error: \(error)")
+                DottieLog.warning("⚠️ Companion response error: \(error)")
                 doOnMacOrSpeakConnectionError(requestText: transcript, inputKind: currentClassicTurnInputKind)
             }
 
@@ -4517,7 +4517,7 @@ final class CompanionManager: ObservableObject {
                 // Only send the cursor screen so the model can't pick something
                 // on a different monitor that we can't point at.
                 guard let cursorScreenCapture = screenCaptures.first(where: { $0.isCursorScreen }) else {
-                    print("🎯 Onboarding demo: no cursor screen found")
+                    DottieLog.notice("🎯 Onboarding demo: no cursor screen found")
                     return
                 }
 
@@ -4534,7 +4534,7 @@ final class CompanionManager: ObservableObject {
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
 
                 guard let pointCoordinate = parseResult.coordinate else {
-                    print("🎯 Onboarding demo: no element to point at")
+                    DottieLog.notice("🎯 Onboarding demo: no element to point at")
                     return
                 }
 
@@ -4549,9 +4549,9 @@ final class CompanionManager: ObservableObject {
                 detectedElementBubbleText = parseResult.spokenText
                 detectedElementScreenLocation = globalLocation
                 detectedElementDisplayFrame = displayFrame
-                print("🎯 Onboarding demo: pointing at \"\(parseResult.elementLabel ?? "element")\" — \"\(parseResult.spokenText)\"")
+                DottieLog.notice("🎯 Onboarding demo: pointing at \"\(parseResult.elementLabel ?? "element")\" — \"\(parseResult.spokenText)\"")
             } catch {
-                print("⚠️ Onboarding demo error: \(error)")
+                DottieLog.warning("⚠️ Onboarding demo error: \(error)")
             }
         }
     }

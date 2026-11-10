@@ -92,7 +92,7 @@ enum PointingRefiner {
             forLabelWords: labelWords,
             near: roughPoint
         ) {
-            print("🎯 Pointing refined by Accessibility: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(accessibilityFrame.midX)),\(Int(accessibilityFrame.midY))")
+            DottieLog.notice("🎯 Pointing refined by Accessibility: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(accessibilityFrame.midX)),\(Int(accessibilityFrame.midY))")
             return accessibilityFrame
         }
 
@@ -106,7 +106,7 @@ enum PointingRefiner {
             await ScreenTextFinder.frameOfText(matching: elementLabel, near: roughPoint, displayFrame: displayFrame)
         }) {
             let snappedFrame = AccessibilitySnap.refinedFrame(textFrame)
-            print("🎯 Pointing refined by on-screen text: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
+            DottieLog.notice("🎯 Pointing refined by on-screen text: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
             return snappedFrame
         }
 
@@ -123,7 +123,7 @@ enum PointingRefiner {
         }
         guard let visionFrame else { return nil }
         let snappedFrame = AccessibilitySnap.refinedFrame(visionFrame)
-        print("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
+        DottieLog.notice("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
         return snappedFrame
     }
 
@@ -404,7 +404,7 @@ private enum VisionElementLocator {
         guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt, referenceImageJPEG: referenceImageJPEG) else {
             return overviewFrame
         }
-        print("🎯 Zoom pass refined the vision guess")
+        DottieLog.notice("🎯 Zoom pass refined the vision guess")
         return frame(of: zoomedBox, in: zoomRect)
     }
 

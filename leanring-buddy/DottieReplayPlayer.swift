@@ -41,7 +41,7 @@ final class DottieReplayPlayer {
             let outcome = await perform(step, stepNumber: stepIndex + 1, of: replay.steps.count)
             if Task.isCancelled { return .stopped }
             if let failureReason = outcome {
-                print("⚡ Replay \"\(replay.name)\" stopped at step \(stepIndex + 1) (\(step.summary)): \(failureReason)")
+                DottieLog.notice("⚡ Replay \"\(replay.name)\" stopped at step \(stepIndex + 1) (\(step.summary)): \(failureReason)")
                 return .handedOver(playedSteps: playedSteps, stepIndex: stepIndex, reason: failureReason)
             }
             playedSteps.append(step)

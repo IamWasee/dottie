@@ -54,7 +54,7 @@ final class DottieScreenLock: ObservableObject {
     private func setLocked(_ newValue: Bool) {
         guard newValue != isLocked else { return }
         isLocked = newValue
-        print(newValue ? "🔒 Screen locked: screen jobs will wait" : "🔓 Screen unlocked: screen jobs can carry on")
+        DottieLog.notice(newValue ? "🔒 Screen locked: screen jobs will wait" : "🔓 Screen unlocked: screen jobs can carry on")
         if !newValue {
             let waiters = unlockWaiters
             unlockWaiters = []
@@ -220,15 +220,15 @@ final class DottieKeepAwake: ObservableObject {
             if result == kIOReturnSuccess {
                 assertionID = newAssertionID
                 isHolding = true
-                print("☕️ Keeping the Mac awake (\(assertionType)): \(assertionReasonText)")
+                DottieLog.notice("☕️ Keeping the Mac awake (\(assertionType)): \(assertionReasonText)")
             } else {
-                print("⚠️ Couldn't keep the Mac awake (\(result))")
+                DottieLog.warning("⚠️ Couldn't keep the Mac awake (\(result))")
             }
         } else if !isNeeded && isHolding {
             IOPMAssertionRelease(assertionID)
             assertionID = 0
             isHolding = false
-            print("☕️ Released \(assertionType)")
+            DottieLog.notice("☕️ Released \(assertionType)")
         }
     }
 
@@ -247,7 +247,7 @@ final class DottieKeepAwake: ObservableObject {
         if result == kIOReturnSuccess {
             // Declaring activity turns the display on; the assertion lapses
             // by itself, so it isn't released here.
-            print("☀️ Woke the screen for Dottie's work")
+            DottieLog.notice("☀️ Woke the screen for Dottie's work")
         }
         // The screensaver runs as its own app; closing it is what a key
         // press does.
@@ -255,7 +255,7 @@ final class DottieKeepAwake: ObservableObject {
         for bundleIdentifier in screenSaverBundleIdentifiers {
             for screenSaverApp in NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier) {
                 screenSaverApp.terminate()
-                print("☀️ Ended the screensaver so Dottie can see the screen")
+                DottieLog.notice("☀️ Ended the screensaver so Dottie can see the screen")
             }
         }
     }

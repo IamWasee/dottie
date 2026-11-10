@@ -57,12 +57,12 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests {
-            print("🎯 Dottie: Hosting unit tests, not starting the companion")
+            DottieLog.notice("🎯 Dottie: Hosting unit tests, not starting the companion")
             return
         }
 
-        print("🎯 Dottie: Starting...")
-        print("🎯 Dottie: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
+        DottieLog.notice("🎯 Dottie: Starting...")
+        DottieLog.notice("🎯 Dottie: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
 
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
@@ -157,9 +157,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         if loginItemService.status != .enabled {
             do {
                 try loginItemService.register()
-                print("🎯 Dottie: Registered as login item")
+                DottieLog.notice("🎯 Dottie: Registered as login item")
             } catch {
-                print("⚠️ Dottie: Failed to register as login item: \(error)")
+                DottieLog.warning("⚠️ Dottie: Failed to register as login item: \(error)")
             }
         }
     }

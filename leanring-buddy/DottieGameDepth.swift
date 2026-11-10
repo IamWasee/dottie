@@ -126,7 +126,7 @@ final class DottieGameDepth {
             let visionModel = try VNCoreMLModel(for: model)
             return DottieDepthEstimator(visionModel: visionModel)
         } catch {
-            print("⚠️ Game depth: couldn't load the depth model: \(error)")
+            DottieLog.warning("⚠️ Game depth: couldn't load the depth model: \(error)")
             // A broken compile is removed so the next try starts clean.
             try? FileManager.default.removeItem(at: compiledModelURL)
             return nil
@@ -170,7 +170,7 @@ final class DottieGameDepth {
             try? FileManager.default.removeItem(at: downloadFolderURL)
             return true
         } catch {
-            print("⚠️ Game depth: couldn't download the depth model: \(error)")
+            DottieLog.warning("⚠️ Game depth: couldn't download the depth model: \(error)")
             return false
         }
     }

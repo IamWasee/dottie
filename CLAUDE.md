@@ -265,6 +265,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieCodeOnScreen.swift` | ~410 | code_on_screen: Dottie builds a small project on camera, the way a person at the keyboard would (made for Dottie's commercials). She plans the files, opens the project in the user's code editor (VS Code, Cursor or Windsurf), opens each file with Quick Open, types it with the human auto typer, saves, then reads what landed on disk and fixes any line that came out wrong. |
 | `DottieKnownPlaces.swift` | ~230 | Where things are on this Mac, learned as they're opened, so "open my resume" or "open the coffee site folder" is instant the second time. Whenever a document or a Finder folder comes to the front (opened by the user, by Dottie, by a screen job, anything), its path is noted with its name. |
 | `DottieSketchArtist.swift` | ~87 | Free drawing for explain_on_screen's "sketch" step: "draw a horse", "a plant cell", "a guitar". A quick model call plans the picture as pen strokes (outline first, then details) inside a 0-1000 square, and DottieTeaching draws them one by one like a marker, so Dottie can draw anything, not only lines, shapes and graphs. |
+| `DottieLog.swift` | ~100 | Dottie's log. Lines go to the Mac's own log (Console, or `log show --predicate 'process == "Dottie"'`), with a level and the file they came from as the category; print() lines never reached it. The words written in the code always show. |
 
 ## Build & Run
 
@@ -333,6 +334,7 @@ IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
 - All UI state updates must be on `@MainActor`
 - Use async/await for all asynchronous operations
 - Comments should explain "why" not just "what", especially for non-obvious AppKit bridging
+- Log with `DottieLog.notice` / `.warning` / `.error` (`DottieLog.swift`), never `print`: print lines don't reach the Mac's log. Write them like a string; the values put into a line are hidden in the log unless details are switched on, so the fixed words must say what happened
 - AppKit `NSPanel`/`NSWindow` bridged into SwiftUI via `NSHostingView`
 - All buttons must show a pointer cursor on hover
 - For any interactive element, explicitly think through its hover behavior (cursor, visual feedback, and whether hover should communicate clickability)

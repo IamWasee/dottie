@@ -173,7 +173,7 @@ final class DottieMeetingRecorder: ObservableObject {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
-            print("⚠️ Meeting: mic failed to start: \(error)")
+            DottieLog.warning("⚠️ Meeting: mic failed to start: \(error)")
             return false
         }
         audioEngine = engine
@@ -202,7 +202,7 @@ final class DottieMeetingRecorder: ObservableObject {
             streamOutput = output
             return true
         } catch {
-            print("⚠️ Meeting: computer audio failed to start: \(error)")
+            DottieLog.warning("⚠️ Meeting: computer audio failed to start: \(error)")
             return false
         }
     }

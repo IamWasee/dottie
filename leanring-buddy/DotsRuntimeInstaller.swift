@@ -177,7 +177,7 @@ actor DotsRuntimeInstaller {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: geminiLauncherURL.path)
 
         try expectedMarkerText.write(to: installedMarkerURL, atomically: true, encoding: .utf8)
-        print("✅ Dots runtime ready: Node \(nodeVersion), Gemini CLI \(geminiCLIVersion)")
+        DottieLog.notice("✅ Dots runtime ready: Node \(nodeVersion), Gemini CLI \(geminiCLIVersion)")
     }
 
     private static func download(from remoteURL: URL, to destinationURL: URL) async throws -> URL {

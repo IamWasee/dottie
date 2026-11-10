@@ -167,7 +167,7 @@ final class DottieGlobalShortcuts: ObservableObject {
             hotKeyRefs[action] = hotKeyRef
         } else {
             problems[action] = "Another app already uses \(hotkey.displayText). Pick a different shortcut."
-            print("⚠️ Dottie: couldn't register \(hotkey.displayText) (\(status))")
+            DottieLog.warning("⚠️ Dottie: couldn't register \(hotkey.displayText) (\(status))")
         }
     }
 
@@ -211,7 +211,7 @@ final class DottieGlobalShortcuts: ObservableObject {
             &eventHandlerRef
         )
         if status != noErr {
-            print("⚠️ Dottie: couldn't listen for shortcuts (\(status))")
+            DottieLog.warning("⚠️ Dottie: couldn't listen for shortcuts (\(status))")
         }
     }
 

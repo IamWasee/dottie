@@ -38,7 +38,7 @@ protocol BuddyTranscriptionProvider {
 enum BuddyTranscriptionProviderFactory {
     static func makeDefaultProvider() -> any BuddyTranscriptionProvider {
         let provider = AppleSpeechTranscriptionProvider()
-        print("🎙️ Transcription: using \(provider.displayName)")
+        DottieLog.notice("🎙️ Transcription: using \(provider.displayName)")
         return provider
     }
 }

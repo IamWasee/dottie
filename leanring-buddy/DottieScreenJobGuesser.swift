@@ -96,7 +96,7 @@ final class DottieScreenJobGuesser {
             let stepDescription = Self.describe(rawStep)
             onProgress("guessing step \(stepIndex + 1): \(stepDescription)")
             if let problem = await perform(rawStep) {
-                print("🔮 Guess missed at step \(stepIndex + 1) (\(stepDescription)): \(problem)")
+                DottieLog.notice("🔮 Guess missed at step \(stepIndex + 1) (\(stepDescription)): \(problem)")
                 return .handedOver(note: Self.handOverNote(doneSteps: doneStepDescriptions, missedStep: stepDescription, problem: problem))
             }
             doneStepDescriptions.append(stepDescription)
@@ -117,7 +117,7 @@ final class DottieScreenJobGuesser {
                 screenShowsDoneText = await Self.screenShows(doneWhenText)
             }
             if screenShowsDoneText {
-                print("🔮 Guessed the whole job without a screenshot: \(doneStepDescriptions.joined(separator: "; "))")
+                DottieLog.notice("🔮 Guessed the whole job without a screenshot: \(doneStepDescriptions.joined(separator: "; "))")
                 return .finished(answer: answer, steps: doneStepDescriptions)
             }
         }

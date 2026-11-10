@@ -323,7 +323,7 @@ final class DottieToolsStore: ObservableObject {
         for serverName in gitHubServerNames {
             guard let tokenPreset = DottieMCPPresets.preset(withID: "github") else { return }
             if file.mcpServers[serverName]?.command != nil {
-                print("🔧 Moving \(serverName) from browser sign-in (GitHub answers 404) to a token")
+                DottieLog.notice("🔧 Moving \(serverName) from browser sign-in (GitHub answers 404) to a token")
                 file.mcpServers[serverName] = tokenPreset.config
                 var settings = file.dottie.servers[serverName] ?? DottieMCPServerSettings()
                 settings.preset = tokenPreset.id
@@ -339,7 +339,7 @@ final class DottieToolsStore: ObservableObject {
                 }
                 guard let cliToken else { continue }
                 DottieToolsKeychain.setValue(cliToken, server: serverName, name: tokenName)
-                print("🔑 \(serverName) uses the GitHub CLI's sign-in")
+                DottieLog.notice("🔑 \(serverName) uses the GitHub CLI's sign-in")
             }
         }
     }

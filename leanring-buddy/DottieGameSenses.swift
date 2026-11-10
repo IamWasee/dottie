@@ -164,7 +164,7 @@ final class DottieGameHearing {
             captureStream = stream
             streamOutput = output
         } catch {
-            print("⚠️ Game: couldn't listen to the game's sound: \(error)")
+            DottieLog.warning("⚠️ Game: couldn't listen to the game's sound: \(error)")
         }
     }
 

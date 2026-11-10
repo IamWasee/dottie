@@ -206,7 +206,7 @@ final class DottieGuide {
         // Calendar: guiding from that screenshot pointed at other apps'
         // buttons. Bring the app the goal names to the front first.
         if let namedAppName = await Self.bringAppNamedInGoalToFront(goal) {
-            print("🧑‍🏫 Guide: brought \(namedAppName) to the front")
+            DottieLog.notice("🧑‍🏫 Guide: brought \(namedAppName) to the front")
         }
         let frontmostAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
         // How this app really does it, from the web, looked up while the
@@ -382,7 +382,7 @@ final class DottieGuide {
             if let foundFrame, screen.displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: foundFrame.midX, y: foundFrame.midY)) {
                 // How far the model's own box was from the real control, so
                 // drift can be read in the log.
-                print("🧑‍🏫 Guide target \"\(targetLabel)\": model \(Int(targetRect.midX)),\(Int(targetRect.midY)) → found \(Int(foundFrame.midX)),\(Int(foundFrame.midY)) (\(Int(hypot(foundFrame.midX - targetRect.midX, foundFrame.midY - targetRect.midY))) points)")
+                DottieLog.notice("🧑‍🏫 Guide target \"\(targetLabel)\": model \(Int(targetRect.midX)),\(Int(targetRect.midY)) → found \(Int(foundFrame.midX)),\(Int(foundFrame.midY)) (\(Int(hypot(foundFrame.midX - targetRect.midX, foundFrame.midY - targetRect.midY))) points)")
                 step = Step(
                     kind: step.kind,
                     say: step.say,
@@ -394,7 +394,7 @@ final class DottieGuide {
                 )
                 return step
             }
-            print("🧑‍🏫 Guide target \"\(targetLabel)\" isn't on screen (attempt \(attempt))")
+            DottieLog.notice("🧑‍🏫 Guide target \"\(targetLabel)\" isn't on screen (attempt \(attempt))")
             if attempt == 2 {
                 // Still nothing there: say it without pointing at a spot
                 // that may be wrong.
@@ -769,7 +769,7 @@ final class DottieGuide {
         let model = requestBody["model"] as? String ?? Self.guideModel
         guard let (responseData, response) = try? await DottieModelPicker.shared.data(for: request, model: model) else { return nil }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            print("⚠️ Guide request failed: \(String(decoding: responseData.prefix(300), as: UTF8.self))")
+            DottieLog.warning("⚠️ Guide request failed: \(String(decoding: responseData.prefix(300), as: UTF8.self))")
             return nil
         }
         // /chat streams server-sent events.

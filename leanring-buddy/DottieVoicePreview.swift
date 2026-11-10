@@ -196,7 +196,7 @@ final class DottieVoicePreview: ObservableObject {
               let candidates = payload["candidates"] as? [[String: Any]],
               let content = candidates.first?["content"] as? [String: Any],
               let parts = content["parts"] as? [[String: Any]] else {
-            print("🔈 Voice preview: \(model) gave no sample for \(voiceName)")
+            DottieLog.notice("🔈 Voice preview: \(model) gave no sample for \(voiceName)")
             return nil
         }
         for part in parts {
@@ -219,7 +219,7 @@ final class DottieVoicePreview: ObservableObject {
               (tokenReply.1 as? HTTPURLResponse)?.statusCode == 200,
               let tokenPayload = try? JSONSerialization.jsonObject(with: tokenReply.0) as? [String: Any],
               let token = tokenPayload["token"] as? String else {
-            print("🔈 Voice preview: no Live token")
+            DottieLog.notice("🔈 Voice preview: no Live token")
             return nil
         }
         let liveModel = (tokenPayload["model"] as? String) ?? "gemini-3.8-live"
@@ -279,7 +279,7 @@ final class DottieVoicePreview: ObservableObject {
                 if (serverContent["turnComplete"] as? Bool) == true { break }
             }
         } catch {
-            print("🔈 Voice preview: Live sample for \(voiceName) failed: \(error.localizedDescription)")
+            DottieLog.notice("🔈 Voice preview: Live sample for \(voiceName) failed: \(error.localizedDescription)")
         }
         // Anything under a second is a broken sample, not worth saving.
         return audio.count >= sampleRate * 2 ? audio : nil

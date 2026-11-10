@@ -149,7 +149,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
         let activeEventTap = AXIsProcessTrusted() ? createTap(.defaultTap) : nil
         guard let globalEventTap = activeEventTap ?? createTap(.listenOnly) else {
-            print("⚠️ Global push-to-talk: couldn't create CGEvent tap")
+            DottieLog.warning("⚠️ Global push-to-talk: couldn't create CGEvent tap")
             return
         }
         isEventTapActive = activeEventTap != nil
@@ -160,7 +160,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
             0
         ) else {
             CFMachPortInvalidate(globalEventTap)
-            print("⚠️ Global push-to-talk: couldn't create event tap run loop source")
+            DottieLog.warning("⚠️ Global push-to-talk: couldn't create event tap run loop source")
             return
         }
 

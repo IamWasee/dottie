@@ -19,7 +19,7 @@ enum ClickyAnalytics {
 
     static func configure() {
         guard let postHogAPIKey = AppBundleConfiguration.stringValue(forKey: "PostHogAPIKey") else {
-            print("📊 Analytics: disabled (no PostHogAPIKey in Info.plist)")
+            DottieLog.notice("📊 Analytics: disabled (no PostHogAPIKey in Info.plist)")
             return
         }
         let postHogHost = AppBundleConfiguration.stringValue(forKey: "PostHogHost") ?? "https://us.i.posthog.com"

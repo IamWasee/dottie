@@ -209,7 +209,7 @@ final class DottieGameBrain {
                 lastEngineName = "claude \(claudeTier.modelKeyword)"
                 return plan
             }
-            print("⚠️ Game brain: Claude's reply had no plan: \(claudeReply.prefix(300))")
+            DottieLog.warning("⚠️ Game brain: Claude's reply had no plan: \(claudeReply.prefix(300))")
         }
         guard !Task.isCancelled else { return nil }
         // A timed-out or busy Gemini model gets one more try on another

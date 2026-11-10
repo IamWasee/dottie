@@ -257,7 +257,7 @@ enum DottieTeaching {
             return nil
         }
         guard let foundBoxes else {
-            print("✏️ Couldn't find the anchors")
+            DottieLog.notice("✏️ Couldn't find the anchors")
             return [:]
         }
         var frames: [String: CGRect] = [:]
@@ -269,7 +269,7 @@ enum DottieTeaching {
                 height: (box[2] - box[0]) / 1000 * displayFrame.height
             )
         }
-        print("✏️ Found \(frames.count) of \(anchors.count) anchors with \(foundBoxes.model)")
+        DottieLog.notice("✏️ Found \(frames.count) of \(anchors.count) anchors with \(foundBoxes.model)")
         return frames
     }
 

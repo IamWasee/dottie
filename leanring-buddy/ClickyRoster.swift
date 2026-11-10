@@ -1397,7 +1397,7 @@ extension ClickyRoster {
         DottieMausBot.shared.pauseClaude(for: reason)
         appendTranscriptItem(.status, text: reason.noteForTranscript, to: agentID, persist: false)
         if case .engineProblem(let detail) = reason {
-            print("⚠️ Claude helper turn moved to Gemini: \(detail)")
+            DottieLog.warning("⚠️ Claude helper turn moved to Gemini: \(detail)")
         }
     }
 

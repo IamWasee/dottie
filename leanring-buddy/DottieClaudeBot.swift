@@ -84,7 +84,7 @@ final class DottieClaudeBot {
         let identity: DottieMausBotIdentity
         switch await mausBotRuntime.ensureBot(for: spec, launcher: launcher) {
         case .failure(let reason):
-            print("⚠️ \(helperName): Claude bot not ready (\(reason))")
+            DottieLog.warning("⚠️ \(helperName): Claude bot not ready (\(reason))")
             skipForAWhile()
             return nil
         case .success(let readyIdentity):
@@ -122,7 +122,7 @@ final class DottieClaudeBot {
         case .finished(let succeeded, _) where succeeded && !replyCollector.text.isEmpty:
             return replyCollector.text
         case .stopped:
-            print("⚠️ \(helperName): Claude took over \(Int(timeoutSeconds)) s")
+            DottieLog.warning("⚠️ \(helperName): Claude took over \(Int(timeoutSeconds)) s")
             return nil
         default:
             skipForAWhile()

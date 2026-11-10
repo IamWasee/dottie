@@ -176,7 +176,7 @@ enum DottieGameMapPicture {
             do {
                 try asset.export(to: openableModelURL)
             } catch {
-                print("⚠️ Couldn't write \(openableModelURL.lastPathComponent): \(error.localizedDescription)")
+                DottieLog.warning("⚠️ Couldn't write \(openableModelURL.lastPathComponent): \(error.localizedDescription)")
             }
             if FileManager.default.fileExists(atPath: openableModelURL.path) { return }
         }
@@ -470,7 +470,7 @@ enum DottieGameMapPicture {
         do {
             try FileManager.default.removeItem(at: savedMap.mapFolderURL)
         } catch {
-            print("⚠️ Couldn't delete the map of \(savedMap.gameName): \(error.localizedDescription)")
+            DottieLog.warning("⚠️ Couldn't delete the map of \(savedMap.gameName): \(error.localizedDescription)")
             return false
         }
         try? FileManager.default.removeItem(at: savedMap.gameFolderURL.appendingPathComponent("movement.json"))
