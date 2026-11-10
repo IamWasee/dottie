@@ -118,7 +118,8 @@ jobs:
             {
               echo "### App unit tests"
               echo ""
-              grep -E "Test run with|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" test.log | tail -5 | sed 's/^/- /'
+              echo "- $(grep -cE "^Test case .* passed" test.log) passed, $(grep -cE "^Test case .* failed" test.log) failed"
+              grep -E "^Test case .* failed" test.log | sed 's/^/- /' || true
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
