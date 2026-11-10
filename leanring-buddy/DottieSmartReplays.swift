@@ -114,7 +114,7 @@ final class DottieSmartReplayStore: ObservableObject {
             replays.insert(cleanedReplay, at: 0)
         }
         guard let replayData = try? Self.encoder.encode(cleanedReplay) else { return }
-        try? replayData.write(to: fileURL(for: cleanedReplay.id), options: .atomic)
+        DottieFileSaver.save(replayData, to: fileURL(for: cleanedReplay.id))
     }
 
     func delete(_ replayID: UUID) {

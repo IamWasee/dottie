@@ -657,7 +657,7 @@ final class DottieEpisodeEmbeddings {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self, !Task.isCancelled else { return }
             if let fileData = try? JSONEncoder().encode(self.vectors) {
-                try? fileData.write(to: self.fileURL, options: .atomic)
+                DottieFileSaver.save(fileData, to: self.fileURL)
             }
         }
     }

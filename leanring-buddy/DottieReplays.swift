@@ -150,7 +150,7 @@ final class DottieReplayStore: ObservableObject {
 
     private func write(_ replay: DottieReplay) {
         guard let data = try? Self.encoder.encode(replay) else { return }
-        try? data.write(to: fileURL(for: replay), options: .atomic)
+        DottieFileSaver.save(data, to: fileURL(for: replay))
     }
 
     /// Saves a job that worked, replacing an older replay of the same job.

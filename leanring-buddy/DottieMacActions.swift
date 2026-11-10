@@ -108,7 +108,7 @@ enum DottieMacActions {
         var arguments = ["run", shortcutName]
         if let input, !input.isEmpty {
             let inputFileURL = workFolderURL.appendingPathComponent("input.txt")
-            try? input.write(to: inputFileURL, atomically: true, encoding: .utf8)
+            DottieFileSaver.save(text: input, to: inputFileURL)
             arguments += ["--input-path", inputFileURL.path]
         }
         let outputFileURL = workFolderURL.appendingPathComponent("output")

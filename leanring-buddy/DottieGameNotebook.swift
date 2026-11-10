@@ -287,7 +287,7 @@ final class DottieGameNotebook {
     /// yet, so the user always has a file to open and edit.
     func createUserControlsFileIfMissing() {
         guard !FileManager.default.fileExists(atPath: userControlsFileURL.path) else { return }
-        try? Self.userControlsFileHeader.write(to: userControlsFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: Self.userControlsFileHeader, to: userControlsFileURL)
     }
 
     /// Reads my-controls.txt fresh each time, so edits the user makes while
@@ -325,7 +325,7 @@ final class DottieGameNotebook {
             keptLines.removeLast()
         }
         keptLines.append("\(normalizedKeys) = \(trimmedMeaning)")
-        try? (keptLines.joined(separator: "\n") + "\n").write(to: userControlsFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: (keptLines.joined(separator: "\n") + "\n"), to: userControlsFileURL)
         contents.controls[normalizedKeys] = String(trimmedMeaning.prefix(80)) + " (taught by the user)"
         save()
     }
@@ -418,7 +418,7 @@ final class DottieGameNotebook {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let contentsData = try? encoder.encode(contents) else { return }
-        try? contentsData.write(to: folderURL.appendingPathComponent("notebook.json"), options: .atomic)
+        DottieFileSaver.save(contentsData, to: folderURL.appendingPathComponent("notebook.json"))
     }
 }
 

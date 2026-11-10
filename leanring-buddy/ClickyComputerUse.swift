@@ -117,8 +117,8 @@ enum ClickyComputerUse {
     static func writePolicyFiles(inCLIHome cliHomeURL: URL) {
         let observePolicy = policyYAML(allowedToolNames: observationToolNames, comment: "Look only. Written by Dottie; rewritten at launch.")
         let actPolicy = policyYAML(allowedToolNames: observationToolNames + inputToolNames, comment: "Look and act, for turns the user allowed. Written by Dottie; rewritten at launch.")
-        try? observePolicy.write(to: observePolicyFileURL(inCLIHome: cliHomeURL), atomically: true, encoding: .utf8)
-        try? actPolicy.write(to: actPolicyFileURL(inCLIHome: cliHomeURL), atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: observePolicy, to: observePolicyFileURL(inCLIHome: cliHomeURL))
+        DottieFileSaver.save(text: actPolicy, to: actPolicyFileURL(inCLIHome: cliHomeURL))
     }
 
     private static func policyYAML(allowedToolNames: [String], comment: String) -> String {

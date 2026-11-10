@@ -77,7 +77,7 @@ enum DottieBuiltInSkills {
             """
             let existingText = try? String(contentsOf: skillFileURL, encoding: .utf8)
             if existingText != skillFileText {
-                try? skillFileText.write(to: skillFileURL, atomically: true, encoding: .utf8)
+                DottieFileSaver.save(text: skillFileText, to: skillFileURL)
             }
             skillFileURLs.append(skillFileURL)
         }

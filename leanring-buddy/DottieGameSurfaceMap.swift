@@ -266,7 +266,7 @@ actor DottieGameSurfaceMap {
             // OBJ counts points from 1.
             lines.append("f \(quad.0 + 1) \(quad.1 + 1) \(quad.2 + 1) \(quad.3 + 1)")
         }
-        try? (lines.joined(separator: "\n") + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: (lines.joined(separator: "\n") + "\n"), to: fileURL)
     }
 
     /// The same mesh as USD (the file's extension picks USDZ or USDC)
@@ -326,7 +326,7 @@ actor DottieGameSurfaceMap {
             cellData.append(cell.weight)
             cellData.append(contentsOf: [UInt8((cell.color >> 16) & 0xFF), UInt8((cell.color >> 8) & 0xFF), UInt8(cell.color & 0xFF)])
         }
-        try? cellData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(cellData, to: fileURL)
     }
 
     nonisolated private static func loadCells(from fileURL: URL) -> [Int64: Cell] {

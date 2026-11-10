@@ -235,7 +235,7 @@ final class DottieAwayMode: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let logData = try? encoder.encode(log) else { return }
-        try? logData.write(to: Self.logFileURL, options: .atomic)
+        DottieFileSaver.save(logData, to: Self.logFileURL)
     }
 }
 

@@ -356,7 +356,7 @@ final class GeminiCLIAgentRuntime {
         )
 
         if let settingsData = try? JSONSerialization.data(withJSONObject: cliSettings, options: [.prettyPrinted, .sortedKeys]) {
-            try? settingsData.write(to: settingsFolderURL.appendingPathComponent("settings.json"), options: .atomic)
+            DottieFileSaver.save(settingsData, to: settingsFolderURL.appendingPathComponent("settings.json"))
         }
     }
 

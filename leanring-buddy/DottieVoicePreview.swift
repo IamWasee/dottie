@@ -148,7 +148,7 @@ final class DottieVoicePreview: ObservableObject {
 
     private static func saveSample(_ audio: Data, for voiceName: String) {
         try? FileManager.default.createDirectory(at: samplesFolder, withIntermediateDirectories: true)
-        try? audio.write(to: sampleFile(for: voiceName), options: .atomic)
+        DottieFileSaver.save(audio, to: sampleFile(for: voiceName))
     }
 
     // MARK: - Making a sample

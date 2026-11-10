@@ -396,7 +396,7 @@ final class DottieFolderCleanup {
         if !steps.isEmpty {
             let undoLog = UndoLog(folderPath: plan.folderURL.path, date: Date(), steps: steps, createdFolders: createdFolders)
             if let logData = try? JSONEncoder().encode(undoLog) {
-                try? logData.write(to: Self.undoLogURL, options: .atomic)
+                DottieFileSaver.save(logData, to: Self.undoLogURL)
             }
         }
 

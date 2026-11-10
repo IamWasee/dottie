@@ -175,7 +175,7 @@ struct DottieToolsFile: Codable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let fileData = try? encoder.encode(self) {
-            try? fileData.write(to: Self.fileURL, options: .atomic)
+            DottieFileSaver.save(fileData, to: Self.fileURL)
         }
     }
 

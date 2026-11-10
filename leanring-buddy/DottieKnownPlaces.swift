@@ -214,7 +214,7 @@ final class DottieKnownPlaces {
     private func save() {
         try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let encodedPlaces = try? JSONEncoder().encode(places) {
-            try? encodedPlaces.write(to: storeURL, options: .atomic)
+            DottieFileSaver.save(encodedPlaces, to: storeURL)
         }
     }
 

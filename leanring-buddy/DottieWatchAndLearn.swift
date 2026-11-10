@@ -332,7 +332,7 @@ final class DottieWatchAndLearn: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let storeData = try? encoder.encode(howTos) else { return }
-        try? storeData.write(to: Self.storeURL, options: .atomic)
+        DottieFileSaver.save(storeData, to: Self.storeURL)
     }
 }
 

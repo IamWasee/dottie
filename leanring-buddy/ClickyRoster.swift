@@ -1139,7 +1139,7 @@ final class ClickyRoster: ObservableObject {
             "model": ["name": agent.model]
         ]
         if let settingsData = try? JSONSerialization.data(withJSONObject: geminiSettings, options: [.prettyPrinted, .sortedKeys]) {
-            try? settingsData.write(to: agentWorkspaceURL.appendingPathComponent(".gemini/settings.json"))
+            DottieFileSaver.save(settingsData, to: agentWorkspaceURL.appendingPathComponent(".gemini/settings.json"))
         }
     }
 
@@ -1160,7 +1160,7 @@ final class ClickyRoster: ObservableObject {
         settingsObject["env"] = environmentSettings
         try? FileManager.default.createDirectory(at: claudeSettingsFolderURL, withIntermediateDirectories: true)
         if let settingsData = try? JSONSerialization.data(withJSONObject: settingsObject, options: [.prettyPrinted, .sortedKeys]) {
-            try? settingsData.write(to: claudeSettingsFileURL, options: .atomic)
+            DottieFileSaver.save(settingsData, to: claudeSettingsFileURL)
         }
     }
 
@@ -1177,7 +1177,7 @@ final class ClickyRoster: ObservableObject {
         let refreshedText = String(currentInstructions[..<currentNotesRange.lowerBound])
             + String(existingText[existingNotesRange.lowerBound...])
         guard refreshedText != existingText else { return }
-        try? refreshedText.write(to: instructionsFileURL, atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: refreshedText, to: instructionsFileURL)
     }
 
     /// The standing instructions every agent gets: identity, how to work,
@@ -1255,7 +1255,7 @@ final class ClickyRoster: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let rosterData = try? encoder.encode(agents) else { return }
-        try? rosterData.write(to: rosterFileURL, options: .atomic)
+        DottieFileSaver.save(rosterData, to: rosterFileURL)
     }
 
     /// Deletes one message from a Dot's chat (Home → Dots).
@@ -1271,7 +1271,7 @@ final class ClickyRoster: ObservableObject {
         // Keep the last 500 items so the file stays small.
         let transcriptToSave = Array((transcriptsByAgentID[agentID] ?? []).suffix(500))
         guard let transcriptData = try? encoder.encode(transcriptToSave) else { return }
-        try? transcriptData.write(to: workspaceURL(for: agent).appendingPathComponent("transcript.json"), options: .atomic)
+        DottieFileSaver.save(transcriptData, to: workspaceURL(for: agent).appendingPathComponent("transcript.json"))
     }
 }
 

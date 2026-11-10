@@ -89,7 +89,7 @@ final class DottieProjects: ObservableObject {
         )
         try? FileManager.default.createDirectory(at: folderURL(for: project), withIntermediateDirectories: true)
         let notes = "# \(projectName)\n\n\(summary.isEmpty ? "" : summary + "\n\n")## What's here\n\n(nothing yet)\n\n## What's left\n\n"
-        try? notes.write(to: folderURL(for: project).appendingPathComponent(Self.notesFileName), atomically: true, encoding: .utf8)
+        DottieFileSaver.save(text: notes, to: folderURL(for: project).appendingPathComponent(Self.notesFileName))
         projects.append(project)
         saveIndex()
         return (project, true)
@@ -232,6 +232,6 @@ final class DottieProjects: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
         guard let indexData = try? encoder.encode(projects) else { return }
-        try? indexData.write(to: indexURL, options: .atomic)
+        DottieFileSaver.save(indexData, to: indexURL)
     }
 }

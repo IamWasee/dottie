@@ -583,7 +583,7 @@ final class DottieToolsStore: ObservableObject {
     private func saveToolCache() {
         if let cacheData = try? JSONEncoder().encode(toolsByServer) {
             try? FileManager.default.createDirectory(at: DottieToolsFile.folderURL, withIntermediateDirectories: true)
-            try? cacheData.write(to: DottieToolsFile.toolCacheFileURL, options: .atomic)
+            DottieFileSaver.save(cacheData, to: DottieToolsFile.toolCacheFileURL)
         }
     }
 

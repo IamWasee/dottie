@@ -43,7 +43,7 @@ final class DottieAppLessons {
         lessons.append(trimmedLesson)
         lessonsByAppName[Self.key(for: appName)] = Array(lessons.suffix(Self.maximumLessonsPerApp))
         guard let lessonsData = try? JSONEncoder().encode(lessonsByAppName) else { return }
-        try? lessonsData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(lessonsData, to: fileURL)
     }
 
     func lessons(forApp appName: String) -> [String] {

@@ -144,7 +144,7 @@ final class DottieFormDetails: ObservableObject {
 
     private func writeToDisk() {
         guard let detailsData = try? JSONEncoder().encode(details) else { return }
-        try? detailsData.write(to: fileURL, options: .atomic)
+        DottieFileSaver.save(detailsData, to: fileURL)
     }
 
     // MARK: - What's never saved

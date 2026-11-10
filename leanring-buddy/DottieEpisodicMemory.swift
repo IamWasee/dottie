@@ -694,7 +694,7 @@ final class DottieEpisodicMemory: ObservableObject {
             _ = try? fileHandle.seekToEnd()
             try? fileHandle.write(contentsOf: linesData)
         } else {
-            try? linesData.write(to: episodesFileURL, options: .atomic)
+            DottieFileSaver.save(linesData, to: episodesFileURL)
         }
     }
 
@@ -706,7 +706,7 @@ final class DottieEpisodicMemory: ObservableObject {
             fileData.append(lineData)
             fileData.append(UInt8(ascii: "\n"))
         }
-        try? fileData.write(to: episodesFileURL, options: .atomic)
+        DottieFileSaver.save(fileData, to: episodesFileURL)
         writeIndex()
     }
 
@@ -723,7 +723,7 @@ final class DottieEpisodicMemory: ObservableObject {
         }
         let index: [String: Any] = ["count": episodes.count, "file": "episodes.jsonl", "days": days]
         if let indexData = try? JSONSerialization.data(withJSONObject: index, options: [.prettyPrinted, .sortedKeys]) {
-            try? indexData.write(to: indexFileURL, options: .atomic)
+            DottieFileSaver.save(indexData, to: indexFileURL)
         }
     }
 
@@ -738,7 +738,7 @@ final class DottieEpisodicMemory: ObservableObject {
             return
         }
         guard let pendingData = try? Self.makeEncoder().encode(pendingExchanges) else { return }
-        try? pendingData.write(to: pendingFileURL, options: .atomic)
+        DottieFileSaver.save(pendingData, to: pendingFileURL)
     }
 }
 

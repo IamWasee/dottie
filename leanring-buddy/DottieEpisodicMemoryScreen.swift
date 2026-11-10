@@ -282,7 +282,7 @@ final class DottieScreenMemory: ObservableObject {
             _ = try? fileHandle.seekToEnd()
             try? fileHandle.write(contentsOf: lineData)
         } else {
-            try? lineData.write(to: momentsFileURL, options: .atomic)
+            DottieFileSaver.save(lineData, to: momentsFileURL)
         }
     }
 
@@ -299,7 +299,7 @@ final class DottieScreenMemory: ObservableObject {
             fileData.append(lineData)
             fileData.append(UInt8(ascii: "\n"))
         }
-        try? fileData.write(to: momentsFileURL, options: .atomic)
+        DottieFileSaver.save(fileData, to: momentsFileURL)
     }
 }
 
