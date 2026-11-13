@@ -56,7 +56,7 @@ final class DottieScreenTaskRunner {
     private static let taskModel = "gemini-3.6-flash"
     /// Older screenshots are dropped from the conversation to keep requests
     /// small; the action log still says what happened.
-    private static let keptScreenshotCount = 2
+    static let keptScreenshotCount = 2
     private static let maximumScreenshotDimension = 1440
     /// Games favor speed: a smaller frame and the quickest model (a box
     /// lookup takes about a second on it, Oct 2026).
@@ -685,7 +685,7 @@ final class DottieScreenTaskRunner {
 
     /// The action did what it said ("clicked", "typed it"), not an error
     /// or a refusal.
-    private static func resultLooksDone(_ result: String) -> Bool {
+    static func resultLooksDone(_ result: String) -> Bool {
         let lowercasedResult = result.lowercased()
         return !["error", "couldn't", "unknown", "refused", "not clicked", "stopped"].contains { lowercasedResult.hasPrefix($0) }
     }
@@ -901,13 +901,13 @@ final class DottieScreenTaskRunner {
     }
 
     /// Nearly no pixel moved (a blinking caret or clock doesn't count).
-    private static func isSameScreen(_ first: [UInt8], _ second: [UInt8]) -> Bool {
+    static func isSameScreen(_ first: [UInt8], _ second: [UInt8]) -> Bool {
         guard first.count == second.count, !first.isEmpty else { return false }
         let changedPixels = zip(first, second).filter { abs(Int($0) - Int($1)) > 12 }.count
         return Double(changedPixels) / Double(first.count) < 0.003
     }
 
-    private static func signature(functionName: String, arguments: [String: Any]) -> String {
+    static func signature(functionName: String, arguments: [String: Any]) -> String {
         let label = (arguments["label"] as? String) ?? (arguments["text"] as? String) ?? (arguments["keys"] as? String)
             ?? (arguments["url"] as? String) ?? (arguments["name"] as? String) ?? (arguments["direction"] as? String) ?? ""
         return label.isEmpty ? functionName : "\(functionName) \"\(label.prefix(60))\""
@@ -915,7 +915,7 @@ final class DottieScreenTaskRunner {
 
     /// An action done three times in the last four (scrolling and waiting
     /// repeat legitimately, so they need more).
-    private static func repeatedAction(in signatures: [String]) -> String? {
+    static func repeatedAction(in signatures: [String]) -> String? {
         guard let lastSignature = signatures.last else { return nil }
         let isNaturallyRepeated = lastSignature.hasPrefix("scroll") || lastSignature.hasPrefix("wait")
         let repeatCount = signatures.suffix(isNaturallyRepeated ? 6 : 4).filter { $0 == lastSignature }.count
@@ -1734,7 +1734,7 @@ final class DottieScreenTaskRunner {
     }
 
     /// Keeps only the newest screenshots in the conversation.
-    private static func dropOldScreenshots(from contents: inout [[String: Any]]) {
+    static func dropOldScreenshots(from contents: inout [[String: Any]]) {
         var screenshotsSeen = 0
         for contentIndex in contents.indices.reversed() {
             guard var parts = contents[contentIndex]["parts"] as? [[String: Any]] else { continue }
