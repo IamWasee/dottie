@@ -376,18 +376,25 @@ extension DottieSelfKnowledge {
     /// Settings sections, the notch, CompanionManager's tools). Built on
     /// each call so shortcut names and state are current.
     static func features() -> [Feature] {
-        let talkKeys = companionManager?.globalPushToTalkShortcutMonitor.talkHotkey.displayText ?? ClickyHotkey.defaultTalk.displayText
-        let dictateKeys = companionManager?.globalPushToTalkShortcutMonitor.dictationHotkey.displayText ?? ClickyHotkey.defaultDictation.displayText
-        let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
-        let voiceNames = DottieVoicePreview.voices.map(\.name).joined(separator: ", ")
+        talkingFeatures() + helperAndConnectionFeatures() + everydayFeatures() + settingsFeatures()
+    }
+
+    private static var currentTalkShortcutText: String {
+        companionManager?.globalPushToTalkShortcutMonitor.talkHotkey.displayText ?? ClickyHotkey.defaultTalk.displayText
+    }
+
+    private static var currentDictationShortcutText: String {
+        companionManager?.globalPushToTalkShortcutMonitor.dictationHotkey.displayText ?? ClickyHotkey.defaultDictation.displayText
+    }
+
+    /// Talking to Dottie and what she does on the screen.
+    private static func talkingFeatures() -> [Feature] {
+        let talkKeys = currentTalkShortcutText
+        let dictateKeys = currentDictationShortcutText
         let askBarKeys = DottieEveryday.shared.shortcuts.hotkey(for: .askBar)?.displayText
         let askBarText = askBarKeys.map { "Press \($0)" } ?? "Set a shortcut in Settings → Shortcuts, then press it"
-        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
-        let askBarKeyName: String = askBarKeys ?? "a shortcut you pick"
-        let fixTextKeyName: String = fixTextKeys ?? "a shortcut you pick (off until you choose one)"
-        let fixTextKeyNote: String = fixTextKeys.map { " (\($0))" } ?? " (set one in Settings → Shortcuts)"
 
-        let allFeatures: [Feature] = [
+        let features: [Feature] = [
             Feature(
                 id: "tour",
                 title: "A tour of Dottie",
@@ -473,7 +480,14 @@ extension DottieSelfKnowledge {
                 keywords: ["draw", "drawing", "explain", "math", "diagram", "graph", "board", "whiteboard", "equation"],
                 summary: "For math or anything visual I draw on your screen, or on a board beside it, while I explain step by step. Say clear to wipe it.",
                 whereToFind: "Any app, by voice."
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Helpers and everything Dottie connects to: projects, skills, the brain, meetings, the phone, the smart home and tools.
+    private static func helperAndConnectionFeatures() -> [Feature] {
+        let features: [Feature] = [
             Feature(
                 id: "helpers",
                 title: "Helpers (Dots)",
@@ -653,7 +667,17 @@ extension DottieSelfKnowledge {
                     )
                 ],
                 doneLine: "That's it. Helpers use Claude when they can and Gemini when they can't."
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Everyday extras: the profile, games, focus, watches, replays, fixing text and memory.
+    private static func everydayFeatures() -> [Feature] {
+        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
+        let fixTextKeyNote: String = fixTextKeys.map { " (\($0))" } ?? " (set one in Settings → Shortcuts)"
+
+        let features: [Feature] = [
             Feature(
                 id: "profile",
                 title: "My levels",
@@ -757,7 +781,23 @@ extension DottieSelfKnowledge {
                 keywords: ["search", "web", "news", "weather", "price", "look up", "google"],
                 summary: "For fresh facts (news, prices, weather, scores) I search the web and answer in a sentence.",
                 whereToFind: "By voice."
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// How Dottie looks, sounds and is set up, ending with the tour of Settings.
+    private static func settingsFeatures() -> [Feature] {
+        let talkKeys = currentTalkShortcutText
+        let dictateKeys = currentDictationShortcutText
+        let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
+        let voiceNames = DottieVoicePreview.voices.map(\.name).joined(separator: ", ")
+        let askBarKeys = DottieEveryday.shared.shortcuts.hotkey(for: .askBar)?.displayText
+        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
+        let askBarKeyName: String = askBarKeys ?? "a shortcut you pick"
+        let fixTextKeyName: String = fixTextKeys ?? "a shortcut you pick (off until you choose one)"
+
+        let features: [Feature] = [
             Feature(
                 id: "cursor",
                 title: "My cursor",
@@ -895,7 +935,7 @@ extension DottieSelfKnowledge {
                 doneLine: "That's Settings! Ask me to open any of it."
             )
         ]
-        return allFeatures
+        return features
     }
 
     private static func featuresText() -> String {
