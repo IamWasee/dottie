@@ -459,7 +459,6 @@ final class ClickyRoster: ObservableObject {
         touchAgent(agent.id)
 
         let routineID = conversation.routineID
-        let isFirstTurn = conversation.isFirstGeminiTurn
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
         let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
@@ -525,58 +524,16 @@ final class ClickyRoster: ObservableObject {
             }
             let geminiMessage = conversation.geminiNeedsHandover ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {
-                do {
-                    try await self.runAgentProcess(
-                        agent: agent,
-                        sessionID: conversation.geminiSessionID,
-                        isFirstTurn: isFirstTurn,
-                        message: geminiMessage,
-                        workspaceURL: agentWorkspaceURL,
-                        isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs,
-                        workerRoute: workerRoute
-                    )
-                } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
-                            where !isFirstTurn && Self.isLostSessionError(standardErrorTail) {
-                    // Gemini CLI lost the saved conversation (for example
-                    // the first turn failed before it was written). Start a
-                    // fresh session and hand over the recent chat instead,
-                    // rather than failing every turn from now on.
-                    let freshSessionID: UUID
-                    let handover: String
-                    if let routineID {
-                        freshSessionID = self.routineStore.beginFreshSession(routineID: routineID)
-                        handover = self.routineStore.routine(withID: routineID)
-                            .map { ClickyRoutinePrompts.lastReportHandover(for: $0) + "\n\n" } ?? ""
-                    } else {
-                        freshSessionID = self.replaceSession(forAgentID: agentID)
-                        handover = self.recentConversationContext(forAgentID: agentID)
-                    }
-                    try await self.runAgentProcess(
-                        agent: agent,
-                        sessionID: freshSessionID,
-                        isFirstTurn: true,
-                        message: handover + fullMessageForAgent,
-                        workspaceURL: agentWorkspaceURL,
-                        isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs,
-                        workerRoute: workerRoute
-                    )
-                } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
-                            where isFirstTurn && standardErrorTail.lowercased().contains("already exists") {
-                    // An earlier turn did save the session after all
-                    // (it failed partway): carry on in it.
-                    try await self.runAgentProcess(
-                        agent: agent,
-                        sessionID: conversation.geminiSessionID,
-                        isFirstTurn: false,
-                        message: geminiMessage,
-                        workspaceURL: agentWorkspaceURL,
-                        isComputerUseApproved: isTurnApprovedForComputerUse,
-                        additionalDirectoryURLs: additionalDirectoryURLs,
-                        workerRoute: workerRoute
-                    )
-                }
+                try await self.runTurnOnGeminiCLI(
+                    agent: agent,
+                    conversation: conversation,
+                    geminiMessage: geminiMessage,
+                    fullMessageForAgent: fullMessageForAgent,
+                    agentWorkspaceURL: agentWorkspaceURL,
+                    isTurnApprovedForComputerUse: isTurnApprovedForComputerUse,
+                    additionalDirectoryURLs: additionalDirectoryURLs,
+                    workerRoute: workerRoute
+                )
             } catch {
                 self.appendTranscriptItem(.error, text: error.localizedDescription, to: agentID)
             }
@@ -585,6 +542,76 @@ final class ClickyRoster: ObservableObject {
                     self.finishTurn(agentID: agentID)
                 }
             }
+        }
+    }
+
+    /// Runs the turn on Gemini CLI. When the CLI lost the saved conversation,
+    /// or already has one it was told to start, the turn is run once more
+    /// the way that fits instead of failing.
+    private func runTurnOnGeminiCLI(
+        agent: ClickyAgent,
+        conversation: ClickyTurnConversation,
+        geminiMessage: String,
+        fullMessageForAgent: String,
+        agentWorkspaceURL: URL,
+        isTurnApprovedForComputerUse: Bool,
+        additionalDirectoryURLs: [URL],
+        workerRoute: String
+    ) async throws {
+        let agentID = agent.id
+        let routineID = conversation.routineID
+        let isFirstTurn = conversation.isFirstGeminiTurn
+        do {
+            try await self.runAgentProcess(
+                agent: agent,
+                sessionID: conversation.geminiSessionID,
+                isFirstTurn: isFirstTurn,
+                message: geminiMessage,
+                workspaceURL: agentWorkspaceURL,
+                isComputerUseApproved: isTurnApprovedForComputerUse,
+                additionalDirectoryURLs: additionalDirectoryURLs,
+                workerRoute: workerRoute
+            )
+        } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
+                    where !isFirstTurn && Self.isLostSessionError(standardErrorTail) {
+            // Gemini CLI lost the saved conversation (for example
+            // the first turn failed before it was written). Start a
+            // fresh session and hand over the recent chat instead,
+            // rather than failing every turn from now on.
+            let freshSessionID: UUID
+            let handover: String
+            if let routineID {
+                freshSessionID = self.routineStore.beginFreshSession(routineID: routineID)
+                handover = self.routineStore.routine(withID: routineID)
+                    .map { ClickyRoutinePrompts.lastReportHandover(for: $0) + "\n\n" } ?? ""
+            } else {
+                freshSessionID = self.replaceSession(forAgentID: agentID)
+                handover = self.recentConversationContext(forAgentID: agentID)
+            }
+            try await self.runAgentProcess(
+                agent: agent,
+                sessionID: freshSessionID,
+                isFirstTurn: true,
+                message: handover + fullMessageForAgent,
+                workspaceURL: agentWorkspaceURL,
+                isComputerUseApproved: isTurnApprovedForComputerUse,
+                additionalDirectoryURLs: additionalDirectoryURLs,
+                workerRoute: workerRoute
+            )
+        } catch GeminiCLIAgentRuntimeError.processFailed(_, let standardErrorTail)
+                    where isFirstTurn && standardErrorTail.lowercased().contains("already exists") {
+            // An earlier turn did save the session after all
+            // (it failed partway): carry on in it.
+            try await self.runAgentProcess(
+                agent: agent,
+                sessionID: conversation.geminiSessionID,
+                isFirstTurn: false,
+                message: geminiMessage,
+                workspaceURL: agentWorkspaceURL,
+                isComputerUseApproved: isTurnApprovedForComputerUse,
+                additionalDirectoryURLs: additionalDirectoryURLs,
+                workerRoute: workerRoute
+            )
         }
     }
 
