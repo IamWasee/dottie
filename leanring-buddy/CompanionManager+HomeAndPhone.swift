@@ -415,91 +415,7 @@ extension CompanionManager {
         DottieFunPack.shared.attach(to: self)
         configureSpeedPack()
         clickyRoster.onAgentTurnFinished = { [weak self] turnResult in
-            guard let self else { return }
-            DottieFunPack.shared.helperTurnFinished(
-                agentID: turnResult.agent.id,
-                reply: turnResult.finalReply,
-                succeeded: turnResult.succeeded,
-                routineTitle: turnResult.routineTitle
-            )
-            // A routine run with nothing new stays out of the notch.
-            guard !turnResult.foundNothingNew else { return }
-            let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
-            let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
-            // The helper did what it could in the background and left the
-            // on-screen steps to Dottie (DottieWorkRoutes).
-            if turnResult.succeeded, let screenJobRequest = DottieWorkRoutes.screenJobRequest(in: turnResult.finalReply) {
-                DottieLog.notice("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
-                let status = self.startScreenTask(ScreenJob(text: screenJobRequest.steps, returnsToHelperAgentID: turnResult.agent.id))
-                let progressText = screenJobRequest.replyWithoutBlock.isEmpty ? "Doing the on-screen part now." : screenJobRequest.replyWithoutBlock
-                self.notchPresenter.showAgentUpdate(title: updateTitle, text: progressText)
-                if isPhoneHelper {
-                    Task { await self.phoneBridge.send("Doing the on-screen part on your Mac now (\(status.prefix(80))).") }
-                }
-                return
-            }
-            if let computerUseRequest = turnResult.computerUseRequest {
-                // From the phone, or while the user is away: asked on the
-                // phone with Allow / Deny buttons, as well as in the notch.
-                if isPhoneHelper || DottieAwayMode.shared.questionsGoToPhone {
-                    let requestingAgent = turnResult.agent
-                    Task { [weak self] in
-                        let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
-                            "\(updateTitle) needs to use your Mac's screen for this: \(computerUseRequest)",
-                            screenshotJPEG: nil
-                        )
-                        guard let self, self.clickyRoster.pendingComputerUseRequest(for: requestingAgent) != nil else { return }
-                        self.notchPresenter.dropComputerUseRequest(forAgentID: requestingAgent.id)
-                        self.dotNotifications.removeNotification(forAgentID: requestingAgent.id)
-                        if isAllowed {
-                            self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
-                        } else {
-                            self.clickyRoster.declineComputerUse(for: requestingAgent)
-                        }
-                    }
-                }
-                // Ask in the notch and in a notification; the answer comes
-                // back through onAnswerComputerUseRequest below.
-                self.notchPresenter.showAgentUpdate(
-                    title: updateTitle,
-                    text: computerUseRequest,
-                    computerUseRequestAgentID: turnResult.agent.id
-                )
-                self.dotNotifications.notifyComputerUseRequest(
-                    agentID: turnResult.agent.id,
-                    title: "\(updateTitle) wants to use your Mac",
-                    text: computerUseRequest
-                )
-                return
-            }
-            let updateText = turnResult.finalReply.isEmpty
-                ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
-                : turnResult.finalReply
-            if isPhoneHelper {
-                Task { await self.phoneBridge.send(updateText) }
-            }
-            if DottieAwayMode.shared.isAway {
-                DottieAwayMode.shared.noteResult(
-                    title: updateTitle,
-                    detail: updateText,
-                    succeeded: turnResult.succeeded,
-                    alreadyTextedToPhone: isPhoneHelper
-                )
-            }
-            let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
-            self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
-            if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
-                self.pendingSpokenBrainQuestion = nil
-                if turnResult.succeeded {
-                    self.brain.saveBrainAnswer(question: brainQuestion, answer: updateText)
-                }
-                self.speakBrainAnswer(question: brainQuestion, answer: updateText)
-                self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
-                return
-            }
-            self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
-            self.refreshNotchPeekFiles()
-            self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
+            self?.handleFinishedHelperTurn(turnResult)
         }
 
         dotNotifications.configure()
@@ -543,6 +459,96 @@ extension CompanionManager {
                 self.clickyRoster.declineComputerUse(for: requestingAgent)
             }
         }
+    }
+
+    /// A helper finished a turn: hands on-screen steps it asked for to a
+    /// screen job, asks about using the Mac (in the notch, and on the phone
+    /// when the user is away), or shows and remembers its reply.
+    private func handleFinishedHelperTurn(_ turnResult: ClickyAgentTurnResult) {
+        DottieFunPack.shared.helperTurnFinished(
+            agentID: turnResult.agent.id,
+            reply: turnResult.finalReply,
+            succeeded: turnResult.succeeded,
+            routineTitle: turnResult.routineTitle
+        )
+        // A routine run with nothing new stays out of the notch.
+        guard !turnResult.foundNothingNew else { return }
+        let updateTitle = turnResult.routineTitle.map { "\(turnResult.agent.name) · \($0)" } ?? turnResult.agent.name
+        let isPhoneHelper = turnResult.agent.name == Self.phoneHelperName && self.phoneBridge.pairedChatID != nil
+        // The helper did what it could in the background and left the
+        // on-screen steps to Dottie (DottieWorkRoutes).
+        if turnResult.succeeded, let screenJobRequest = DottieWorkRoutes.screenJobRequest(in: turnResult.finalReply) {
+            DottieLog.notice("🧭 \(turnResult.agent.name) asked for on-screen steps: \(screenJobRequest.steps)")
+            let status = self.startScreenTask(ScreenJob(text: screenJobRequest.steps, returnsToHelperAgentID: turnResult.agent.id))
+            let progressText = screenJobRequest.replyWithoutBlock.isEmpty ? "Doing the on-screen part now." : screenJobRequest.replyWithoutBlock
+            self.notchPresenter.showAgentUpdate(title: updateTitle, text: progressText)
+            if isPhoneHelper {
+                Task { await self.phoneBridge.send("Doing the on-screen part on your Mac now (\(status.prefix(80))).") }
+            }
+            return
+        }
+        if let computerUseRequest = turnResult.computerUseRequest {
+            // From the phone, or while the user is away: asked on the
+            // phone with Allow / Deny buttons, as well as in the notch.
+            if isPhoneHelper || DottieAwayMode.shared.questionsGoToPhone {
+                let requestingAgent = turnResult.agent
+                Task { [weak self] in
+                    let isAllowed = await DottieAwayMode.shared.confirmOnPhone(
+                        "\(updateTitle) needs to use your Mac's screen for this: \(computerUseRequest)",
+                        screenshotJPEG: nil
+                    )
+                    guard let self, self.clickyRoster.pendingComputerUseRequest(for: requestingAgent) != nil else { return }
+                    self.notchPresenter.dropComputerUseRequest(forAgentID: requestingAgent.id)
+                    self.dotNotifications.removeNotification(forAgentID: requestingAgent.id)
+                    if isAllowed {
+                        self.clickyRoster.approveComputerUse(for: requestingAgent, alwaysAllow: false)
+                    } else {
+                        self.clickyRoster.declineComputerUse(for: requestingAgent)
+                    }
+                }
+            }
+            // Ask in the notch and in a notification; the answer comes
+            // back through onAnswerComputerUseRequest below.
+            self.notchPresenter.showAgentUpdate(
+                title: updateTitle,
+                text: computerUseRequest,
+                computerUseRequestAgentID: turnResult.agent.id
+            )
+            self.dotNotifications.notifyComputerUseRequest(
+                agentID: turnResult.agent.id,
+                title: "\(updateTitle) wants to use your Mac",
+                text: computerUseRequest
+            )
+            return
+        }
+        let updateText = turnResult.finalReply.isEmpty
+            ? (turnResult.succeeded ? "Finished." : "Stopped without a reply.")
+            : turnResult.finalReply
+        if isPhoneHelper {
+            Task { await self.phoneBridge.send(updateText) }
+        }
+        if DottieAwayMode.shared.isAway {
+            DottieAwayMode.shared.noteResult(
+                title: updateTitle,
+                detail: updateText,
+                succeeded: turnResult.succeeded,
+                alreadyTextedToPhone: isPhoneHelper
+            )
+        }
+        let finishedTask = self.clickyRoster.transcriptsByAgentID[turnResult.agent.id]?.last { $0.kind == .user }?.text ?? ""
+        self.brain.record(.helper, "\(updateTitle) was asked: \(finishedTask.prefix(400))\nreplied: \(updateText.prefix(1200))")
+        if turnResult.agent.isBrain == true, let brainQuestion = self.pendingSpokenBrainQuestion {
+            self.pendingSpokenBrainQuestion = nil
+            if turnResult.succeeded {
+                self.brain.saveBrainAnswer(question: brainQuestion, answer: updateText)
+            }
+            self.speakBrainAnswer(question: brainQuestion, answer: updateText)
+            self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
+            return
+        }
+        self.notchPresenter.showAgentUpdate(title: updateTitle, text: updateText)
+        self.refreshNotchPeekFiles()
+        self.dotNotifications.notifyDotFinished(agentID: turnResult.agent.id, title: updateTitle, text: updateText)
     }
 
     /// What the notch shows about the Dots: working ones first, then ones
