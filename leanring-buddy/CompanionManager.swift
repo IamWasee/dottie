@@ -1099,6 +1099,13 @@ final class CompanionManager: ObservableObject {
             (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
         }
 
+        connectLiveTurnCallbacks()
+        connectLiveToolCallbacks()
+    }
+
+    /// What the Live client reports about a turn: speech starting, captions,
+    /// pointing, the turn ending, finished tool calls and errors.
+    private func connectLiveTurnCallbacks() {
         liveVoiceClient.onModelSpeechStarted = { [weak self] in
             guard let self, self.isLiveTurnInFlight else { return }
             self.voiceState = .responding
@@ -1127,6 +1134,27 @@ final class CompanionManager: ObservableObject {
             )
         }
 
+        liveVoiceClient.onTurnError = { [weak self] error in
+            guard let self else { return }
+            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
+            DottieLog.warning("⚠️ Gemini Live turn error: \(error)")
+            self.isLiveTurnInFlight = false
+            self.currentLiveTurnIsNarration = false
+            self.liveVoiceClient.isAudioOutputMuted = false
+            self.fireLiveTurnFinishedHandler()
+            let failedRequestText = self.currentLiveTurnTypedText ?? self.currentLiveTurnOnDeviceText ?? ""
+            self.voiceState = .idle
+            self.scheduleTransientHideIfNeeded()
+            self.doOnMacOrSpeakConnectionError(
+                requestText: failedRequestText,
+                inputKind: self.currentLiveTurnTypedText == nil ? .voice : .typed
+            )
+        }
+    }
+
+    /// The tools Live can call, each handed to the part of the companion
+    /// that does it.
+    private func connectLiveToolCallbacks() {
         liveVoiceClient.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
@@ -1208,23 +1236,6 @@ final class CompanionManager: ObservableObject {
                 return await self.performSmartHomeTool(functionName: functionName, arguments: arguments)
             }
             return await self.macTools.perform(functionName: functionName, arguments: arguments)
-        }
-
-        liveVoiceClient.onTurnError = { [weak self] error in
-            guard let self else { return }
-            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-            DottieLog.warning("⚠️ Gemini Live turn error: \(error)")
-            self.isLiveTurnInFlight = false
-            self.currentLiveTurnIsNarration = false
-            self.liveVoiceClient.isAudioOutputMuted = false
-            self.fireLiveTurnFinishedHandler()
-            let failedRequestText = self.currentLiveTurnTypedText ?? self.currentLiveTurnOnDeviceText ?? ""
-            self.voiceState = .idle
-            self.scheduleTransientHideIfNeeded()
-            self.doOnMacOrSpeakConnectionError(
-                requestText: failedRequestText,
-                inputKind: self.currentLiveTurnTypedText == nil ? .voice : .typed
-            )
         }
     }
 
