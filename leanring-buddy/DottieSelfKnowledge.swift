@@ -376,7 +376,8 @@ extension DottieSelfKnowledge {
     /// Settings sections, the notch, CompanionManager's tools). Built on
     /// each call so shortcut names and state are current.
     static func features() -> [Feature] {
-        talkingFeatures() + helperAndConnectionFeatures() + everydayFeatures() + settingsFeatures()
+        talkingFeatures() + helperFeatures() + meetingPhoneAndHomeFeatures() + macAndToolFeatures()
+            + profileAndPlayFeatures() + textAndMemoryFeatures() + lookAndSoundFeatures() + setupFeatures()
     }
 
     private static var currentTalkShortcutText: String {
@@ -387,7 +388,7 @@ extension DottieSelfKnowledge {
         companionManager?.globalPushToTalkShortcutMonitor.dictationHotkey.displayText ?? ClickyHotkey.defaultDictation.displayText
     }
 
-    /// Talking to Dottie and what she does on the screen.
+    /// The tour, talking, typing, dictation and what Dottie does on the screen.
     private static func talkingFeatures() -> [Feature] {
         let talkKeys = currentTalkShortcutText
         let dictateKeys = currentDictationShortcutText
@@ -485,8 +486,8 @@ extension DottieSelfKnowledge {
         return features
     }
 
-    /// Helpers and everything Dottie connects to: projects, skills, the brain, meetings, the phone, the smart home and tools.
-    private static func helperAndConnectionFeatures() -> [Feature] {
+    /// Helpers and what they work with: projects, skills, pictures and the brain.
+    private static func helperFeatures() -> [Feature] {
         let features: [Feature] = [
             Feature(
                 id: "helpers",
@@ -547,7 +548,14 @@ extension DottieSelfKnowledge {
                     WalkStep(target: .text(["Folders the brain can use"]), say: "Add folders here so my brain can search your files.", wait: .none),
                     WalkStep(target: .text(["Forget everything"]), say: "And this wipes every memory.", wait: .none)
                 ]
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Meetings, texting from the phone and the smart home.
+    private static func meetingPhoneAndHomeFeatures() -> [Feature] {
+        let features: [Feature] = [
             Feature(
                 id: "meetings",
                 title: "Meeting mode",
@@ -614,7 +622,14 @@ extension DottieSelfKnowledge {
                     WalkStep(target: .text(["Philips Hue"]), say: "Hue lights connect here.", wait: .none),
                     WalkStep(target: .text(["Home Assistant"]), say: "And Home Assistant for everything else.", wait: .none)
                 ]
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Dottie's own hands on the Mac, connected tools and helpers on Claude.
+    private static func macAndToolFeatures() -> [Feature] {
+        let features: [Feature] = [
             Feature(
                 id: "mac",
                 title: "Mac powers",
@@ -672,11 +687,8 @@ extension DottieSelfKnowledge {
         return features
     }
 
-    /// Everyday extras: the profile, games, focus, watches, replays, fixing text and memory.
-    private static func everydayFeatures() -> [Feature] {
-        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
-        let fixTextKeyNote: String = fixTextKeys.map { " (\($0))" } ?? " (set one in Settings → Shortcuts)"
-
+    /// The profile, games, 24/7 jobs, focus, watches, replays and the self-check.
+    private static func profileAndPlayFeatures() -> [Feature] {
         let features: [Feature] = [
             Feature(
                 id: "profile",
@@ -744,7 +756,17 @@ extension DottieSelfKnowledge {
                 whereToFind: "Settings → Check everything, or by voice.",
                 place: .settings("Check everything"),
                 steps: [WalkStep(target: .text(["Check everything"]), say: "Click Check everything. It takes a few seconds.", wait: .click)]
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Fixing text, folder cleanup, the timeline and search.
+    private static func textAndMemoryFeatures() -> [Feature] {
+        let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
+        let fixTextKeyNote: String = fixTextKeys.map { " (\($0))" } ?? " (set one in Settings → Shortcuts)"
+
+        let features: [Feature] = [
             Feature(
                 id: "fixtext",
                 title: "Fix selected text",
@@ -786,8 +808,8 @@ extension DottieSelfKnowledge {
         return features
     }
 
-    /// How Dottie looks, sounds and is set up, ending with the tour of Settings.
-    private static func settingsFeatures() -> [Feature] {
+    /// How Dottie looks and sounds, and her shortcuts.
+    private static func lookAndSoundFeatures() -> [Feature] {
         let talkKeys = currentTalkShortcutText
         let dictateKeys = currentDictationShortcutText
         let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
@@ -858,7 +880,14 @@ extension DottieSelfKnowledge {
                     WalkStep(target: .text(["Type to Dottie"]), say: "This opens a box to type to me from any app.", wait: .none),
                     WalkStep(target: .text(["Fix selected text"]), say: "And this fixes the text you've selected.", wait: .none)
                 ]
-            ),
+            )
+        ]
+        return features
+    }
+
+    /// Permissions, updates and the rest of set-up, ending with the tour of Settings.
+    private static func setupFeatures() -> [Feature] {
+        let features: [Feature] = [
             Feature(
                 id: "permissions",
                 title: "Permissions",
