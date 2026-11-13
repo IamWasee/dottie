@@ -1308,6 +1308,15 @@ extension DottieSelfKnowledge {
 
     /// Things the self-check doesn't test: Dottie's own settings and modes.
     private static func stateProblems() async -> [Problem] {
+        settingAndHelperWaitProblems()
+            + helperEngineProblems()
+            + shortcutFocusAndLockProblems()
+            + connectedAppProblems()
+            + updateProblems()
+    }
+
+    /// Helpers waiting for an OK, and settings that are switched off.
+    private static func settingAndHelperWaitProblems() -> [Problem] {
         var problems: [Problem] = []
         if let companionManager = companionManager {
             let roster = companionManager.clickyRoster
@@ -1346,7 +1355,12 @@ extension DottieSelfKnowledge {
                 ))
             }
         }
+        return problems
+    }
 
+    /// Why helpers are on the Gemini backup instead of Claude.
+    private static func helperEngineProblems() -> [Problem] {
+        var problems: [Problem] = []
         let mausBot = DottieMausBot.shared
         if mausBot.preference == .claudeWithBackup {
             if mausBot.isDesktopAppHoldingWorkspace {
@@ -1381,7 +1395,12 @@ extension DottieSelfKnowledge {
                 ))
             }
         }
+        return problems
+    }
 
+    /// Shortcuts that don't work, focus mode and the locked screen.
+    private static func shortcutFocusAndLockProblems() -> [Problem] {
+        var problems: [Problem] = []
         for (action, problemText) in DottieEveryday.shared.shortcuts.problems {
             let shortcutName = action == .askBar ? "type-to-ask" : "fix-text"
             problems.append(Problem(
@@ -1410,7 +1429,12 @@ extension DottieSelfKnowledge {
                 isMajor: true
             ))
         }
+        return problems
+    }
 
+    /// Apps in Home → Tools that need a key, a program or couldn't start.
+    private static func connectedAppProblems() -> [Problem] {
+        var problems: [Problem] = []
         let toolsStore = DottieToolsStore.shared
         for serverName in toolsStore.serverNames where toolsStore.isEnabled(serverName) {
             let appTitle = toolsStore.title(for: serverName)
@@ -1429,7 +1453,12 @@ extension DottieSelfKnowledge {
                 isMajor: false
             ))
         }
+        return problems
+    }
 
+    /// An update that's waiting, or an update check that failed.
+    private static func updateProblems() -> [Problem] {
+        var problems: [Problem] = []
         if case .available(let version) = DottieUpdater.shared.state {
             problems.append(Problem(
                 text: "An update is waiting: Dottie \(version).",
