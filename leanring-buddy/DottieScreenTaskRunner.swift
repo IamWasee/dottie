@@ -953,72 +953,13 @@ final class DottieScreenTaskRunner {
             return didOpen ? "opened \(appName); it's in front now" : "couldn't find an app called \(appName)"
 
         case "open_url":
-            guard var address = text("url") else { return "error: no url" }
-            if !address.contains("://") { address = "https://" + address }
-            guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
-                return "error: not a web address"
-            }
-            onProgress?(stepNumber, "opening \(url.host ?? address)")
-            let didOpen: Bool
-            if let browserName = text("browser") {
-                didOpen = await Self.open(url, inApplicationNamed: browserName)
-            } else {
-                didOpen = await DottieBrowser.openInUsersBrowser(url)
-            }
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            return didOpen ? "opened \(address)" : "couldn't open \(address)"
+            return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
         case "click":
-            guard let point = clickPoint() else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
-            let label = text("label") ?? "it"
-            onProgress?(stepNumber, "clicking \(label)")
-            // In a game, a pause before every click costs the moment.
-            if !isGameMode {
-                await onWillClick?(point, screen.displayFrame)
-            }
-            if Task.isCancelled { return "stopped" }
-            if !isGameMode {
-                windowsBeforeLastClick = Self.windowSnapshot()
-            }
-            DottieScreenActionPerformer.click(at: point, clickCount: flag("double_click") ? 2 : 1, isRightClick: flag("right_click"))
-            return "clicked \(label)"
+            return await performClick(at: clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
         case "type_text":
-            guard var typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
-            // "{{code}}" is a code or password the user gave (ask_user).
-            var isUserSecret = false
-            for (placeholder, secret) in userSecrets where typedText.contains(placeholder) {
-                typedText = typedText.replacingOccurrences(of: placeholder, with: secret)
-                isUserSecret = true
-            }
-            if typedText.contains("{{") && typedText.contains("}}") {
-                return "error: the user hasn't given that yet. ask_user for it first."
-            }
-            lastTypedIntoSecureField = false
-            if let point = clickPoint() {
-                await onWillClick?(point, screen.displayFrame)
-                if Task.isCancelled { return "stopped" }
-                DottieScreenActionPerformer.click(at: point, clickCount: 1, isRightClick: false)
-                try? await Task.sleep(nanoseconds: 350_000_000)
-            }
-            if DottieScreenActionPerformer.isFocusedFieldSecure {
-                // Only a password the user gave; never a guess.
-                let userGaveIt = isUserSecret || (typedText.count >= 4 && (currentTaskText ?? "").contains(typedText))
-                guard userGaveIt else {
-                    return "refused: that's a password box and the user hasn't given you this password. If the browser or keychain offers a saved one (a list under the field, a key icon, or the field fills itself), click that. Otherwise ask_user: kind password to get it, or kind do_it_yourself to have them type it."
-                }
-                lastTypedIntoSecureField = true
-            }
-            onProgress?(stepNumber, isUserSecret || lastTypedIntoSecureField ? "typing what you gave me" : "typing \"\(typedText.prefix(40))\"")
-            if flag("select_all_first") {
-                DottieScreenActionPerformer.press(keyCombination: "cmd+a")
-            }
-            await DottieScreenActionPerformer.type(typedText)
-            if flag("press_enter") {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                DottieScreenActionPerformer.press(keyCombination: "enter")
-            }
-            return flag("press_enter") ? "typed it and pressed return" : "typed it"
+            return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
 
         case "press_keys":
             guard let keys = text("keys") else { return "error: no keys" }
@@ -1028,15 +969,7 @@ final class DottieScreenTaskRunner {
                 : "unknown key \(keys); use names like cmd+l, enter, escape, tab, up, down"
 
         case "scroll":
-            guard let direction = text("direction").flatMap({ DottieScreenAction.ScrollDirection(rawValue: $0.lowercased()) }) else {
-                return "error: direction must be up, down, left or right"
-            }
-            onProgress?(stepNumber, "scrolling \(direction.rawValue)")
-            let amount = Int((arguments["amount"] as? NSNumber)?.doubleValue ?? 5)
-            // Scroll where the content is, not wherever the user's pointer is.
-            let scrollPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 550)
-            DottieScreenActionPerformer.scroll(direction: direction, amount: amount, at: scrollPoint)
-            return "scrolled \(direction.rawValue)"
+            return await performScroll(arguments: arguments, directionName: text("direction"), boxCenter: boxCenter(), screen: screen, stepNumber: stepNumber)
 
         case "hold_keys":
             guard let keys = text("keys") else { return "error: no keys" }
@@ -1051,21 +984,7 @@ final class DottieScreenTaskRunner {
             return await walk(arguments: arguments, screen: screen, stepNumber: stepNumber)
 
         case "move_mouse":
-            let deltaX = CGFloat((arguments["dx"] as? NSNumber)?.doubleValue ?? 0)
-            let deltaY = CGFloat((arguments["dy"] as? NSNumber)?.doubleValue ?? 0)
-            let button = text("button")?.lowercased() ?? "none"
-            onProgress?(stepNumber, "turning the camera")
-            // dx and dy are 0-1000 across the screenshot, like boxes.
-            let startPoint = boxCenter() ?? screen.globalPoint(normalizedX: 500, normalizedY: 500)
-            let deltaXPoints = deltaX / 1000 * screen.displayFrame.width
-            await DottieScreenActionPerformer.moveMouse(
-                from: startPoint,
-                deltaX: deltaXPoints,
-                deltaY: -deltaY / 1000 * screen.displayFrame.height,
-                button: button,
-                seconds: (arguments["seconds"] as? NSNumber)?.doubleValue ?? 0.4
-            )
-            return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
+            return await performMoveMouse(arguments: arguments, button: text("button")?.lowercased() ?? "none", boxCenter: boxCenter(), screen: screen, stepNumber: stepNumber)
 
         case "search_web":
             let query = ((arguments["query"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1082,50 +1001,10 @@ final class DottieScreenTaskRunner {
             return "waited \(Int(seconds.rounded())) seconds"
 
         case "zoom":
-            guard let box = arguments["box_2d"] as? [Any] else { return "error: zoom needs box_2d" }
-            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
-            guard numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1],
-                  let sharpImage = await DottieDisplayCapture.captureImage(displayFrame: screen.displayFrame, maximumDimension: 2880) else {
-                return "error: box_2d must be [ymin, xmin, ymax, xmax]"
-            }
-            let imageWidth = Double(sharpImage.width), imageHeight = Double(sharpImage.height)
-            let cropRect = CGRect(
-                x: numbers[1] / 1000 * imageWidth, y: numbers[0] / 1000 * imageHeight,
-                width: (numbers[3] - numbers[1]) / 1000 * imageWidth, height: (numbers[2] - numbers[0]) / 1000 * imageHeight
-            ).integral
-            guard let croppedImage = sharpImage.cropping(to: cropRect),
-                  let croppedJPEG = NSBitmapImageRep(cgImage: croppedImage).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
-                return "couldn't zoom there."
-            }
-            onProgress?(stepNumber, "taking a closer look")
-            pendingExtraImageParts.append(["text": "Zoomed-in view of box \(numbers.map { Int($0) }) on the screenshot before this one (sharper; boxes for actions still go on the full screenshot):"])
-            pendingExtraImageParts.append(["inlineData": ["mimeType": "image/jpeg", "data": croppedJPEG.base64EncodedString()]])
-            return "zoomed in; the close-up comes with the next screenshot."
+            return await performZoom(arguments: arguments, screen: screen, stepNumber: stepNumber)
 
         case "save_picture":
-            let name = text("name") ?? "picture"
-            var pictureImage = screen.image
-            if let box = arguments["box_2d"] as? [Any] {
-                let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
-                if numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1] {
-                    let imageWidth = Double(screen.image.width), imageHeight = Double(screen.image.height)
-                    // A little of the surroundings helps recognize it later.
-                    let padding = 0.15
-                    let boxWidth = numbers[3] - numbers[1], boxHeight = numbers[2] - numbers[0]
-                    let cropRect = CGRect(
-                        x: max(0, (numbers[1] - boxWidth * padding) / 1000 * imageWidth),
-                        y: max(0, (numbers[0] - boxHeight * padding) / 1000 * imageHeight),
-                        width: boxWidth * (1 + 2 * padding) / 1000 * imageWidth,
-                        height: boxHeight * (1 + 2 * padding) / 1000 * imageHeight
-                    ).integral
-                    if let croppedImage = screen.image.cropping(to: cropRect) { pictureImage = croppedImage }
-                }
-            }
-            guard let pngData = NSBitmapImageRep(cgImage: pictureImage).representation(using: .png, properties: [:]) else {
-                return "couldn't save the picture."
-            }
-            onProgress?(stepNumber, "remembering \(name)")
-            return onSavePicture?(pngData, name, text("description") ?? "") ?? "pictures can't be saved right now."
+            return await performSavePicture(arguments: arguments, name: text("name") ?? "picture", description: text("description") ?? "", screen: screen, stepNumber: stepNumber)
 
         case "wait_for_video_end":
             let maximumSeconds = (arguments["max_seconds"] as? NSNumber)?.doubleValue ?? 600
@@ -1135,6 +1014,159 @@ final class DottieScreenTaskRunner {
         default:
             return "error: unknown action \(functionName)"
         }
+    }
+
+    /// Opens a web address in the browser the model named, or the user's own.
+    private func performOpenURL(address givenAddress: String?, browserName: String?, stepNumber: Int) async -> String {
+        guard var address = givenAddress else { return "error: no url" }
+        if !address.contains("://") { address = "https://" + address }
+        guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            return "error: not a web address"
+        }
+        onProgress?(stepNumber, "opening \(url.host ?? address)")
+        let didOpen: Bool
+        if let browserName {
+            didOpen = await Self.open(url, inApplicationNamed: browserName)
+        } else {
+            didOpen = await DottieBrowser.openInUsersBrowser(url)
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        return didOpen ? "opened \(address)" : "couldn't open \(address)"
+    }
+
+    /// Clicks a point, showing the cursor fly there first unless a game is being played.
+    private func performClick(at clickPoint: CGPoint?, label: String, isDoubleClick: Bool, isRightClick: Bool, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard let point = clickPoint else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
+        onProgress?(stepNumber, "clicking \(label)")
+        // In a game, a pause before every click costs the moment.
+        if !isGameMode {
+            await onWillClick?(point, screen.displayFrame)
+        }
+        if Task.isCancelled { return "stopped" }
+        if !isGameMode {
+            windowsBeforeLastClick = Self.windowSnapshot()
+        }
+        DottieScreenActionPerformer.click(at: point, clickCount: isDoubleClick ? 2 : 1, isRightClick: isRightClick)
+        return "clicked \(label)"
+    }
+
+    /// Types text, after clicking the field when a box came with it. Passwords are typed only when the user gave them.
+    private func performTypeText(arguments: [String: Any], fieldPoint: CGPoint?, selectsAllFirst: Bool, pressesEnter: Bool, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard var typedText = arguments["text"] as? String, !typedText.isEmpty else { return "error: no text" }
+        // "{{code}}" is a code or password the user gave (ask_user).
+        var isUserSecret = false
+        for (placeholder, secret) in userSecrets where typedText.contains(placeholder) {
+            typedText = typedText.replacingOccurrences(of: placeholder, with: secret)
+            isUserSecret = true
+        }
+        if typedText.contains("{{") && typedText.contains("}}") {
+            return "error: the user hasn't given that yet. ask_user for it first."
+        }
+        lastTypedIntoSecureField = false
+        if let point = fieldPoint {
+            await onWillClick?(point, screen.displayFrame)
+            if Task.isCancelled { return "stopped" }
+            DottieScreenActionPerformer.click(at: point, clickCount: 1, isRightClick: false)
+            try? await Task.sleep(nanoseconds: 350_000_000)
+        }
+        if DottieScreenActionPerformer.isFocusedFieldSecure {
+            // Only a password the user gave; never a guess.
+            let userGaveIt = isUserSecret || (typedText.count >= 4 && (currentTaskText ?? "").contains(typedText))
+            guard userGaveIt else {
+                return "refused: that's a password box and the user hasn't given you this password. If the browser or keychain offers a saved one (a list under the field, a key icon, or the field fills itself), click that. Otherwise ask_user: kind password to get it, or kind do_it_yourself to have them type it."
+            }
+            lastTypedIntoSecureField = true
+        }
+        onProgress?(stepNumber, isUserSecret || lastTypedIntoSecureField ? "typing what you gave me" : "typing \"\(typedText.prefix(40))\"")
+        if selectsAllFirst {
+            DottieScreenActionPerformer.press(keyCombination: "cmd+a")
+        }
+        await DottieScreenActionPerformer.type(typedText)
+        if pressesEnter {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            DottieScreenActionPerformer.press(keyCombination: "enter")
+        }
+        return pressesEnter ? "typed it and pressed return" : "typed it"
+    }
+
+    /// Scrolls where the content is.
+    private func performScroll(arguments: [String: Any], directionName: String?, boxCenter: CGPoint?, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard let direction = directionName.flatMap({ DottieScreenAction.ScrollDirection(rawValue: $0.lowercased()) }) else {
+            return "error: direction must be up, down, left or right"
+        }
+        onProgress?(stepNumber, "scrolling \(direction.rawValue)")
+        let amount = Int((arguments["amount"] as? NSNumber)?.doubleValue ?? 5)
+        // Scroll where the content is, not wherever the user's pointer is.
+        let scrollPoint = boxCenter ?? screen.globalPoint(normalizedX: 500, normalizedY: 550)
+        DottieScreenActionPerformer.scroll(direction: direction, amount: amount, at: scrollPoint)
+        return "scrolled \(direction.rawValue)"
+    }
+
+    /// Drags the mouse, which turns the camera in a game.
+    private func performMoveMouse(arguments: [String: Any], button: String, boxCenter: CGPoint?, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        let deltaX = CGFloat((arguments["dx"] as? NSNumber)?.doubleValue ?? 0)
+        let deltaY = CGFloat((arguments["dy"] as? NSNumber)?.doubleValue ?? 0)
+        onProgress?(stepNumber, "turning the camera")
+        // dx and dy are 0-1000 across the screenshot, like boxes.
+        let startPoint = boxCenter ?? screen.globalPoint(normalizedX: 500, normalizedY: 500)
+        let deltaXPoints = deltaX / 1000 * screen.displayFrame.width
+        await DottieScreenActionPerformer.moveMouse(
+            from: startPoint,
+            deltaX: deltaXPoints,
+            deltaY: -deltaY / 1000 * screen.displayFrame.height,
+            button: button,
+            seconds: (arguments["seconds"] as? NSNumber)?.doubleValue ?? 0.4
+        )
+        return "moved the mouse \(Int(deltaX)), \(Int(deltaY)) with \(button == "none" ? "no button" : "the \(button) button") held"
+    }
+
+    /// Sends the model a sharp close-up of one part of the screen with its next screenshot.
+    private func performZoom(arguments: [String: Any], screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard let box = arguments["box_2d"] as? [Any] else { return "error: zoom needs box_2d" }
+        let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1],
+              let sharpImage = await DottieDisplayCapture.captureImage(displayFrame: screen.displayFrame, maximumDimension: 2880) else {
+            return "error: box_2d must be [ymin, xmin, ymax, xmax]"
+        }
+        let imageWidth = Double(sharpImage.width), imageHeight = Double(sharpImage.height)
+        let cropRect = CGRect(
+            x: numbers[1] / 1000 * imageWidth, y: numbers[0] / 1000 * imageHeight,
+            width: (numbers[3] - numbers[1]) / 1000 * imageWidth, height: (numbers[2] - numbers[0]) / 1000 * imageHeight
+        ).integral
+        guard let croppedImage = sharpImage.cropping(to: cropRect),
+              let croppedJPEG = NSBitmapImageRep(cgImage: croppedImage).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
+            return "couldn't zoom there."
+        }
+        onProgress?(stepNumber, "taking a closer look")
+        pendingExtraImageParts.append(["text": "Zoomed-in view of box \(numbers.map { Int($0) }) on the screenshot before this one (sharper; boxes for actions still go on the full screenshot):"])
+        pendingExtraImageParts.append(["inlineData": ["mimeType": "image/jpeg", "data": croppedJPEG.base64EncodedString()]])
+        return "zoomed in; the close-up comes with the next screenshot."
+    }
+
+    /// Saves the screen, or one boxed part of it, to the picture library.
+    private func performSavePicture(arguments: [String: Any], name: String, description: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        var pictureImage = screen.image
+        if let box = arguments["box_2d"] as? [Any] {
+            let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+            if numbers.count == 4, numbers[2] > numbers[0], numbers[3] > numbers[1] {
+                let imageWidth = Double(screen.image.width), imageHeight = Double(screen.image.height)
+                // A little of the surroundings helps recognize it later.
+                let padding = 0.15
+                let boxWidth = numbers[3] - numbers[1], boxHeight = numbers[2] - numbers[0]
+                let cropRect = CGRect(
+                    x: max(0, (numbers[1] - boxWidth * padding) / 1000 * imageWidth),
+                    y: max(0, (numbers[0] - boxHeight * padding) / 1000 * imageHeight),
+                    width: boxWidth * (1 + 2 * padding) / 1000 * imageWidth,
+                    height: boxHeight * (1 + 2 * padding) / 1000 * imageHeight
+                ).integral
+                if let croppedImage = screen.image.cropping(to: cropRect) { pictureImage = croppedImage }
+            }
+        }
+        guard let pngData = NSBitmapImageRep(cgImage: pictureImage).representation(using: .png, properties: [:]) else {
+            return "couldn't save the picture."
+        }
+        onProgress?(stepNumber, "remembering \(name)")
+        return onSavePicture?(pngData, name, description) ?? "pictures can't be saved right now."
     }
 
     /// Walks the character toward a target, from both boxes on the
