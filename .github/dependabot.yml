@@ -11,6 +11,11 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      # vitest and its add-ons only work on matching versions, so they move
+      # together in one pull request, big version jumps included. Apart,
+      # the install fails before a single test runs.
+      worker-test-tools:
+        patterns: ["vitest", "@vitest/*", "@cloudflare/vitest-plugin"]
       worker-packages:
         patterns: ["*"]
         update-types: [minor, patch]
