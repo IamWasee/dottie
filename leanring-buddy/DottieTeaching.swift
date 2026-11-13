@@ -441,432 +441,525 @@ enum DottieTeaching {
         let points = step.points.compactMap(space.point)
         let fontSize: CGFloat = step.size == "small" ? 18 : (step.size == "large" ? 38 : 26)
 
+        let wasDrawn: Bool
         switch step.kind {
         case .sketch:
-            let sketchStrokes = DottieSketchArtist.strokes(fromStepText: step.text)
-            guard !sketchStrokes.isEmpty else { return nil }
-            let sketchRect: CGRect
-            if points.count >= 2, let givenRect = rectangle(from: step, points: points, in: space) {
-                sketchRect = givenRect
-            } else if let center = points.first {
-                let side: CGFloat = space.boardRect.map { $0.width * 0.6 } ?? 360
-                sketchRect = CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
-            } else {
-                return nil
-            }
-            // Keep the drawing's proportions: fit the square canvas inside
-            // the area, centered.
-            let side = min(sketchRect.width, sketchRect.height)
-            let canvas = CGRect(x: sketchRect.midX - side / 2, y: sketchRect.midY - side / 2, width: side, height: side)
-            func canvasPoint(_ sketchPoint: CGPoint) -> CGPoint {
-                // y runs down on the canvas, up in AppKit.
-                CGPoint(x: canvas.minX + sketchPoint.x / 1000 * canvas.width, y: canvas.maxY - sketchPoint.y / 1000 * canvas.height)
-            }
-            for sketchStroke in sketchStrokes {
-                let strokePoints = sketchStroke.points.map(canvasPoint)
-                // A smooth curve through a sharp corner (a fold, a box's
-                // edge) swings out into a loop, so strokes are split at
-                // their corners and each piece is smoothed on its own.
-                let strokePieces = Self.piecesSplitAtSharpCorners(strokePoints, isClosed: sketchStroke.isClosed)
-                let keepsClosedCurve = sketchStroke.isClosed && strokePieces.count == 1
-                for strokePiece in strokePieces {
-                    drawn.add(.stroke(points: strokePiece, closed: keepsClosedCurve, smooth: strokePiece.count >= 3, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                              ink: sketchStroke.ink ?? ink, lineWidth: 3, pen: keepsClosedCurve ? strokePiece + [strokePiece[0]] : strokePiece,
-                              duration: min(max(Double(length(of: strokePiece)) / 900, 0.15), 1.4))
-                }
-            }
-
+            wasDrawn = drawSketch(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .line, .curve, .polygon:
-            guard points.count >= 2 else { return nil }
-            let closed = step.kind == .polygon
-            drawn.add(.stroke(points: points, closed: closed, smooth: step.kind == .curve, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: ink, pen: closed ? points + [points[0]] : points)
-            if let label, let lastPoint = points.last {
-                drawn.addLabel(label, centeredAt: CGPoint(x: lastPoint.x + 24, y: lastPoint.y + 18), ink: ink)
-            }
-
+            wasDrawn = drawLineCurveOrPolygon(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .arrow, .double_arrow:
-            guard points.count >= 2 else { return nil }
-            var arrowPoints = points
-            // An arrow to or from a whole thing stops at its edge.
-            if let startFrame = step.points.first.flatMap(space.wholeAnchor) {
-                arrowPoints[0] = edgePoint(of: startFrame, toward: arrowPoints[1], gap: 6)
-            }
-            if let endFrame = step.points.last.flatMap(space.wholeAnchor) {
-                arrowPoints[arrowPoints.count - 1] = edgePoint(of: endFrame, toward: arrowPoints[arrowPoints.count - 2], gap: 6)
-            }
-            drawn.add(.stroke(points: arrowPoints, closed: false, smooth: arrowPoints.count > 2, dashed: false,
-                              arrowAtStart: step.kind == .double_arrow, arrowAtEnd: true),
-                      ink: ink, pen: arrowPoints)
-            if let label {
-                let middle = midpoint(arrowPoints[0], arrowPoints[arrowPoints.count - 1])
-                drawn.addLabel(label, centeredAt: offset(middle, perpendicularTo: arrowPoints[0], arrowPoints[arrowPoints.count - 1], by: 22), ink: ink)
-            }
-
+            wasDrawn = drawArrow(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .circle:
-            let ring: [CGPoint]
-            if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference), step.points.count == 1 {
-                ring = ellipsePoints(in: frame.insetBy(dx: -10, dy: -8))
-            } else if points.count >= 2 {
-                let radius = distance(points[0], points[1])
-                ring = ellipsePoints(in: CGRect(x: points[0].x - radius, y: points[0].y - radius, width: radius * 2, height: radius * 2))
-            } else if let center = points.first {
-                ring = ellipsePoints(in: CGRect(x: center.x - 28, y: center.y - 28, width: 56, height: 56))
-            } else {
-                return nil
-            }
-            drawn.add(.stroke(points: ring, closed: true, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: ink, pen: ring, duration: 0.7)
-            if let label, let topPoint = ring.max(by: { $0.y < $1.y }) {
-                drawn.addLabel(label, centeredAt: CGPoint(x: topPoint.x, y: topPoint.y + 20), ink: ink)
-            }
-
+            wasDrawn = drawCircle(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .box, .highlight:
-            guard let rect = rectangle(from: step, points: points, in: space) else { return nil }
-            let corners = [CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY),
-                           CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY)]
-            if step.kind == .highlight {
-                drawn.add(.fill(points: corners), ink: step.ink ?? .yellow, pen: [corners[0], corners[1], corners[2], corners[3], corners[0]], duration: 0.5)
-            } else {
-                drawn.add(.stroke(points: corners, closed: true, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, pen: corners + [corners[0]])
-            }
-            if let label {
-                drawn.addLabel(label, centeredAt: CGPoint(x: rect.midX, y: rect.minY - 20), ink: ink)
-            }
-
+            wasDrawn = drawBoxOrHighlight(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .underline:
-            let start: CGPoint, end: CGPoint
-            if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference), step.points.count == 1 {
-                start = CGPoint(x: frame.minX - 2, y: frame.minY - 5)
-                end = CGPoint(x: frame.maxX + 2, y: frame.minY - 6)
-            } else if points.count >= 2 {
-                start = points[0]
-                end = points[1]
-            } else {
-                return nil
-            }
-            drawn.add(.stroke(points: [start, end], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: ink, pen: [start, end])
-
+            wasDrawn = drawUnderline(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .angle, .right_angle:
-            guard points.count >= 3 else { return nil }
-            let vertex = points[0]
-            let armA = unit(from: vertex, to: points[1])
-            let armB = unit(from: vertex, to: points[2])
-            let shorterArm = min(distance(vertex, points[1]), distance(vertex, points[2]))
-            if step.kind == .right_angle {
-                let side = min(18, max(9, shorterArm * 0.3))
-                let square = [
-                    CGPoint(x: vertex.x + armA.dx * side, y: vertex.y + armA.dy * side),
-                    CGPoint(x: vertex.x + (armA.dx + armB.dx) * side, y: vertex.y + (armA.dy + armB.dy) * side),
-                    CGPoint(x: vertex.x + armB.dx * side, y: vertex.y + armB.dy * side)
-                ]
-                drawn.add(.stroke(points: square, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, lineWidth: 3, pen: square, duration: 0.4)
-                if let label {
-                    let outward = normalized(CGVector(dx: armA.dx + armB.dx, dy: armA.dy + armB.dy))
-                    drawn.addLabel(label, centeredAt: CGPoint(x: vertex.x + outward.dx * (side + 26), y: vertex.y + outward.dy * (side + 26)),
-                                   fontSize: 20, ink: ink)
-                }
-            } else {
-                let radius = min(40, max(16, shorterArm * 0.35))
-                let startAngle = atan2(armA.dy, armA.dx)
-                var sweep = atan2(armB.dy, armB.dx) - startAngle
-                while sweep > .pi { sweep -= 2 * .pi }
-                while sweep < -.pi { sweep += 2 * .pi }
-                let arc = (0...24).map { index -> CGPoint in
-                    let angle = startAngle + sweep * CGFloat(index) / 24
-                    return CGPoint(x: vertex.x + cos(angle) * radius, y: vertex.y + sin(angle) * radius)
-                }
-                drawn.add(.stroke(points: arc, closed: false, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, lineWidth: 3, pen: arc, duration: 0.45)
-                if let label {
-                    let middleAngle = startAngle + sweep / 2
-                    drawn.addLabel(label, centeredAt: CGPoint(x: vertex.x + cos(middleAngle) * (radius + 22), y: vertex.y + sin(middleAngle) * (radius + 22)),
-                                   fontSize: 20, ink: ink)
-                }
-            }
-
+            wasDrawn = drawAngle(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .point:
-            guard let point = points.first else { return nil }
-            drawn.add(.dot(center: point, radius: 5.5), ink: ink, pen: [point], duration: 0.25)
-            if let label {
-                drawn.addText(label, origin: CGPoint(x: point.x + 10, y: point.y + 16), fontSize: 22, ink: ink)
-            }
-
+            wasDrawn = drawPoint(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .text:
-            guard let label else { return nil }
-            let origin: CGPoint
-            if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference) {
-                origin = CGPoint(x: frame.maxX + 14, y: frame.midY)
-            } else if let point = points.first {
-                origin = point
-            } else {
-                return nil
-            }
-            // On a board, a long line is written smaller rather than running
-            // off its edge.
-            var fittedFontSize = fontSize
-            if let boardRect = space.boardRect {
-                let roomToTheRight = boardRect.maxX - 18 - origin.x
-                while fittedFontSize > 13, DottieFigure.estimatedTextWidth(label, fontSize: fittedFontSize) > roomToTheRight {
-                    fittedFontSize -= 1
-                }
-            }
-            drawn.addText(label, origin: origin, fontSize: fittedFontSize, ink: step.ink ?? .white)
-
+            wasDrawn = drawText(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .ticks:
-            guard points.count >= 2 else { return nil }
-            let count = max(1, min(4, Int(step.text ?? "") ?? 1))
-            let middle = midpoint(points[0], points[1])
-            let along = unit(from: points[0], to: points[1])
-            let across = CGVector(dx: -along.dy, dy: along.dx)
-            for tickIndex in 0..<count {
-                let shift = (CGFloat(tickIndex) - CGFloat(count - 1) / 2) * 6
-                let center = CGPoint(x: middle.x + along.dx * shift, y: middle.y + along.dy * shift)
-                let tick = [CGPoint(x: center.x - across.dx * 8, y: center.y - across.dy * 8),
-                            CGPoint(x: center.x + across.dx * 8, y: center.y + across.dy * 8)]
-                drawn.add(.stroke(points: tick, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, lineWidth: 3, pen: tick, duration: 0.15)
-            }
-
+            wasDrawn = drawTicks(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .measure:
-            guard points.count >= 2 else { return nil }
-            let along = unit(from: points[0], to: points[1])
-            let across = CGVector(dx: -along.dy, dy: along.dx)
-            let lift: CGFloat = 18
-            let start = CGPoint(x: points[0].x + across.dx * lift, y: points[0].y + across.dy * lift)
-            let end = CGPoint(x: points[1].x + across.dx * lift, y: points[1].y + across.dy * lift)
-            for (base, lifted) in [(points[0], start), (points[1], end)] {
-                let bar = [CGPoint(x: base.x + across.dx * 6, y: base.y + across.dy * 6),
-                           CGPoint(x: lifted.x + across.dx * 8, y: lifted.y + across.dy * 8)]
-                drawn.add(.stroke(points: bar, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, lineWidth: 2, pen: bar, duration: 0.15)
-            }
-            drawn.add(.stroke(points: [start, end], closed: false, smooth: false, dashed: false, arrowAtStart: true, arrowAtEnd: true),
-                      ink: ink, lineWidth: 2.5, pen: [start, end])
-            let middle = midpoint(start, end)
-            drawn.addLabel(label, centeredAt: CGPoint(x: middle.x + across.dx * 20, y: middle.y + across.dy * 20), fontSize: 20, ink: ink)
-
+            wasDrawn = drawMeasure(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .brace:
-            guard points.count >= 2 else { return nil }
-            let start = points[0], end = points[1]
-            let along = CGVector(dx: end.x - start.x, dy: end.y - start.y)
-            let across = normalized(CGVector(dx: -along.dy, dy: along.dx))
-            let depth: CGFloat = 14
-            func at(_ t: CGFloat, _ lift: CGFloat) -> CGPoint {
-                CGPoint(x: start.x + along.dx * t + across.dx * lift, y: start.y + along.dy * t + across.dy * lift)
-            }
-            let brace = [at(0, 0), at(0.06, depth * 0.55), at(0.2, depth * 0.62), at(0.44, depth * 0.66), at(0.5, depth * 1.25),
-                         at(0.56, depth * 0.66), at(0.8, depth * 0.62), at(0.94, depth * 0.55), at(1, 0)]
-            drawn.add(.stroke(points: brace, closed: false, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: ink, lineWidth: 3, pen: brace)
-            let tip = at(0.5, depth * 1.25 + 22)
-            drawn.addLabel(label, centeredAt: tip, fontSize: 20, ink: ink)
-
+            wasDrawn = drawBrace(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .axes:
-            guard points.count >= 3 else { return nil }
-            let origin = points[0]
-            for axisEnd in [points[1], points[2]] {
-                drawn.add(.stroke(points: [origin, axisEnd], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                          ink: step.ink ?? .white, lineWidth: 2.5, pen: [origin, axisEnd])
-            }
-            let names = (label ?? "x,y").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: points[1].x + 4, y: points[1].y - 22), fontSize: 20, ink: step.ink ?? .white)
-            if names.count > 1 {
-                drawn.addLabel(names[1], centeredAt: CGPoint(x: points[2].x + 20, y: points[2].y + 4), fontSize: 20, ink: step.ink ?? .white)
-            }
-
+            wasDrawn = drawAxes(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .grid:
-            guard points.count >= 2 else { return nil }
-            let gridArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
-                                  width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
-            guard gridArea.width > 20, gridArea.height > 20 else { return nil }
-            // "8x5" is 8 cells across and 5 down; one number is the cells
-            // across, with square-ish cells down.
-            let cellCounts = (step.text ?? "")
-                .lowercased()
-                .components(separatedBy: CharacterSet(charactersIn: "x× ,"))
-                .compactMap { Int($0) }
-            let columnCount = min(max(cellCounts.first ?? 10, 1), 40)
-            let defaultRowCount = Int((CGFloat(columnCount) * gridArea.height / gridArea.width).rounded())
-            let rowCount = min(max(cellCounts.count > 1 ? cellCounts[1] : defaultRowCount, 1), 40)
-            let gridInk = step.ink ?? .white
-            // Thin and quick: a grid is the paper, not the point.
-            let lineCount = columnCount + rowCount + 2
-            let secondsPerLine = max(0.04, min(0.12, 2.0 / Double(lineCount)))
-            for columnIndex in 0...columnCount {
-                let lineX = gridArea.minX + gridArea.width * CGFloat(columnIndex) / CGFloat(columnCount)
-                let gridLine = [CGPoint(x: lineX, y: gridArea.maxY), CGPoint(x: lineX, y: gridArea.minY)]
-                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
-            }
-            for rowIndex in 0...rowCount {
-                let lineY = gridArea.minY + gridArea.height * CGFloat(rowIndex) / CGFloat(rowCount)
-                let gridLine = [CGPoint(x: gridArea.minX, y: lineY), CGPoint(x: gridArea.maxX, y: lineY)]
-                drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
-            }
-
+            wasDrawn = drawGrid(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .plot:
-            guard points.count >= 2, let expressionText = step.text,
-                  let function = DottieMathExpression(expressionText) else { return nil }
-            let area = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
-                              width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
-            guard area.width > 20, area.height > 20 else { return nil }
-            let range = step.range.count == 4 && step.range[1] > step.range[0] && step.range[3] > step.range[2]
-                ? step.range : [-10, 10, -10, 10]
-            let (xMin, xMax, yMin, yMax) = (range[0], range[1], range[2], range[3])
-            func screenPoint(_ x: Double, _ y: Double) -> CGPoint {
-                CGPoint(x: area.minX + CGFloat((x - xMin) / (xMax - xMin)) * area.width,
-                        y: area.minY + CGFloat((y - yMin) / (yMax - yMin)) * area.height)
-            }
-            // Faint axes where zero is in view.
-            if xMin < 0, xMax > 0 {
-                let axis = [screenPoint(0, yMin), screenPoint(0, yMax)]
-                drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                          ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
-            }
-            if yMin < 0, yMax > 0 {
-                let axis = [screenPoint(xMin, 0), screenPoint(xMax, 0)]
-                drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                          ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
-            }
-            // The curve, broken wherever it leaves the view or jumps.
-            var segments: [[CGPoint]] = [[]]
-            let sampleCount = 240
-            let ySpan = yMax - yMin
-            for sampleIndex in 0...sampleCount {
-                let x = xMin + (xMax - xMin) * Double(sampleIndex) / Double(sampleCount)
-                let y = function.evaluate(x: x)
-                if y.isFinite, y >= yMin - ySpan * 0.02, y <= yMax + ySpan * 0.02 {
-                    segments[segments.count - 1].append(screenPoint(x, min(max(y, yMin), yMax)))
-                } else if !(segments.last?.isEmpty ?? true) {
-                    segments.append([])
-                }
-            }
-            let curves = segments.filter { $0.count >= 2 }
-            guard !curves.isEmpty else { return nil }
-            let totalLength = curves.reduce(CGFloat(0)) { $0 + length(of: $1) }
-            for curve in curves {
-                let share = Double(length(of: curve) / max(totalLength, 1))
-                drawn.add(.stroke(points: curve, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                          ink: ink, lineWidth: 3, pen: curve, duration: max(0.25, 1.6 * share))
-            }
-            if let lastCurve = curves.last, let curveEnd = lastCurve.last {
-                let name = "y = " + DottieMathText.prettyPlainText(expressionText)
-                let width = DottieFigure.estimatedTextWidth(name, fontSize: 20)
-                let x = min(curveEnd.x + 8, area.maxX - width)
-                drawn.addText(name, origin: CGPoint(x: x, y: min(curveEnd.y + 18, area.maxY - 10)), fontSize: 20, ink: ink)
-            }
-
+            wasDrawn = drawPlot(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .cross:
-            guard let point = points.first else { return nil }
-            let first = [CGPoint(x: point.x - 12, y: point.y + 12), CGPoint(x: point.x + 12, y: point.y - 12)]
-            let second = [CGPoint(x: point.x + 12, y: point.y + 12), CGPoint(x: point.x - 12, y: point.y - 12)]
-            drawn.add(.stroke(points: first, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: step.ink ?? .red, lineWidth: 4, pen: first, duration: 0.2)
-            drawn.add(.stroke(points: second, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: step.ink ?? .red, lineWidth: 4, pen: second, duration: 0.2)
-
+            wasDrawn = drawCross(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .chart:
-            guard points.count >= 2, let dataText = step.text else { return nil }
-            let chartPoints = DottieChartData.parse(dataText)
-            guard !chartPoints.isEmpty else { return nil }
-            // Room on the left for the scale and below for the labels.
-            let outerArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
-                                   width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
-            let scaleLabelFontSize: CGFloat = 15
-            let plotArea = CGRect(x: outerArea.minX + 46, y: outerArea.minY + 30,
-                                  width: outerArea.width - 56, height: outerArea.height - 40)
-            guard plotArea.width > 40, plotArea.height > 40 else { return nil }
-            let chartStyle = step.style ?? "line"
-            let values = chartPoints.map(\.value)
-            let valueScale = DottieChartData.valueScale(
-                values: values,
-                startsAtZero: chartStyle == "bar",
-                givenRange: step.range.count >= 2 && step.range[1] > step.range[0] ? (step.range[0], step.range[1]) : nil
-            )
-            func screenY(_ value: Double) -> CGFloat {
-                plotArea.minY + CGFloat((value - valueScale.minimum) / (valueScale.maximum - valueScale.minimum)) * plotArea.height
-            }
-            // x is spread evenly for labels, or by the numbers for x, y pairs.
-            let numericXValues = chartPoints.compactMap(\.x)
-            let usesNumericX = numericXValues.count == chartPoints.count && chartPoints.count > 1
-                && (numericXValues.max() ?? 0) > (numericXValues.min() ?? 0)
-            func screenX(_ index: Int) -> CGFloat {
-                if usesNumericX, let xMinimum = numericXValues.min(), let xMaximum = numericXValues.max(), let x = chartPoints[index].x {
-                    return plotArea.minX + 12 + CGFloat((x - xMinimum) / (xMaximum - xMinimum)) * (plotArea.width - 24)
-                }
-                return plotArea.minX + plotArea.width * (CGFloat(index) + 0.5) / CGFloat(chartPoints.count)
-            }
-            let axisInk = DottieInk.white
-            // Faint scale lines with their numbers.
-            for tickValue in valueScale.ticks {
-                let lineY = screenY(tickValue)
-                let scaleLine = [CGPoint(x: plotArea.minX, y: lineY), CGPoint(x: plotArea.maxX, y: lineY)]
-                drawn.add(.stroke(points: scaleLine, closed: false, smooth: false, dashed: true, arrowAtStart: false, arrowAtEnd: false),
-                          ink: axisInk, lineWidth: 0.8, pen: scaleLine, duration: 0.08)
-                let tickText = DottieChartData.shortNumber(tickValue)
-                let tickWidth = DottieFigure.estimatedTextWidth(tickText, fontSize: scaleLabelFontSize)
-                drawn.addText(tickText, origin: CGPoint(x: plotArea.minX - tickWidth - 8, y: lineY + 5), fontSize: scaleLabelFontSize, ink: axisInk)
-            }
-            let axes = [CGPoint(x: plotArea.minX, y: plotArea.maxY), CGPoint(x: plotArea.minX, y: plotArea.minY), CGPoint(x: plotArea.maxX, y: plotArea.minY)]
-            drawn.add(.stroke(points: axes, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: axisInk, lineWidth: 2.5, pen: axes, duration: 0.4)
-            // Labels under the axis, every one that fits.
-            let xLabels = chartPoints.indices.map { index in
-                chartPoints[index].label ?? chartPoints[index].x.map(DottieChartData.shortNumber) ?? ""
-            }
-            let widestLabel = xLabels.map { DottieFigure.estimatedTextWidth($0, fontSize: scaleLabelFontSize) }.max() ?? 0
-            let slotWidth = plotArea.width / CGFloat(chartPoints.count)
-            let labelEvery = max(1, Int(ceil((widestLabel + 8) / max(slotWidth, 1))))
-            for index in chartPoints.indices where index % labelEvery == 0 && !xLabels[index].isEmpty {
-                drawn.addLabel(xLabels[index], centeredAt: CGPoint(x: screenX(index), y: plotArea.minY - 12), fontSize: scaleLabelFontSize, ink: axisInk)
-            }
-            // The data itself.
-            let dataPoints = chartPoints.indices.map { CGPoint(x: screenX($0), y: screenY(chartPoints[$0].value)) }
-            switch chartStyle {
-            case "bar":
-                let barWidth = max(4, min(60, slotWidth * 0.6))
-                let baseY = screenY(max(valueScale.minimum, min(0, valueScale.maximum)))
-                for dataPoint in dataPoints {
-                    let barCorners = [CGPoint(x: dataPoint.x - barWidth / 2, y: baseY), CGPoint(x: dataPoint.x - barWidth / 2, y: dataPoint.y),
-                                      CGPoint(x: dataPoint.x + barWidth / 2, y: dataPoint.y), CGPoint(x: dataPoint.x + barWidth / 2, y: baseY)]
-                    drawn.add(.fill(points: barCorners), ink: ink, pen: barCorners, duration: max(0.12, 1.4 / Double(dataPoints.count)))
-                }
-            case "dots":
-                for dataPoint in dataPoints {
-                    drawn.add(.dot(center: dataPoint, radius: 5), ink: ink, pen: [dataPoint], duration: max(0.06, 1.0 / Double(dataPoints.count)))
-                }
-            default:
-                if dataPoints.count >= 2 {
-                    drawn.add(.stroke(points: dataPoints, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                              ink: ink, lineWidth: 3.5, pen: dataPoints, duration: min(2.4, max(0.6, Double(dataPoints.count) * 0.15)))
-                }
-                for dataPoint in dataPoints where dataPoints.count <= 40 {
-                    drawn.add(.dot(center: dataPoint, radius: 4.5), ink: ink, pen: [dataPoint], duration: 0.04)
-                }
-            }
-            // Each value written on its point when there are few enough.
-            if dataPoints.count <= 12 && labelEvery == 1 {
-                for (index, dataPoint) in dataPoints.enumerated() {
-                    drawn.addLabel(DottieChartData.shortNumber(chartPoints[index].value), centeredAt: CGPoint(x: dataPoint.x, y: dataPoint.y + 18),
-                                   fontSize: scaleLabelFontSize, ink: ink)
-                }
-            }
-            if let label = step.caption.map(DottieMathText.prettyPlainText) {
-                drawn.addLabel(label, centeredAt: CGPoint(x: plotArea.midX, y: outerArea.maxY + 4), fontSize: 20, ink: axisInk)
-            }
-
+            wasDrawn = drawChart(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         case .check:
-            guard let point = points.first else { return nil }
-            let tick = [CGPoint(x: point.x - 12, y: point.y + 2), CGPoint(x: point.x - 3, y: point.y - 9), CGPoint(x: point.x + 15, y: point.y + 14)]
-            drawn.add(.stroke(points: tick, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
-                      ink: step.ink ?? .green, lineWidth: 4, pen: tick, duration: 0.3)
+            wasDrawn = drawCheck(step, in: space, points: points, label: label, ink: ink, fontSize: fontSize, into: &drawn)
         }
+        guard wasDrawn else { return nil }
         return drawn.figures.isEmpty ? nil : drawn
+    }
+
+    /// A free drawing planned as pen strokes. False when the step has too little to draw.
+    private static func drawSketch(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        let sketchStrokes = DottieSketchArtist.strokes(fromStepText: step.text)
+        guard !sketchStrokes.isEmpty else { return false }
+        let sketchRect: CGRect
+        if points.count >= 2, let givenRect = rectangle(from: step, points: points, in: space) {
+            sketchRect = givenRect
+        } else if let center = points.first {
+            let side: CGFloat = space.boardRect.map { $0.width * 0.6 } ?? 360
+            sketchRect = CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
+        } else {
+            return false
+        }
+        // Keep the drawing's proportions: fit the square canvas inside
+        // the area, centered.
+        let side = min(sketchRect.width, sketchRect.height)
+        let canvas = CGRect(x: sketchRect.midX - side / 2, y: sketchRect.midY - side / 2, width: side, height: side)
+        func canvasPoint(_ sketchPoint: CGPoint) -> CGPoint {
+            // y runs down on the canvas, up in AppKit.
+            CGPoint(x: canvas.minX + sketchPoint.x / 1000 * canvas.width, y: canvas.maxY - sketchPoint.y / 1000 * canvas.height)
+        }
+        for sketchStroke in sketchStrokes {
+            let strokePoints = sketchStroke.points.map(canvasPoint)
+            // A smooth curve through a sharp corner (a fold, a box's
+            // edge) swings out into a loop, so strokes are split at
+            // their corners and each piece is smoothed on its own.
+            let strokePieces = Self.piecesSplitAtSharpCorners(strokePoints, isClosed: sketchStroke.isClosed)
+            let keepsClosedCurve = sketchStroke.isClosed && strokePieces.count == 1
+            for strokePiece in strokePieces {
+                drawn.add(.stroke(points: strokePiece, closed: keepsClosedCurve, smooth: strokePiece.count >= 3, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: sketchStroke.ink ?? ink, lineWidth: 3, pen: keepsClosedCurve ? strokePiece + [strokePiece[0]] : strokePiece,
+                          duration: min(max(Double(length(of: strokePiece)) / 900, 0.15), 1.4))
+            }
+        }
+        return true
+    }
+
+    /// A line, a smooth curve or a closed shape through the points. False when the step has too little to draw.
+    private static func drawLineCurveOrPolygon(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        let closed = step.kind == .polygon
+        drawn.add(.stroke(points: points, closed: closed, smooth: step.kind == .curve, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: ink, pen: closed ? points + [points[0]] : points)
+        if let label, let lastPoint = points.last {
+            drawn.addLabel(label, centeredAt: CGPoint(x: lastPoint.x + 24, y: lastPoint.y + 18), ink: ink)
+        }
+        return true
+    }
+
+    /// An arrow, with a head at both ends for a double arrow. False when the step has too little to draw.
+    private static func drawArrow(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        var arrowPoints = points
+        // An arrow to or from a whole thing stops at its edge.
+        if let startFrame = step.points.first.flatMap(space.wholeAnchor) {
+            arrowPoints[0] = edgePoint(of: startFrame, toward: arrowPoints[1], gap: 6)
+        }
+        if let endFrame = step.points.last.flatMap(space.wholeAnchor) {
+            arrowPoints[arrowPoints.count - 1] = edgePoint(of: endFrame, toward: arrowPoints[arrowPoints.count - 2], gap: 6)
+        }
+        drawn.add(.stroke(points: arrowPoints, closed: false, smooth: arrowPoints.count > 2, dashed: false,
+                          arrowAtStart: step.kind == .double_arrow, arrowAtEnd: true),
+                  ink: ink, pen: arrowPoints)
+        if let label {
+            let middle = midpoint(arrowPoints[0], arrowPoints[arrowPoints.count - 1])
+            drawn.addLabel(label, centeredAt: offset(middle, perpendicularTo: arrowPoints[0], arrowPoints[arrowPoints.count - 1], by: 22), ink: ink)
+        }
+        return true
+    }
+
+    /// A ring around a thing, or a circle from a center and a point on it. False when the step has too little to draw.
+    private static func drawCircle(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        let ring: [CGPoint]
+        if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference), step.points.count == 1 {
+            ring = ellipsePoints(in: frame.insetBy(dx: -10, dy: -8))
+        } else if points.count >= 2 {
+            let radius = distance(points[0], points[1])
+            ring = ellipsePoints(in: CGRect(x: points[0].x - radius, y: points[0].y - radius, width: radius * 2, height: radius * 2))
+        } else if let center = points.first {
+            ring = ellipsePoints(in: CGRect(x: center.x - 28, y: center.y - 28, width: 56, height: 56))
+        } else {
+            return false
+        }
+        drawn.add(.stroke(points: ring, closed: true, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: ink, pen: ring, duration: 0.7)
+        if let label, let topPoint = ring.max(by: { $0.y < $1.y }) {
+            drawn.addLabel(label, centeredAt: CGPoint(x: topPoint.x, y: topPoint.y + 20), ink: ink)
+        }
+        return true
+    }
+
+    /// A box around an area, or the area filled in as a highlight. False when the step has too little to draw.
+    private static func drawBoxOrHighlight(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard let rect = rectangle(from: step, points: points, in: space) else { return false }
+        let corners = [CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY),
+                       CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY)]
+        if step.kind == .highlight {
+            drawn.add(.fill(points: corners), ink: step.ink ?? .yellow, pen: [corners[0], corners[1], corners[2], corners[3], corners[0]], duration: 0.5)
+        } else {
+            drawn.add(.stroke(points: corners, closed: true, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, pen: corners + [corners[0]])
+        }
+        if let label {
+            drawn.addLabel(label, centeredAt: CGPoint(x: rect.midX, y: rect.minY - 20), ink: ink)
+        }
+        return true
+    }
+
+    /// A line under a thing or between two points. False when the step has too little to draw.
+    private static func drawUnderline(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        let start: CGPoint, end: CGPoint
+        if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference), step.points.count == 1 {
+            start = CGPoint(x: frame.minX - 2, y: frame.minY - 5)
+            end = CGPoint(x: frame.maxX + 2, y: frame.minY - 6)
+        } else if points.count >= 2 {
+            start = points[0]
+            end = points[1]
+        } else {
+            return false
+        }
+        drawn.add(.stroke(points: [start, end], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: ink, pen: [start, end])
+        return true
+    }
+
+    /// An arc or a right-angle mark at a corner. False when the step has too little to draw.
+    private static func drawAngle(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 3 else { return false }
+        let vertex = points[0]
+        let armA = unit(from: vertex, to: points[1])
+        let armB = unit(from: vertex, to: points[2])
+        let shorterArm = min(distance(vertex, points[1]), distance(vertex, points[2]))
+        if step.kind == .right_angle {
+            let side = min(18, max(9, shorterArm * 0.3))
+            let square = [
+                CGPoint(x: vertex.x + armA.dx * side, y: vertex.y + armA.dy * side),
+                CGPoint(x: vertex.x + (armA.dx + armB.dx) * side, y: vertex.y + (armA.dy + armB.dy) * side),
+                CGPoint(x: vertex.x + armB.dx * side, y: vertex.y + armB.dy * side)
+            ]
+            drawn.add(.stroke(points: square, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, lineWidth: 3, pen: square, duration: 0.4)
+            if let label {
+                let outward = normalized(CGVector(dx: armA.dx + armB.dx, dy: armA.dy + armB.dy))
+                drawn.addLabel(label, centeredAt: CGPoint(x: vertex.x + outward.dx * (side + 26), y: vertex.y + outward.dy * (side + 26)),
+                               fontSize: 20, ink: ink)
+            }
+        } else {
+            let radius = min(40, max(16, shorterArm * 0.35))
+            let startAngle = atan2(armA.dy, armA.dx)
+            var sweep = atan2(armB.dy, armB.dx) - startAngle
+            while sweep > .pi { sweep -= 2 * .pi }
+            while sweep < -.pi { sweep += 2 * .pi }
+            let arc = (0...24).map { index -> CGPoint in
+                let angle = startAngle + sweep * CGFloat(index) / 24
+                return CGPoint(x: vertex.x + cos(angle) * radius, y: vertex.y + sin(angle) * radius)
+            }
+            drawn.add(.stroke(points: arc, closed: false, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, lineWidth: 3, pen: arc, duration: 0.45)
+            if let label {
+                let middleAngle = startAngle + sweep / 2
+                drawn.addLabel(label, centeredAt: CGPoint(x: vertex.x + cos(middleAngle) * (radius + 22), y: vertex.y + sin(middleAngle) * (radius + 22)),
+                               fontSize: 20, ink: ink)
+            }
+        }
+        return true
+    }
+
+    /// A dot, with its label beside it. False when the step has too little to draw.
+    private static func drawPoint(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard let point = points.first else { return false }
+        drawn.add(.dot(center: point, radius: 5.5), ink: ink, pen: [point], duration: 0.25)
+        if let label {
+            drawn.addText(label, origin: CGPoint(x: point.x + 10, y: point.y + 16), fontSize: 22, ink: ink)
+        }
+        return true
+    }
+
+    /// Handwritten text or math. False when the step has too little to draw.
+    private static func drawText(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard let label else { return false }
+        let origin: CGPoint
+        if let firstReference = step.points.first, let frame = space.wholeAnchor(firstReference) {
+            origin = CGPoint(x: frame.maxX + 14, y: frame.midY)
+        } else if let point = points.first {
+            origin = point
+        } else {
+            return false
+        }
+        // On a board, a long line is written smaller rather than running
+        // off its edge.
+        var fittedFontSize = fontSize
+        if let boardRect = space.boardRect {
+            let roomToTheRight = boardRect.maxX - 18 - origin.x
+            while fittedFontSize > 13, DottieFigure.estimatedTextWidth(label, fontSize: fittedFontSize) > roomToTheRight {
+                fittedFontSize -= 1
+            }
+        }
+        drawn.addText(label, origin: origin, fontSize: fittedFontSize, ink: step.ink ?? .white)
+        return true
+    }
+
+    /// Small marks that show sides are equal. False when the step has too little to draw.
+    private static func drawTicks(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        let count = max(1, min(4, Int(step.text ?? "") ?? 1))
+        let middle = midpoint(points[0], points[1])
+        let along = unit(from: points[0], to: points[1])
+        let across = CGVector(dx: -along.dy, dy: along.dx)
+        for tickIndex in 0..<count {
+            let shift = (CGFloat(tickIndex) - CGFloat(count - 1) / 2) * 6
+            let center = CGPoint(x: middle.x + along.dx * shift, y: middle.y + along.dy * shift)
+            let tick = [CGPoint(x: center.x - across.dx * 8, y: center.y - across.dy * 8),
+                        CGPoint(x: center.x + across.dx * 8, y: center.y + across.dy * 8)]
+            drawn.add(.stroke(points: tick, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, lineWidth: 3, pen: tick, duration: 0.15)
+        }
+        return true
+    }
+
+    /// A length shown between two points. False when the step has too little to draw.
+    private static func drawMeasure(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        let along = unit(from: points[0], to: points[1])
+        let across = CGVector(dx: -along.dy, dy: along.dx)
+        let lift: CGFloat = 18
+        let start = CGPoint(x: points[0].x + across.dx * lift, y: points[0].y + across.dy * lift)
+        let end = CGPoint(x: points[1].x + across.dx * lift, y: points[1].y + across.dy * lift)
+        for (base, lifted) in [(points[0], start), (points[1], end)] {
+            let bar = [CGPoint(x: base.x + across.dx * 6, y: base.y + across.dy * 6),
+                       CGPoint(x: lifted.x + across.dx * 8, y: lifted.y + across.dy * 8)]
+            drawn.add(.stroke(points: bar, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, lineWidth: 2, pen: bar, duration: 0.15)
+        }
+        drawn.add(.stroke(points: [start, end], closed: false, smooth: false, dashed: false, arrowAtStart: true, arrowAtEnd: true),
+                  ink: ink, lineWidth: 2.5, pen: [start, end])
+        let middle = midpoint(start, end)
+        drawn.addLabel(label, centeredAt: CGPoint(x: middle.x + across.dx * 20, y: middle.y + across.dy * 20), fontSize: 20, ink: ink)
+        return true
+    }
+
+    /// A brace along a span, with its label. False when the step has too little to draw.
+    private static func drawBrace(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        let start = points[0], end = points[1]
+        let along = CGVector(dx: end.x - start.x, dy: end.y - start.y)
+        let across = normalized(CGVector(dx: -along.dy, dy: along.dx))
+        let depth: CGFloat = 14
+        func at(_ t: CGFloat, _ lift: CGFloat) -> CGPoint {
+            CGPoint(x: start.x + along.dx * t + across.dx * lift, y: start.y + along.dy * t + across.dy * lift)
+        }
+        let brace = [at(0, 0), at(0.06, depth * 0.55), at(0.2, depth * 0.62), at(0.44, depth * 0.66), at(0.5, depth * 1.25),
+                     at(0.56, depth * 0.66), at(0.8, depth * 0.62), at(0.94, depth * 0.55), at(1, 0)]
+        drawn.add(.stroke(points: brace, closed: false, smooth: true, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: ink, lineWidth: 3, pen: brace)
+        let tip = at(0.5, depth * 1.25 + 22)
+        drawn.addLabel(label, centeredAt: tip, fontSize: 20, ink: ink)
+        return true
+    }
+
+    /// The x and y axes. False when the step has too little to draw.
+    private static func drawAxes(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 3 else { return false }
+        let origin = points[0]
+        for axisEnd in [points[1], points[2]] {
+            drawn.add(.stroke(points: [origin, axisEnd], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
+                      ink: step.ink ?? .white, lineWidth: 2.5, pen: [origin, axisEnd])
+        }
+        let names = (label ?? "x,y").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: points[1].x + 4, y: points[1].y - 22), fontSize: 20, ink: step.ink ?? .white)
+        if names.count > 1 {
+            drawn.addLabel(names[1], centeredAt: CGPoint(x: points[2].x + 20, y: points[2].y + 4), fontSize: 20, ink: step.ink ?? .white)
+        }
+        return true
+    }
+
+    /// A grid with numbered lines. False when the step has too little to draw.
+    private static func drawGrid(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2 else { return false }
+        let gridArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                              width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+        guard gridArea.width > 20, gridArea.height > 20 else { return false }
+        // "8x5" is 8 cells across and 5 down; one number is the cells
+        // across, with square-ish cells down.
+        let cellCounts = (step.text ?? "")
+            .lowercased()
+            .components(separatedBy: CharacterSet(charactersIn: "x× ,"))
+            .compactMap { Int($0) }
+        let columnCount = min(max(cellCounts.first ?? 10, 1), 40)
+        let defaultRowCount = Int((CGFloat(columnCount) * gridArea.height / gridArea.width).rounded())
+        let rowCount = min(max(cellCounts.count > 1 ? cellCounts[1] : defaultRowCount, 1), 40)
+        let gridInk = step.ink ?? .white
+        // Thin and quick: a grid is the paper, not the point.
+        let lineCount = columnCount + rowCount + 2
+        let secondsPerLine = max(0.04, min(0.12, 2.0 / Double(lineCount)))
+        for columnIndex in 0...columnCount {
+            let lineX = gridArea.minX + gridArea.width * CGFloat(columnIndex) / CGFloat(columnCount)
+            let gridLine = [CGPoint(x: lineX, y: gridArea.maxY), CGPoint(x: lineX, y: gridArea.minY)]
+            drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
+        }
+        for rowIndex in 0...rowCount {
+            let lineY = gridArea.minY + gridArea.height * CGFloat(rowIndex) / CGFloat(rowCount)
+            let gridLine = [CGPoint(x: gridArea.minX, y: lineY), CGPoint(x: gridArea.maxX, y: lineY)]
+            drawn.add(.stroke(points: gridLine, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: gridInk, lineWidth: 1, pen: gridLine, duration: secondsPerLine)
+        }
+        return true
+    }
+
+    /// The real curve of a function of x. False when the step has too little to draw.
+    private static func drawPlot(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2, let expressionText = step.text,
+              let function = DottieMathExpression(expressionText) else { return false }
+        let area = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                          width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+        guard area.width > 20, area.height > 20 else { return false }
+        let range = step.range.count == 4 && step.range[1] > step.range[0] && step.range[3] > step.range[2]
+            ? step.range : [-10, 10, -10, 10]
+        let (xMin, xMax, yMin, yMax) = (range[0], range[1], range[2], range[3])
+        func screenPoint(_ x: Double, _ y: Double) -> CGPoint {
+            CGPoint(x: area.minX + CGFloat((x - xMin) / (xMax - xMin)) * area.width,
+                    y: area.minY + CGFloat((y - yMin) / (yMax - yMin)) * area.height)
+        }
+        // Faint axes where zero is in view.
+        if xMin < 0, xMax > 0 {
+            let axis = [screenPoint(0, yMin), screenPoint(0, yMax)]
+            drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
+                      ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
+        }
+        if yMin < 0, yMax > 0 {
+            let axis = [screenPoint(xMin, 0), screenPoint(xMax, 0)]
+            drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
+                      ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
+        }
+        // The curve, broken wherever it leaves the view or jumps.
+        var segments: [[CGPoint]] = [[]]
+        let sampleCount = 240
+        let ySpan = yMax - yMin
+        for sampleIndex in 0...sampleCount {
+            let x = xMin + (xMax - xMin) * Double(sampleIndex) / Double(sampleCount)
+            let y = function.evaluate(x: x)
+            if y.isFinite, y >= yMin - ySpan * 0.02, y <= yMax + ySpan * 0.02 {
+                segments[segments.count - 1].append(screenPoint(x, min(max(y, yMin), yMax)))
+            } else if !(segments.last?.isEmpty ?? true) {
+                segments.append([])
+            }
+        }
+        let curves = segments.filter { $0.count >= 2 }
+        guard !curves.isEmpty else { return false }
+        let totalLength = curves.reduce(CGFloat(0)) { $0 + length(of: $1) }
+        for curve in curves {
+            let share = Double(length(of: curve) / max(totalLength, 1))
+            drawn.add(.stroke(points: curve, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                      ink: ink, lineWidth: 3, pen: curve, duration: max(0.25, 1.6 * share))
+        }
+        if let lastCurve = curves.last, let curveEnd = lastCurve.last {
+            let name = "y = " + DottieMathText.prettyPlainText(expressionText)
+            let width = DottieFigure.estimatedTextWidth(name, fontSize: 20)
+            let x = min(curveEnd.x + 8, area.maxX - width)
+            drawn.addText(name, origin: CGPoint(x: x, y: min(curveEnd.y + 18, area.maxY - 10)), fontSize: 20, ink: ink)
+        }
+        return true
+    }
+
+    /// An X through something wrong. False when the step has too little to draw.
+    private static func drawCross(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard let point = points.first else { return false }
+        let first = [CGPoint(x: point.x - 12, y: point.y + 12), CGPoint(x: point.x + 12, y: point.y - 12)]
+        let second = [CGPoint(x: point.x + 12, y: point.y + 12), CGPoint(x: point.x - 12, y: point.y - 12)]
+        drawn.add(.stroke(points: first, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: step.ink ?? .red, lineWidth: 4, pen: first, duration: 0.2)
+        drawn.add(.stroke(points: second, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: step.ink ?? .red, lineWidth: 4, pen: second, duration: 0.2)
+        return true
+    }
+
+    /// A bar or line chart from data. False when the step has too little to draw.
+    private static func drawChart(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard points.count >= 2, let dataText = step.text else { return false }
+        let chartPoints = DottieChartData.parse(dataText)
+        guard !chartPoints.isEmpty else { return false }
+        // Room on the left for the scale and below for the labels.
+        let outerArea = CGRect(x: min(points[0].x, points[1].x), y: min(points[0].y, points[1].y),
+                               width: abs(points[1].x - points[0].x), height: abs(points[1].y - points[0].y))
+        let scaleLabelFontSize: CGFloat = 15
+        let plotArea = CGRect(x: outerArea.minX + 46, y: outerArea.minY + 30,
+                              width: outerArea.width - 56, height: outerArea.height - 40)
+        guard plotArea.width > 40, plotArea.height > 40 else { return false }
+        let chartStyle = step.style ?? "line"
+        let values = chartPoints.map(\.value)
+        let valueScale = DottieChartData.valueScale(
+            values: values,
+            startsAtZero: chartStyle == "bar",
+            givenRange: step.range.count >= 2 && step.range[1] > step.range[0] ? (step.range[0], step.range[1]) : nil
+        )
+        func screenY(_ value: Double) -> CGFloat {
+            plotArea.minY + CGFloat((value - valueScale.minimum) / (valueScale.maximum - valueScale.minimum)) * plotArea.height
+        }
+        // x is spread evenly for labels, or by the numbers for x, y pairs.
+        let numericXValues = chartPoints.compactMap(\.x)
+        let usesNumericX = numericXValues.count == chartPoints.count && chartPoints.count > 1
+            && (numericXValues.max() ?? 0) > (numericXValues.min() ?? 0)
+        func screenX(_ index: Int) -> CGFloat {
+            if usesNumericX, let xMinimum = numericXValues.min(), let xMaximum = numericXValues.max(), let x = chartPoints[index].x {
+                return plotArea.minX + 12 + CGFloat((x - xMinimum) / (xMaximum - xMinimum)) * (plotArea.width - 24)
+            }
+            return plotArea.minX + plotArea.width * (CGFloat(index) + 0.5) / CGFloat(chartPoints.count)
+        }
+        let axisInk = DottieInk.white
+        // Faint scale lines with their numbers.
+        for tickValue in valueScale.ticks {
+            let lineY = screenY(tickValue)
+            let scaleLine = [CGPoint(x: plotArea.minX, y: lineY), CGPoint(x: plotArea.maxX, y: lineY)]
+            drawn.add(.stroke(points: scaleLine, closed: false, smooth: false, dashed: true, arrowAtStart: false, arrowAtEnd: false),
+                      ink: axisInk, lineWidth: 0.8, pen: scaleLine, duration: 0.08)
+            let tickText = DottieChartData.shortNumber(tickValue)
+            let tickWidth = DottieFigure.estimatedTextWidth(tickText, fontSize: scaleLabelFontSize)
+            drawn.addText(tickText, origin: CGPoint(x: plotArea.minX - tickWidth - 8, y: lineY + 5), fontSize: scaleLabelFontSize, ink: axisInk)
+        }
+        let axes = [CGPoint(x: plotArea.minX, y: plotArea.maxY), CGPoint(x: plotArea.minX, y: plotArea.minY), CGPoint(x: plotArea.maxX, y: plotArea.minY)]
+        drawn.add(.stroke(points: axes, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: axisInk, lineWidth: 2.5, pen: axes, duration: 0.4)
+        // Labels under the axis, every one that fits.
+        let xLabels = chartPoints.indices.map { index in
+            chartPoints[index].label ?? chartPoints[index].x.map(DottieChartData.shortNumber) ?? ""
+        }
+        let widestLabel = xLabels.map { DottieFigure.estimatedTextWidth($0, fontSize: scaleLabelFontSize) }.max() ?? 0
+        let slotWidth = plotArea.width / CGFloat(chartPoints.count)
+        let labelEvery = max(1, Int(ceil((widestLabel + 8) / max(slotWidth, 1))))
+        for index in chartPoints.indices where index % labelEvery == 0 && !xLabels[index].isEmpty {
+            drawn.addLabel(xLabels[index], centeredAt: CGPoint(x: screenX(index), y: plotArea.minY - 12), fontSize: scaleLabelFontSize, ink: axisInk)
+        }
+        // The data itself.
+        let dataPoints = chartPoints.indices.map { CGPoint(x: screenX($0), y: screenY(chartPoints[$0].value)) }
+        switch chartStyle {
+        case "bar":
+            let barWidth = max(4, min(60, slotWidth * 0.6))
+            let baseY = screenY(max(valueScale.minimum, min(0, valueScale.maximum)))
+            for dataPoint in dataPoints {
+                let barCorners = [CGPoint(x: dataPoint.x - barWidth / 2, y: baseY), CGPoint(x: dataPoint.x - barWidth / 2, y: dataPoint.y),
+                                  CGPoint(x: dataPoint.x + barWidth / 2, y: dataPoint.y), CGPoint(x: dataPoint.x + barWidth / 2, y: baseY)]
+                drawn.add(.fill(points: barCorners), ink: ink, pen: barCorners, duration: max(0.12, 1.4 / Double(dataPoints.count)))
+            }
+        case "dots":
+            for dataPoint in dataPoints {
+                drawn.add(.dot(center: dataPoint, radius: 5), ink: ink, pen: [dataPoint], duration: max(0.06, 1.0 / Double(dataPoints.count)))
+            }
+        default:
+            if dataPoints.count >= 2 {
+                drawn.add(.stroke(points: dataPoints, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                          ink: ink, lineWidth: 3.5, pen: dataPoints, duration: min(2.4, max(0.6, Double(dataPoints.count) * 0.15)))
+            }
+            for dataPoint in dataPoints where dataPoints.count <= 40 {
+                drawn.add(.dot(center: dataPoint, radius: 4.5), ink: ink, pen: [dataPoint], duration: 0.04)
+            }
+        }
+        // Each value written on its point when there are few enough.
+        if dataPoints.count <= 12 && labelEvery == 1 {
+            for (index, dataPoint) in dataPoints.enumerated() {
+                drawn.addLabel(DottieChartData.shortNumber(chartPoints[index].value), centeredAt: CGPoint(x: dataPoint.x, y: dataPoint.y + 18),
+                               fontSize: scaleLabelFontSize, ink: ink)
+            }
+        }
+        if let label = step.caption.map(DottieMathText.prettyPlainText) {
+            drawn.addLabel(label, centeredAt: CGPoint(x: plotArea.midX, y: outerArea.maxY + 4), fontSize: 20, ink: axisInk)
+        }
+        return true
+    }
+
+    /// A check mark. False when the step has too little to draw.
+    private static func drawCheck(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
+        guard let point = points.first else { return false }
+        let tick = [CGPoint(x: point.x - 12, y: point.y + 2), CGPoint(x: point.x - 3, y: point.y - 9), CGPoint(x: point.x + 15, y: point.y + 14)]
+        drawn.add(.stroke(points: tick, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: false),
+                  ink: step.ink ?? .green, lineWidth: 4, pen: tick, duration: 0.3)
+        return true
     }
 
     // MARK: - Geometry helpers
