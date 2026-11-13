@@ -156,54 +156,79 @@ final class DottieGames {
             }
             return "if your guess was wrong, try your next guess; or they can draw again and click Guess."
 
-        case .wordChain(var usedWords, let nextLetter, var score, var lives, let waitingForDottie):
-            if let myWord {
-                let word = Self.normalizedWord(myWord)
-                guard let wordFirst = word.first, wordFirst == nextLetter, !usedWords.contains(word), word.count > 1 else {
-                    return "your word \"\(myWord)\" doesn't work (it must start with \"\(nextLetter)\" and not repeat). say a different one and call game answer with my_word again."
-                }
-                usedWords.append(word)
-                let userLetter = word.last ?? "a"
-                self.current = .wordChain(usedWords: usedWords, nextLetter: userLetter, score: score, lives: lives, waitingForDottie: false)
-                return "good. the user's word must start with \"\(userLetter)\"."
-            }
-            guard let answerText else { return "what was their word?" }
-            if waitingForDottie {
-                return "it's your turn first: say a word starting with \"\(nextLetter)\" and pass it as my_word."
-            }
-            let word = Self.normalizedWord(answerText)
-            let problem: String?
-            if word.count < 2 || word.contains(" ") {
-                problem = "that's not one word"
-            } else if word.first != nextLetter {
-                problem = "it doesn't start with \"\(nextLetter)\""
-            } else if usedWords.contains(word) {
-                problem = "\"\(word)\" was already used"
-            } else {
-                problem = nil
-            }
-            if let problem {
-                lives -= 1
-                if lives <= 0 {
-                    self.current = nil
-                    if score > 0 { DottieLevels.shared.award(.gamePoints, points: score) }
-                    return "\(problem), and that was their last life. game over with \(score) words! be a good sport and offer a rematch."
-                }
-                self.current = .wordChain(usedWords: usedWords, nextLetter: nextLetter, score: score, lives: lives, waitingForDottie: false)
-                return "\(problem). they lose a life (\(lives) left) and try again with a word starting with \"\(nextLetter)\"."
+        case .wordChain(let usedWords, let nextLetter, let score, let lives, let waitingForDottie):
+            return answerWordChain(
+                answerText,
+                myWord: myWord,
+                usedWords: usedWords,
+                nextLetter: nextLetter,
+                score: score,
+                lives: lives,
+                waitingForDottie: waitingForDottie
+            )
+        }
+    }
+
+    /// One answer in word chain: Dottie's own word (`myWord`) or the user's.
+    /// A word that doesn't fit costs the user a life; ten good words win.
+    private func answerWordChain(
+        _ answerText: String?,
+        myWord: String?,
+        usedWords usedWordsSoFar: [String],
+        nextLetter: Character,
+        score scoreSoFar: Int,
+        lives livesSoFar: Int,
+        waitingForDottie: Bool
+    ) -> String {
+        var usedWords = usedWordsSoFar
+        var score = scoreSoFar
+        var lives = livesSoFar
+        if let myWord {
+            let word = Self.normalizedWord(myWord)
+            guard let wordFirst = word.first, wordFirst == nextLetter, !usedWords.contains(word), word.count > 1 else {
+                return "your word \"\(myWord)\" doesn't work (it must start with \"\(nextLetter)\" and not repeat). say a different one and call game answer with my_word again."
             }
             usedWords.append(word)
-            score += 1
-            if score >= 10 {
-                self.current = nil
-                DottieLevels.shared.award(.gameWon)
-                DottieLevels.shared.award(.gamePoints, points: score)
-                return "\"\(word)\" works, and that's 10 words: the user wins! celebrate."
-            }
-            let dottieLetter = word.last ?? "a"
-            self.current = .wordChain(usedWords: usedWords, nextLetter: dottieLetter, score: score, lives: lives, waitingForDottie: true)
-            return "\"\(word)\" works (\(score) words). now say one common word starting with \"\(dottieLetter)\" that isn't used yet (used: \(usedWords.suffix(15).joined(separator: ", "))), and call game answer with my_word set to it."
+            let userLetter = word.last ?? "a"
+            self.current = .wordChain(usedWords: usedWords, nextLetter: userLetter, score: score, lives: lives, waitingForDottie: false)
+            return "good. the user's word must start with \"\(userLetter)\"."
         }
+        guard let answerText else { return "what was their word?" }
+        if waitingForDottie {
+            return "it's your turn first: say a word starting with \"\(nextLetter)\" and pass it as my_word."
+        }
+        let word = Self.normalizedWord(answerText)
+        let problem: String?
+        if word.count < 2 || word.contains(" ") {
+            problem = "that's not one word"
+        } else if word.first != nextLetter {
+            problem = "it doesn't start with \"\(nextLetter)\""
+        } else if usedWords.contains(word) {
+            problem = "\"\(word)\" was already used"
+        } else {
+            problem = nil
+        }
+        if let problem {
+            lives -= 1
+            if lives <= 0 {
+                self.current = nil
+                if score > 0 { DottieLevels.shared.award(.gamePoints, points: score) }
+                return "\(problem), and that was their last life. game over with \(score) words! be a good sport and offer a rematch."
+            }
+            self.current = .wordChain(usedWords: usedWords, nextLetter: nextLetter, score: score, lives: lives, waitingForDottie: false)
+            return "\(problem). they lose a life (\(lives) left) and try again with a word starting with \"\(nextLetter)\"."
+        }
+        usedWords.append(word)
+        score += 1
+        if score >= 10 {
+            self.current = nil
+            DottieLevels.shared.award(.gameWon)
+            DottieLevels.shared.award(.gamePoints, points: score)
+            return "\"\(word)\" works, and that's 10 words: the user wins! celebrate."
+        }
+        let dottieLetter = word.last ?? "a"
+        self.current = .wordChain(usedWords: usedWords, nextLetter: dottieLetter, score: score, lives: lives, waitingForDottie: true)
+        return "\"\(word)\" works (\(score) words). now say one common word starting with \"\(dottieLetter)\" that isn't used yet (used: \(usedWords.suffix(15).joined(separator: ", "))), and call game answer with my_word set to it."
     }
 
     func hint() -> String {

@@ -505,41 +505,7 @@ enum DottieSmartReplayTools: DottieToolModule {
             }
             return "watching now for a \(kind.rawValue) replay. tell the user to go ahead and say done when finished."
         case "stop":
-            let recordingKind = recorder.recordingKind
-            guard recorder.isRecording else { return "wasn't watching anything." }
-            guard let actionLines = recorder.stop() else {
-                return "stopped, but nothing was done while watching, so nothing was saved."
-            }
-            let description = await DottieSmartReplayRecorder.describe(actionLines: actionLines, kind: recordingKind)
-            let newReplay = DottieSmartReplay(
-                id: UUID(),
-                name: description.name,
-                kind: recordingKind,
-                steps: description.steps,
-                closingMessage: nil,
-                voiceShortcuts: [],
-                createdAt: Date(),
-                lastRunAt: nil,
-                runCount: 0
-            )
-            store.save(newReplay)
-            let savedReplayID = newReplay.id
-            let savedReplayName = newReplay.name
-            // The text box opens after this answer, so the voice isn't kept
-            // waiting while the user types.
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                let closingMessage = DottieTextPrompt.ask(
-                    title: "Want Dottie to say something when \"\(savedReplayName)\" finishes?",
-                    detail: "She'll say it out loud at the end of every run. You can change it later in Home → Smart Replays.",
-                    placeholder: "Type it here, or skip"
-                )
-                guard let closingMessage, var savedReplay = store.replay(withID: savedReplayID) else { return }
-                savedReplay.closingMessage = closingMessage
-                store.save(savedReplay)
-            }
-            let numberedSteps = description.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " ")
-            return "saved the \(recordingKind.rawValue) replay \"\(description.name)\": \(numberedSteps). read the steps back in a few words, and say a text box is open for what she should say at the end (they can skip it)."
+            return await stopWatchingAndSaveReplay()
         case "list":
             guard !store.replays.isEmpty else { return "no smart replays yet. say \"create a smart replay of me doing this\" to make one." }
             return store.replays.enumerated().map { index, replay in
@@ -558,29 +524,7 @@ enum DottieSmartReplayTools: DottieToolModule {
             guard let startSmartReplayJob else { return "replays can't run right now." }
             return "\(replay.kind.rawValue) replay \"\(replay.name)\": " + startSmartReplayJob(replay, arguments.dottieString("details"))
         case "edit":
-            guard var replay = arguments.dottieString("name").flatMap(store.replay(named:)) else {
-                return "no smart replay matches that. call smart_replays list."
-            }
-            var changes: [String] = []
-            if let newName = arguments.dottieString("new_name") {
-                replay.name = newName
-                changes.append("named it \"\(newName)\"")
-            }
-            if let kindName = arguments.dottieString("kind"), let newKind = DottieSmartReplay.Kind(rawValue: kindName) {
-                replay.kind = newKind
-                changes.append("made it a \(newKind.rawValue) replay")
-            }
-            if let newSteps = arguments["steps"] as? [String], !newSteps.isEmpty {
-                replay.steps = newSteps
-                changes.append("steps now: " + newSteps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " "))
-            }
-            if let closingMessage = arguments["closing_message"] as? String {
-                replay.closingMessage = closingMessage
-                changes.append(closingMessage.trimmingCharacters(in: .whitespaces).isEmpty ? "removed the closing line" : "closing line: \"\(closingMessage)\"")
-            }
-            guard !changes.isEmpty else { return "nothing to change was given." }
-            store.save(replay)
-            return "changed \"\(replay.name)\": " + changes.joined(separator: "; ") + ". read the change back in a few words."
+            return editReplay(arguments)
         case "shortcut":
             guard var replay = arguments.dottieString("name").flatMap(store.replay(named:)) else {
                 return "no smart replay matches that. call smart_replays list."
@@ -608,5 +552,75 @@ enum DottieSmartReplayTools: DottieToolModule {
         default:
             return "unknown action."
         }
+    }
+
+    /// Stops watching, has the actions turned into steps and saves them as a
+    /// new replay, then opens the text box for its closing line.
+    private static func stopWatchingAndSaveReplay() async -> String {
+        let store = DottieSmartReplayStore.shared
+        let recorder = DottieSmartReplayRecorder.shared
+        let recordingKind = recorder.recordingKind
+        guard recorder.isRecording else { return "wasn't watching anything." }
+        guard let actionLines = recorder.stop() else {
+            return "stopped, but nothing was done while watching, so nothing was saved."
+        }
+        let description = await DottieSmartReplayRecorder.describe(actionLines: actionLines, kind: recordingKind)
+        let newReplay = DottieSmartReplay(
+            id: UUID(),
+            name: description.name,
+            kind: recordingKind,
+            steps: description.steps,
+            closingMessage: nil,
+            voiceShortcuts: [],
+            createdAt: Date(),
+            lastRunAt: nil,
+            runCount: 0
+        )
+        store.save(newReplay)
+        let savedReplayID = newReplay.id
+        let savedReplayName = newReplay.name
+        // The text box opens after this answer, so the voice isn't kept
+        // waiting while the user types.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let closingMessage = DottieTextPrompt.ask(
+                title: "Want Dottie to say something when \"\(savedReplayName)\" finishes?",
+                detail: "She'll say it out loud at the end of every run. You can change it later in Home → Smart Replays.",
+                placeholder: "Type it here, or skip"
+            )
+            guard let closingMessage, var savedReplay = store.replay(withID: savedReplayID) else { return }
+            savedReplay.closingMessage = closingMessage
+            store.save(savedReplay)
+        }
+        let numberedSteps = description.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " ")
+        return "saved the \(recordingKind.rawValue) replay \"\(description.name)\": \(numberedSteps). read the steps back in a few words, and say a text box is open for what she should say at the end (they can skip it)."
+    }
+
+    /// Changes a saved replay's name, kind, steps or closing line.
+    private static func editReplay(_ arguments: [String: Any]) -> String {
+        let store = DottieSmartReplayStore.shared
+        guard var replay = arguments.dottieString("name").flatMap(store.replay(named:)) else {
+            return "no smart replay matches that. call smart_replays list."
+        }
+        var changes: [String] = []
+        if let newName = arguments.dottieString("new_name") {
+            replay.name = newName
+            changes.append("named it \"\(newName)\"")
+        }
+        if let kindName = arguments.dottieString("kind"), let newKind = DottieSmartReplay.Kind(rawValue: kindName) {
+            replay.kind = newKind
+            changes.append("made it a \(newKind.rawValue) replay")
+        }
+        if let newSteps = arguments["steps"] as? [String], !newSteps.isEmpty {
+            replay.steps = newSteps
+            changes.append("steps now: " + newSteps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " "))
+        }
+        if let closingMessage = arguments["closing_message"] as? String {
+            replay.closingMessage = closingMessage
+            changes.append(closingMessage.trimmingCharacters(in: .whitespaces).isEmpty ? "removed the closing line" : "closing line: \"\(closingMessage)\"")
+        }
+        guard !changes.isEmpty else { return "nothing to change was given." }
+        store.save(replay)
+        return "changed \"\(replay.name)\": " + changes.joined(separator: "; ") + ". read the change back in a few words."
     }
 }
