@@ -198,32 +198,11 @@ final class GeminiCLIAgentRuntime {
             : ["--resume", sessionID.uuidString.lowercased()])
           + Self.allowedMCPServerArguments(cliHomeURL: cliHomeURL, isComputerUseApproved: isComputerUseApproved)
 
-        var processEnvironment = ProcessInfo.processInfo.environment
-        if let loginShellPATH = Self.loginShellPATH {
-            processEnvironment["PATH"] = loginShellPATH
-        }
-        // Dottie's own Node.js, so node and npx work in the Dot's shell even
-        // on a Mac without them.
-        if DotsRuntimeInstaller.isInstalled {
-            let existingPATH = processEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-            processEnvironment["PATH"] = existingPATH + ":" + DotsRuntimeInstaller.nodeBinFolderURL.path
-        }
-        // "/gemini" tries Groq first when the request fits; "/gemini-only"
-        // (a helper set to Gemini) goes straight to Gemini.
-        processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + workerRoute
-        // The Worker swaps this for the real key. Without a shared secret
-        // configured, any placeholder works.
-        processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
-        processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
-        // Keys for the apps connected in Home → Tools (see prepareCLIHome).
-        processEnvironment.merge(DottieHelperMCPSync.helperSecretEnvironment()) { _, key in key }
-        processEnvironment["DOTTIE_SEARCH_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/search"
-        // Picks the cua-driver policy for this turn (see ClickyComputerUse).
-        processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved
-            ? ClickyComputerUse.actPolicyFileURL(inCLIHome: cliHomeURL)
-            : ClickyComputerUse.observePolicyFileURL(inCLIHome: cliHomeURL)).path
-        processEnvironment["NO_COLOR"] = "1"
-        agentProcess.environment = processEnvironment
+        agentProcess.environment = turnProcessEnvironment(
+            cliHomeURL: cliHomeURL,
+            isComputerUseApproved: isComputerUseApproved,
+            workerRoute: workerRoute
+        )
 
         let standardOutputPipe = Pipe()
         let standardErrorPipe = Pipe()
@@ -272,6 +251,42 @@ final class GeminiCLIAgentRuntime {
                 standardErrorTail: standardErrorCollector.tail
             )
         }
+    }
+
+    /// The environment Gemini CLI runs a turn in: where the Worker is, the
+    /// CLI's own home folder, the connected apps' keys and which computer-use
+    /// policy applies.
+    private func turnProcessEnvironment(
+        cliHomeURL: URL,
+        isComputerUseApproved: Bool,
+        workerRoute: String
+    ) -> [String: String] {
+        var processEnvironment = ProcessInfo.processInfo.environment
+        if let loginShellPATH = Self.loginShellPATH {
+            processEnvironment["PATH"] = loginShellPATH
+        }
+        // Dottie's own Node.js, so node and npx work in the Dot's shell even
+        // on a Mac without them.
+        if DotsRuntimeInstaller.isInstalled {
+            let existingPATH = processEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+            processEnvironment["PATH"] = existingPATH + ":" + DotsRuntimeInstaller.nodeBinFolderURL.path
+        }
+        // "/gemini" tries Groq first when the request fits; "/gemini-only"
+        // (a helper set to Gemini) goes straight to Gemini.
+        processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + workerRoute
+        // The Worker swaps this for the real key. Without a shared secret
+        // configured, any placeholder works.
+        processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
+        processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
+        // Keys for the apps connected in Home → Tools (see prepareCLIHome).
+        processEnvironment.merge(DottieHelperMCPSync.helperSecretEnvironment()) { _, key in key }
+        processEnvironment["DOTTIE_SEARCH_URL"] = ClickyWorkerConfiguration.workerBaseURL + "/search"
+        // Picks the cua-driver policy for this turn (see ClickyComputerUse).
+        processEnvironment["CLICKY_CUA_POLICY_FILE"] = (isComputerUseApproved
+            ? ClickyComputerUse.actPolicyFileURL(inCLIHome: cliHomeURL)
+            : ClickyComputerUse.observePolicyFileURL(inCLIHome: cliHomeURL)).path
+        processEnvironment["NO_COLOR"] = "1"
+        return processEnvironment
     }
 
     /// Every MCP server in the settings, minus the computer-use variant this
