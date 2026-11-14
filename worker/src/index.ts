@@ -75,6 +75,12 @@ export interface Env {
   PHONE_RELAY: DurableObjectNamespace;
   /** Cloudflare's rate limiter (wrangler.toml); absent in a setup without it, and then nothing is limited. */
   REQUEST_RATE_LIMITER?: RateLimit;
+  /** Each install's counts for the day (usageLimits.ts); absent in a setup without it, and then nothing is counted. */
+  INSTALL_USAGE?: DurableObjectNamespace;
+  /** "voice=300,chat=3000,…": the day's limit per area for one install. */
+  INSTALL_DAILY_LIMITS?: string;
+  /** Comma-separated install ids that are never limited. */
+  UNLIMITED_INSTALL_IDS?: string;
 }
 
 /**
@@ -182,7 +188,9 @@ import { attemptTimeoutMilliseconds, BUSY_STATUSES, fetchGeminiWithFallback, GEM
 import { isSameSecret, jsonResponse, readJSONObject, upstreamErrorResponse } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
+import { splitPassthroughKey, usageRefusal } from "./usageLimits";
 export { PhoneRelay } from "./phoneRelay";
+export { InstallUsage } from "./usageLimits";
 
 export default {
   async fetch(incomingRequest: Request, env: Env): Promise<Response> {
@@ -200,8 +208,9 @@ export default {
     // for a helper the user set to Gemini.
     const isGeminiOnlyRoute = url.pathname.startsWith("/gemini-only/");
     if (url.pathname.startsWith("/gemini/") || isGeminiOnlyRoute) {
-      const sentKey = request.headers.get("x-goog-api-key") ?? url.searchParams.get("key");
-      if (env.APP_SHARED_SECRET && !isSameSecret(sentKey ?? "", env.APP_SHARED_SECRET)) {
+      // The app puts its install id after the secret ("secret:install-id").
+      const sentKey = splitPassthroughKey(request.headers.get("x-goog-api-key") ?? url.searchParams.get("key") ?? "").secret;
+      if (env.APP_SHARED_SECRET && !isSameSecret(sentKey, env.APP_SHARED_SECRET)) {
         return new Response("Unauthorized", { status: 401 });
       }
       const upstreamPath = url.pathname.slice((isGeminiOnlyRoute ? "/gemini-only" : "/gemini").length);
@@ -209,6 +218,8 @@ export default {
         return jsonResponse({ error: "This part of the Gemini API isn't available through Dottie." }, 403);
       }
       if (await isOverRateLimit(request, env)) return tooManyRequestsResponse();
+      const passthroughUsageRefusal = await usageRefusal(request, url, env);
+      if (passthroughUsageRefusal) return passthroughUsageRefusal;
       try {
         return await handleGeminiPassthrough(request, url, env, isGeminiOnlyRoute);
       } catch (error) {
@@ -234,14 +245,16 @@ export default {
       });
     }
 
-    const presentedSecret = request.headers.get("x-clicky-secret") ?? request.headers.get("x-goog-api-key");
-    if (env.APP_SHARED_SECRET && !isSameSecret(presentedSecret ?? "", env.APP_SHARED_SECRET)) {
+    const presentedSecret = request.headers.get("x-clicky-secret") ?? splitPassthroughKey(request.headers.get("x-goog-api-key") ?? "").secret;
+    if (env.APP_SHARED_SECRET && !isSameSecret(presentedSecret, env.APP_SHARED_SECRET)) {
       return new Response("Unauthorized", { status: 401 });
     }
 
     // The Mac's long poll for phone messages (one call every 25 seconds) isn't counted.
     const isPhoneLongPoll = url.pathname === "/phone/telegram/getUpdates";
     if (!isPhoneLongPoll && (await isOverRateLimit(request, env))) return tooManyRequestsResponse();
+    const usageRefusalResponse = await usageRefusal(request, url, env);
+    if (usageRefusalResponse) return usageRefusalResponse;
 
     try {
       const phoneRelayResponse = await handlePhoneRelay(request, url, env);

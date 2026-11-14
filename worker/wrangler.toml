@@ -25,6 +25,16 @@ class_name = "PhoneRelay"
 tag = "v1-phone-relay"
 new_sqlite_classes = ["PhoneRelay"]
 
+# Limits per install (usageLimits.ts): each copy of the app's counts for the
+# day, and how many new copies were seen today.
+[[durable_objects.bindings]]
+name = "INSTALL_USAGE"
+class_name = "InstallUsage"
+
+[[migrations]]
+tag = "v2-install-usage"
+new_sqlite_classes = ["InstallUsage"]
+
 # Most requests one address may make a minute (the app's own bursts, like a
 # screen job's steps, stay well under it). Counted at Cloudflare's edge with
 # no extra wait. namespace_id is any number unique in the account.
@@ -54,5 +64,11 @@ GROQ_VISION_MODELS = "qwen/qwen3.8-27b"
 # Biggest request sent to Groq, in tokens. 7000 fits the free plan's 8,000 a
 # minute; raise it on a paid plan so long screen jobs and Dot turns fit too.
 GROQ_MAX_REQUEST_TOKENS = "7000"
+# What one install may ask for in a day, per area, and how many installs the
+# Worker has never seen may start in a day. "voice" counts live sessions,
+# "chat" questions and screen-job steps, "helpers" a helper's model calls.
+# Add UNLIMITED_INSTALL_IDS (comma-separated; each Mac's id is under
+# Settings → Updates in the app) for Macs that should never be limited.
+INSTALL_DAILY_LIMITS = "voice=300,chat=3000,speech=1000,dictation=1000,helpers=3000,search=1000,newInstalls=200"
 # NVIDIA NIM backups (only with NVIDIA_API_KEY), best first.
 NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"

@@ -102,6 +102,11 @@ struct HomeUpdateSettings: View {
                 Spacer()
                 actionButton
             }
+            // The id Dottie's server counts this copy's daily use under.
+            Text("Install id: \(ClickyWorkerConfiguration.installIdentifier)")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textSecondary)
+                .textSelection(.enabled)
             if let statusText {
                 Text(statusText)
                     .font(.system(size: 11))

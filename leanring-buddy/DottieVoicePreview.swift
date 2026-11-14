@@ -181,6 +181,8 @@ final class DottieVoicePreview: ObservableObject {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        // The passthrough checks the shared secret as the API key.
+        request.setValue(ClickyWorkerConfiguration.passthroughAPIKey, forHTTPHeaderField: "x-goog-api-key")
         let body: [String: Any] = [
             "contents": [["parts": [["text": "Say \(sampleDelivery(for: voiceName)): \(sampleText(for: voiceName))"]]]],
             "generationConfig": [

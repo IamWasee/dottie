@@ -94,8 +94,10 @@ final class DottieMausBotRuntime {
         let helperModelSelection = await DottieMausBot.shared.helperModelSelection(launcher: launcher)
         let modelSelection = spec.model ?? helperModelSelection
         let instructions = Self.trimmedToByteLimit(spec.instructions, maximumBytes: Self.maximumInstructionBytes)
+        let approvalLevel = ClickyComputerUse.mausBotApprovalLevel(isAlwaysAllowed: ClickyComputerUse.isAlwaysAllowed)
         let specHash = Self.fingerprint([
             spec.helperName, spec.title, instructions, spec.workspacePath, modelSelection ?? "", spec.effort ?? "", "computer=off",
+            "approval=\(approvalLevel)",
             spec.skillFiles.map { "\($0.path)=\($0.isEnabled)" }.joined(separator: ",")
         ])
         if let knownBotID = spec.knownBotID, let knownBotName = spec.knownBotName, spec.knownSpecHash == specHash {
@@ -128,8 +130,10 @@ final class DottieMausBotRuntime {
             "title": Self.singleLine(spec.title, maximumLength: 190),
             "description": "One of Dottie's helpers.",
             "soul": instructions,
-            // Like Gemini CLI's yolo mode: shell and file edits without cards.
-            "approval": "full",
+            // "full" runs shell and file edits without cards, once the user
+            // chose "Always allow"; "auto" lets Claude's own review pass
+            // routine actions and puts the rest on a card in MausBot.
+            "approval": approvalLevel,
             // Dottie does the screen work herself. "local" made MausBot need
             // its CUA Driver (own Screen Recording + Accessibility grants),
             // and without them every turn failed before Claude started.

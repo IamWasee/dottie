@@ -22,6 +22,7 @@ enum ClickyWorkerConfiguration {
     /// Set from Settings when the app wasn't built with an address.
     static let userWorkerBaseURLDefaultsKey = "clickyWorkerBaseURL"
     static let userAppSharedSecretDefaultsKey = "clickyAppSharedSecret"
+    private static let installIdentifierDefaultsKey = "dottieInstallIdentifier"
 
     /// The address this copy of Dottie was built with, if any.
     static var builtInWorkerBaseURL: String? {
@@ -53,6 +54,28 @@ enum ClickyWorkerConfiguration {
         let savedSecret = UserDefaults.standard.string(forKey: userAppSharedSecretDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return savedSecret.isEmpty ? AppBundleConfiguration.stringValue(forKey: "ClickyAppSharedSecret") : savedSecret
+    }
+
+    /// This copy of Dottie's own id, made up the first time it's needed and
+    /// kept from then on. The Worker counts each install's requests for the
+    /// day under it (worker/src/usageLimits.ts). It says nothing about the
+    /// user or the Mac, and it isn't a secret.
+    static var installIdentifier: String {
+        if let savedInstallIdentifier = UserDefaults.standard.string(forKey: installIdentifierDefaultsKey),
+           !savedInstallIdentifier.isEmpty {
+            return savedInstallIdentifier
+        }
+        let newInstallIdentifier = UUID().uuidString.lowercased()
+        UserDefaults.standard.set(newInstallIdentifier, forKey: installIdentifierDefaultsKey)
+        return newInstallIdentifier
+    }
+
+    /// What Gemini CLI and the Gemini passthrough send as their "API key":
+    /// the shared secret (any placeholder works without one) with the
+    /// install id after it. The Worker checks the first part, counts under
+    /// the second, and swaps in the real key.
+    static var passthroughAPIKey: String {
+        (appSharedSecret ?? "clicky-worker") + ":" + installIdentifier
     }
 
     static func url(forRoute routePath: String) -> URL {
@@ -88,11 +111,13 @@ enum ClickyWorkerConfiguration {
         }
     }
 
-    /// Adds the shared-secret header when one is configured. Every request to
-    /// the Worker goes through here so the header is never forgotten.
+    /// Adds the shared-secret header when one is configured, and this
+    /// install's id. Every request to the Worker goes through here so
+    /// neither is ever forgotten.
     static func applyAuthenticationHeaders(to request: inout URLRequest) {
         if let appSharedSecret {
             request.setValue(appSharedSecret, forHTTPHeaderField: "x-clicky-secret")
         }
+        request.setValue(installIdentifier, forHTTPHeaderField: "x-dottie-install")
     }
 }

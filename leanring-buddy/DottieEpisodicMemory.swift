@@ -777,9 +777,7 @@ enum DottieMemoryNetwork {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         // The passthrough checks the shared secret as the API key.
-        if let appSharedSecret = ClickyWorkerConfiguration.appSharedSecret {
-            request.setValue(appSharedSecret, forHTTPHeaderField: "x-goog-api-key")
-        }
+        request.setValue(ClickyWorkerConfiguration.passthroughAPIKey, forHTTPHeaderField: "x-goog-api-key")
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = bodyData
         guard let (responseData, response) = await DottieLoggedRequest.send(request),
