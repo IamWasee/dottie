@@ -1550,10 +1550,7 @@ final class CompanionManager: ObservableObject {
         // Start with Live's "okay, watch" out of the way, so drawing and
         // speaking stay together.
         if speaksLines {
-            for _ in 0..<40 {
-                if !(isLiveTurnInFlight || voiceState != .idle) || Task.isCancelled { break }
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
+            await waitUntilLiveIsQuiet()
         }
 
         // "circled" is always an anchor: the area the user circled.
@@ -1638,6 +1635,21 @@ final class CompanionManager: ObservableObject {
         // A stopped explanation was already tidied up, maybe with a new one
         // under way.
         guard !Task.isCancelled else { return }
+        tidyUpAfterTeaching(plan: plan, generation: generation, missedSteps: missedSteps)
+    }
+
+    /// Waits (up to 8 seconds) for Live to finish what it is saying, so an
+    /// explanation's drawing and speaking start together.
+    private func waitUntilLiveIsQuiet() async {
+        for _ in 0..<40 {
+            if !(isLiveTurnInFlight || voiceState != .idle) || Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    /// An explanation ran to its end: the pen goes away and the drawing
+    /// fades (later when the plan asked to keep it up).
+    private func tidyUpAfterTeaching(plan: DottieTeaching.Plan, generation: Int, missedSteps: Int) {
         penTrace = nil
         if generation == teachingGeneration {
             teachingTask = nil

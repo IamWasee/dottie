@@ -654,35 +654,71 @@ final class DottiePhoneBridge: ObservableObject {
         return response["result"]
     }
 
-    // MARK: - Token file
+    // MARK: - Token and install key
 
-    /// A private file rather than the keychain: Dottie is signed ad hoc, so
-    /// each update would otherwise ask for the keychain password.
+    /// Where the bot token and this Mac's install key are kept: the login
+    /// Keychain, which other apps can't read without the user saying yes.
+    /// They used to be private files, from when Dottie was signed ad hoc and
+    /// every update would have asked for the Keychain password; releases
+    /// are signed with one certificate now, so the Keychain stays quiet.
+    private static let keychainServerName = "Dottie phone"
+    private static let tokenKeychainName = "bot-token"
+    private static let installKeyKeychainName = "relay-key"
+
+    /// The older private file for the token, still read once to move it.
     private static var tokenFileURL: URL {
         let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return applicationSupportURL.appendingPathComponent("Dottie/phone-bot-token")
     }
 
+    /// The older private file for the install key, still read once to move it.
+    private static var installKeyFileURL: URL {
+        tokenFileURL.deletingLastPathComponent().appendingPathComponent("phone-relay-key")
+    }
+
+    /// Keeps a secret in the Keychain and removes its old file. When the
+    /// Keychain refuses, the secret stays in (or goes into) the private
+    /// file, so the phone never loses its connection over where it's kept.
+    private static func keepSecret(_ secret: String, keychainName: String, fallbackFileURL: URL) {
+        if DottieToolsKeychain.setValue(secret, server: keychainServerName, name: keychainName) {
+            try? FileManager.default.removeItem(at: fallbackFileURL)
+            return
+        }
+        DottieLog.warning("The Keychain didn't take a phone secret, so it stays in its private file")
+        try? FileManager.default.createDirectory(at: fallbackFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: fallbackFileURL.path, contents: Data(secret.utf8), attributes: [.posixPermissions: 0o600])
+    }
+
+    /// A secret from the Keychain, or from its old file (which is then
+    /// moved into the Keychain).
+    private static func savedSecret(keychainName: String, fallbackFileURL: URL) -> String? {
+        if let keychainSecret = DottieToolsKeychain.value(server: keychainServerName, name: keychainName), !keychainSecret.isEmpty {
+            return keychainSecret
+        }
+        guard let fileSecret = (try? String(contentsOf: fallbackFileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !fileSecret.isEmpty else { return nil }
+        keepSecret(fileSecret, keychainName: keychainName, fallbackFileURL: fallbackFileURL)
+        return fileSecret
+    }
+
     private static func saveToken(_ token: String?) {
         guard let token else {
+            DottieToolsKeychain.setValue(nil, server: keychainServerName, name: tokenKeychainName)
             try? FileManager.default.removeItem(at: tokenFileURL)
             return
         }
-        try? FileManager.default.createDirectory(at: tokenFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: tokenFileURL.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600])
+        keepSecret(token, keychainName: tokenKeychainName, fallbackFileURL: tokenFileURL)
     }
 
     private static func readToken() -> String? {
-        (try? String(contentsOf: tokenFileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        savedSecret(keychainName: tokenKeychainName, fallbackFileURL: tokenFileURL)
     }
 
-    /// This Mac's key for Dottie's bot: 32 random bytes made once and kept
-    /// in a private file next to the token. Whoever has it can read this
-    /// Mac's messages on Dottie's server, so it never leaves the Mac except
-    /// in that header.
+    /// This Mac's key for Dottie's bot: 32 random bytes made once. Whoever
+    /// has it can read this Mac's messages on Dottie's server, so it never
+    /// leaves the Mac except in that header.
     private static func installKey() -> String {
-        let keyFileURL = tokenFileURL.deletingLastPathComponent().appendingPathComponent("phone-relay-key")
-        if let savedKey = (try? String(contentsOf: keyFileURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let savedKey = savedSecret(keychainName: installKeyKeychainName, fallbackFileURL: installKeyFileURL),
            savedKey.count >= 32 {
             return savedKey
         }
@@ -691,8 +727,7 @@ final class DottiePhoneBridge: ObservableObject {
             randomBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
         }
         let newKey = randomBytes.map { String(format: "%02x", $0) }.joined()
-        try? FileManager.default.createDirectory(at: keyFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: keyFileURL.path, contents: Data(newKey.utf8), attributes: [.posixPermissions: 0o600])
+        keepSecret(newKey, keychainName: installKeyKeychainName, fallbackFileURL: installKeyFileURL)
         return newKey
     }
 }

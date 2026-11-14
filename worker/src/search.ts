@@ -257,12 +257,36 @@ export async function searchWikipedia(query: string): Promise<SearchResult[]> {
   }));
 }
 
+/** How much of a page is read for its text. The answer is in the first part; the rest is never downloaded. */
+const MAXIMUM_PAGE_BYTES = 600_000;
+
+/**
+ * The start of a response's body as text. Reading stops at the limit, so a
+ * page of any size (or one that never ends) costs no more than the limit.
+ */
+export async function readTextUpTo(response: Response, maximumBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const bodyReader = response.body.getReader();
+  const textDecoder = new TextDecoder();
+  let text = "";
+  let receivedBytes = 0;
+  while (receivedBytes < maximumBytes) {
+    const { done, value } = await bodyReader.read();
+    if (done) break;
+    const bytesToKeep = value.subarray(0, maximumBytes - receivedBytes);
+    receivedBytes += bytesToKeep.byteLength;
+    text += textDecoder.decode(bytesToKeep, { stream: true });
+  }
+  await bodyReader.cancel().catch(() => {});
+  return text + textDecoder.decode();
+}
+
 /** The page's visible text, without scripts, styles and markup, cut to about 2500 characters (the answer is near the top, and every character is read again by the model). */
 export async function fetchReadableText(pageURL: string): Promise<string> {
   const response = await fetch(pageURL, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("html")) return "";
-  const html = (await response.text()).slice(0, 600_000);
+  const html = await readTextUpTo(response, MAXIMUM_PAGE_BYTES);
   const body = html
     .replace(/<(script|style|noscript|svg|nav|footer|header|form)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");

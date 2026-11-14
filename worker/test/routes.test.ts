@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker, { isAllowedPassthrough } from "../src/index";
+import worker, { isAllowedPassthrough, requestWithinSizeLimit } from "../src/index";
 import type { Env } from "../src/index";
 import { chatAnswer, fakeFetch, geminiTextAnswer, jsonAnswer, makeEnv, sseJSON } from "./helpers";
 
@@ -27,15 +27,15 @@ const userText = (text: string) => ({ role: "user", parts: [{ text }] });
 const sseAnswer = (text: string) => new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\r\n\r\n`, { headers: { "content-type": "text/event-stream" } });
 
 describe("GET /health", () => {
-  it("says what is set up, without any secret", async () => {
+  it("says it is up and has a Gemini key, without any secret", async () => {
     const response = await call("/health");
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: true, hasGroqKey: false, requiresAppSecret: false, hasPhoneBot: false });
+    expect(await response.json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: true });
   });
 
-  it("reports the optional keys", async () => {
+  it("says when the Gemini key is missing, and nothing about the other keys or the secret", async () => {
     const response = await call("/health", { env: { GROQ_API_KEY: "g", APP_SHARED_SECRET: "s", TELEGRAM_BOT_TOKEN: "t", GEMINI_API_KEY: "" } });
-    expect(await response.json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: false, hasGroqKey: true, requiresAppSecret: true, hasPhoneBot: true });
+    expect(await response.json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: false });
   });
 
   it("is open even when a shared secret is set", async () => {
@@ -133,7 +133,9 @@ describe("POST /live-token", () => {
     const startWindow = Date.parse(calls[0].json.newSessionExpireTime) - before;
     expect(startWindow).toBeGreaterThanOrEqual(119_000);
     expect(startWindow).toBeLessThanOrEqual(121_000);
-    expect(Date.parse(answer.expireTime) - before).toBeGreaterThanOrEqual(29 * 60 * 1000);
+    const lifetime = Date.parse(answer.expireTime) - before;
+    expect(lifetime).toBeGreaterThanOrEqual(9 * 60 * 1000);
+    expect(lifetime).toBeLessThanOrEqual(11 * 60 * 1000);
   });
 
   it("passes Gemini's error on", async () => {
@@ -317,6 +319,14 @@ describe("POST /tts", () => {
     const response = await call("/tts", { body });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "missing text" });
+  });
+
+  it("turns away text far too long to speak, without asking Gemini", async () => {
+    const calls = fakeFetch([]);
+    const response = await call("/tts", { body: { text: "a".repeat(10_001) } });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "That text is too long to speak." });
+    expect(calls).toHaveLength(0);
   });
 
   it("tries the backup voice model when the first is busy", async () => {
@@ -636,5 +646,48 @@ describe("the rate limit", () => {
   it("blocks nobody when the limiter itself fails", async () => {
     const { binding } = limiter(new Error("limiter is down"));
     expect((await call("/config", { env: { REQUEST_RATE_LIMITER: binding } })).status).toBe(200);
+  });
+});
+
+describe("the size limit on a body", () => {
+  const piecesOf = (pieces: string[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const piece of pieces) controller.enqueue(new TextEncoder().encode(piece));
+        controller.close();
+      },
+    });
+  const streamedRequest = (pieces: string[]) =>
+    new Request("https://worker.test/chat", { method: "POST", body: piecesOf(pieces), duplex: "half" } as RequestInit);
+
+  it("lets a request without a body through as it is", async () => {
+    const request = new Request("https://worker.test/config");
+    expect(await requestWithinSizeLimit(request, 10)).toBe(request);
+  });
+
+  it("goes by the size a request declares", async () => {
+    const small = new Request("https://worker.test/chat", { method: "POST", body: "12345", headers: { "content-length": "5" } });
+    expect(await requestWithinSizeLimit(small, 10)).toBe(small);
+    const big = new Request("https://worker.test/chat", { method: "POST", body: "12345", headers: { "content-length": "11" } });
+    expect(await requestWithinSizeLimit(big, 10)).toBeUndefined();
+  });
+
+  it("keeps a body sent in pieces with no size when it fits", async () => {
+    const request = streamedRequest(['{"a":', "1}"]);
+    request.headers.delete("content-length");
+    const checkedRequest = await requestWithinSizeLimit(request, 10);
+    expect(checkedRequest?.method).toBe("POST");
+    expect(await checkedRequest?.text()).toBe('{"a":1}');
+  });
+
+  it("drops a body sent in pieces with no size once it goes over", async () => {
+    const request = streamedRequest(["123456", "789012"]);
+    request.headers.delete("content-length");
+    expect(await requestWithinSizeLimit(request, 10)).toBeUndefined();
+  });
+
+  it("answers 413 for a body that declares more than the route takes", async () => {
+    const response = await call("/chat", { body: "{}", headers: { "content-length": String(33 * 1024 * 1024) } });
+    expect(response.status).toBe(413);
   });
 });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decodeHTMLEntities,
   fetchReadableText,
+  readTextUpTo,
   handleSearch,
   htmlToText,
   meaningfulQueryWords,
@@ -422,5 +423,41 @@ describe("handleSearch", () => {
     ]);
     const answer = (await (await handleSearch(searchURL("a".repeat(500)))).json()) as any;
     expect(answer.query).toHaveLength(300);
+  });
+});
+
+describe("readTextUpTo", () => {
+  const streamOf = (pieces: string[], onPull?: () => void) =>
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        onPull?.();
+        const piece = pieces.shift();
+        if (piece === undefined) controller.close();
+        else controller.enqueue(new TextEncoder().encode(piece));
+      },
+    });
+
+  it("returns the whole text of a short page", async () => {
+    expect(await readTextUpTo(new Response(streamOf(["hello ", "there"])), 100)).toBe("hello there");
+  });
+
+  it("stops at the limit, in the middle of a piece", async () => {
+    expect(await readTextUpTo(new Response(streamOf(["12345", "67890", "abcde"])), 7)).toBe("1234567");
+  });
+
+  it("does not keep reading a page that never ends", async () => {
+    let piecesRead = 0;
+    const endlessPage = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        piecesRead += 1;
+        controller.enqueue(new TextEncoder().encode("x".repeat(10)));
+      },
+    });
+    expect(await readTextUpTo(new Response(endlessPage), 25)).toHaveLength(25);
+    expect(piecesRead).toBeLessThan(10);
+  });
+
+  it("returns nothing for a response without a body", async () => {
+    expect(await readTextUpTo(new Response(null), 100)).toBe("");
   });
 });

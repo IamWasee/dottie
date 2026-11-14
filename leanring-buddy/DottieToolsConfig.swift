@@ -278,7 +278,11 @@ enum DottieToolsKeychain {
         return value
     }
 
-    static func setValue(_ newValue: String?, server: String, name: String) {
+    /// Saves a value, or removes it when the new value is nil or empty.
+    /// Returns false when the Keychain refused to keep it, so a caller with
+    /// somewhere else to put the value can fall back to that.
+    @discardableResult
+    static func setValue(_ newValue: String?, server: String, name: String) -> Bool {
         let accountName = account(server: server, name: name)
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -287,15 +291,17 @@ enum DottieToolsKeychain {
         ]
         SecItemDelete(baseQuery as CFDictionary)
         let trimmedValue = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var wasKept = true
         if !trimmedValue.isEmpty {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = Data(trimmedValue.utf8)
             addQuery[kSecAttrLabel as String] = "Dottie: \(server) \(name)"
-            SecItemAdd(addQuery as CFDictionary, nil)
+            wasKept = SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
         }
         lock.lock()
-        cache[accountName] = .some(trimmedValue.isEmpty ? nil : trimmedValue)
+        cache[accountName] = .some(trimmedValue.isEmpty || !wasKept ? nil : trimmedValue)
         lock.unlock()
+        return wasKept
     }
 
     static func removeAll(server: String, names: [String]) {
