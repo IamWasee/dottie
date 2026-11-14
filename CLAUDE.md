@@ -322,7 +322,7 @@ npx wrangler dev
 npm run check   # type check, tests with coverage floor, speed checks, trial bundle
 ```
 
-Worker tests live in `worker/test/` (Vitest inside the Workers runtime; `worker/test/performance/` holds speed checks run in Node). Worker rules: every change comes with tests (coverage floor in `vitest.config.mts`: 97% lines, 93% branches). Tests never reach the internet; fake every outside call with `fakeFetch`. The Gemini passthrough forwards only model calls and model listing (`isAllowedPassthrough`); add a path there, with a test, before the app or Gemini CLI uses a new one. Requests are limited per address by the `REQUEST_RATE_LIMITER` binding in `wrangler.toml` (300 a minute). Needs Node 22 (wrangler 4).
+Worker tests live in `worker/test/` (Vitest inside the Workers runtime; `worker/test/performance/` holds speed checks run in Node). `worker/test/journeys.test.ts` runs whole journeys (a voice turn, a helper's turn, phone pairing, the rate limit) with `wrangler.toml`'s own settings; the app's speed checks are `leanring-buddyTests/SpeedCheckTests.swift`. Worker rules: every change comes with tests (coverage floor in `vitest.config.mts`: 97% lines, 93% branches). Tests never reach the internet; fake every outside call with `fakeFetch`. The Gemini passthrough forwards only model calls and model listing (`isAllowedPassthrough`); add a path there, with a test, before the app or Gemini CLI uses a new one. Requests are limited per address by the `REQUEST_RATE_LIMITER` binding in `wrangler.toml` (300 a minute). Needs Node 22 (wrangler 4).
 
 ## Code Style & Conventions
 
