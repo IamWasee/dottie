@@ -57,4 +57,21 @@ struct AppleScriptSafetyTests {
         #expect(DottieMacActions.isRisky(#"tell application "Finder" to delete file "a.txt""#))
         #expect(DottieMacActions.isRisky(#"tell application "Finder" to empty trash"#))
     }
+
+    // MARK: - Who is asked
+
+    @Test func aHarmlessScriptNeverAsks() {
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: false, alwaysAllowsScripts: false, questionsGoToPhone: false) == .runWithoutAsking)
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: false, alwaysAllowsScripts: false, questionsGoToPhone: true) == .runWithoutAsking)
+    }
+
+    @Test func aRiskyScriptAsksOnTheMacUntilAlwaysAllowed() {
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: true, alwaysAllowsScripts: false, questionsGoToPhone: false) == .askOnMac)
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: true, alwaysAllowsScripts: true, questionsGoToPhone: false) == .runWithoutAsking)
+    }
+
+    @Test func inAwayModeTheQuestionGoesToThePhone() {
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: true, alwaysAllowsScripts: false, questionsGoToPhone: true) == .askOnPhone)
+        #expect(DottieMacActions.scriptPermissionRoute(isScriptRisky: true, alwaysAllowsScripts: true, questionsGoToPhone: true) == .runWithoutAsking)
+    }
 }

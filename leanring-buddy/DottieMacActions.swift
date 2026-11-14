@@ -155,19 +155,68 @@ enum DottieMacActions {
         return riskyScriptPatterns.contains { wordsWithSingleSpaces.contains($0) }
     }
 
+    /// UserDefaults key of "Run scripts without asking" in Settings →
+    /// Working on its own. Also turned on by "Always allow" in the dialog.
+    static let alwaysAllowsScriptsDefaultsKey = "dottieAlwaysAllowsScripts"
+
+    /// Off until the user taps "Always allow" or turns the setting on.
+    static var alwaysAllowsScripts: Bool {
+        UserDefaults.standard.bool(forKey: alwaysAllowsScriptsDefaultsKey)
+    }
+
+    /// Who is asked before a script runs.
+    enum ScriptPermissionRoute: Equatable {
+        /// Nobody: the script runs straight away.
+        case runWithoutAsking
+        /// A dialog on the Mac with Do it, Always allow and Don't.
+        case askOnMac
+        /// Allow / Deny on the phone, because the user is away.
+        case askOnPhone
+    }
+
+    /// Dottie works for the user, so a script only waits for a yes when it
+    /// looks risky and the user hasn't said "always allow" yet. While the
+    /// user is away the question goes to their phone, since nobody is at
+    /// the Mac to see a dialog.
+    static func scriptPermissionRoute(isScriptRisky: Bool, alwaysAllowsScripts: Bool, questionsGoToPhone: Bool) -> ScriptPermissionRoute {
+        guard isScriptRisky, !alwaysAllowsScripts else { return .runWithoutAsking }
+        return questionsGoToPhone ? .askOnPhone : .askOnMac
+    }
+
     /// Runs AppleScript. Scripts that look like they send, delete, buy or
-    /// run shell commands ask the user in a dialog first.
+    /// run shell commands ask the user first (on the Mac, or on the phone
+    /// in away mode) until the user picks "Always allow".
     @MainActor
     static func runAppleScript(_ script: String, purpose: String) async -> String {
         let trimmedScript = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedScript.isEmpty else { return "the script was empty." }
-        if isRisky(trimmedScript) {
-            let isAllowed = DottieConfirmation.ask(
+        let permissionRoute = scriptPermissionRoute(
+            isScriptRisky: isRisky(trimmedScript),
+            alwaysAllowsScripts: alwaysAllowsScripts,
+            questionsGoToPhone: DottieAwayMode.shared.questionsGoToPhone
+        )
+        let questionDetail = (purpose.isEmpty ? "" : purpose + "\n\n") + shortened(trimmedScript, to: 900)
+        switch permissionRoute {
+        case .runWithoutAsking:
+            break
+        case .askOnPhone:
+            let isAllowed = await DottieAwayMode.shared.confirmOnPhone("Let Dottie run this script?\n\n" + questionDetail, screenshotJPEG: nil)
+            guard isAllowed else { return "the user didn't allow it from their phone, so it wasn't run. carry on with what doesn't need it." }
+        case .askOnMac:
+            let answer = DottieConfirmation.askWithAlwaysAllow(
                 title: "Let Dottie do this?",
-                detail: (purpose.isEmpty ? "" : purpose + "\n\n") + shortened(trimmedScript, to: 900),
+                detail: questionDetail + "\n\nAlways allow: Dottie stops asking before scripts. You can change it in Settings → Working on its own.",
                 confirmButtonTitle: "Do it"
             )
-            guard isAllowed else { return "the user said no, so it wasn't run. say okay, you won't." }
+            switch answer {
+            case .declined:
+                return "the user said no, so it wasn't run. say okay, you won't."
+            case .allowedAlways:
+                UserDefaults.standard.set(true, forKey: alwaysAllowsScriptsDefaultsKey)
+                DottieLog.notice("The user chose Always allow for scripts")
+            case .allowedOnce:
+                break
+            }
         }
         let result = await runProcess("/usr/bin/osascript", arguments: ["-e", trimmedScript], timeout: 60)
         if result.timedOut {
@@ -235,5 +284,30 @@ enum DottieConfirmation {
         alert.addButton(withTitle: "Don't")
         alert.window.level = .floating
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    enum AnswerWithAlwaysAllow {
+        case allowedOnce
+        case allowedAlways
+        case declined
+    }
+
+    /// The same dialog with a third button, "Always allow", for questions
+    /// the user shouldn't have to answer every time.
+    static func askWithAlwaysAllow(title: String, detail: String, confirmButtonTitle: String) -> AnswerWithAlwaysAllow {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: confirmButtonTitle)
+        alert.addButton(withTitle: "Always allow")
+        alert.addButton(withTitle: "Don't")
+        alert.window.level = .floating
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .allowedOnce
+        case .alertSecondButtonReturn: return .allowedAlways
+        default: return .declined
+        }
     }
 }
