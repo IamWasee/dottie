@@ -460,34 +460,7 @@ final class DottiePhoneBridge: ObservableObject {
         }
 
         guard let pairedChatID else {
-            // The code has to be the whole message (digits only), and each
-            // chat gets a few tries: a message holding thousands of digits
-            // could otherwise contain every possible code.
-            let sentDigits = text.filter(\.isNumber)
-            let failedAttempts = failedPairingAttemptsByChatID[chatID, default: 0]
-            guard failedAttempts < Self.maximumPairingAttemptsPerChat else { return }
-            if sentDigits == pairingCode, text.count <= 12 {
-                failedPairingAttemptsByChatID = [:]
-                self.pairedChatID = chatID
-                UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
-                statusText = "Paired with your phone."
-                await send("Paired! Text me anything and a helper on your Mac will do it. Try: status, screenshot, or \"check my calendar for tomorrow\".")
-            } else {
-                if !sentDigits.isEmpty {
-                    failedPairingAttemptsByChatID[chatID] = failedAttempts + 1
-                    // Many wrong codes overall: a new code, so guessing
-                    // across chats doesn't add up either.
-                    if failedPairingAttemptsByChatID.values.reduce(0, +) >= Self.maximumPairingAttemptsOverall {
-                        pairingCode = Self.newPairingCode()
-                        failedPairingAttemptsByChatID = [:]
-                        statusText = "Too many wrong pairing codes, so there's a new one."
-                    }
-                }
-                _ = await callTelegram(method: "sendMessage", parameters: [
-                    "chat_id": chatID,
-                    "text": "Send the 6-digit pairing code shown in Dottie → Home → Phone."
-                ])
-            }
+            await handlePairingCodeAttempt(chatID: chatID, text: text)
             return
         }
         // Only the paired chat can talk to this Mac.
@@ -500,27 +473,8 @@ final class DottiePhoneBridge: ObservableObject {
         if text.hasPrefix("/start") { command = "start" }
         // A question Dottie asked is waiting: a typed answer (or yes/no to
         // one with buttons) answers it instead of starting a new job.
-        if let question = pendingQuestion {
-            if question.choices.isEmpty, !["status", "screenshot", "screen", "help", "report"].contains(command) {
-                resolvePendingQuestion(with: text)
-                return
-            }
-            let yesWords = ["allow", "yes", "y", "ok", "okay", "go", "go ahead", "do it"]
-            let noWords = ["deny", "no", "n", "don't", "dont", "stop", "skip"]
-            if !question.choices.isEmpty {
-                if let typedChoice = question.choices.first(where: { $0.lowercased() == command }) {
-                    resolvePendingQuestion(with: typedChoice)
-                    return
-                }
-                if yesWords.contains(command), let firstChoice = question.choices.first {
-                    resolvePendingQuestion(with: firstChoice)
-                    return
-                }
-                if noWords.contains(command), question.choices.count > 1, let lastChoice = question.choices.last {
-                    resolvePendingQuestion(with: lastChoice)
-                    return
-                }
-            }
+        if let question = pendingQuestion, answerPendingQuestion(question, command: command, text: text) {
+            return
         }
         switch command {
         case "away", "i'm out", "im out", "i'm away", "im away", "away mode", "away on", "leaving":
@@ -545,6 +499,66 @@ final class DottiePhoneBridge: ObservableObject {
         default:
             onMessage?(text)
         }
+    }
+
+    /// A message from a chat while no phone is paired yet: pairs the chat
+    /// when the message is the pairing code, otherwise asks for the code.
+    private func handlePairingCodeAttempt(chatID: Int64, text: String) async {
+        // The code has to be the whole message (digits only), and each
+        // chat gets a few tries: a message holding thousands of digits
+        // could otherwise contain every possible code.
+        let sentDigits = text.filter(\.isNumber)
+        let failedAttempts = failedPairingAttemptsByChatID[chatID, default: 0]
+        guard failedAttempts < Self.maximumPairingAttemptsPerChat else { return }
+        if sentDigits == pairingCode, text.count <= 12 {
+            failedPairingAttemptsByChatID = [:]
+            self.pairedChatID = chatID
+            UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
+            statusText = "Paired with your phone."
+            await send("Paired! Text me anything and a helper on your Mac will do it. Try: status, screenshot, or \"check my calendar for tomorrow\".")
+        } else {
+            if !sentDigits.isEmpty {
+                failedPairingAttemptsByChatID[chatID] = failedAttempts + 1
+                // Many wrong codes overall: a new code, so guessing
+                // across chats doesn't add up either.
+                if failedPairingAttemptsByChatID.values.reduce(0, +) >= Self.maximumPairingAttemptsOverall {
+                    pairingCode = Self.newPairingCode()
+                    failedPairingAttemptsByChatID = [:]
+                    statusText = "Too many wrong pairing codes, so there's a new one."
+                }
+            }
+            _ = await callTelegram(method: "sendMessage", parameters: [
+                "chat_id": chatID,
+                "text": "Send the 6-digit pairing code shown in Dottie → Home → Phone."
+            ])
+        }
+    }
+
+    /// Answers the question Dottie is waiting on with what the phone sent.
+    /// Returns false when the message is not an answer, so it is handled
+    /// as a command or a new job.
+    private func answerPendingQuestion(_ question: PendingQuestion, command: String, text: String) -> Bool {
+        if question.choices.isEmpty, !["status", "screenshot", "screen", "help", "report"].contains(command) {
+            resolvePendingQuestion(with: text)
+            return true
+        }
+        let yesWords = ["allow", "yes", "y", "ok", "okay", "go", "go ahead", "do it"]
+        let noWords = ["deny", "no", "n", "don't", "dont", "stop", "skip"]
+        if !question.choices.isEmpty {
+            if let typedChoice = question.choices.first(where: { $0.lowercased() == command }) {
+                resolvePendingQuestion(with: typedChoice)
+                return true
+            }
+            if yesWords.contains(command), let firstChoice = question.choices.first {
+                resolvePendingQuestion(with: firstChoice)
+                return true
+            }
+            if noWords.contains(command), question.choices.count > 1, let lastChoice = question.choices.last {
+                resolvePendingQuestion(with: lastChoice)
+                return true
+            }
+        }
+        return false
     }
 
     private func appendLog(isFromPhone: Bool, _ text: String) {
