@@ -45,6 +45,62 @@ enum ClickyComputerUse {
         set { UserDefaults.standard.set(newValue, forKey: alwaysAllowDefaultsKey) }
     }
 
+    // MARK: - What a turn may do without asking
+
+    /// Gemini CLI's approval mode for a helper's turn. A turn the user
+    /// allowed (Allow on the card, or "Always allow") runs everything
+    /// without asking. Any other turn may read, search and edit files in
+    /// its own folders; shell commands and connected apps' tools are
+    /// refused (the CLI can't stop and ask when it runs without a
+    /// terminal), and the helper asks with a <COMPUTER_USE_REQUEST> block.
+    static func geminiApprovalMode(isTurnApprovedToAct: Bool) -> String {
+        isTurnApprovedToAct ? "yolo" : "auto_edit"
+    }
+
+    /// MausBot's approval level for a Claude helper: "full" (everything
+    /// without asking) once the user chose "Always allow", otherwise "auto",
+    /// where Claude's own review lets routine actions through and anything
+    /// else waits on a card in MausBot.
+    static func mausBotApprovalLevel(isAlwaysAllowed: Bool) -> String {
+        isAlwaysAllowed ? "full" : "auto"
+    }
+
+    /// The one shell command a turn may run without being allowed to act:
+    /// the web search from the helpers' instructions, exactly as written
+    /// there, with a query that has no quotes, backslashes, `$` or
+    /// backticks in it. Matched against the command as Gemini CLI writes
+    /// it in JSON (`"command":"…"`), so every quote in the command has a
+    /// backslash in front of it and the last quote closes the JSON string.
+    static let helperSearchCommandPattern = #"curl -s -G -H \\"x-goog-api-key: \$GEMINI_API_KEY\\" --data-urlencode \\"q=[^"\\$`]*\\" \\"\$DOTTIE_SEARCH_URL\\"""#
+
+    static func helperPolicyFileURL(inCLIHome cliHomeURL: URL) -> URL {
+        cliHomeURL.appendingPathComponent(".gemini/policies/dottie-helpers.toml")
+    }
+
+    /// Gemini CLI's own rules refuse skills and every shell command in a
+    /// turn that can't ask the user. This adds what such a turn still
+    /// needs: reading a skill, and the web search command.
+    static func writeHelperPolicyFile(inCLIHome cliHomeURL: URL) {
+        let policyFileURL = helperPolicyFileURL(inCLIHome: cliHomeURL)
+        try? FileManager.default.createDirectory(at: policyFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let helperPolicy = """
+        # Written by Dottie; rewritten before every helper turn.
+
+        [[rule]]
+        toolName = "activate_skill"
+        decision = "allow"
+        priority = 100
+
+        [[rule]]
+        toolName = "run_shell_command"
+        commandRegex = '\(helperSearchCommandPattern)'
+        decision = "allow"
+        priority = 100
+
+        """
+        DottieFileSaver.save(text: helperPolicy, to: policyFileURL)
+    }
+
     // MARK: - Locating cua-driver
 
     /// Finds the `cua-driver` executable: the copy the build puts in the
@@ -183,9 +239,28 @@ enum ClickyComputerUse {
 
             You can't operate apps on this Mac right now: the computer-use driver is missing from this build of Dottie. If a task needs clicking or typing in an app, do what you can without it and tell the user that Settings in Dottie's Home explains how to add the driver.
 
-            """
+
+            """ + commandInstructions
         }
-        return """
+        return operatingInstructions + "\n" + commandInstructions
+    }
+
+    /// What a helper may run in a turn the user hasn't allowed, and how it asks.
+    static let commandInstructions = """
+    # Running commands
+
+    In a turn whose message starts with "\(approvedTurnPrefix)" you can run any command and use every connected app. In any other turn you can read and search files, create and edit files in your own folders, use skills, read web pages with `web_fetch`, and search the web with the command from "Searching the web" exactly as it is written there. Every other shell command, and the connected apps' tools, are refused in such a turn.
+
+    When something you need is refused, don't retry it or look for a way around it. Finish whatever else you can, then end your reply with one block saying what you'd run and why, like this:
+
+    <COMPUTER_USE_REQUEST>Run npm install and npm run build in the project folder to build the site.</COMPUTER_USE_REQUEST>
+
+    Dottie shows the user Allow, Always allow and Not now. If they allow it, your next turn starts with "\(approvedTurnPrefix)". Never tell the user you can't run commands; ask with the block instead.
+
+    """
+
+    private static var operatingInstructions: String {
+        """
         # Using the Mac
 
         You have tools from the `\(mcpServerName)` server (`\(actingMCPServerName)` in a turn you may act in) that operate apps on the user's Mac without taking over their screen. Use them when the task needs an app or website rather than files, for example adding a reminder, filling in a form or checking something in a signed-in site. Don't use AppleScript, `open`, or other shell tricks to drive apps.

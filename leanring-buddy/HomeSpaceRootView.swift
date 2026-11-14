@@ -746,13 +746,13 @@ private struct HomeSettingsView: View {
                         Text(isCuaDriverBundled ? "Built in" : (isCuaDriverInstalled ? "Installed" : "Missing"))
                             .foregroundColor(isCuaDriverInstalled ? DS.Colors.textSecondary : DS.Colors.warningText)
                     }
-                    settingsRow(label: "Let Dots click and type without asking") {
+                    settingsRow(label: "Let Dots run commands, click and type without asking") {
                         Toggle("", isOn: $isComputerUseAlwaysAllowed)
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
                     settingsHint(isCuaDriverInstalled
-                        ? "Dots can always look at your apps. With this off, they ask in the notch before they click or type."
+                        ? "Dots can always look at your apps, search the web and work on files in their own folders. With this off, they ask before they run commands, use connected apps, click or type. Answering \"Always allow\" turns this on."
                         : "Dots operate apps through cua-driver, which the build normally puts inside Dottie. This build doesn't have it (it couldn't be downloaded while building). Rebuild with a network connection, or install it with: /bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"")
                     settingsRow(label: "Tips Dottie learned from her jobs: \(learnedTipCount)") {
                         Button("Forget them") {

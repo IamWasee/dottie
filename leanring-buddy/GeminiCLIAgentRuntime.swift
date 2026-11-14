@@ -8,6 +8,8 @@
 //
 //  Each turn is one process:
 //    gemini -m <model> -p <message> -o stream-json --approval-mode yolo
+//  (auto_edit instead of yolo in a turn the user hasn't allowed to act, see
+//  ClickyComputerUse.geminiApprovalMode)
 //           --skip-trust --include-directories <skills library>
 //           (--session-id <uuid> | --resume <uuid>)
 //  run inside the agent's workspace folder. The CLI's newline-delimited JSON
@@ -190,7 +192,7 @@ final class GeminiCLIAgentRuntime {
             "-m", model,
             "-p", message,
             "-o", "stream-json",
-            "--approval-mode", "yolo",
+            "--approval-mode", ClickyComputerUse.geminiApprovalMode(isTurnApprovedToAct: isComputerUseApproved),
             "--skip-trust"
         ] + additionalDirectoryURLs.flatMap { ["--include-directories", $0.path] }
           + (isFirstTurn
@@ -274,9 +276,9 @@ final class GeminiCLIAgentRuntime {
         // "/gemini" tries Groq first when the request fits; "/gemini-only"
         // (a helper set to Gemini) goes straight to Gemini.
         processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + workerRoute
-        // The Worker swaps this for the real key. Without a shared secret
-        // configured, any placeholder works.
-        processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.appSharedSecret ?? "clicky-worker"
+        // The Worker swaps this for the real key. It carries the shared
+        // secret (any placeholder works without one) and this install's id.
+        processEnvironment["GEMINI_API_KEY"] = ClickyWorkerConfiguration.passthroughAPIKey
         processEnvironment["GEMINI_CLI_HOME"] = cliHomeURL.path
         // Keys for the apps connected in Home → Tools (see prepareCLIHome).
         processEnvironment.merge(DottieHelperMCPSync.helperSecretEnvironment()) { _, key in key }
@@ -317,6 +319,7 @@ final class GeminiCLIAgentRuntime {
         let settingsFolderURL = cliHomeURL.appendingPathComponent(".gemini", isDirectory: true)
         try? FileManager.default.createDirectory(at: settingsFolderURL, withIntermediateDirectories: true)
 
+        ClickyComputerUse.writeHelperPolicyFile(inCLIHome: cliHomeURL)
         let cuaDriverURL = ClickyComputerUse.locateCuaDriverExecutable()
         var cliSettings: [String: Any] = [
             "security": ["auth": ["selectedType": "gemini-api-key"]],

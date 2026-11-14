@@ -256,6 +256,8 @@ jobs:
           fi
           if [ -n "$DOTTIE_APP_SECRET" ]; then
             /usr/libexec/PlistBuddy -c "Set :ClickyAppSharedSecret $DOTTIE_APP_SECRET" "$plist"
+          else
+            echo "::warning::No DOTTIE_APP_SECRET secret, so the Worker stays open to anyone who finds its address. Add one (any long random text) to lock it to this app."
           fi
           # In-app updates read the releases repository's releases.
           /usr/libexec/PlistBuddy -c "Set :DottieUpdateRepository $RELEASES_REPOSITORY" "$plist"
