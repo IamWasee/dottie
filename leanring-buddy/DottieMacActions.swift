@@ -130,15 +130,29 @@ enum DottieMacActions {
     // MARK: - AppleScript
 
     /// Words that mean a script can send, delete, buy or run anything.
+    /// Besides "do shell script" that covers the other ways a script reaches
+    /// a shell or another program's own scripting: Terminal's "do script",
+    /// "run script" on text, JavaScript in a browser tab, typing keys into
+    /// whatever app is in front, raw event codes written with « », and
+    /// writing files.
     private static let riskyScriptPatterns = [
         "delete", "remove", "erase", "empty trash", "move to trash", "to trash", "do shell script",
         "send", "reply", "forward", "purchase", "buy", "shut down", "restart", "log out", "sudo",
-        "password", "keychain", "format ", "overwrite"
+        "password", "keychain", "format ", "overwrite",
+        "do script", "run script", "load script", "osascript", "terminal", "iterm",
+        "do javascript", "execute javascript", "keystroke", "key code", "«",
+        "open for access", "to file"
     ]
 
     static func isRisky(_ text: String) -> Bool {
-        let lowercasedText = text.lowercased()
-        return riskyScriptPatterns.contains { lowercasedText.contains($0) }
+        // AppleScript reads "do   shell script" and a command broken over
+        // two lines with ¬ the same as the plain spelling, so the check
+        // looks at the words with single spaces between them.
+        let wordsWithSingleSpaces = text.lowercased()
+            .replacingOccurrences(of: "¬", with: " ")
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        return riskyScriptPatterns.contains { wordsWithSingleSpaces.contains($0) }
     }
 
     /// Runs AppleScript. Scripts that look like they send, delete, buy or
