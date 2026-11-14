@@ -282,8 +282,28 @@ enum DottieGameMapPicture {
         }
 
         // Dottie: an arrow the way the camera faces.
-        let dottiePoint = pixelPoint(x: worldMap.pose.x, y: worldMap.pose.y)
-        let dottieHeadingRadians = worldMap.pose.headingDegrees * .pi / 180
+        drawDottieArrow(
+            in: context,
+            at: pixelPoint(x: worldMap.pose.x, y: worldMap.pose.y),
+            headingDegrees: worldMap.pose.headingDegrees,
+            dottieColor: dottieColor
+        )
+
+        drawPlaceNamesTitleAndLegend(
+            in: context,
+            worldMap: worldMap,
+            placeColor: placeColor,
+            pictureHeight: pictureHeight,
+            pixelPoint: { mapX, mapY in pixelPoint(x: mapX, y: mapY) }
+        )
+
+        guard let pictureImage = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: pictureImage).representation(using: .png, properties: [:])
+    }
+
+    /// Dottie on the map picture: a small arrow pointing the way the camera faces.
+    private static func drawDottieArrow(in context: CGContext, at dottiePoint: CGPoint, headingDegrees: Double, dottieColor: CGColor) {
+        let dottieHeadingRadians = headingDegrees * .pi / 180
         let arrowLength = 12.0
         let arrowTip = CGPoint(x: dottiePoint.x + sin(dottieHeadingRadians) * arrowLength, y: dottiePoint.y + cos(dottieHeadingRadians) * arrowLength)
         let arrowLeft = CGPoint(x: dottiePoint.x + sin(dottieHeadingRadians - 2.5) * arrowLength * 0.6, y: dottiePoint.y + cos(dottieHeadingRadians - 2.5) * arrowLength * 0.6)
@@ -294,7 +314,16 @@ enum DottieGameMapPicture {
         context.addLine(to: arrowRight)
         context.closePath()
         context.fillPath()
+    }
 
+    /// The named places, the title and the color legend of the map picture.
+    private static func drawPlaceNamesTitleAndLegend(
+        in context: CGContext,
+        worldMap: DottieGameWorldMap,
+        placeColor: CGColor,
+        pictureHeight: Int,
+        pixelPoint: (Double, Double) -> CGPoint
+    ) {
         // Labels need an AppKit drawing context on top of the bitmap.
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
@@ -303,7 +332,7 @@ enum DottieGameMapPicture {
             .foregroundColor: NSColor(cgColor: placeColor) ?? NSColor.green
         ]
         for place in worldMap.places {
-            let placePoint = pixelPoint(x: place.x, y: place.y)
+            let placePoint = pixelPoint(place.x, place.y)
             context.setFillColor(placeColor)
             context.fillEllipse(in: CGRect(x: placePoint.x - 4, y: placePoint.y - 4, width: 8, height: 8))
             NSString(string: place.name).draw(at: CGPoint(x: placePoint.x + 6, y: placePoint.y - 6), withAttributes: labelAttributes)
@@ -323,9 +352,6 @@ enum DottieGameMapPicture {
         NSString(string: "grey floor · white wall · amber low thing (jump) · blue drop · red blocker · cyan photographed spot · green named place · pink arrow Dottie")
             .draw(at: CGPoint(x: 12, y: 11), withAttributes: subtitleAttributes)
         NSGraphicsContext.restoreGraphicsState()
-
-        guard let pictureImage = context.makeImage() else { return nil }
-        return NSBitmapImageRep(cgImage: pictureImage).representation(using: .png, properties: [:])
     }
 
     private static func reportText(of worldMap: DottieGameWorldMap, floorPlan: DottieGameNavigator.FloorPlan) -> String {

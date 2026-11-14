@@ -156,19 +156,7 @@ extension CompanionManager {
         }
         if inputKind == .voice, checksInstantLane, isInstantLaneAllowedNow,
            DottieInstantLane.shared.plan(for: transcript) != nil || DottieNeedleRouter.shared.isAvailable {
-            Task { [weak self] in
-                guard let self else { return }
-                guard let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: transcript) else {
-                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
-                    return
-                }
-                switch await DottieInstantLane.shared.run(instantPlan) {
-                case .done(let doneText):
-                    self.finishInstantLaneTurn(userText: transcript, doneText: doneText, inputKind: .voice)
-                case .askGemini:
-                    self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
-                }
-            }
+            tryInstantLaneBeforeClassicTurn(transcript: transcript)
             return
         }
         currentClassicTurnInputKind = inputKind
@@ -223,28 +211,7 @@ extension CompanionManager {
                     voiceState = .idle
                 }
 
-                // Pick the screen capture matching the screen number,
-                // falling back to the cursor screen if not specified.
-                let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                        return screenCaptures[screenNumber - 1]
-                    }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
-                }()
-
-                if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
-                    detectedElementScreenLocation = Self.globalScreenLocation(
-                        forScreenshotPixel: pointCoordinate,
-                        in: targetScreenCapture
-                    )
-                    detectedElementDisplayFrame = targetScreenCapture.displayFrame
-                    ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    DottieLog.notice("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-                } else {
-                    DottieLog.notice("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
-                }
+                pointAtElement(from: parseResult, screenCaptures: screenCaptures)
 
                 // Save the exchange with the point tag stripped so it doesn't
                 // confuse future context.
@@ -291,6 +258,52 @@ extension CompanionManager {
                 notchPresenter.showFinishedResponse(notchPresenter.liveCaptionText)
                 scheduleTransientHideIfNeeded()
             }
+        }
+    }
+
+    /// A spoken classic turn that might be instant: the instant lane (and
+    /// Needle) get the first try, and the turn only goes to Gemini when
+    /// they have nothing for it.
+    private func tryInstantLaneBeforeClassicTurn(transcript: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let instantPlan = await DottieInstantLane.shared.planIncludingNeedle(for: transcript) else {
+                self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
+                return
+            }
+            switch await DottieInstantLane.shared.run(instantPlan) {
+            case .done(let doneText):
+                self.finishInstantLaneTurn(userText: transcript, doneText: doneText, inputKind: .voice)
+            case .askGemini:
+                self.sendTranscriptToGeminiWithScreenshot(transcript: transcript, inputKind: .voice, checksInstantLane: false)
+            }
+        }
+    }
+
+    /// Flies the cursor to the element the model's [POINT:] tag names, on
+    /// the screen the tag says (or the one the cursor is on).
+    private func pointAtElement(from parseResult: PointingParseResult, screenCaptures: [CompanionScreenCapture]) {
+        // Pick the screen capture matching the screen number,
+        // falling back to the cursor screen if not specified.
+        let targetScreenCapture: CompanionScreenCapture? = {
+            if let screenNumber = parseResult.screenNumber,
+               screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                return screenCaptures[screenNumber - 1]
+            }
+            return screenCaptures.first(where: { $0.isCursorScreen })
+        }()
+
+        if let pointCoordinate = parseResult.coordinate,
+           let targetScreenCapture {
+            detectedElementScreenLocation = Self.globalScreenLocation(
+                forScreenshotPixel: pointCoordinate,
+                in: targetScreenCapture
+            )
+            detectedElementDisplayFrame = targetScreenCapture.displayFrame
+            ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
+            DottieLog.notice("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
+        } else {
+            DottieLog.notice("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
         }
     }
 
