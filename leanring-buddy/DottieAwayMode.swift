@@ -285,6 +285,7 @@ struct HomeWorkingAloneSettings: View {
     @AppStorage(DottieScreenJobClaudeBrain.isEnabledDefaultsKey) private var screenJobsUseClaude = true
     @AppStorage(DottieScreenJobGuesser.isEnabledDefaultsKey) private var screenJobsGuessFirst = true
     @AppStorage(DottieWorkRoutes.helpersCanUseHomeFoldersDefaultsKey) private var helpersCanUseHomeFolders = true
+    @AppStorage(DottieMacActions.alwaysAllowsScriptsDefaultsKey) private var alwaysAllowsScripts = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -315,6 +316,10 @@ struct HomeWorkingAloneSettings: View {
                 .toggleStyle(.switch)
                 .pointerCursor()
             hint("They still ask before deleting or overwriting your files. Takes effect the next time Dottie opens.")
+            Toggle("Run scripts without asking", isOn: $alwaysAllowsScripts)
+                .toggleStyle(.switch)
+                .pointerCursor()
+            hint("Off: Dottie asks before a script that runs a command, types keys, writes a file, sends or deletes (on your phone in away mode). On: she just does it. \u{201C}Always allow\u{201D} in that question turns this on.")
             HStack {
                 Text(awayMode.log.isEmpty ? "Nothing logged yet" : "\(awayMode.log.count) things logged")
                     .font(.system(size: 12))
