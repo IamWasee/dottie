@@ -85,6 +85,15 @@ export interface Env {
 const MAXIMUM_BODY_BYTES = 32 * 1024 * 1024;
 const MAXIMUM_PHONE_FILE_BYTES = 52 * 1024 * 1024;
 
+/** How long a Gemini Live token stays usable after it is handed out. */
+const LIVE_TOKEN_LIFETIME_MILLISECONDS = 10 * 60 * 1000;
+
+/** The longest text /tts speaks. A spoken answer is a few sentences; this is pages. */
+const MAXIMUM_SPOKEN_TEXT_CHARACTERS = 10_000;
+
+/** The longest app name /dictate puts into its prompt. */
+const MAXIMUM_APP_NAME_CHARACTERS = 80;
+
 /**
  * What the Gemini passthrough forwards: calling a model, and listing
  * models. Everything else the Gemini API offers with the same key
@@ -100,12 +109,45 @@ export function isAllowedPassthrough(method: string, upstreamPath: string): bool
   return false;
 }
 
-/** True when the request says its body is bigger than the route takes. */
-function isBodyTooBig(request: Request, url: URL): boolean {
-  const declaredBytes = Number(request.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(declaredBytes)) return false;
-  const maximumBytes = url.pathname.startsWith("/phone/") ? MAXIMUM_PHONE_FILE_BYTES : MAXIMUM_BODY_BYTES;
-  return declaredBytes > maximumBytes;
+/** The biggest body the route at this address takes. */
+function maximumBodyBytes(url: URL): number {
+  return url.pathname.startsWith("/phone/") ? MAXIMUM_PHONE_FILE_BYTES : MAXIMUM_BODY_BYTES;
+}
+
+/**
+ * The request, once its body is known to fit the route, or undefined when
+ * it is too big. A body that says its size is taken at its word (the
+ * network layer cuts it off there). A body sent in pieces with no size is
+ * counted as it arrives and dropped the moment it goes over, so leaving
+ * the size out is no way around the limit.
+ */
+export async function requestWithinSizeLimit(request: Request, maximumBytes: number): Promise<Request | undefined> {
+  const declaredSize = request.headers.get("content-length");
+  if (declaredSize !== null && Number.isFinite(Number(declaredSize))) {
+    return Number(declaredSize) > maximumBytes ? undefined : request;
+  }
+  if (!request.body) return request;
+
+  const bodyReader = request.body.getReader();
+  const receivedChunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+  for (;;) {
+    const { done, value } = await bodyReader.read();
+    if (done) break;
+    receivedBytes += value.byteLength;
+    if (receivedBytes > maximumBytes) {
+      await bodyReader.cancel();
+      return undefined;
+    }
+    receivedChunks.push(value);
+  }
+  const wholeBody = new Uint8Array(receivedBytes);
+  let writeOffset = 0;
+  for (const chunk of receivedChunks) {
+    wholeBody.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+  return new Request(request.url, { method: request.method, headers: request.headers, body: wholeBody });
 }
 
 /**
@@ -143,10 +185,11 @@ import { handleSearch } from "./search";
 export { PhoneRelay } from "./phoneRelay";
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+  async fetch(incomingRequest: Request, env: Env): Promise<Response> {
+    const url = new URL(incomingRequest.url);
 
-    if (isBodyTooBig(request, url)) {
+    const request = await requestWithinSizeLimit(incomingRequest, maximumBodyBytes(url));
+    if (!request) {
       return jsonResponse({ error: "That request is too big." }, 413);
     }
 
@@ -181,14 +224,13 @@ export default {
 
     // Open to anyone: says the Worker is up and has a key, nothing more.
     // The release workflow and Dottie's Settings use it to check an address.
+    // It doesn't say which other keys are set or whether a secret is
+    // needed: that would tell a stranger what is worth trying.
     if (request.method === "GET" && url.pathname === "/health") {
       return jsonResponse({
         ok: true,
         app: "dottie",
         hasGeminiKey: Boolean(env.GEMINI_API_KEY),
-        hasGroqKey: Boolean(env.GROQ_API_KEY),
-        requiresAppSecret: Boolean(env.APP_SHARED_SECRET),
-        hasPhoneBot: Boolean(env.TELEGRAM_BOT_TOKEN),
       });
     }
 
@@ -254,8 +296,10 @@ export default {
 
 /**
  * Mints a Gemini Live ephemeral token. `uses: 1` means one WebSocket session
- * per token; session resumption can reuse it within expireTime. A new session
- * must start within newSessionExpireTime (2 minutes).
+ * per token; session resumption can reuse it within expireTime (10 minutes,
+ * well past the two minutes a session with screen frames lasts, so a token
+ * that leaks is of little use). A new session must start within
+ * newSessionExpireTime (2 minutes).
  *
  * The token is deliberately not locked with bidiGenerateContentSetup: a locked
  * token pins the whole setup (system prompt, voice, tools), but the app builds
@@ -263,7 +307,7 @@ export default {
  */
 async function handleLiveToken(env: Env): Promise<Response> {
   const now = Date.now();
-  const expireTime = new Date(now + 30 * 60 * 1000).toISOString();
+  const expireTime = new Date(now + LIVE_TOKEN_LIFETIME_MILLISECONDS).toISOString();
   const newSessionExpireTime = new Date(now + 2 * 60 * 1000).toISOString();
 
   const response = await fetch(`${GEMINI_API_BASE}/auth_tokens`, {
@@ -383,6 +427,9 @@ async function handleTTS(request: Request, env: Env): Promise<Response> {
   if (typeof text !== "string" || !text) {
     return jsonResponse({ error: "missing text" }, 400);
   }
+  if (text.length > MAXIMUM_SPOKEN_TEXT_CHARACTERS) {
+    return jsonResponse({ error: "That text is too long to speak." }, 413);
+  }
 
   const response = await fetchGeminiWithFallback(
     env.GEMINI_API_KEY,
@@ -465,8 +512,8 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
       `They're speaking ${language}. Write the text in ${language}, even where a word sounds like another language; never translate.`
     );
   }
-  if (body.appName) {
-    contextLines.push(`They're typing into ${body.appName}.`);
+  if (typeof body.appName === "string" && body.appName) {
+    contextLines.push(`They're typing into ${body.appName.slice(0, MAXIMUM_APP_NAME_CHARACTERS)}.`);
   }
   if (body.textBeforeCursor) {
     contextLines.push(
