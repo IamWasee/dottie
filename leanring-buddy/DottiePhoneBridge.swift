@@ -451,6 +451,7 @@ final class DottiePhoneBridge: ObservableObject {
             // this Mac; checking it here too costs nothing.
             let startWords = text.split(separator: " ").map(String.init)
             guard startWords.count == 2, startWords[0].hasPrefix("/start"), startWords[1] == pairingCode else { return }
+            guard userAllowsPairing(withSenderNamed: Self.pairingSenderName(fromMessage: message)) else { return }
             self.pairedChatID = chatID
             UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
             pairingLink = nil
@@ -460,7 +461,7 @@ final class DottiePhoneBridge: ObservableObject {
         }
 
         guard let pairedChatID else {
-            await handlePairingCodeAttempt(chatID: chatID, text: text)
+            await handlePairingCodeAttempt(chatID: chatID, text: text, senderName: Self.pairingSenderName(fromMessage: message))
             return
         }
         // Only the paired chat can talk to this Mac.
@@ -501,9 +502,43 @@ final class DottiePhoneBridge: ObservableObject {
         }
     }
 
+    /// Who is asking to pair, the way Telegram names them: "Sam Lee
+    /// (@samlee)". Shown in the question on the Mac so the user can tell
+    /// their own phone from a stranger who got hold of the code or link.
+    static func pairingSenderName(fromMessage message: [String: Any]) -> String {
+        let sender = message["from"] as? [String: Any] ?? [:]
+        let nameParts = [sender["first_name"] as? String, sender["last_name"] as? String]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let fullName = nameParts.joined(separator: " ")
+        let username = (sender["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fullName.isEmpty, !username.isEmpty { return "\(fullName) (@\(username))" }
+        if !fullName.isEmpty { return fullName }
+        if !username.isEmpty { return "@\(username)" }
+        return "Someone"
+    }
+
+    /// Asks on the Mac, once per pairing, whether this Telegram chat may
+    /// text Dottie. A paired phone can run jobs and get screenshots and
+    /// files, so the right code alone isn't enough: the person at the Mac
+    /// has to say yes. On a no the code and link are thrown away.
+    private func userAllowsPairing(withSenderNamed senderName: String) -> Bool {
+        let isAllowed = DottieConfirmation.ask(
+            title: "Pair this phone with Dottie?",
+            detail: "\(senderName) on Telegram wants to text Dottie on this Mac. A paired phone can give Dottie jobs and ask for screenshots and files. Only pair it if this is you.",
+            confirmButtonTitle: "Pair"
+        )
+        if !isAllowed {
+            DottieLog.warning("The user turned down a phone pairing")
+            unpair()
+            statusText = "Didn't pair. There's a new pairing code."
+        }
+        return isAllowed
+    }
+
     /// A message from a chat while no phone is paired yet: pairs the chat
     /// when the message is the pairing code, otherwise asks for the code.
-    private func handlePairingCodeAttempt(chatID: Int64, text: String) async {
+    private func handlePairingCodeAttempt(chatID: Int64, text: String, senderName: String) async {
         // The code has to be the whole message (digits only), and each
         // chat gets a few tries: a message holding thousands of digits
         // could otherwise contain every possible code.
@@ -511,6 +546,7 @@ final class DottiePhoneBridge: ObservableObject {
         let failedAttempts = failedPairingAttemptsByChatID[chatID, default: 0]
         guard failedAttempts < Self.maximumPairingAttemptsPerChat else { return }
         if sentDigits == pairingCode, text.count <= 12 {
+            guard userAllowsPairing(withSenderNamed: senderName) else { return }
             failedPairingAttemptsByChatID = [:]
             self.pairedChatID = chatID
             UserDefaults.standard.set(NSNumber(value: chatID), forKey: Self.pairedChatDefaultsKey)
