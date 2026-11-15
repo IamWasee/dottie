@@ -61,8 +61,8 @@ enum DottieWorkRoutes {
 
     ## Files people use
 
-    - Word (.docx): write the document as clean HTML (headings, paragraphs, lists, tables), then convert it with `textutil -convert docx file.html -output file.docx`. Pages opens it too.
-    - Excel (.xlsx): Python with openpyxl (install it with `python3 -m pip install --user openpyxl` if it's missing), with real formulas, a header row and sensible column widths. If Python can't be used, make a CSV and convert it with Numbers through AppleScript (export as Microsoft Excel). Use CSV alone only as a last resort.
+    - Word (.docx): write the document as clean HTML (headings, paragraphs, lists, tables), then convert it with `textutil -convert docx -inputencoding UTF-8 file.html -output file.docx` (without `-inputencoding UTF-8`, dashes, quotes and accents come out as "â€”"). Open the result's text with `textutil -convert txt -stdout file.docx` and check for "â€" before saying it's done. Pages opens it too.
+    - Excel (.xlsx): Python with openpyxl (install it with `python3 -m pip install --user openpyxl` if it's missing), with real formulas (totals and summaries as =SUM/=SUMIFS on the data, not typed-in numbers), a header row and sensible column widths. If Python can't be used, make a CSV and convert it with Numbers through AppleScript (export as Microsoft Excel). Use CSV alone only as a last resort.
     - PDF: make the .docx first, then open it in Pages through AppleScript and export it as PDF.
     - Put what you make in `output/` (or where the user asked) and say the path.
 
