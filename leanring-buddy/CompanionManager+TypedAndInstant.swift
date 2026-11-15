@@ -358,6 +358,14 @@ extension CompanionManager {
             guard let self else { return }
             // A guide line needs no new look at the screen.
             await self.beginLiveTurnWithScreenFrame(includesScreenFrame: !isNarration)
+            // Turns Dottie makes herself ("(done: …)", "(job asks: …)", a
+            // guide line) aren't the user asking for anything.
+            let isTurnMadeByDottie = isNarration || recordedUserText.isEmpty || recordedUserText.hasPrefix("(")
+            if isTurnMadeByDottie {
+                self.liveVoiceClient.skipHelperHandOffCheckForCurrentTurn()
+            } else {
+                self.liveVoiceClient.noteTypedQuestionForHelperHandOffCheck(recordedUserText)
+            }
             self.liveVoiceClient.sendTurnContextText(turnText)
             self.liveVoiceClient.endUserTurn()
         }

@@ -1055,7 +1055,8 @@ final class CompanionManager: ObservableObject {
     - their files, folders, tools or real digging ("find my resume and tighten it", "check my git repos for uncommitted work"): ask_brain. say a few words, then stop; its answer comes back to you to say.
 
     helpers (also called dots): background workers on the mac with a shell, files, node and the web, who report back in the notch. they research, write documents, organize files, write code and build whole websites or apps.
-    - for work that takes more than an answer, or "have a helper / a named helper do it", call start_helper with a task that stands on its own (helper_name if they named one), then say it's started in a few words. don't do the task yourself, and never say you can't start a helper.
+    - for work that takes more than an answer, or "have a helper / a named helper do it", call start_helper with a task that stands on its own (helper_name if they named one), then say it's started in a few words. don't do the task yourself, and never say you can't start a helper. never say a helper is on something unless you called start_helper for it in this same answer.
+    - more work on something a helper just did ("open it", "change that file", "add a column"): the [recent helper work] note says which helper did it; give it to that same helper (open_helper_result or start_helper with its helper_name), never ask_brain.
     - helpers change without you, so never answer about them from memory: call list_helpers or check_helper first and give the gist in a sentence or two. if one isn't there anymore, it was deleted.
     - anything being built or come back to lives in a project: pass project to start_helper (an existing name to keep working on it, a short new name for something new; a different new thing gets its own project). a big job with separate parts, or "a team", goes to start_team.
 
@@ -1126,6 +1127,15 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onLateTranscriptOfPreviousAnswer = { [weak self] lateTranscript in
             guard let self else { return }
             self.conversationStore.extendEntry(withID: self.lastLiveTurnConversationEntryID, clickyText: lateTranscript)
+        }
+
+        liveVoiceClient.helperNamesForHandOffCheck = { [weak self] in
+            guard let self else { return (allHelperNames: [], busyHelperNames: []) }
+            let helpers = self.clickyRoster.agents.filter { $0.isBrain != true }
+            return (
+                allHelperNames: helpers.map(\.name),
+                busyHelperNames: helpers.filter { self.clickyRoster.isRunning($0) }.map(\.name)
+            )
         }
 
         liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
@@ -1269,6 +1279,13 @@ final class CompanionManager: ObservableObject {
         if includesScreenFrame && !notesForNextLiveTurn.isEmpty {
             liveVoiceClient.sendTurnContextText(notesForNextLiveTurn.joined(separator: "\n"))
             notesForNextLiveTurn = []
+        }
+        // What the helpers did lately and which files they touched, so
+        // "open that file" or "change it again" goes back to the helper
+        // that did it. Live's own history only has what was said aloud,
+        // not which helper did the work.
+        if includesScreenFrame, let recentWorkNote = DottieRecentWorkNote.noteText(entries: clickyRoster.recentHelperWork()) {
+            liveVoiceClient.sendTurnContextText(recentWorkNote)
         }
     }
 

@@ -118,11 +118,58 @@ extension ClickyRoster {
         return files.sorted { $0.modifiedAt > $1.modifiedAt }.map(\.path)
     }
 
-    /// Opens what the helper made: a website's index.html in the browser, a
-    /// single file in its app, otherwise the output folder in Finder.
+    /// What each helper (not the second brain) did lately, newest first,
+    /// for the recent work note voice Dottie gets with every turn.
+    func recentHelperWork() -> [DottieRecentHelperWork] {
+        agents.filter { $0.isBrain != true }.compactMap { agent -> DottieRecentHelperWork? in
+            let transcript = transcriptsByAgentID[agent.id] ?? []
+            guard let lastTaskIndex = transcript.lastIndex(where: { $0.kind == .user }) else { return nil }
+            let lastTask = transcript[lastTaskIndex]
+            let latestReply = transcript[lastTaskIndex...].last(where: { $0.kind == .assistant })?.text
+            return DottieRecentHelperWork(
+                helperName: agent.name,
+                status: statusLine(for: agent),
+                taskText: lastTask.text,
+                taskStartedAt: lastTask.createdAt,
+                touchedFilePaths: filesTouchedInLatestTask(for: agent),
+                latestReply: latestReply
+            )
+        }
+    }
+
+    /// Files the helper's latest task named in its steps or its reply
+    /// ("edit · /Users/me/Budget.xlsx") that are really on the Mac, last
+    /// named first. A helper often edits the user's own file in place, so
+    /// it never shows up in the helper's output folder.
+    func filesTouchedInLatestTask(for agent: ClickyAgent) -> [String] {
+        let transcript = transcriptsByAgentID[agent.id] ?? []
+        guard let lastTaskIndex = transcript.lastIndex(where: { $0.kind == .user }) else { return [] }
+        let taskItems = transcript[lastTaskIndex...].filter { $0.kind == .tool || $0.kind == .assistant }
+        var touchedFilePaths: [String] = []
+        for taskItem in taskItems.reversed() {
+            for namedPath in DottieRecentWorkNote.filePaths(in: taskItem.text) {
+                let expandedPath = (namedPath as NSString).expandingTildeInPath
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: expandedPath, isDirectory: &isDirectory),
+                      !isDirectory.boolValue,
+                      !touchedFilePaths.contains(expandedPath) else { continue }
+                touchedFilePaths.append(expandedPath)
+            }
+        }
+        return touchedFilePaths
+    }
+
+    /// Opens what the helper made: a file it worked on outside its own
+    /// folder (the user's spreadsheet it edited), a website's index.html in
+    /// the browser, a single file in its app, otherwise the output folder.
     @discardableResult
     func openHelperResult(for agent: ClickyAgent) -> String {
         let outputFolderURL = workspaceURL(for: agent).appendingPathComponent("output", isDirectory: true)
+        let workspaceFolderPath = workspaceURL(for: agent).path
+        if let fileWorkedOnElsewhere = filesTouchedInLatestTask(for: agent).first(where: { !$0.hasPrefix(workspaceFolderPath + "/") }) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: fileWorkedOnElsewhere))
+            return "opened \((fileWorkedOnElsewhere as NSString).lastPathComponent), the file \(agent.name) worked on."
+        }
         let outputFiles = outputFileNames(for: agent)
         guard !outputFiles.isEmpty else {
             revealWorkspaceInFinder(for: agent)

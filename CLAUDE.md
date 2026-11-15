@@ -283,6 +283,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `CompanionManager+HomeAndPhone.swift` | ~620 | The voice tools for the smart home, meeting mode, the speed pack (replays and the self-check) and texting Dottie from the phone. Part of CompanionManager, split out by topic. |
 | `CompanionManager+Onboarding.swift` | ~220 | The onboarding video and the short demo that plays the first time Dottie is opened. Part of CompanionManager, split out by topic. |
 | `CompanionManager+TypedAndInstant.swift` | ~460 | Typed messages from the notch and Home, the instant lane that answers without AI, and stopping everything with Escape. Part of CompanionManager, split out by topic. |
+| `DottieHelperFollowThrough.swift` | ~210 | Two checks that keep voice Dottie honest about her helpers (Dots). The hand-off check: when an answer says a helper is on it, or the user asked for a helper, but start_helper was never called, the app tells Live so and asks it to hand the work over now. |
 
 ## Build & Run
 
