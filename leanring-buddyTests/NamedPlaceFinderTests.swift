@@ -67,6 +67,15 @@ struct NamedPlaceFinderFolderTests {
         #expect(note.contains("no need to search"))
     }
 
+    @Test func aSpokenFolderNameFindsTheDashedFolder() throws {
+        let homeURL = try makeHomeFolder()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        try FileManager.default.createDirectory(at: homeURL.appendingPathComponent("Dottie-test-sandbox"), withIntermediateDirectories: true)
+        let foundFolders = DottieNamedPlaceFinder.findFolders(in: "In the Dottie test sandbox folder, open sales messy", searchFolderURLs: [homeURL])
+        #expect(foundFolders.first?.folderURL.lastPathComponent == "Dottie-test-sandbox")
+        #expect(DottieNamedPlaceFinder.folderKey("bull_and-shit") == DottieNamedPlaceFinder.folderKey("Bull And Shit"))
+    }
+
     @Test func nothingIsAddedWhenNoNamedFolderExists() throws {
         let homeURL = try makeHomeFolder()
         defer { try? FileManager.default.removeItem(at: homeURL) }

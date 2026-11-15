@@ -78,7 +78,7 @@ enum DottieNamedPlaceFinder {
 
     /// The folders a task names, looked for one level inside each search
     /// folder (home, Desktop, Documents, Downloads), names matched without
-    /// caring about case.
+    /// caring about case, spaces, dashes or underscores.
     static func findFolders(
         in taskText: String,
         searchFolderURLs: [URL],
@@ -147,10 +147,11 @@ enum DottieNamedPlaceFinder {
     }
 
     private static func folder(named folderName: String, searchFolderURLs: [URL], fileManager: FileManager) -> URL? {
-        let wantedName = folderName.lowercased()
+        let wantedKey = folderKey(folderName)
+        guard !wantedKey.isEmpty else { return nil }
         for searchFolderURL in searchFolderURLs {
             guard let entries = try? fileManager.contentsOfDirectory(atPath: searchFolderURL.path) else { continue }
-            for entry in entries where entry.lowercased() == wantedName {
+            for entry in entries where folderKey(entry) == wantedKey {
                 let candidateURL = searchFolderURL.appendingPathComponent(entry, isDirectory: true)
                 var isDirectory: ObjCBool = false
                 if fileManager.fileExists(atPath: candidateURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
@@ -159,5 +160,14 @@ enum DottieNamedPlaceFinder {
             }
         }
         return nil
+    }
+
+    /// A folder name with only its letters and digits, lowercased, so
+    /// "Dottie test sandbox" said out loud finds "Dottie-test-sandbox".
+    static func folderKey(_ name: String) -> String {
+        name.lowercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
     }
 }
