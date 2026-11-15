@@ -4,7 +4,8 @@
 //
 //  Unit tests for DottieNamedPlaceFinder: the folders and files a helper's
 //  task names are found before it starts, even when the user's file name
-//  is only close to the real one.
+//  is only close to the real one. Also which connected apps Gemini CLI
+//  helpers leave out because they repeat its own tools.
 //
 
 import Foundation
@@ -72,5 +73,14 @@ struct NamedPlaceFinderFolderTests {
         #expect(DottieNamedPlaceFinder.findFolders(in: "open the 'taxes' folder", searchFolderURLs: [homeURL]).isEmpty)
         #expect(DottieNamedPlaceFinder.findFolders(in: "make me a website", searchFolderURLs: [homeURL]).isEmpty)
         #expect(DottieNamedPlaceFinder.noteText(for: []) == nil)
+    }
+}
+
+struct GeminiHelperToolDietTests {
+    @Test func desktopCommanderIsLeftOutForGeminiHelpers() {
+        #expect(GeminiCLIAgentRuntime.repeatsBuiltInTools(serverName: "desktop-commander"))
+        #expect(GeminiCLIAgentRuntime.repeatsBuiltInTools(serverName: "Desktop_Commander"))
+        #expect(GeminiCLIAgentRuntime.repeatsBuiltInTools(serverName: "computer-use") == false)
+        #expect(GeminiCLIAgentRuntime.repeatsBuiltInTools(serverName: "notion") == false)
     }
 }
