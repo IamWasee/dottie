@@ -762,8 +762,20 @@ final class ClickyRoster: ObservableObject {
         // Dot just stopped. Say so instead.
         if !succeeded, let lastItem = transcriptsByAgentID[agentID]?.last,
            lastItem.kind != .assistant, lastItem.kind != .error, lastItem.kind != .needsApproval, lastItem.text != "Stopped" {
-            let engineName = agent(withID: agentID)?.lastHelperEngine == "claude" ? "Claude" : "Gemini"
-            appendTranscriptItem(.error, text: "Couldn't finish this one: \(engineName) was too busy to answer. Try sending it again.", to: agentID)
+            // The real cause isn't known here (a busy model, or the run just
+            // ended), so say what happened and how to carry on. A helper set
+            // to Groq falls back to Gemini whenever a step is too big for
+            // Groq, so naming only one of them would mislead.
+            let finishedAgentForMessage = agent(withID: agentID)
+            let engineName: String
+            if finishedAgentForMessage?.lastHelperEngine == "claude" {
+                engineName = "Claude"
+            } else if finishedAgentForMessage?.engineChoice == "groq" || finishedAgentForMessage?.engineChoice == nil {
+                engineName = "Groq and its Gemini backup"
+            } else {
+                engineName = "Gemini"
+            }
+            appendTranscriptItem(.error, text: "Stopped before finishing: \(engineName) stopped answering partway, maybe because it was busy. Send \"carry on\" to pick up where it left off.", to: agentID)
         }
         saveTranscript(for: agentID)
 
