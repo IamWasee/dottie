@@ -462,9 +462,19 @@ final class ClickyRoster: ObservableObject {
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
         let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
+        // Folders and files the task names, found now so the helper gets
+        // their paths and access instead of searching the Mac step by step.
+        let namedFolders = routineID == nil
+            ? DottieNamedPlaceFinder.findFolders(
+                in: messageForAgent,
+                searchFolderURLs: [FileManager.default.homeDirectoryForCurrentUser] + DottieWorkRoutes.homeFolderURLs
+            )
+            : []
+        let messageWithNamedPlaces = DottieNamedPlaceFinder.noteText(for: namedFolders)
+            .map { "\($0)\n\n\(messageForAgent)" } ?? messageForAgent
         let fullMessageForAgent = isTurnApprovedForComputerUse
-            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
-            : messageForAgent
+            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageWithNamedPlaces)"
+            : messageWithNamedPlaces
         refreshAgentInstructions(for: agent)
         // Picks up a cua-driver installed since launch.
         GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
@@ -478,6 +488,8 @@ final class ClickyRoster: ObservableObject {
         appendTranscriptItem(.tool, text: "Getting started…", to: agentID, toolID: gettingStartedToolID, persist: false)
 
         var additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
+        let namedFolderURLs = namedFolders.map(\.folderURL).filter { !sharedFolderURLs.contains($0) }
+        additionalDirectoryURLs += namedFolderURLs
         if agent.isBrain == true {
             additionalDirectoryURLs += [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
         }

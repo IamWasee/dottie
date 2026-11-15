@@ -284,6 +284,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `CompanionManager+Onboarding.swift` | ~220 | The onboarding video and the short demo that plays the first time Dottie is opened. Part of CompanionManager, split out by topic. |
 | `CompanionManager+TypedAndInstant.swift` | ~460 | Typed messages from the notch and Home, the instant lane that answers without AI, and stopping everything with Escape. Part of CompanionManager, split out by topic. |
 | `DottieHelperFollowThrough.swift` | ~210 | Two checks that keep voice Dottie honest about her helpers (Dots). The hand-off check: when an answer says a helper is on it, or the user asked for a helper, but start_helper was never called, the app tells Live so and asks it to hand the work over now. |
+| `DottieNamedPlaceFinder.swift` | ~160 | Finds the folders and files a helper's task names ("in the 'bull and shit' folder, open 'invoice cleanup.demo.xlsx'") before the helper starts, so it gets the real paths and access to the folder instead of searching the whole Mac step by step (each step is a full model round trip) and being refused outside its own folders. Foundation only, so the matching can be unit tested. |
 
 ## Build & Run
 
