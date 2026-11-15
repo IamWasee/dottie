@@ -49,6 +49,17 @@ struct HelperHandOffUserAskTests {
         #expect(!DottieHelperHandOffCheck.userAskedForHelper("open safari", helperNames: helperNames))
         #expect(!DottieHelperHandOffCheck.userAskedForHelper("get me the weather", helperNames: helperNames))
     }
+
+    @Test func askingAsAQuestionOrByNameCounts() {
+        #expect(DottieHelperHandOffCheck.userAskedForHelper("can one of my helpers make me a packing list for a beach trip?", helperNames: helperNames))
+        #expect(DottieHelperHandOffCheck.userAskedForHelper("Jarvis, look up the 3 cheapest flights from Dhaka to Bangkok", helperNames: helperNames))
+        #expect(DottieHelperHandOffCheck.userAskedForHelper("hey jarvis: find me a flight", helperNames: helperNames))
+    }
+
+    @Test func questionsAboutHelpersArentJobs() {
+        #expect(!DottieHelperHandOffCheck.userAskedForHelper("what can my helpers do?", helperNames: helperNames))
+        #expect(!DottieHelperHandOffCheck.userAskedForHelper("I talked about Jarvis, the movie", helperNames: helperNames))
+    }
 }
 
 struct HelperHandOffNudgeTests {

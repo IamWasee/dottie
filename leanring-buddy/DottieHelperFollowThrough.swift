@@ -59,11 +59,21 @@ enum DottieHelperHandOffCheck {
         let askVerbs = ["have", "get", "ask", "tell", "use", "send", "give", "let", "put", "hand"]
         var helperReferences = helperWords
         helperReferences += usableHelperNames(helperNames)
+        // "can one of my helpers make…" asks too, but "what can my helpers
+        // do?" is a question about them, not a job.
+        let isQuestionAboutHelpers = text.range(of: "^\\s*(what|how|which|who|why|when|where)\\b", options: .regularExpression) != nil
+        let questionVerbs = isQuestionAboutHelpers ? [] : ["can", "could", "would", "will"]
         for helperReference in helperReferences {
-            for askVerb in askVerbs {
-                let pattern = "\\b\(askVerb)\\b[^.?!]{0,16}\\b\(NSRegularExpression.escapedPattern(for: helperReference))\\b"
+            let escapedReference = NSRegularExpression.escapedPattern(for: helperReference)
+            for askVerb in askVerbs + questionVerbs {
+                let pattern = "\\b\(askVerb)\\b[^.?!]{0,16}\\b\(escapedReference)\\b"
                 if text.range(of: pattern, options: .regularExpression) != nil { return true }
             }
+        }
+        // Talking to a helper by name: "Jarvis, look up flights to Bangkok".
+        for helperName in usableHelperNames(helperNames) {
+            let pattern = "^\\s*(hey\\s+)?\(NSRegularExpression.escapedPattern(for: helperName))\\s*[,:]\\s*\\S"
+            if text.range(of: pattern, options: .regularExpression) != nil { return true }
         }
         return false
     }
