@@ -82,7 +82,7 @@ enum GeminiLiveToolCatalog {
         "memories": "memories episodes forget recent yesterday history past happened",
         "game": "game play trivia twenty questions drawing word chain fun",
         "dottie_level": "level xp streak unlock unlocks wear",
-        "keep_working": "nonstop night keep working repeat every minutes background",
+        "keep_working": "nonstop night keep working repeat every minutes background routine routines stop cancel schedule hourly",
         "apps_and_tools": "connected apps notion github slack tools integrations",
         "use_app_tool": "connected app run tool notion github slack",
         "fix_text": "fix rewrite selected text grammar spelling translate shorten formal",
