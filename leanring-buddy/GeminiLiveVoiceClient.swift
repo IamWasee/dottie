@@ -617,31 +617,39 @@ final class GeminiLiveVoiceClient {
         if let smartReplaysLine = DottieSmartReplayStore.shared.voicePromptLine {
             baseSystemInstruction += "\n\n" + smartReplaysLine
         }
-        guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
+        guard let historyText = Self.carriedHistoryText(for: recentConversationHistory) else { return baseSystemInstruction }
+        return baseSystemInstruction + "\n\n" + historyText
+    }
 
+    /// The recent conversation for a new session's instruction. Every
+    /// exchange in it is over: after a relaunch, "hello" used to get an
+    /// answer to the request before it (often one that never finished),
+    /// because the history read like a conversation still going on.
+    nonisolated static func carriedHistoryText(for history: [(userTranscript: String, modelTranscript: String)]) -> String? {
+        guard !history.isEmpty else { return nil }
         // Only the last few exchanges, trimmed: older facts about the user
         // live in the profile and memories already in the instruction, and
         // every character here is read again by each new session.
-        let carriedExchanges = Array(recentConversationHistory.suffix(Self.carriedHistoryExchangeCount))
+        let carriedExchanges = Array(history.suffix(Self.carriedHistoryExchangeCount))
         let historyLines = carriedExchanges.enumerated().map { exchangeIndex, exchange in
             let isOneOfTheLatest = exchangeIndex >= carriedExchanges.count - 2
             let maximumCharacters = isOneOfTheLatest ? 800 : 300
             let userText = Self.trimmedForHistory(exchange.userTranscript, maximumCharacters: maximumCharacters)
             let modelText = Self.trimmedForHistory(exchange.modelTranscript, maximumCharacters: maximumCharacters)
-            return "user: \(userText)\nyou: \(modelText)"
+            return "user: \(userText)\nyou: \(modelText.isEmpty ? "(no answer, it was cut off)" : modelText)"
         }.joined(separator: "\n")
 
-        return baseSystemInstruction + """
-
-
-        recent conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
+        return """
+        earlier conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
         \(historyLines)
+
+        that conversation is over and everything in it is finished or dropped. answer only what the user says now: a greeting gets a greeting, never an answer to an earlier request. don't redo, continue or repeat an earlier request or answer unless the user asks for it again in their own words ("carry on", "do that again", "did it work?").
         """
     }
 
-    private static let carriedHistoryExchangeCount = 8
+    private nonisolated static let carriedHistoryExchangeCount = 8
 
-    private static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
+    private nonisolated static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedText.count > maximumCharacters else { return trimmedText }
         return String(trimmedText.prefix(maximumCharacters)) + "…"
