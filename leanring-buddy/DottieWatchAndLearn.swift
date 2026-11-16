@@ -373,7 +373,18 @@ enum DottieWatchAndLearnTools: DottieToolModule {
         ]
     }
 
+    /// Voice Dottie hears what she learned by watching, and that doing it
+    /// again is a screen job. Before, only screen jobs and helpers knew, so
+    /// "do the same for the other one" went to a helper with no screen,
+    /// which answered that it had no access.
     static var voicePromptSection: String {
-        "when the user wants you to watch them do something and learn it, use watch_and_learn."
+        var section = "when the user wants you to watch them do something and learn it, use watch_and_learn."
+        let learnedNames = DottieWatchAndLearn.shared.howTos.suffix(12).map { "\"\($0.name)\" (\($0.appName))" }
+        if !learnedNames.isEmpty {
+            section += " you learned these by watching the user: \(learnedNames.joined(separator: ", ")). when they ask for one of them or something like it (\"do it again\", \"do the same for march\", \"move the other one too\"), call do_task_on_screen with their words: you do it on their screen with the how-to you learned. never hand it to a helper or ask_brain, and never say you don't have access."
+        } else {
+            section += " right after you learn something, \"do it again\" or \"do the same for…\" is a do_task_on_screen job, never a helper's."
+        }
+        return section
     }
 }
