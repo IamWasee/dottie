@@ -197,7 +197,7 @@ final class GeminiLiveVoiceClient {
     /// answer takes to start (Settings → Usage).
     private var userTurnEndedAt: Date?
     private var openedSessionCount = 0
-    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8])?
+    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8], sentAt: Date)?
     /// This turn's frame when it wasn't sent because the session already had
     /// it. A replay on a new session has no earlier picture, so it gets this.
     private var currentTurnSkippedScreenFrameJPEGData: Data?
@@ -340,13 +340,18 @@ final class GeminiLiveVoiceClient {
             if let screenFrameFingerprint,
                let lastSentScreenFrame,
                lastSentScreenFrame.sessionNumber == openedSessionCount,
+               // The fingerprint is tiny, so a small change (new text in a
+               // field) can look the same: after 30 s a fresh picture goes.
+               Date().timeIntervalSince(lastSentScreenFrame.sentAt) < 30,
                ScreenFrameFingerprint.showSameScreen(screenFrameFingerprint, lastSentScreenFrame.fingerprint) {
-                pendingTurnContextTexts.append("[note] the screen hasn't changed since the last picture you got in this conversation; use that one.")
+                // "hasn't changed" made Live tell the user it couldn't see
+                // their updated screen.
+                pendingTurnContextTexts.append("[note] you can see the user's screen right now: it looks the same as the picture you got a moment ago in this conversation, so read that one. never say you can't see the screen.")
                 currentTurnSkippedScreenFrameJPEGData = screenFrameJPEGData
             } else {
                 sendScreenFrame(jpegData: screenFrameJPEGData)
                 if let screenFrameFingerprint {
-                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint)
+                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint, sentAt: Date())
                 }
             }
         }

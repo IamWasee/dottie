@@ -98,6 +98,48 @@ enum DottieMathText {
         DottieInkText.transformingText(in: text, using: prettyPlain)
     }
 
+    /// Whether a line is code (or a command) rather than math or words, so
+    /// it's written exactly: making it pretty turned from_pretrained into
+    /// fromₚretrained and **inputs into × ×inputs.
+    static func looksLikeCode(_ text: String) -> Bool {
+        let codePatterns = [
+            #"(?m)^\s*(from\s+[\w.]+\s+import\s|import\s+[\w.]+(\s+as\s+\w+)?\s*$|def\s+\w+\(|class\s+\w+\s*[(:{]|print\(|const\s+\w+\s*=|function\s+\w+\(|#include|pip3?\s+install|npm\s+(install|run|i)\b|git\s+(clone|commit|push|pull|add|checkout)\b|\$\s)"#,
+            #"\b[A-Za-z_]\w*\.[A-Za-z_]\w*\("#,
+            #"\b[a-z]{2,}_[a-z]{2,}\w*\s*[(=]"#,
+            #";\s*$"#,
+            #"==="#
+        ]
+        return codePatterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// The code and commands in an answer, so Home can show each with a
+    /// Copy button: fenced ``` blocks, and `inline` spans that look like
+    /// code. Duplicates are left out.
+    static func codeSnippets(in answerText: String) -> [String] {
+        var snippets: [String] = []
+        func add(_ candidate: String) {
+            let trimmedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedCandidate.isEmpty, !snippets.contains(trimmedCandidate) { snippets.append(trimmedCandidate) }
+        }
+        var textWithoutFences = answerText
+        if let fencePattern = try? NSRegularExpression(pattern: "```[a-zA-Z0-9_+-]*\\n?([\\s\\S]*?)```") {
+            let range = NSRange(answerText.startIndex..., in: answerText)
+            for match in fencePattern.matches(in: answerText, range: range) {
+                if let codeRange = Range(match.range(at: 1), in: answerText) { add(String(answerText[codeRange])) }
+            }
+            textWithoutFences = fencePattern.stringByReplacingMatches(in: answerText, range: range, withTemplate: " ")
+        }
+        if let inlinePattern = try? NSRegularExpression(pattern: "`([^`\\n]{3,300})`") {
+            let range = NSRange(textWithoutFences.startIndex..., in: textWithoutFences)
+            for match in inlinePattern.matches(in: textWithoutFences, range: range) {
+                guard let codeRange = Range(match.range(at: 1), in: textWithoutFences) else { continue }
+                let inlineCode = String(textWithoutFences[codeRange])
+                if looksLikeCode(inlineCode) { add(inlineCode) }
+            }
+        }
+        return snippets
+    }
+
     /// Pretty, with the markings taken out, for what the cursor says.
     static func prettyPlainText(_ text: String) -> String {
         DottieInkText.plainText(pretty(text))
