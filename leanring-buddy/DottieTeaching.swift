@@ -318,7 +318,7 @@ enum DottieTeaching {
                 "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. sketch: the drawing area's top-left and bottom-right (keep it about square), or one center point. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
             "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac), or for sketch what to draw, with the pose and look (\"a horse galloping, side view\", \"a plant cell with its parts\", \"a red sports car\"); it's drawn stroke by stroke like an artist, so use sketch for any picture of a thing (animals, people, objects, places, cells, machines), and text steps beside it for labels. Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on."],
-            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. Leave it out for the plain light pen; use a color only when it means something, and give a word and the part of the drawing it names the same color (the label Demand and its curve both blue)."],
+            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. Leave it out for the plain pen (grey on the board); use a color only when it means something, and give a word and the part of the drawing it names the same color (the label Demand and its curve both blue). red is for acting on something (a minus sign, crossing out), green for ticks. A color goes back to grey once the next step is drawn, so color the thing you are talking about now."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
             "say": ["type": "STRING", "description": "The sentence you say out loud for this step. It's spoken while this step is drawn."],
@@ -909,12 +909,12 @@ enum DottieTeaching {
             : [CGPoint(x: points[1].x, y: origin.y), CGPoint(x: origin.x, y: points[1].y)]
         for axisEnd in axisEnds {
             drawn.add(.stroke(points: [origin, axisEnd], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                      ink: step.ink ?? .white, lineWidth: 2.5, pen: [origin, axisEnd])
+                      ink: step.ink ?? .grey, lineWidth: 2.5, pen: [origin, axisEnd])
         }
         let names = (label ?? "x,y").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: axisEnds[0].x + 4, y: axisEnds[0].y - 22), fontSize: 20, ink: step.ink ?? .white)
+        drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: axisEnds[0].x + 4, y: axisEnds[0].y - 22), fontSize: 20, ink: step.ink ?? .grey)
         if names.count > 1 {
-            drawn.addLabel(names[1], centeredAt: CGPoint(x: axisEnds[1].x + 20, y: axisEnds[1].y + 4), fontSize: 20, ink: step.ink ?? .white)
+            drawn.addLabel(names[1], centeredAt: CGPoint(x: axisEnds[1].x + 20, y: axisEnds[1].y + 4), fontSize: 20, ink: step.ink ?? .grey)
         }
         return true
     }
@@ -934,7 +934,7 @@ enum DottieTeaching {
         let columnCount = min(max(cellCounts.first ?? 10, 1), 40)
         let defaultRowCount = Int((CGFloat(columnCount) * gridArea.height / gridArea.width).rounded())
         let rowCount = min(max(cellCounts.count > 1 ? cellCounts[1] : defaultRowCount, 1), 40)
-        let gridInk = step.ink ?? .white
+        let gridInk = step.ink ?? .grey
         // Thin and quick: a grid is the paper, not the point.
         let lineCount = columnCount + rowCount + 2
         let secondsPerLine = max(0.04, min(0.12, 2.0 / Double(lineCount)))
@@ -971,12 +971,12 @@ enum DottieTeaching {
         if xMin < 0, xMax > 0 {
             let axis = [screenPoint(0, yMin), screenPoint(0, yMax)]
             drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                      ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
+                      ink: .grey, lineWidth: 1.5, pen: axis, duration: 0.25)
         }
         if yMin < 0, yMax > 0 {
             let axis = [screenPoint(xMin, 0), screenPoint(xMax, 0)]
             drawn.add(.stroke(points: axis, closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
-                      ink: .white, lineWidth: 1.5, pen: axis, duration: 0.25)
+                      ink: .grey, lineWidth: 1.5, pen: axis, duration: 0.25)
         }
         // The curve, broken wherever it leaves the view or jumps.
         var segments: [[CGPoint]] = [[]]

@@ -1680,7 +1680,7 @@ final class CompanionManager: ObservableObject {
                                           caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)
                 try? await Task.sleep(nanoseconds: UInt64(leadInSeconds * 1_000_000_000))
                 if Task.isCancelled { break }
-                drawingOverlayManager.addFigures(drawn.figures)
+                drawingOverlayManager.addFigures(drawn.figures, relaxingEarlierAccents: true)
                 // Time to see it and read the caption before the next one.
                 let captionSeconds = step.caption.map { min(2.0, 0.6 + Double($0.count) * 0.04) } ?? 0.3
                 try? await Task.sleep(nanoseconds: UInt64((drawn.duration + captionSeconds) * 1_000_000_000))

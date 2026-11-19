@@ -31,13 +31,16 @@ struct DottieDrawing: Identifiable, Equatable {
 
 /// A pen color for teaching drawings. Gold is Dottie's gold-to-purple
 /// marker; the rest are flat chalk colors for telling things apart.
+/// On the white teaching board each one becomes a muted Cognito color
+/// (`paperHex`): grey for the plain pen, color only where it means something.
 enum DottieInk: String, CaseIterable {
-    case gold, white, red, blue, green, yellow, pink, purple, orange
+    case gold, white, grey, red, blue, green, yellow, pink, purple, orange
 
     var color: Color {
         switch self {
         case .gold: return Color(red: 1.0, green: 0.8, blue: 0.36)
         case .white: return Color(red: 0.97, green: 0.97, blue: 0.95)
+        case .grey: return Color(red: 0.72, green: 0.72, blue: 0.74)
         case .red: return Color(red: 1.0, green: 0.36, blue: 0.36)
         case .blue: return Color(red: 0.36, green: 0.66, blue: 1.0)
         case .green: return Color(red: 0.4, green: 0.88, blue: 0.5)
@@ -46,6 +49,40 @@ enum DottieInk: String, CaseIterable {
         case .purple: return Color(red: 0.72, green: 0.52, blue: 1.0)
         case .orange: return Color(red: 1.0, green: 0.6, blue: 0.24)
         }
+    }
+
+    /// The colors Cognito uses on white, sampled from its videos: dark grey
+    /// for working, light grey for axes and lines, maroon for the "act on
+    /// this" mark (minus signs, crossings out), and muted accents.
+    var paperHex: Int {
+        switch self {
+        case .white: return 0x585858
+        case .grey: return 0x9F9F9F
+        case .gold: return 0xC9A24F
+        case .red: return 0x92375D
+        case .pink: return 0xB5487A
+        case .blue: return 0x335A81
+        case .green: return 0x4F9A45
+        case .yellow: return 0xE3C14F
+        case .purple: return 0x6B4E8F
+        case .orange: return 0xD08A45
+        }
+    }
+
+    /// The plain pens; every other ink is an accent that relaxes to grey.
+    var isAccent: Bool { self != .white && self != .grey }
+
+    func color(onPaper: Bool) -> Color {
+        guard onPaper else { return color }
+        return Self.color(hex: paperHex)
+    }
+
+    static func color(hex: Int) -> Color {
+        Color(red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
+    }
+
+    func strokeStyle(onPaper: Bool) -> AnyShapeStyle {
+        onPaper ? AnyShapeStyle(color(onPaper: true)) : strokeStyle
     }
 
     var strokeStyle: AnyShapeStyle {
@@ -102,14 +139,18 @@ enum DottieInkText {
 
     /// Ready for a SwiftUI Text: colored runs, bold runs and highlighted
     /// runs; the rest takes the Text's own color.
-    static func attributedString(_ markedText: String) -> AttributedString {
+    /// `onPaper`: written on the white board, in its muted colors and the
+    /// pale gold wash Cognito fills with.
+    static func attributedString(_ markedText: String, onPaper: Bool = false) -> AttributedString {
         var attributedText = AttributedString()
         for segment in segments(in: markedText) {
             var run = AttributedString(segment.text)
-            if let ink = segment.ink { run.swiftUI.foregroundColor = ink.color }
+            if let ink = segment.ink { run.swiftUI.foregroundColor = ink.color(onPaper: onPaper) }
             if segment.isBold { run.foundation.inlinePresentationIntent = .stronglyEmphasized }
             if segment.isHighlighted {
-                run.swiftUI.backgroundColor = Color(red: 1.0, green: 0.86, blue: 0.2).opacity(0.38)
+                run.swiftUI.backgroundColor = onPaper
+                    ? DottieInk.color(hex: 0xFBE7AE)
+                    : Color(red: 1.0, green: 0.86, blue: 0.2).opacity(0.38)
             }
             attributedText.append(run)
         }
@@ -198,6 +239,40 @@ struct DottieFigure: Identifiable, Equatable {
     /// Seconds after it's added before the pen starts on it.
     var delay: Double = 0
     var drawDuration: Double = 0.6
+    /// An accent from an earlier step on the board, gone back to grey the
+    /// way Cognito lets a highlight relax once the next thing is drawn.
+    var isRelaxed = false
+
+    /// The ink it shows in now: a relaxed accent writes in the working grey
+    /// (text) or the line grey (everything else).
+    var shownInk: DottieInk {
+        guard isRelaxed, ink.isAccent else { return ink }
+        if case .text = shape { return .white }
+        return .grey
+    }
+
+    /// This figure with its accent relaxed; boards and plain pens stay.
+    func relaxed() -> DottieFigure {
+        if case .board = shape { return self }
+        guard ink.isAccent else { return self }
+        var relaxedFigure = self
+        relaxedFigure.isRelaxed = true
+        return relaxedFigure
+    }
+
+    /// Whether it sits on one of the boards (and so is drawn on paper).
+    static func isOnPaper(_ figure: DottieFigure, boardRects: [CGRect]) -> Bool {
+        if case .board = figure.shape { return false }
+        let figureCenter = CGPoint(x: figure.bounds.midX, y: figure.bounds.midY)
+        return boardRects.contains { $0.contains(figureCenter) }
+    }
+
+    static func boardRects(in figures: [DottieFigure]) -> [CGRect] {
+        figures.compactMap { figure in
+            if case .board(let rect) = figure.shape { return rect }
+            return nil
+        }
+    }
 
     /// Roughly what it covers, to know which screen draws it.
     var bounds: CGRect {
@@ -213,6 +288,10 @@ struct DottieFigure: Identifiable, Equatable {
             return rect
         }
     }
+
+    /// Cognito's lines are thin (2-2.5 px at 960 wide), so lines on the
+    /// board are drawn a quarter thinner than over the screen.
+    static let paperLineWidthScale: CGFloat = 0.75
 
     static func estimatedTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
         CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.62 + 6
@@ -239,7 +318,7 @@ struct DottieFigure: Identifiable, Equatable {
             let movedCorner = moved(rect.origin)
             refittedShape = .board(rect: CGRect(x: movedCorner.x, y: movedCorner.y, width: rect.width * scale, height: rect.height * scale))
         }
-        return DottieFigure(shape: refittedShape, ink: ink, lineWidth: lineWidth, delay: 0, drawDuration: 0.2)
+        return DottieFigure(shape: refittedShape, ink: ink, lineWidth: lineWidth, delay: 0, drawDuration: 0.2, isRelaxed: isRelaxed)
     }
 }
 
@@ -272,11 +351,24 @@ final class DottieDrawingOverlayManager: ObservableObject {
         clearFigures()
     }
 
-    func addFigures(_ newFigures: [DottieFigure]) {
+    /// `relaxingEarlierAccents`: a new teaching step; colors already on a
+    /// board go back to grey so only the newest thing stands out.
+    func addFigures(_ newFigures: [DottieFigure], relaxingEarlierAccents: Bool = false) {
         guard !newFigures.isEmpty else { return }
         showWindowsIfNeeded()
         figureFadeOutTask?.cancel()
+        if relaxingEarlierAccents {
+            figures = Self.relaxingAccentsOnBoards(figures)
+        }
         figures.append(contentsOf: newFigures)
+    }
+
+    static func relaxingAccentsOnBoards(_ currentFigures: [DottieFigure]) -> [DottieFigure] {
+        let boardRects = DottieFigure.boardRects(in: currentFigures)
+        guard !boardRects.isEmpty else { return currentFigures }
+        return currentFigures.map { figure in
+            DottieFigure.isOnPaper(figure, boardRects: boardRects) ? figure.relaxed() : figure
+        }
     }
 
     func clearFigures() {
@@ -347,8 +439,10 @@ private struct DottieDrawingCanvasView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            let boardRects = DottieFigure.boardRects(in: overlayManager.figures)
             ForEach(overlayManager.figures.filter { $0.bounds.intersects(screenFrame) }) { figure in
-                DottieFigureView(figure: figure, screenFrame: screenFrame)
+                DottieFigureView(figure: figure, screenFrame: screenFrame,
+                                 onPaper: DottieFigure.isOnPaper(figure, boardRects: boardRects))
                     .transition(.opacity)
             }
             ForEach(overlayManager.drawings.filter { $0.targetRect.intersects(screenFrame) }) { drawing in
@@ -456,7 +550,14 @@ private struct DottieDrawingMarkView: View {
 private struct DottieFigureView: View {
     let figure: DottieFigure
     let screenFrame: CGRect
+    /// On the white board: Cognito's muted colors, thinner lines, no shadows.
+    let onPaper: Bool
     @State private var progress: CGFloat = 0
+
+    private var inkColor: Color { figure.shownInk.color(onPaper: onPaper) }
+    private var inkStyle: AnyShapeStyle { figure.shownInk.strokeStyle(onPaper: onPaper) }
+    private var shownLineWidth: CGFloat { onPaper ? figure.lineWidth * DottieFigure.paperLineWidthScale : figure.lineWidth }
+    private var shadowColor: Color { onPaper ? .clear : .black.opacity(0.4) }
     /// Arrowheads go on once the line reaches its end.
     @State private var arrowHeadOpacity: Double = 0
 
@@ -490,13 +591,14 @@ private struct DottieFigureView: View {
         case .board(let rect):
             let localBoard = localRect(rect)
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                // Solid, so the page behind doesn't show through the writing.
-                .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
+                // Solid white paper like Cognito's, so the page behind
+                // doesn't show through the writing.
+                .fill(Color.white)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        .stroke(Color.black.opacity(0.1), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 8)
+                .shadow(color: .black.opacity(0.3), radius: 18, x: 0, y: 8)
                 .frame(width: localBoard.width, height: localBoard.height)
                 .position(x: localBoard.midX, y: localBoard.midY)
                 .opacity(Double(progress))
@@ -506,24 +608,24 @@ private struct DottieFigureView: View {
                 path.addLines(points.map(localPoint))
                 path.closeSubpath()
             }
-            .fill(figure.ink.color.opacity(0.2))
+            .fill(inkColor.opacity(onPaper ? 0.25 : 0.2))
             .opacity(Double(progress))
 
         case .dot(let center, let radius):
             Circle()
-                .fill(figure.ink.color)
+                .fill(inkColor)
                 .frame(width: radius * 2, height: radius * 2)
-                .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
+                .shadow(color: shadowColor, radius: 1.5, x: 0, y: 1)
                 .scaleEffect(progress)
                 .position(localPoint(center))
 
         case .text(let text, let origin, let fontSize):
             let localOrigin = localPoint(origin)
-            Text(DottieInkText.attributedString(text))
+            Text(DottieInkText.attributedString(text, onPaper: onPaper))
                 .font(Self.boardLettering(size: fontSize))
-                .foregroundColor(figure.ink.color)
+                .foregroundColor(inkColor)
                 .fixedSize()
-                .shadow(color: .black.opacity(0.55), radius: 1.5, x: 0, y: 1)
+                .shadow(color: onPaper ? .clear : .black.opacity(0.55), radius: 1.5, x: 0, y: 1)
                 .mask(
                     GeometryReader { proxy in
                         Rectangle().frame(width: proxy.size.width * progress, height: proxy.size.height)
@@ -537,17 +639,17 @@ private struct DottieFigureView: View {
             ZStack {
                 Self.strokePath(through: localPoints, closed: closed, smooth: smooth)
                     .trim(from: 0, to: progress)
-                    .stroke(figure.ink.strokeStyle, style: StrokeStyle(
-                        lineWidth: figure.lineWidth,
+                    .stroke(inkStyle, style: StrokeStyle(
+                        lineWidth: shownLineWidth,
                         lineCap: .round,
                         lineJoin: .round,
                         dash: dashed ? [10, 8] : []
                     ))
-                Self.arrowHeads(for: localPoints, atStart: arrowAtStart, atEnd: arrowAtEnd, size: 9 + figure.lineWidth * 1.6)
-                    .stroke(figure.ink.strokeStyle, style: StrokeStyle(lineWidth: figure.lineWidth, lineCap: .round, lineJoin: .round))
+                Self.arrowHeads(for: localPoints, atStart: arrowAtStart, atEnd: arrowAtEnd, size: 9 + shownLineWidth * 1.6)
+                    .stroke(inkStyle, style: StrokeStyle(lineWidth: shownLineWidth, lineCap: .round, lineJoin: .round))
                     .opacity(arrowHeadOpacity)
             }
-            .shadow(color: .black.opacity(0.4), radius: 1.5, x: 0, y: 1)
+            .shadow(color: shadowColor, radius: 1.5, x: 0, y: 1)
         }
     }
 
