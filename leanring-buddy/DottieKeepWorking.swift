@@ -281,7 +281,7 @@ enum DottieKeepWorkingTools: DottieToolModule {
         [
             DottieTool(
                 name: "keep_working",
-                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for nonstop or repeated work (\"keep at it all night until it's done\", \"check every 10 minutes\"); never start one on your own. start needs the helper task; stop ends one by title or helper (or all 24/7 jobs), and also stops a helper's own routines ("stop the bitcoin routine"); status lists 24/7 jobs and routines. While one runs the Mac stays awake and the notch shows a moon.",
+                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for nonstop or repeated work (\"keep at it all night until it's done\", \"check every 10 minutes\"); never start one on your own. start needs the helper task; stop ends one by title or helper (or all 24/7 jobs), and also stops a helper's own routines (\"stop the bitcoin routine\"); status lists 24/7 jobs and routines. While one runs the Mac stays awake and the notch shows a moon.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
