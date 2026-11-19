@@ -308,4 +308,15 @@ struct TeachingBoardTests {
         #expect(origin.y < 500)
         #expect(origin.y > 500 - 26 * 2 * 0.6 * 0.8 * 9)
     }
+
+    @Test func onlyWrittenTextTakesUpSpaceAndItIsTrimmedTopAndBottom() {
+        let label = DottieFigure(shape: .text("SUPPLY", origin: CGPoint(x: 100, y: 100), fontSize: 20))
+        let dot = DottieFigure(shape: .dot(center: CGPoint(x: 50, y: 50), radius: 4))
+        let rects = DottieTeaching.textRects(of: [dot, label, dot])
+        #expect(rects.count == 1)
+        #expect(abs(rects[0].height - label.bounds.height * 0.6) < 0.01)
+        #expect(rects[0].width == label.bounds.width)
+        #expect(DottieTeaching.textRects(of: []).isEmpty)
+        #expect(DottieTeaching.textRects(of: [dot]).isEmpty)
+    }
 }

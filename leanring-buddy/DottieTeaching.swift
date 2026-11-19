@@ -271,16 +271,19 @@ enum DottieTeaching {
         return nil
     }
 
+    /// The space each piece of written text takes up, trimmed a little top
+    /// and bottom so lines written close together don't count as touching.
+    static func textRects(of figures: [DottieFigure]) -> [CGRect] {
+        figures.compactMap { figure in
+            guard case .text = figure.shape else { return nil }
+            return figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)
+        }
+    }
+
     /// A text step moved down until it no longer sits on text already
     /// written, so two labels placed close together don't print over each
     /// other. Gives up after a few lines and leaves it where it ended.
     static func nudgedClearOfText(_ drawn: DrawnStep, occupiedTextRects: [CGRect]) -> DrawnStep {
-        func textRects(of figures: [DottieFigure]) -> [CGRect] {
-            figures.compactMap { figure in
-                guard case .text = figure.shape else { return nil }
-                return figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)
-            }
-        }
         let ownTextRects = textRects(of: drawn.figures)
         guard !ownTextRects.isEmpty else { return drawn }
         let lineStep = (ownTextRects.map(\.height).max() ?? 30) * 0.8

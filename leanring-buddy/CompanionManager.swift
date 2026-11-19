@@ -1611,10 +1611,7 @@ final class CompanionManager: ObservableObject {
         let builtInAnchorFrames: [String: CGRect] = circledArea.map { ["circled": $0] } ?? [:]
         var missedSteps = 0
         // Text already written, so a new label doesn't land on top of one.
-        var occupiedTextRects: [CGRect] = drawingOverlayManager.figures.compactMap { figure in
-            guard case .text = figure.shape else { return nil }
-            return figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)
-        }
+        var occupiedTextRects = DottieTeaching.textRects(of: drawingOverlayManager.figures)
         for plannedStep in plan.steps {
             if Task.isCancelled { break }
             var step = plannedStep
@@ -1660,20 +1657,12 @@ final class CompanionManager: ObservableObject {
                 notchPresenter.endScreenTask()
                 if Task.isCancelled { break }
             }
-            let space = DottieTeaching.Space(
+            let space = Self.teachingSpace(
                 // Anchored steps point at the screen even with a board open.
                 boardRect: usesAnchors ? nil : boardRect,
                 anchorFrames: (anchorFrames ?? [:]).merging(builtInAnchorFrames) { foundFrame, _ in foundFrame },
-                screenPoint: { normalizedX, normalizedY in
-                    guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
-                        // No frame this turn (a typed ask): numbers mean the
-                        // display being drawn on, instead of drawing nothing.
-                        let clampedX = min(max(normalizedX, 0), 1000), clampedY = min(max(normalizedY, 0), 1000)
-                        return CGPoint(x: displayFrame.minX + clampedX / 1000 * displayFrame.width,
-                                       y: displayFrame.maxY - clampedY / 1000 * displayFrame.height)
-                    }
-                    return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
-                }
+                screenFrame: screenFrame,
+                displayFrame: displayFrame
             )
             var narration: Task<Void, Never>?
             if let line = step.say {
@@ -1684,10 +1673,7 @@ final class CompanionManager: ObservableObject {
                 if step.kind == .text {
                     drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
                 }
-                occupiedTextRects += drawn.figures.compactMap { figure in
-                    guard case .text = figure.shape else { return nil }
-                    return figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)
-                }
+                occupiedTextRects += DottieTeaching.textRects(of: drawn.figures)
                 let leadInSeconds = 0.4
                 penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
                                           caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)
@@ -1708,6 +1694,25 @@ final class CompanionManager: ObservableObject {
         // under way.
         guard !Task.isCancelled else { return }
         tidyUpAfterTeaching(plan: plan, generation: generation, missedSteps: missedSteps)
+    }
+
+    /// Where a teaching step's 0-1000 numbers land: on the turn's screen
+    /// frame, or with no frame this turn (a typed ask) on the display being
+    /// drawn on, instead of drawing nothing.
+    private static func teachingSpace(
+        boardRect: CGRect?,
+        anchorFrames: [String: CGRect],
+        screenFrame: CompanionCompositeScreenFrame?,
+        displayFrame: CGRect
+    ) -> DottieTeaching.Space {
+        DottieTeaching.Space(boardRect: boardRect, anchorFrames: anchorFrames, screenPoint: { normalizedX, normalizedY in
+            guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
+                let clampedX = min(max(normalizedX, 0), 1000), clampedY = min(max(normalizedY, 0), 1000)
+                return CGPoint(x: displayFrame.minX + clampedX / 1000 * displayFrame.width,
+                               y: displayFrame.maxY - clampedY / 1000 * displayFrame.height)
+            }
+            return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
+        })
     }
 
     /// Waits (up to 8 seconds) for Live to finish what it is saying, so an
