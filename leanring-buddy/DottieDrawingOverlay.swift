@@ -215,7 +215,7 @@ struct DottieFigure: Identifiable, Equatable {
     }
 
     static func estimatedTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
-        CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.56 + 6
+        CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.62 + 6
     }
 
     /// The same figure moved and scaled from one board to a resized one
@@ -460,11 +460,10 @@ private struct DottieFigureView: View {
     /// Arrowheads go on once the line reaches its end.
     @State private var arrowHeadOpacity: Double = 0
 
-    /// A friendly handwriting face; macOS ships Noteworthy.
-    private static func handwriting(size: CGFloat) -> Font {
-        NSFont(name: "Noteworthy-Bold", size: size) != nil
-            ? .custom("Noteworthy-Bold", size: size)
-            : .system(size: size, weight: .semibold, design: .rounded)
+    /// Clean rounded lettering, like the Cognito explainers the user
+    /// picked over marker handwriting.
+    private static func boardLettering(size: CGFloat) -> Font {
+        .system(size: size, weight: .semibold, design: .rounded)
     }
 
     var body: some View {
@@ -521,7 +520,7 @@ private struct DottieFigureView: View {
         case .text(let text, let origin, let fontSize):
             let localOrigin = localPoint(origin)
             Text(DottieInkText.attributedString(text))
-                .font(Self.handwriting(size: fontSize))
+                .font(Self.boardLettering(size: fontSize))
                 .foregroundColor(figure.ink.color)
                 .fixedSize()
                 .shadow(color: .black.opacity(0.55), radius: 1.5, x: 0, y: 1)

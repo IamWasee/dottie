@@ -217,6 +217,17 @@ enum DottieTeaching {
         var anchorNames: Set<String> { Set(anchors.map { $0.name.lowercased() }) }
     }
 
+    /// Words on the board in capitals, like Cognito's lettering. Math,
+    /// numbers, single letters (x, A) and color markings stay as written,
+    /// since capitals would change what they mean.
+    static func boardLettering(_ text: String) -> String {
+        let mathCharacters = CharacterSet(charactersIn: "0123456789=+−-×÷^/()√πθ²³¹⁰⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉≤≥≠≈±∫Δ°{}*_<>|")
+        guard text.rangeOfCharacter(from: mathCharacters) == nil else { return text }
+        let words = text.split(whereSeparator: \.isWhitespace)
+        guard words.contains(where: { $0.filter(\.isLetter).count >= 2 }) else { return text }
+        return text.uppercased()
+    }
+
     /// Why one step can't be drawn, or nil when it can. Mirrors what each
     /// draw function needs.
     static func problem(with step: Step, knownAnchorNames: Set<String>) -> String? {
@@ -304,7 +315,7 @@ enum DottieTeaching {
                 "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. sketch: the drawing area's top-left and bottom-right (keep it about square), or one center point. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
             "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac), or for sketch what to draw, with the pose and look (\"a horse galloping, side view\", \"a plant cell with its parts\", \"a red sports car\"); it's drawn stroke by stroke like an artist, so use sketch for any picture of a thing (animals, people, objects, places, cells, machines), and text steps beside it for labels. Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on."],
-            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
+            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. Leave it out for the plain light pen; use a color only when it means something, and give a word and the part of the drawing it names the same color (the label Demand and its curve both blue)."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
             "say": ["type": "STRING", "description": "The sentence you say out loud for this step. It's spoken while this step is drawn."],
@@ -570,14 +581,16 @@ enum DottieTeaching {
         }
 
         static func penDuration(_ pen: [CGPoint]) -> Double {
-            min(max(Double(length(of: pen)) / 650, 0.3), 1.6)
+            // About 330 points a second, the pace Cognito draws curves at.
+            min(max(Double(length(of: pen)) / 330, 0.3), 2.4)
         }
     }
 
     static func draw(_ step: Step, in space: Space) -> DrawnStep? {
         var drawn = DrawnStep()
-        let ink = step.ink ?? .gold
-        let label = step.text.map(DottieMathText.pretty)
+        // Light by default; color only where it carries meaning (Cognito).
+        let ink = step.ink ?? .white
+        let label = step.text.map(DottieMathText.pretty).map(boardLettering)
         let points = step.points.compactMap(space.point)
         let fontSize: CGFloat = step.size == "small" ? 18 : (step.size == "large" ? 38 : 26)
 
