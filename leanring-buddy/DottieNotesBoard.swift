@@ -437,6 +437,21 @@ enum DottieNotesTools: DottieToolModule {
         ]
     }
 
+    /// What a block is written as. Code is written exactly: made pretty,
+    /// from_pretrained became fromₚretrained and **inputs became × ×inputs,
+    /// so text blocks that hold code become code blocks.
+    static func writtenBlock(kind: DottieNoteBlock.Kind, rawText: String) -> (kind: DottieNoteBlock.Kind, text: String) {
+        let writtenAsText: Set<DottieNoteBlock.Kind> = [.paragraph, .bullet, .numbered, .equation]
+        let writtenKind = writtenAsText.contains(kind) && DottieMathText.looksLikeCode(rawText) ? .code : kind
+        return (kind: writtenKind, text: writtenKind == .code ? rawText : DottieMathText.pretty(rawText))
+    }
+
+    /// One batch of blocks as text, so a repeated call with the same notes
+    /// is noticed and written once.
+    static func batchSignature(of blocks: [DottieNoteBlock]) -> [String] {
+        blocks.map { "\($0.kind.rawValue):\($0.text)" }
+    }
+
     private static func perform(_ arguments: [String: Any]) async -> String {
         let notesBoard = DottieNotesBoard.shared
         switch (arguments["action"] as? String)?.lowercased() ?? "write" {
@@ -466,13 +481,9 @@ enum DottieNotesTools: DottieToolModule {
         for rawBlock in rawBlocks {
             guard var kind = (rawBlock["kind"] as? String).flatMap({ DottieNoteBlock.Kind(rawValue: $0.lowercased()) }) else { continue }
             let rawText = (rawBlock["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            // Code is written exactly: made pretty, from_pretrained became
-            // fromₚretrained and **inputs became × ×inputs.
-            let writtenAsText: Set<DottieNoteBlock.Kind> = [.paragraph, .bullet, .numbered, .equation]
-            if writtenAsText.contains(kind), DottieMathText.looksLikeCode(rawText) {
-                kind = .code
-            }
-            let text = kind == .code ? rawText : DottieMathText.pretty(rawText)
+            let written = writtenBlock(kind: kind, rawText: rawText)
+            kind = written.kind
+            let text = written.text
             if kind != .picture && kind != .divider && text.isEmpty { continue }
             let defaultInk: DottieInk = (kind == .heading || kind == .subheading) ? .gold : .white
             let ink = (rawBlock["color"] as? String).flatMap { DottieInk(rawValue: $0.lowercased()) } ?? defaultInk
@@ -497,7 +508,7 @@ enum DottieNotesTools: DottieToolModule {
             return pictureProblems.isEmpty ? "error: nothing to write." : "couldn't get the picture (\(pictureProblems.joined(separator: ", "))). say so in a few words."
         }
         // The same notes sent twice (a repeated call) are written once.
-        let batchSignature = placedBlocks.map { "\($0.block.kind.rawValue):\($0.block.text)" }
+        let batchSignature = batchSignature(of: placedBlocks.map(\.block))
         if batchSignature == notesBoard.lastWrittenBatchSignature {
             return "those notes are already on the board. say a few words, don't write them again."
         }

@@ -337,13 +337,8 @@ final class GeminiLiveVoiceClient {
             // Each picture costs hundreds of tokens and stays in the
             // session's context. When this session already has a picture of
             // the same screen, say so instead of sending it again.
-            if let screenFrameFingerprint,
-               let lastSentScreenFrame,
-               lastSentScreenFrame.sessionNumber == openedSessionCount,
-               // The fingerprint is tiny, so a small change (new text in a
-               // field) can look the same: after 30 s a fresh picture goes.
-               Date().timeIntervalSince(lastSentScreenFrame.sentAt) < 30,
-               ScreenFrameFingerprint.showSameScreen(screenFrameFingerprint, lastSentScreenFrame.fingerprint) {
+            if Self.reusesLastScreenFrame(newFingerprint: screenFrameFingerprint, lastSentScreenFrame: lastSentScreenFrame,
+                                          currentSessionNumber: openedSessionCount, now: Date()) {
                 // "hasn't changed" made Live tell the user it couldn't see
                 // their updated screen.
                 pendingTurnContextTexts.append("[note] you can see the user's screen right now: it looks the same as the picture you got a moment ago in this conversation, so read that one. never say you can't see the screen.")
@@ -355,6 +350,26 @@ final class GeminiLiveVoiceClient {
                 }
             }
         }
+    }
+
+    /// Seconds a picture of an unchanged screen is reused before a fresh
+    /// one goes anyway.
+    static let screenFrameReuseSeconds: TimeInterval = 30
+
+    /// Whether this turn can lean on the picture already sent instead of
+    /// sending the same screen again: same session (a new session never saw
+    /// it), sent less than 30 s ago (the fingerprint is tiny, so new text
+    /// in a field can look the same), and the same-looking screen.
+    static func reusesLastScreenFrame(
+        newFingerprint: [UInt8]?,
+        lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8], sentAt: Date)?,
+        currentSessionNumber: Int,
+        now: Date
+    ) -> Bool {
+        guard let newFingerprint, let lastSentScreenFrame else { return false }
+        guard lastSentScreenFrame.sessionNumber == currentSessionNumber else { return false }
+        guard now.timeIntervalSince(lastSentScreenFrame.sentAt) < screenFrameReuseSeconds else { return false }
+        return ScreenFrameFingerprint.showSameScreen(newFingerprint, lastSentScreenFrame.fingerprint)
     }
 
     /// Sends a JPEG frame of the screen. Called at turn start; can be called
