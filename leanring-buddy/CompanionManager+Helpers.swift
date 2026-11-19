@@ -211,8 +211,12 @@ extension CompanionManager {
             requestedAgent = clickyRoster.agent(matchingName: helperName)
         } else {
             // No name: the helper the user most likely means is the one
-            // that did something most recently.
-            requestedAgent = clickyRoster.agents.max { $0.lastActivityAt < $1.lastActivityAt }
+            // given a task most recently. The second brain isn't a helper,
+            // so "open it" never lands on it unless it's asked for by name.
+            let helpers = clickyRoster.agents.filter { $0.isBrain != true }
+            requestedAgent = helpers.max { firstHelper, secondHelper in
+                latestTaskDate(for: firstHelper) < latestTaskDate(for: secondHelper)
+            }
         }
         guard let agent = requestedAgent else {
             if let helperName, clickyRoster.recentlyDeletedAgentNames.contains(where: { $0.caseInsensitiveCompare(helperName) == .orderedSame }) {
@@ -236,5 +240,9 @@ extension CompanionManager {
         default:
             return clickyRoster.helperDetail(for: agent)
         }
+    }
+
+    private func latestTaskDate(for agent: ClickyAgent) -> Date {
+        clickyRoster.transcriptsByAgentID[agent.id]?.last(where: { $0.kind == .user })?.createdAt ?? agent.lastActivityAt
     }
 }

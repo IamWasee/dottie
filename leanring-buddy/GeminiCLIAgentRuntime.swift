@@ -292,7 +292,8 @@ final class GeminiCLIAgentRuntime {
     }
 
     /// Every MCP server in the settings, minus the computer-use variant this
-    /// turn shouldn't have (look-only, or look-and-act when allowed).
+    /// turn shouldn't have (look-only, or look-and-act when allowed), and
+    /// minus servers that only repeat Gemini CLI's own shell and file tools.
     private static func allowedMCPServerArguments(cliHomeURL: URL, isComputerUseApproved: Bool) -> [String] {
         let settingsFileURL = cliHomeURL.appendingPathComponent(".gemini/settings.json")
         guard let settingsData = try? Data(contentsOf: settingsFileURL),
@@ -301,9 +302,24 @@ final class GeminiCLIAgentRuntime {
         let unwantedServerName = isComputerUseApproved
             ? ClickyComputerUse.mcpServerName
             : ClickyComputerUse.actingMCPServerName
-        let allowedServerNames = mcpServers.keys.filter { $0 != unwantedServerName }.sorted()
-        guard !allowedServerNames.isEmpty, allowedServerNames.count < mcpServers.count else { return [] }
+        let allowedServerNames = mcpServers.keys
+            .filter { $0 != unwantedServerName && !repeatsBuiltInTools(serverName: $0) }
+            .sorted()
+        guard allowedServerNames.count < mcpServers.count else { return [] }
+        // Every server was left out: a name no server has turns them all off
+        // (no names at all would allow every server).
+        guard !allowedServerNames.isEmpty else { return ["--allowed-mcp-server-names", "none"] }
         return allowedServerNames.flatMap { ["--allowed-mcp-server-names", $0] }
+    }
+
+    /// Desktop Commander's ~25 tools only repeat Gemini CLI's own shell and
+    /// file tools, yet their descriptions are re-sent with every step of a
+    /// turn, which made each step too big for Groq and slower on Gemini. It
+    /// also ran commands anywhere on a turn the user hadn't allowed to run
+    /// them.
+    static func repeatsBuiltInTools(serverName: String) -> Bool {
+        let comparableName = serverName.lowercased().replacingOccurrences(of: "_", with: "-")
+        return comparableName.contains("desktop-commander")
     }
 
     /// Writes the CLI's user settings into Dottie's own CLI home: API-key

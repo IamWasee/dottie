@@ -108,19 +108,25 @@ final class DottieKeepWorking: ObservableObject {
         return result
     }
 
-    /// Stops the job with this title or helper name, or every job.
+    /// Stops the jobs with this title or helper name: 24/7 jobs and the
+    /// helpers' own routines alike ("stop the bitcoin routine" used to find
+    /// nothing, since only 24/7 jobs were looked at). No name stops every
+    /// 24/7 job, never a helper's ordinary routines.
     @discardableResult
     func stop(matching name: String?) -> String {
         guard let routineStore else { return "nothing to stop." }
         let jobsToStop: [ClickyRoutine]
         if let name {
-            let helperIDs = Set(companion?.clickyRoster.agents.filter { $0.name.localizedCaseInsensitiveContains(name) }.map(\.id) ?? [])
-            jobsToStop = activeJobs.filter { $0.title.localizedCaseInsensitiveContains(name) || helperIDs.contains($0.agentID) }
+            jobsToStop = routineStore.routines.filter { routine in
+                let helperName = companion?.clickyRoster.agent(withID: routine.agentID)?.name ?? ""
+                return Self.routineMatches(title: routine.title, helperName: helperName, spokenName: name)
+            }
         } else {
             jobsToStop = activeJobs
         }
         guard !jobsToStop.isEmpty else {
-            return activeJobs.isEmpty ? "no 24/7 jobs are running." : "no 24/7 job matches that. running: " + activeJobs.map(\.title).joined(separator: ", ")
+            let allTitles = routineStore.routines.map(\.title)
+            return allTitles.isEmpty ? "no routines or 24/7 jobs are set up." : "nothing matches that. routines: " + allTitles.joined(separator: ", ")
         }
         for job in jobsToStop {
             routineStore.deleteRoutine(routineID: job.id)
@@ -134,9 +140,41 @@ final class DottieKeepWorking: ObservableObject {
         stop(matching: nil)
     }
 
+    /// Words that name what kind of thing it is, not which one.
+    private nonisolated static let genericRoutineWords: Set<String> = ["the", "my", "a", "routine", "routines", "job", "jobs", "check", "checker", "task", "every", "hour", "hourly", "minutes", "daily", "one", "that", "this", "for"]
+
+    /// True when the user's words name this routine: its title or helper
+    /// contains them, or a meaningful word of theirs ("bitcoin" in "the
+    /// bitcoin routine") is in the title.
+    nonisolated static func routineMatches(title: String, helperName: String, spokenName: String) -> Bool {
+        let spoken = spokenName.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !spoken.isEmpty else { return false }
+        let lowercasedTitle = title.lowercased()
+        if lowercasedTitle.contains(spoken) { return true }
+        let lowercasedHelperName = helperName.lowercased()
+        if lowercasedHelperName.count >= 3, spoken == lowercasedHelperName || spoken.contains(lowercasedHelperName) {
+            return true
+        }
+        let titleWords = Set(lowercasedTitle.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
+        let meaningfulSpokenWords = spoken.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !genericRoutineWords.contains($0) }
+        return meaningfulSpokenWords.contains { spokenWord in
+            titleWords.contains { titleWord in
+                titleWord.hasPrefix(spokenWord) || (titleWord.count >= 4 && spokenWord.hasPrefix(titleWord))
+            }
+        }
+    }
+
     var statusForVoice: String {
-        guard !activeJobs.isEmpty else { return "no 24/7 jobs are running." }
-        return activeJobs.map { job in
+        let ordinaryRoutines = routineStore?.routines.filter { $0.keepWorking == nil } ?? []
+        let routineLines = ordinaryRoutines.map { routine in
+            let helperName = companion?.clickyRoster.agent(withID: routine.agentID)?.name ?? "a helper"
+            return "routine \"\(routine.title)\" by \(helperName): \(routine.cadenceDescription)\(routine.isPaused ? " (paused)" : "")"
+        }
+        guard !activeJobs.isEmpty else {
+            return routineLines.isEmpty ? "no 24/7 jobs or routines are running." : "no 24/7 jobs. " + routineLines.joined(separator: "\n")
+        }
+        return (activeJobs.map { job in
             let helperName = companion?.clickyRoster.agent(withID: job.agentID)?.name ?? "a helper"
             var line = "\"\(job.title)\" by \(helperName): \(job.cadenceDescription), \(job.runCount) run\(job.runCount == 1 ? "" : "s") so far"
             if let endsAt = job.keepWorking?.endsAt {
@@ -146,7 +184,7 @@ final class DottieKeepWorking: ObservableObject {
                 line += ", stops when done"
             }
             return line
-        }.joined(separator: "\n")
+        } + routineLines).joined(separator: "\n")
     }
 
     // MARK: - Runs
@@ -243,13 +281,13 @@ enum DottieKeepWorkingTools: DottieToolModule {
         [
             DottieTool(
                 name: "keep_working",
-                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for nonstop or repeated work (\"keep at it all night until it's done\", \"check every 10 minutes\"); never start one on your own. start needs the helper task; stop ends one (or all); status lists them. While one runs the Mac stays awake and the notch shows a moon.",
+                description: "24/7 mode: a helper keeps working on a task in the background, re-running it on an interval or nonstop, while the Mac stays awake. Only when the user clearly asks for nonstop or repeated work (\"keep at it all night until it's done\", \"check every 10 minutes\"); never start one on your own. start needs the helper task; stop ends one by title or helper (or all 24/7 jobs), and also stops a helper's own routines (\"stop the bitcoin routine\"); status lists 24/7 jobs and routines. While one runs the Mac stays awake and the notch shows a moon.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
                         "action": ["type": "STRING", "enum": ["start", "stop", "status"]],
                         "task": ["type": "STRING", "description": "For start: the full, self-contained task for the helper."],
-                        "title": ["type": "STRING", "description": "For start: two to four words naming the job. For stop: which job (leave out to stop all)."],
+                        "title": ["type": "STRING", "description": "For start: two to four words naming the job. For stop: the user's words for the job or routine, like \"bitcoin\" (leave out to stop all 24/7 jobs)."],
                         "helper_name": ["type": "STRING", "description": "Which helper does it, if the user named one."],
                         "every_minutes": ["type": "NUMBER", "description": "Run again every this many minutes (at least 10). Leave out for nonstop (runs again a few minutes after each run ends)."],
                         "until_done": ["type": "BOOLEAN", "description": "true when it should stop by itself once the job is finished."],

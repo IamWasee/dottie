@@ -1043,11 +1043,13 @@ final class CompanionManager: ObservableObject {
 
     another way when one fails: if a script, link or app tool fails, or its result shows the goal didn't happen (a search page instead of the song playing, an error, an empty answer), don't say it's done and don't repeat the same thing: switch routes once, script or link → do_task_on_screen with the user's whole goal (the screen job sees and clicks like they would). say something is done, playing or drawn only when a tool result shows it; until then say you're trying.
     asked again: when the user asks for something you already did ("make a note called test" twice, "search lofi" again), they want it done again: do it again with your tools. never answer "that's already done".
-    multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
+    you can always work the user's screen: anything they could do with their own mouse and keyboard in any app or website (move an event or task to another day or list, drag something between boards, plans or folders, change a setting, fill a form) you can do with do_task_on_screen. never say you don't have access, can't use that app, or that they should do it themselves; never hand screen work to a helper or ask_brain (they have no screen). only after a screen job really failed, say what it tried.
+    these all work, so never say you can't or ask the user to do them: you see their screen (a fresh picture comes with every turn); open any web page with open_url (search first when you don't know the exact address, then open the real page, like a model's hugging face page); click with click_on_screen, and "click around" or anything with several steps is do_task_on_screen; write or type for them into the field in front with type_text ("write it for me" means type it); copy anything with copy_to_clipboard. when they ask for commands or code, write each on the notes board as a code block (write_notes, kind code, exactly as typed), copy it with copy_to_clipboard, and say only what it does; never read code aloud as words or describe it instead of giving it.
+        multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
     worked math, step-by-step solutions, formulas and study notes go on the notes board with write_notes (headings, lists, equations, pictures; place right to continue the same working on one line), always in real symbols (¹⁄₁₆x⁴, ×, √, H₂O), never math spelled out in words; color the part that matters with {red:…} or {highlight:…}. Make it easy for someone who doesn't think in symbols: the rule first in plain words, one small change per line with a short "why" beside it, matching colors for parts that go together, and the answer highlighted at the end; say the explanation out loud in everyday words. when you write numbers (notes, the screen, typed answers), use digits for math, measurements, money, times, dates, scores and anything 10 or more, and words for small everyday counts in a sentence ("two ways", "the first step"); if the user says which they want, keep to it.
-    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked. any ask to draw, sketch, graph, chart or mark something goes to explain_on_screen too, whether or not they say "on my screen": a grid, a graph with a downward trend, an arrow at something. when they ask to add to or change what you drew, call it again with add_to_last true and only the new steps. when they circled something (a problem, a question, a table) and ask you to solve it, do an example or graph it on screen, draw onto or beside it with the anchor circled; for a graph of a table or numbers, use a chart step (text circled graphs exactly what they circled), never lines placed by guessing.
+    whenever you explain something visual or mathematical (geometry, a graph, an equation, a diagram, a chess position), draw it with explain_on_screen without waiting to be asked. any ask to draw, sketch, graph, chart or mark something goes to explain_on_screen too, whether or not they say "on my screen": a grid, a graph with a downward trend, an arrow at something. when they ask to add to or change what you drew, call it again with add_to_last true and only the new steps; for a bigger, smaller or full-screen board, add_to_last true with board_size. when they circled something (a problem, a question, a table) and ask you to solve it, do an example or graph it on screen, draw onto or beside it with the anchor circled; for a graph of a table or numbers, use a chart step (text circled graphs exactly what they circled), never lines placed by guessing.
 
     second brain: it remembers everything you and the helpers did with the user, and can dig through their files, command-line tools and connected apps.
     - about the past ("what was i working on yesterday", "what was that site"): recall_memory with a few keywords, and answer from it.
@@ -1055,7 +1057,8 @@ final class CompanionManager: ObservableObject {
     - their files, folders, tools or real digging ("find my resume and tighten it", "check my git repos for uncommitted work"): ask_brain. say a few words, then stop; its answer comes back to you to say.
 
     helpers (also called dots): background workers on the mac with a shell, files, node and the web, who report back in the notch. they research, write documents, organize files, write code and build whole websites or apps.
-    - for work that takes more than an answer, or "have a helper / a named helper do it", call start_helper with a task that stands on its own (helper_name if they named one), then say it's started in a few words. don't do the task yourself, and never say you can't start a helper.
+    - for work that takes more than an answer, "have a helper / a named helper do it", "can one of my helpers…", or talking to a helper by name ("Jarvis, look up…"), call start_helper with a task that stands on its own (helper_name if they named one), then say it's started in a few words. don't do the task yourself, and never say you can't start a helper. never say a helper is on something unless you called start_helper for it in this same answer.
+    - more work on something a helper just did ("open it", "change that file", "add a column"): the [recent helper work] note says which helper did it; give it to that same helper (open_helper_result or start_helper with its helper_name), never ask_brain.
     - helpers change without you, so never answer about them from memory: call list_helpers or check_helper first and give the gist in a sentence or two. if one isn't there anymore, it was deleted.
     - anything being built or come back to lives in a project: pass project to start_helper (an existing name to keep working on it, a short new name for something new; a different new thing gets its own project). a big job with separate parts, or "a team", goes to start_team.
 
@@ -1126,6 +1129,15 @@ final class CompanionManager: ObservableObject {
         liveVoiceClient.onLateTranscriptOfPreviousAnswer = { [weak self] lateTranscript in
             guard let self else { return }
             self.conversationStore.extendEntry(withID: self.lastLiveTurnConversationEntryID, clickyText: lateTranscript)
+        }
+
+        liveVoiceClient.helperNamesForHandOffCheck = { [weak self] in
+            guard let self else { return (allHelperNames: [], busyHelperNames: []) }
+            let helpers = self.clickyRoster.agents.filter { $0.isBrain != true }
+            return (
+                allHelperNames: helpers.map(\.name),
+                busyHelperNames: helpers.filter { self.clickyRoster.isRunning($0) }.map(\.name)
+            )
         }
 
         liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
@@ -1270,6 +1282,13 @@ final class CompanionManager: ObservableObject {
             liveVoiceClient.sendTurnContextText(notesForNextLiveTurn.joined(separator: "\n"))
             notesForNextLiveTurn = []
         }
+        // What the helpers did lately and which files they touched, so
+        // "open that file" or "change it again" goes back to the helper
+        // that did it. Live's own history only has what was said aloud,
+        // not which helper did the work.
+        if includesScreenFrame, let recentWorkNote = DottieRecentWorkNote.noteText(entries: clickyRoster.recentHelperWork()) {
+            liveVoiceClient.sendTurnContextText(recentWorkNote)
+        }
     }
 
     /// Things that changed outside the conversation (the user stopped a job
@@ -1413,6 +1432,15 @@ final class CompanionManager: ObservableObject {
         guard let plan = DottieTeaching.Plan(arguments: arguments) else {
             return "error: give steps, each with a kind and points."
         }
+        // Checked before anything is drawn or cleared: a step that can't be
+        // drawn used to be skipped quietly while Live said it was drawn.
+        let stepProblems = plan.problems
+        if !stepProblems.isEmpty {
+            DottieLog.notice("✏️ Teaching steps refused: \(stepProblems.joined(separator: "; "))")
+            return "error: nothing was drawn. fix these and call explain_on_screen again with all the steps: "
+                + stepProblems.joined(separator: "; ")
+                + ". don't tell the user anything was drawn until it is."
+        }
         // Adding to a drawing that's still up keeps it, and its board, so
         // "now show a downward trend on it" lands on the same grid. Every
         // call used to wipe the screen and start over.
@@ -1431,7 +1459,33 @@ final class CompanionManager: ObservableObject {
         }
         let reusesEarlierBoard = isAddingToDrawingOnScreen && lastTeachingBoardRect != nil
             && (!plan.surfaceWasGiven || plan.surface != .screen)
-        let boardRect = reusesEarlierBoard ? lastTeachingBoardRect : plan.surface.boardRect(on: cursorScreen.visibleFrame)
+        // Adding to a drawing made over the screen stays on the screen
+        // unless a board was asked for.
+        let staysOnScreenDrawing = isAddingToDrawingOnScreen && lastTeachingBoardRect == nil && !plan.surfaceWasGiven
+        var plannedBoardRect: CGRect?
+        if reusesEarlierBoard {
+            plannedBoardRect = lastTeachingBoardRect
+        } else if !staysOnScreenDrawing {
+            plannedBoardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame, sizeScale: plan.boardSize?.scaleFromUsualSize ?? 1)
+        }
+        // "make the board bigger": the board that's up and its drawing
+        // move and scale together.
+        if reusesEarlierBoard, let boardSize = plan.boardSize, let currentBoard = lastTeachingBoardRect {
+            let boardScreen = NSScreen.screens.first(where: { $0.frame.intersects(currentBoard) }) ?? cursorScreen
+            let usualBoardSide = DottieTeaching.Surface.board_right.boardRect(on: boardScreen.visibleFrame)?.width ?? currentBoard.width
+            let resizedBoard = boardSize.resized(currentBoard, usualBoardSide: usualBoardSide, on: boardScreen.visibleFrame)
+            drawingOverlayManager.refitBoardFigures(from: currentBoard, to: resizedBoard)
+            plannedBoardRect = resizedBoard
+            DottieLog.notice("✏️ Board resized to \(boardSize.rawValue)")
+        }
+        if plan.steps.isEmpty {
+            guard reusesEarlierBoard else {
+                return "there's no board up to resize. to draw on a bigger board, call explain_on_screen with board_size and the steps."
+            }
+            lastTeachingBoardRect = plannedBoardRect
+            return "resized the board; everything on it moved with it. say it in a few words."
+        }
+        let boardRect = plannedBoardRect
         let drawsNewBoard = boardRect != nil && !reusesEarlierBoard
         let teachingDisplayFrame = reusesEarlierBoard ? (lastTeachingDisplayFrame ?? cursorScreen.frame) : cursorScreen.frame
         lastTeachingBoardRect = boardRect
@@ -1556,6 +1610,8 @@ final class CompanionManager: ObservableObject {
         // "circled" is always an anchor: the area the user circled.
         let builtInAnchorFrames: [String: CGRect] = circledArea.map { ["circled": $0] } ?? [:]
         var missedSteps = 0
+        // Text already written, so a new label doesn't land on top of one.
+        var occupiedTextRects = DottieTeaching.textRects(of: drawingOverlayManager.figures)
         for plannedStep in plan.steps {
             if Task.isCancelled { break }
             var step = plannedStep
@@ -1601,21 +1657,23 @@ final class CompanionManager: ObservableObject {
                 notchPresenter.endScreenTask()
                 if Task.isCancelled { break }
             }
-            let space = DottieTeaching.Space(
+            let space = Self.teachingSpace(
                 // Anchored steps point at the screen even with a board open.
                 boardRect: usesAnchors ? nil : boardRect,
                 anchorFrames: (anchorFrames ?? [:]).merging(builtInAnchorFrames) { foundFrame, _ in foundFrame },
-                screenPoint: { normalizedX, normalizedY in
-                    guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else { return nil }
-                    return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
-                }
+                screenFrame: screenFrame,
+                displayFrame: displayFrame
             )
             var narration: Task<Void, Never>?
             if let line = step.say {
                 narration = Task { [weak self] in await self?.narrate(line) }
                 teachingNarrationTask = narration
             }
-            if let drawn = DottieTeaching.draw(step, in: space) {
+            if var drawn = DottieTeaching.draw(step, in: space) {
+                if step.kind == .text {
+                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
+                }
+                occupiedTextRects += DottieTeaching.textRects(of: drawn.figures)
                 let leadInSeconds = 0.4
                 penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
                                           caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)
@@ -1638,6 +1696,25 @@ final class CompanionManager: ObservableObject {
         tidyUpAfterTeaching(plan: plan, generation: generation, missedSteps: missedSteps)
     }
 
+    /// Where a teaching step's 0-1000 numbers land: on the turn's screen
+    /// frame, or with no frame this turn (a typed ask) on the display being
+    /// drawn on, instead of drawing nothing.
+    private static func teachingSpace(
+        boardRect: CGRect?,
+        anchorFrames: [String: CGRect],
+        screenFrame: CompanionCompositeScreenFrame?,
+        displayFrame: CGRect
+    ) -> DottieTeaching.Space {
+        DottieTeaching.Space(boardRect: boardRect, anchorFrames: anchorFrames, screenPoint: { normalizedX, normalizedY in
+            guard let resolved = screenFrame?.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
+                let clampedX = min(max(normalizedX, 0), 1000), clampedY = min(max(normalizedY, 0), 1000)
+                return CGPoint(x: displayFrame.minX + clampedX / 1000 * displayFrame.width,
+                               y: displayFrame.maxY - clampedY / 1000 * displayFrame.height)
+            }
+            return CompanionManager.globalScreenLocation(forScreenshotPixel: resolved.pointInScreenshotPixels, in: resolved.screenCapture)
+        })
+    }
+
     /// Waits (up to 8 seconds) for Live to finish what it is saying, so an
     /// explanation's drawing and speaking start together.
     private func waitUntilLiveIsQuiet() async {
@@ -1657,6 +1734,12 @@ final class CompanionManager: ObservableObject {
         }
         if missedSteps > 0 {
             DottieLog.notice("✏️ \(missedSteps) of \(plan.steps.count) steps couldn't be drawn")
+            // Live already said "watch", so the user hears the truth next
+            // instead of being told it's all there.
+            notesForNextLiveTurn.append("[note] \(missedSteps) of the \(plan.steps.count) steps of your last drawing couldn't be drawn (a thing to mark wasn't found on screen, or a point was off it). never say those parts were drawn; if they matter, draw them again on a board with numbers.")
+            if missedSteps == plan.steps.count {
+                notchPresenter.showCard(title: "drawing", text: "I couldn't draw that one. Ask me again and I'll put it on a board.")
+            }
         }
         drawingOverlayManager.fadeFigures(after: plan.keepsDrawing ? 600 : 60)
         scheduleTransientHideIfNeeded()

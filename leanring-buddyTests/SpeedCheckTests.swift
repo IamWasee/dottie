@@ -11,6 +11,7 @@
 //  fails.
 //
 
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Dottie
@@ -97,5 +98,81 @@ struct SpeedCheckTests {
         }
 
         #expect(median < 2_000, "200 lines of math took \(median) ms")
+    }
+
+    @Test func tellingCodeFromMathForAWholeNotesPageStaysQuick() {
+        let lines = (0..<500).map { lineNumber in
+            lineNumber.isMultiple(of: 2)
+                ? "output_\(lineNumber) = model.generate(**inputs, max_new_tokens=50)"
+                : "x_\(lineNumber)^2 + y^2 = r^2 and v_max = 9.8 m/s^2"
+        }
+
+        var codeLineCount = 0
+        let median = medianMilliseconds {
+            codeLineCount = lines.filter(DottieMathText.looksLikeCode).count
+        }
+
+        #expect(codeLineCount == 250)
+        #expect(median < 1_000, "500 lines took \(median) ms")
+    }
+
+    @Test func findingCodeInALongAnswerStaysQuick() {
+        let paragraph = "Here is how it works, step by step, with `npm run dev` to start it. "
+        let answer = String(repeating: paragraph, count: 300) + "```\npip install transformers\n```"
+
+        var snippetCount = 0
+        let median = medianMilliseconds {
+            snippetCount = DottieMathText.codeSnippets(in: answer).count
+        }
+
+        #expect(snippetCount == 2)
+        #expect(median < 500, "a 20,000-character answer took \(median) ms")
+    }
+
+    @Test func checkingAndDrawingAFullTeachingPlanStaysQuick() {
+        let steps: [[String: Any]] = (0..<40).map { stepNumber in
+            switch stepNumber % 4 {
+            case 0: return ["kind": "plot", "points": ["100,100", "900,900"], "text": "x^2 - 3"]
+            case 1: return ["kind": "chart", "points": ["100,100", "900,900"], "text": "Mon: 12; Tue: 9; Wed: 15; Thu: 4"]
+            case 2: return ["kind": "grid", "points": ["100,100", "900,900"], "text": "20x20"]
+            default: return ["kind": "text", "points": ["100,\(stepNumber * 20)"], "text": "Step \(stepNumber): x² + 1"]
+            }
+        }
+        let board = CGRect(x: 800, y: 100, width: 600, height: 600)
+        let space = DottieTeaching.Space(boardRect: board, anchorFrames: [:], screenPoint: { _, _ in nil })
+
+        var drawnStepCount = 0
+        let median = medianMilliseconds(runCount: 15) {
+            guard let plan = DottieTeaching.Plan(arguments: ["steps": steps]), plan.problems.isEmpty else { return }
+            var occupiedTextRects: [CGRect] = []
+            drawnStepCount = 0
+            for step in plan.steps {
+                guard var drawn = DottieTeaching.draw(step, in: space) else { continue }
+                if step.kind == .text {
+                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
+                }
+                for figure in drawn.figures {
+                    if case .text = figure.shape { occupiedTextRects.append(figure.bounds) }
+                }
+                drawnStepCount += 1
+            }
+        }
+
+        #expect(drawnStepCount == 40)
+        #expect(median < 1_500, "a 40-step plan took \(median) ms")
+    }
+
+    @Test func decidingWhetherToResendTheScreenStaysQuick() {
+        let fingerprint = [UInt8](repeating: 128, count: 256 * 160)
+        let lastSent = (sessionNumber: 1, fingerprint: fingerprint, sentAt: Date())
+
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                _ = GeminiLiveVoiceClient.reusesLastScreenFrame(newFingerprint: fingerprint, lastSentScreenFrame: lastSent,
+                                                               currentSessionNumber: 1, now: Date())
+            }
+        }
+
+        #expect(median < 500, "20 screen comparisons took \(median) ms")
     }
 }

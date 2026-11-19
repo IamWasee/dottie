@@ -121,6 +121,10 @@ final class GeminiLiveVoiceClient {
     /// Shortcuts, AppleScript, Calendar, Reminders, Contacts, the browser
     /// and meeting notes (DottieMacTools). Live waits for the result.
     var onMacTool: (@MainActor (_ functionName: String, _ arguments: [String: Any]) async -> String)?
+    /// The helpers' names, and which of them are working right now, for
+    /// the hand-off check (DottieHelperHandOffCheck). The second brain is
+    /// left out: it isn't a helper.
+    var helperNamesForHandOffCheck: (@MainActor () -> (allHelperNames: [String], busyHelperNames: [String]))?
     /// A tool call got its answer (use_tool calls under the tool's own
     /// name). The instant lane learns shortcuts from these.
     var onFunctionCallFinished: (@MainActor (_ functionName: String, _ arguments: [String: Any], _ result: String) -> Void)?
@@ -193,7 +197,7 @@ final class GeminiLiveVoiceClient {
     /// answer takes to start (Settings → Usage).
     private var userTurnEndedAt: Date?
     private var openedSessionCount = 0
-    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8])?
+    private var lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8], sentAt: Date)?
     /// This turn's frame when it wasn't sent because the session already had
     /// it. A replay on a new session has no earlier picture, so it gets this.
     private var currentTurnSkippedScreenFrameJPEGData: Data?
@@ -226,6 +230,24 @@ final class GeminiLiveVoiceClient {
     /// The user's words for this turn already went out with a turnComplete.
     private var hasReportedUserTranscriptThisTurn = false
     private var toolCallsThisUserTurn = 0
+    // The hand-off check: everything the model said and every tool it
+    // called for the whole question (all its turns, not just the last),
+    // so the check can tell when a helper was promised but never started.
+    private var isCheckingHelperHandOffThisQuestion = false
+    private var hasSentHelperHandOffNudgeThisQuestion = false
+    private var modelTranscriptForWholeQuestion = ""
+    private var functionNamesCalledThisQuestion: Set<String> = []
+    private var typedTextThisQuestion = ""
+    /// A tool was called since the last turnComplete, so Live will answer
+    /// again after the tool's result: this turn wasn't the last one.
+    private var didCallToolSinceLastTurnComplete = false
+    /// Goes up with every question, so a check that waited for late
+    /// transcript words never runs against the next question.
+    private var questionNumber = 0
+    private var helperHandOffCheckTask: Task<Void, Never>?
+    /// How long to wait after the last turn before checking: the end of an
+    /// answer's transcript often arrives a moment after its turnComplete.
+    private static let helperHandOffCheckDelaySeconds: Double = 1.2
     private var hasModelStartedSpeakingThisTurn = false
     /// Any audio, transcript or tool call from the model this turn. Until
     /// then a dropped session can be retried without the user noticing.
@@ -282,6 +304,14 @@ final class GeminiLiveVoiceClient {
         lateTranscriptOfPreviousAnswer = ""
         hasReportedUserTranscriptThisTurn = false
         toolCallsThisUserTurn = 0
+        questionNumber += 1
+        helperHandOffCheckTask?.cancel()
+        isCheckingHelperHandOffThisQuestion = true
+        hasSentHelperHandOffNudgeThisQuestion = false
+        modelTranscriptForWholeQuestion = ""
+        functionNamesCalledThisQuestion = []
+        typedTextThisQuestion = ""
+        didCallToolSinceLastTurnComplete = false
         hasModelStartedSpeakingThisTurn = false
         hasReceivedModelContentThisTurn = false
         turnReplayCount = 0
@@ -307,19 +337,39 @@ final class GeminiLiveVoiceClient {
             // Each picture costs hundreds of tokens and stays in the
             // session's context. When this session already has a picture of
             // the same screen, say so instead of sending it again.
-            if let screenFrameFingerprint,
-               let lastSentScreenFrame,
-               lastSentScreenFrame.sessionNumber == openedSessionCount,
-               ScreenFrameFingerprint.showSameScreen(screenFrameFingerprint, lastSentScreenFrame.fingerprint) {
-                pendingTurnContextTexts.append("[note] the screen hasn't changed since the last picture you got in this conversation; use that one.")
+            if Self.reusesLastScreenFrame(newFingerprint: screenFrameFingerprint, lastSentScreenFrame: lastSentScreenFrame,
+                                          currentSessionNumber: openedSessionCount, now: Date()) {
+                // "hasn't changed" made Live tell the user it couldn't see
+                // their updated screen.
+                pendingTurnContextTexts.append("[note] you can see the user's screen right now: it looks the same as the picture you got a moment ago in this conversation, so read that one. never say you can't see the screen.")
                 currentTurnSkippedScreenFrameJPEGData = screenFrameJPEGData
             } else {
                 sendScreenFrame(jpegData: screenFrameJPEGData)
                 if let screenFrameFingerprint {
-                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint)
+                    lastSentScreenFrame = (sessionNumber: openedSessionCount, fingerprint: screenFrameFingerprint, sentAt: Date())
                 }
             }
         }
+    }
+
+    /// Seconds a picture of an unchanged screen is reused before a fresh
+    /// one goes anyway.
+    static let screenFrameReuseSeconds: TimeInterval = 30
+
+    /// Whether this turn can lean on the picture already sent instead of
+    /// sending the same screen again: same session (a new session never saw
+    /// it), sent less than 30 s ago (the fingerprint is tiny, so new text
+    /// in a field can look the same), and the same-looking screen.
+    static func reusesLastScreenFrame(
+        newFingerprint: [UInt8]?,
+        lastSentScreenFrame: (sessionNumber: Int, fingerprint: [UInt8], sentAt: Date)?,
+        currentSessionNumber: Int,
+        now: Date
+    ) -> Bool {
+        guard let newFingerprint, let lastSentScreenFrame else { return false }
+        guard lastSentScreenFrame.sessionNumber == currentSessionNumber else { return false }
+        guard now.timeIntervalSince(lastSentScreenFrame.sentAt) < screenFrameReuseSeconds else { return false }
+        return ScreenFrameFingerprint.showSameScreen(newFingerprint, lastSentScreenFrame.fingerprint)
     }
 
     /// Sends a JPEG frame of the screen. Called at turn start; can be called
@@ -344,6 +394,18 @@ final class GeminiLiveVoiceClient {
         } else {
             enqueueOrSend(message: ["realtimeInput": ["text": contextText]])
         }
+    }
+
+    /// The words of a typed question, which reach Live as text, not as a
+    /// transcript of the mic; the hand-off check reads them.
+    func noteTypedQuestionForHelperHandOffCheck(_ typedText: String) {
+        typedTextThisQuestion = typedText
+    }
+
+    /// For turns the app makes itself (a guide line, a finished job read
+    /// out): the user didn't ask anything, so nothing to check.
+    func skipHelperHandOffCheckForCurrentTurn() {
+        isCheckingHelperHandOffThisQuestion = false
     }
 
     /// Streams a chunk of 16kHz mono PCM16 mic audio. Safe to call from the
@@ -402,6 +464,8 @@ final class GeminiLiveVoiceClient {
     /// quietly on the server side.
     func cancelCurrentModelResponse() {
         isDiscardingModelAudioForCurrentTurn = true
+        isCheckingHelperHandOffThisQuestion = false
+        helperHandOffCheckTask?.cancel()
         cancelPendingFunctionCalls()
         heldModelAudioChunks = []
         heldModelToolCalls = []
@@ -573,31 +637,39 @@ final class GeminiLiveVoiceClient {
         if let smartReplaysLine = DottieSmartReplayStore.shared.voicePromptLine {
             baseSystemInstruction += "\n\n" + smartReplaysLine
         }
-        guard !recentConversationHistory.isEmpty else { return baseSystemInstruction }
+        guard let historyText = Self.carriedHistoryText(for: recentConversationHistory) else { return baseSystemInstruction }
+        return baseSystemInstruction + "\n\n" + historyText
+    }
 
+    /// The recent conversation for a new session's instruction. Every
+    /// exchange in it is over: after a relaunch, "hello" used to get an
+    /// answer to the request before it (often one that never finished),
+    /// because the history read like a conversation still going on.
+    nonisolated static func carriedHistoryText(for history: [(userTranscript: String, modelTranscript: String)]) -> String? {
+        guard !history.isEmpty else { return nil }
         // Only the last few exchanges, trimmed: older facts about the user
         // live in the profile and memories already in the instruction, and
         // every character here is read again by each new session.
-        let carriedExchanges = Array(recentConversationHistory.suffix(Self.carriedHistoryExchangeCount))
+        let carriedExchanges = Array(history.suffix(Self.carriedHistoryExchangeCount))
         let historyLines = carriedExchanges.enumerated().map { exchangeIndex, exchange in
             let isOneOfTheLatest = exchangeIndex >= carriedExchanges.count - 2
             let maximumCharacters = isOneOfTheLatest ? 800 : 300
             let userText = Self.trimmedForHistory(exchange.userTranscript, maximumCharacters: maximumCharacters)
             let modelText = Self.trimmedForHistory(exchange.modelTranscript, maximumCharacters: maximumCharacters)
-            return "user: \(userText)\nyou: \(modelText)"
+            return "user: \(userText)\nyou: \(modelText.isEmpty ? "(no answer, it was cut off)" : modelText)"
         }.joined(separator: "\n")
 
-        return baseSystemInstruction + """
-
-
-        recent conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
+        return """
+        earlier conversation with this user, oldest first (it may be from earlier days; remember what they told you, like their name):
         \(historyLines)
+
+        that conversation is over and everything in it is finished or dropped. answer only what the user says now: a greeting gets a greeting, never an answer to an earlier request. don't redo, continue or repeat an earlier request or answer unless the user asks for it again in their own words ("carry on", "do that again", "did it work?").
         """
     }
 
-    private static let carriedHistoryExchangeCount = 8
+    private nonisolated static let carriedHistoryExchangeCount = 8
 
-    private static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
+    private nonisolated static func trimmedForHistory(_ text: String, maximumCharacters: Int) -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedText.count > maximumCharacters else { return trimmedText }
         return String(trimmedText.prefix(maximumCharacters)) + "…"
@@ -1047,6 +1119,7 @@ final class GeminiLiveVoiceClient {
            let transcriptChunk = outputTranscription["text"] as? String {
             markModelContentReceived()
             currentTurnModelTranscript += transcriptChunk
+            modelTranscriptForWholeQuestion += transcriptChunk
             if !isDiscardingModelAudioForCurrentTurn {
                 onModelTranscriptUpdate?(currentTurnModelTranscript)
             }
@@ -1095,6 +1168,13 @@ final class GeminiLiveVoiceClient {
             // the model says from here on.
             currentTurnModelTranscript = ""
             onModelTurnComplete?(finishedUserTranscript, finishedModelTranscript, isFollowUp)
+            let isLastTurnOfQuestion = !didCallToolSinceLastTurnComplete
+                && functionCallsAwaitingResponse.isEmpty
+                && pendingFunctionCallTasks.isEmpty
+            didCallToolSinceLastTurnComplete = false
+            if isLastTurnOfQuestion && !wasCancelledByUser {
+                scheduleHelperHandOffCheck()
+            }
             if isConnectedSessionOnBackupModel {
                 // Back to the main model (and its voice) for the next turn;
                 // the conversation carries over through the history.
@@ -1115,6 +1195,7 @@ final class GeminiLiveVoiceClient {
             heldModelToolCalls.append(toolCall)
             return
         }
+        didCallToolSinceLastTurnComplete = true
 
         for functionCall in functionCalls {
             let functionName = functionCall["name"] as? String ?? ""
@@ -1199,6 +1280,7 @@ final class GeminiLiveVoiceClient {
     /// through here, so a tool behaves the same whichever way it's called.
     private func dispatchFunctionCall(functionName: String, functionCallID: String, functionArguments: [String: Any]) {
         functionCallsAwaitingResponse[functionCallID] = (functionName: functionName, arguments: functionArguments)
+        functionNamesCalledThisQuestion.insert(functionName)
         switch functionName {
         case "point_at_element":
             handlePointAtElementCall(functionCallID: functionCallID, functionArguments: functionArguments)
@@ -1406,6 +1488,55 @@ final class GeminiLiveVoiceClient {
         )
         sendFunctionResponse(functionCallID: functionCallID, functionName: "start_helper",
                              response: ["result": startStatus])
+    }
+
+    // MARK: - Helper hand-off check
+
+    /// After the last turn of a question: if Dottie said a helper is on it,
+    /// or the user asked for a helper, but no helper was started, Live is
+    /// told so once and asked to hand the work over now. Without this the
+    /// user hears "Jarvis is on it" and nothing ever happens.
+    private func scheduleHelperHandOffCheck() {
+        guard isCheckingHelperHandOffThisQuestion, !hasSentHelperHandOffNudgeThisQuestion else { return }
+        let checkedQuestionNumber = questionNumber
+        helperHandOffCheckTask?.cancel()
+        helperHandOffCheckTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.helperHandOffCheckDelaySeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self,
+                  self.questionNumber == checkedQuestionNumber,
+                  self.isCheckingHelperHandOffThisQuestion,
+                  !self.hasSentHelperHandOffNudgeThisQuestion,
+                  !self.isUserTurnOpen,
+                  !self.isModelTurnInProgress,
+                  self.connectionState != .disconnected else { return }
+            self.runHelperHandOffCheck()
+        }
+    }
+
+    private func runHelperHandOffCheck() {
+        let helperNames = helperNamesForHandOffCheck?() ?? (allHelperNames: [], busyHelperNames: [])
+        let userText = [currentTurnUserTranscript, typedTextThisQuestion]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let needsNudge = DottieHelperHandOffCheck.needsHandOffNudge(
+            userText: userText,
+            modelTranscript: modelTranscriptForWholeQuestion,
+            calledFunctionNames: functionNamesCalledThisQuestion,
+            helperNames: helperNames.allHelperNames,
+            busyHelperNames: helperNames.busyHelperNames
+        )
+        guard needsNudge else { return }
+        let answerClaimedHandOff = DottieHelperHandOffCheck.answerClaimsHandOff(
+            modelTranscriptForWholeQuestion,
+            helperNames: helperNames.allHelperNames
+        )
+        DottieLog.notice("🧭 Gemini Live: a helper was \(answerClaimedHandOff ? "promised" : "asked for") but never started, asking Live to start it")
+        hasSentHelperHandOffNudgeThisQuestion = true
+        isModelTurnInProgress = true
+        enqueueOrSend(message: ["realtimeInput": ["text": DottieHelperHandOffCheck.nudgeText(answerClaimedHandOff: answerClaimedHandOff)]])
+        sendEndOfTurnSilence()
+        enqueueOrSend(message: ["realtimeInput": ["audioStreamEnd": true]])
+        startResponseWatchdog()
     }
 
     private func sendFunctionResponse(functionCallID: String, functionName: String, response: [String: Any]) {

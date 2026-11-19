@@ -43,22 +43,62 @@ enum DottieTeaching {
 
         /// The board, a square so circles stay round, on the screen with
         /// the cursor.
-        func boardRect(on visibleFrame: CGRect) -> CGRect? {
+        /// `sizeScale` grows or shrinks the board from its usual size
+        /// (board_size), never past the screen.
+        func boardRect(on visibleFrame: CGRect, sizeScale: CGFloat = 1) -> CGRect? {
             let margin: CGFloat = 24
+            let largestSide = min(visibleFrame.width, visibleFrame.height) - margin * 2
+            func scaled(_ usualSide: CGFloat) -> CGFloat { max(160, min(usualSide * sizeScale, largestSide)) }
             switch self {
             case .screen:
                 return nil
             case .board_right, .board_left:
-                let side = min(visibleFrame.width * 0.42, visibleFrame.height * 0.82)
+                let side = scaled(min(visibleFrame.width * 0.42, visibleFrame.height * 0.82))
                 let x = self == .board_right ? visibleFrame.maxX - side - margin : visibleFrame.minX + margin
                 return CGRect(x: x, y: visibleFrame.midY - side / 2, width: side, height: side)
             case .board_bottom:
-                let side = min(visibleFrame.height * 0.45, visibleFrame.width * 0.6)
+                let side = scaled(min(visibleFrame.height * 0.45, visibleFrame.width * 0.6))
                 return CGRect(x: visibleFrame.midX - side / 2, y: visibleFrame.minY + margin, width: side, height: side)
             case .board_center:
-                let side = min(visibleFrame.height * 0.82, visibleFrame.width * 0.8)
+                let side = scaled(min(visibleFrame.height * 0.82, visibleFrame.width * 0.8))
                 return CGRect(x: visibleFrame.midX - side / 2, y: visibleFrame.midY - side / 2, width: side, height: side)
             }
+        }
+    }
+
+    /// board_size: how big the board is. small, medium, large and full
+    /// are sizes; bigger and smaller change the board that's up.
+    enum BoardSize: String, CaseIterable {
+        case small, medium, large, full, bigger, smaller
+
+        /// Scale from the usual board size.
+        var scaleFromUsualSize: CGFloat {
+            switch self {
+            case .small: return 0.65
+            case .medium: return 1
+            case .large: return 1.35
+            case .full: return 10 // capped at the screen
+            case .bigger: return 1.3
+            case .smaller: return 0.75
+            }
+        }
+
+        /// The board that's up, resized: about its center, kept on the
+        /// screen. bigger and smaller scale it; the sizes scale the usual
+        /// board for this screen.
+        func resized(_ currentBoard: CGRect, usualBoardSide: CGFloat, on visibleFrame: CGRect) -> CGRect {
+            let margin: CGFloat = 24
+            let largestSide = min(visibleFrame.width, visibleFrame.height) - margin * 2
+            let wantedSide: CGFloat
+            switch self {
+            case .bigger, .smaller: wantedSide = currentBoard.width * scaleFromUsualSize
+            default: wantedSide = usualBoardSide * scaleFromUsualSize
+            }
+            let side = max(160, min(wantedSide, largestSide))
+            var resizedBoard = CGRect(x: currentBoard.midX - side / 2, y: currentBoard.midY - side / 2, width: side, height: side)
+            resizedBoard.origin.x = min(max(resizedBoard.minX, visibleFrame.minX + margin), visibleFrame.maxX - margin - side)
+            resizedBoard.origin.y = min(max(resizedBoard.minY, visibleFrame.minY + margin), visibleFrame.maxY - margin - side)
+            return resizedBoard
         }
     }
 
@@ -105,6 +145,8 @@ enum DottieTeaching {
         /// Whether the model named a surface, so adding to a board keeps
         /// that board unless it asked for another one.
         let surfaceWasGiven: Bool
+        /// board_size, when the model asked for one.
+        let boardSize: BoardSize?
 
         init?(arguments: [String: Any]) {
             func trimmed(_ value: Any?) -> String? {
@@ -112,8 +154,8 @@ enum DottieTeaching {
                 return text?.isEmpty == false ? text : nil
             }
             let givenSurface = trimmed(arguments["surface"]).flatMap { Surface(rawValue: $0.lowercased()) }
-            surface = givenSurface ?? .screen
             surfaceWasGiven = givenSurface != nil
+            boardSize = trimmed(arguments["board_size"]).flatMap { BoardSize(rawValue: $0.lowercased()) }
             addsToLastDrawing = (arguments["add_to_last"] as? Bool) ?? ((arguments["add_to_last"] as? NSNumber)?.boolValue ?? false)
             anchors = ((arguments["anchors"] as? [Any]) ?? []).compactMap { item in
                 guard let fields = item as? [String: Any], let name = trimmed(fields["name"]) else { return nil }
@@ -146,12 +188,123 @@ enum DottieTeaching {
                     style: trimmed(fields["style"])?.lowercased()
                 )
             }
-            guard !steps.isEmpty else { return nil }
+            // Only resizing the board that's up needs no steps.
+            guard !steps.isEmpty || (addsToLastDrawing && boardSize != nil) else { return nil }
+            // A graph, chart or picture that isn't about something on the
+            // screen goes on a board: drawn over whatever the screen shows,
+            // its lines and labels got lost in the page behind them.
+            let marksAnchors = !anchors.isEmpty
+            let marksCircledArea = steps.contains { step in
+                step.points.contains { $0.lowercased().hasPrefix("circled") }
+            }
+            let referencesScreen = marksAnchors || marksCircledArea
+            let drawsOwnPicture = steps.contains { [Kind.axes, .plot, .chart, .grid, .sketch].contains($0.kind) }
+            surface = givenSurface ?? (drawsOwnPicture && !referencesScreen ? .board_right : .screen)
             // Kept up by default, so the user can ask to add to it later.
             keepsDrawing = (arguments["keep"] as? Bool) ?? true
         }
 
+        /// What's wrong with each step that can't be drawn as given, worked
+        /// out before anything is drawn, so the model fixes it instead of
+        /// saying it drew something that never showed up.
+        var problems: [String] {
+            let knownAnchorNames = anchorNames.union(["circled"])
+            return steps.enumerated().compactMap { stepIndex, step in
+                DottieTeaching.problem(with: step, knownAnchorNames: knownAnchorNames).map { "step \(stepIndex + 1) (\(step.kind.rawValue)): \($0)" }
+            }
+        }
+
         var anchorNames: Set<String> { Set(anchors.map { $0.name.lowercased() }) }
+    }
+
+    /// Words on the board in capitals, like Cognito's lettering. Math,
+    /// numbers, single letters (x, A) and color markings stay as written,
+    /// since capitals would change what they mean.
+    static func boardLettering(_ text: String) -> String {
+        let mathCharacters = CharacterSet(charactersIn: "0123456789=+−-×÷^/()√πθ²³¹⁰⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉≤≥≠≈±∫Δ°{}*_<>|")
+        guard text.rangeOfCharacter(from: mathCharacters) == nil else { return text }
+        let words = text.split(whereSeparator: \.isWhitespace)
+        guard words.contains(where: { $0.filter(\.isLetter).count >= 2 }) else { return text }
+        return text.uppercased()
+    }
+
+    /// Why one step can't be drawn, or nil when it can. Mirrors what each
+    /// draw function needs.
+    static func problem(with step: Step, knownAnchorNames: Set<String>) -> String? {
+        func isUsablePoint(_ reference: String) -> Bool {
+            let numbers = reference.components(separatedBy: CharacterSet(charactersIn: ", ")).filter { !$0.isEmpty }
+            if numbers.count == 2, numbers.allSatisfy({ Double($0) != nil }) { return true }
+            let name = reference.lowercased()
+            if knownAnchorNames.contains(name) { return true }
+            guard let dotIndex = name.lastIndex(of: ".") else { return false }
+            return knownAnchorNames.contains(String(name[..<dotIndex]))
+        }
+        if let unusablePoint = step.points.first(where: { !isUsablePoint($0) }) {
+            return "the point \"\(unusablePoint)\" is neither \"x,y\" numbers nor the name of an anchor you listed"
+        }
+        let neededPointCount: Int
+        switch step.kind {
+        case .line, .curve, .polygon, .arrow, .double_arrow, .ticks, .measure, .brace, .plot, .chart, .grid, .axes: neededPointCount = 2
+        case .angle, .right_angle: neededPointCount = 3
+        case .circle, .box, .highlight, .underline, .point, .text, .cross, .check, .sketch: neededPointCount = 1
+        }
+        if step.points.count < neededPointCount {
+            return "needs at least \(neededPointCount) points, got \(step.points.count)"
+        }
+        switch step.kind {
+        case .text where step.text == nil:
+            return "needs the text to write"
+        case .plot:
+            guard let functionText = step.text, DottieMathExpression(functionText) != nil else {
+                return "text must be a function of x like 2x + 1 or x^2 - 3 (got \"\(step.text ?? "")\"); for a concept graph like supply and demand, use axes and then line or curve steps with text labels"
+            }
+        case .chart:
+            guard let dataText = step.text else { return "needs the data in text, like \"Mon: 12; Tue: 9\"" }
+            if !dataText.lowercased().contains("circled"), DottieChartData.parse(dataText).isEmpty {
+                return "couldn't read numbers from \"\(dataText)\"; write label: value pairs split by ; like \"Mon: 12; Tue: 9\""
+            }
+        case .sketch where step.text == nil && step.caption == nil:
+            return "needs text saying what to draw"
+        default:
+            break
+        }
+        return nil
+    }
+
+    /// The space each piece of written text takes up, trimmed a little top
+    /// and bottom so lines written close together don't count as touching.
+    static func textRects(of figures: [DottieFigure]) -> [CGRect] {
+        figures.compactMap { figure in
+            guard case .text = figure.shape else { return nil }
+            return figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)
+        }
+    }
+
+    /// A text step moved down until it no longer sits on text already
+    /// written, so two labels placed close together don't print over each
+    /// other. Gives up after a few lines and leaves it where it ended.
+    static func nudgedClearOfText(_ drawn: DrawnStep, occupiedTextRects: [CGRect]) -> DrawnStep {
+        let ownTextRects = textRects(of: drawn.figures)
+        guard !ownTextRects.isEmpty else { return drawn }
+        let lineStep = (ownTextRects.map(\.height).max() ?? 30) * 0.8
+        var downwardShift: CGFloat = 0
+        for _ in 0..<8 {
+            let overlaps = ownTextRects.contains { ownRect in
+                let shiftedRect = ownRect.offsetBy(dx: 0, dy: -downwardShift)
+                return occupiedTextRects.contains { $0.intersects(shiftedRect) }
+            }
+            guard overlaps else { break }
+            downwardShift += lineStep
+        }
+        guard downwardShift > 0 else { return drawn }
+        var shifted = drawn
+        shifted.figures = drawn.figures.map { figure in
+            guard case .text(let text, let origin, let fontSize) = figure.shape else { return figure }
+            return DottieFigure(shape: .text(text, origin: CGPoint(x: origin.x, y: origin.y - downwardShift), fontSize: fontSize),
+                                ink: figure.ink, lineWidth: figure.lineWidth, delay: figure.delay, drawDuration: figure.drawDuration)
+        }
+        shifted.penPath = drawn.penPath.map { CGPoint(x: $0.x, y: $0.y - downwardShift) }
+        return shifted
     }
 
     // MARK: - Tool declaration
@@ -165,7 +318,7 @@ enum DottieTeaching {
                 "description": "Each is an anchor's name (add .left .right .top .bottom .topleft .topright .bottomleft .bottomright for its edges) or \"x,y\" from 0 to 1000 across the surface. line, curve, polygon: 2 or more points. arrow, double_arrow: from and to (a middle point bends it). circle: one anchor to ring it, or center and a point on the circle. box, highlight, underline: one anchor, or two corners. angle, right_angle: the vertex, then a point on each arm. point, text, cross, check: one point (text starts there). ticks, measure, brace: the two ends of the segment. axes: origin, end of x axis, end of y axis. plot, chart: the graph area's top-left and bottom-right. sketch: the drawing area's top-left and bottom-right (keep it about square), or one center point. grid: two opposite corners of the grid. The name circled is always there: the area the user circled with their cursor (circled.right, circled.bottom… for its edges)."
             ],
             "text": ["type": "STRING", "description": "What to write: the words or math for text, a point's name, an angle like 40° or θ, a length like 5 cm for measure, a brace's label, the number of ticks, for grid the cells across or across x down like 8x5 (default 10), for plot the function of x like x^2 - 3, or for chart the data as label: value pairs split by ; like \"Mon: 12; Tue: 9; Wed: 15\" (or x, y pairs like \"1, 3; 2, 5\"), or the word circled to graph the table or numbers the user circled (read exactly on the Mac), or for sketch what to draw, with the pose and look (\"a horse galloping, side view\", \"a plant cell with its parts\", \"a red sports car\"); it's drawn stroke by stroke like an artist, so use sketch for any picture of a thing (animals, people, objects, places, cells, machines), and text steps beside it for labels. Always math symbols, never math in words: \"p = ¹⁄₁₆x⁴\" not \"p equals one-sixteenth x to the power of four\"; x², ×, ÷, √, π, θ, ⊥, ≠, ≤, ½, →, H₂O. Color part of it to highlight it: {red:key part}, {highlight:…}, **bold**. Keep each step simple: one change at a time, with a few plain words beside it saying why. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on."],
-            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. gold unless colors help tell things apart."],
+            "color": ["type": "STRING", "enum": DottieInk.allCases.map(\.rawValue), "description": "Pen color. Leave it out for the plain light pen; use a color only when it means something, and give a word and the part of the drawing it names the same color (the label Demand and its curve both blue)."],
             "size": ["type": "STRING", "enum": ["small", "medium", "large"], "description": "Text size; medium unless it's a heading or a small note."],
             "caption": ["type": "STRING", "description": "2-4 words your cursor says as it draws this, like \"right angle\", \"radius = 6\" or \"slope is 3\"."],
             "say": ["type": "STRING", "description": "The sentence you say out loud for this step. It's spoken while this step is drawn."],
@@ -174,14 +327,14 @@ enum DottieTeaching {
         ]
         return [
             "name": functionName,
-            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use sketch to draw any picture of a thing (\"draw a horse\", a heart, a volcano, a cell), never try to build a picture out of lines and curves yourself. A how-to with stages (folding an envelope, a craft, a recipe) is several small sketch steps side by side on a board, one per stage ('1. a square sheet, corners marked', '2. side corners folded to the middle'…), each with a short numbered text label under it and an arrow to the next; never one sketch of the whole tutorial. Use plot for a function's real graph, chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
+            "description": "Teach by drawing, like a tutor with a marker. Draw lines, arrows, curves, circles, angles, right-angle marks, lengths, braces, axes, real plots of functions and handwritten math, one step at a time, either over what's on screen (the video, diagram or page itself) or on a dark board that opens beside it. Use it on your own, without being asked, whenever you explain something visual or mathematical: geometry, graphs, equations, a worked problem, a diagram, a chart, a chess move. Show it, don't only say it. Your cursor holds the pen and says each step's caption. Give every step a say line: they're spoken one by one in sync with the drawing, so right after calling, say only two or three words like \"okay, watch\". When the user circled something with their cursor, the anchor circled is that area: write a worked answer or example beside it (text steps at circled.right, or on a board), mark it, or chart its numbers. To mark other things already on screen, list them in anchors with a precise description and use their names in points: Dottie finds their exact spot with a sharp screenshot, so never guess numbers for them. Numbers are for empty space and the board, and only say you marked something if you anchored it. Worked math, step-by-step solutions and notes go on the notes board with write_notes (it scrolls, keeps long lines whole and takes headings, lists and pictures); use a board here for diagrams and short labels, with each text step's math in symbols, never words. Use sketch to draw any picture of a thing (\"draw a horse\", a heart, a volcano, a cell), never try to build a picture out of lines and curves yourself. A how-to with stages (folding an envelope, a craft, a recipe) is several small sketch steps side by side on a board, one per stage ('1. a square sheet, corners marked', '2. side corners folded to the middle'…), each with a short numbered text label under it and an arrow to the next; never one sketch of the whole tutorial. Use plot only for a real function of x (y = 2x + 1); a concept graph (supply and demand, costs, a trend) is axes on a board, then a line or curve step per curve with its name as text at its end, and text labels spaced apart so none overlap. Use chart to graph data or a table (it draws the axes, scale, labels and the line or bars from the numbers, so never work out positions for data yourself; text circled graphs a table the user circled), grid for graph paper or a chart's grid (then lines, arrows or a polygon on it for a trend, like a falling line for a downward trend), measure for lengths, angle with its size, ticks for equal sides. The drawing stays up: when the user asks to add to it, change it or carry on (\"now show a downward trend on it\", \"label that\"), call this again with add_to_last true and only the new steps, using the same positions as before. If the user says stop or clear, call clear_drawings.",
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
                     "surface": [
                         "type": "STRING",
                         "enum": Surface.allCases.map(\.rawValue),
-                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. Steps that use anchors still point at the screen."
+                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. Graphs, curves, charts and pictures go on a board unless they mark something on screen (left out, they open board_right). Steps that use anchors still point at the screen."
                     ],
                     "anchors": [
                         "type": "ARRAY",
@@ -201,7 +354,8 @@ enum DottieTeaching {
                         "description": "The drawing, in the order to draw and explain it."
                     ],
                     "keep": ["type": "BOOLEAN", "description": "Keep the drawing up after you finish until it's cleared (about 10 minutes). Default true; false fades it after a minute."],
-                    "add_to_last": ["type": "BOOLEAN", "description": "true adds these steps to the drawing already up, on the same board, instead of starting a new one. Use it whenever the user asks to add to, change or continue what you drew."]
+                    "add_to_last": ["type": "BOOLEAN", "description": "true adds these steps to the drawing already up, on the same board, instead of starting a new one. Use it whenever the user asks to add to, change or continue what you drew."],
+                    "board_size": ["type": "STRING", "enum": BoardSize.allCases.map(\.rawValue), "description": "How big the board is: small, medium (default), large or full (as big as the screen allows). With add_to_last, any value resizes the board that's up and everything on it, and bigger or smaller change it from its size now; steps can then be empty. Use it whenever the user asks for a bigger, smaller or full-screen board."]
                 ],
                 "required": ["steps"]
             ]
@@ -430,14 +584,16 @@ enum DottieTeaching {
         }
 
         static func penDuration(_ pen: [CGPoint]) -> Double {
-            min(max(Double(length(of: pen)) / 650, 0.3), 1.6)
+            // About 330 points a second, the pace Cognito draws curves at.
+            min(max(Double(length(of: pen)) / 330, 0.3), 2.4)
         }
     }
 
     static func draw(_ step: Step, in space: Space) -> DrawnStep? {
         var drawn = DrawnStep()
-        let ink = step.ink ?? .gold
-        let label = step.text.map(DottieMathText.pretty)
+        // Light by default; color only where it carries meaning (Cognito).
+        let ink = step.ink ?? .white
+        let label = step.text.map(DottieMathText.pretty).map(boardLettering)
         let points = step.points.compactMap(space.point)
         let fontSize: CGFloat = step.size == "small" ? 18 : (step.size == "large" ? 38 : 26)
 
@@ -745,16 +901,20 @@ enum DottieTeaching {
 
     /// The x and y axes. False when the step has too little to draw.
     private static func drawAxes(_ step: Step, in space: Space, points: [CGPoint], label: String?, ink: DottieInk, fontSize: CGFloat, into drawn: inout DrawnStep) -> Bool {
-        guard points.count >= 3 else { return false }
+        guard points.count >= 2 else { return false }
         let origin = points[0]
-        for axisEnd in [points[1], points[2]] {
+        // Two points are the origin and the far corner of the graph.
+        let axisEnds = points.count >= 3
+            ? [points[1], points[2]]
+            : [CGPoint(x: points[1].x, y: origin.y), CGPoint(x: origin.x, y: points[1].y)]
+        for axisEnd in axisEnds {
             drawn.add(.stroke(points: [origin, axisEnd], closed: false, smooth: false, dashed: false, arrowAtStart: false, arrowAtEnd: true),
                       ink: step.ink ?? .white, lineWidth: 2.5, pen: [origin, axisEnd])
         }
         let names = (label ?? "x,y").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: points[1].x + 4, y: points[1].y - 22), fontSize: 20, ink: step.ink ?? .white)
+        drawn.addLabel(names.first ?? "x", centeredAt: CGPoint(x: axisEnds[0].x + 4, y: axisEnds[0].y - 22), fontSize: 20, ink: step.ink ?? .white)
         if names.count > 1 {
-            drawn.addLabel(names[1], centeredAt: CGPoint(x: points[2].x + 20, y: points[2].y + 4), fontSize: 20, ink: step.ink ?? .white)
+            drawn.addLabel(names[1], centeredAt: CGPoint(x: axisEnds[1].x + 20, y: axisEnds[1].y + 4), fontSize: 20, ink: step.ink ?? .white)
         }
         return true
     }

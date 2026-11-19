@@ -540,6 +540,10 @@ private struct HomeConversationEntryView: View {
                     .foregroundColor(DS.Colors.textSecondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                // Commands and code in the answer, each with a Copy button.
+                ForEach(DottieMathText.codeSnippets(in: entry.clickyText), id: \.self) { codeSnippet in
+                    HomeCopyableCodeRow(code: codeSnippet)
+                }
             }
             Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened) + (entry.inputKind == .typed ? " · typed" : " · voice"))
                 .font(.system(size: 10))
@@ -1199,5 +1203,39 @@ final class HomeWindowManager: NSObject, NSWindowDelegate {
         // and take keyboard focus.
         NSApp.activate(ignoringOtherApps: true)
         homeWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// One command or piece of code from an answer, with a Copy button.
+private struct HomeCopyableCodeRow: View {
+    let code: String
+    @State private var wasJustCopied = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(verbatim: code)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(DS.Colors.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize()
+            }
+            Button {
+                DottieClipboardTools.copy(code)
+                wasJustCopied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { wasJustCopied = false }
+            } label: {
+                Label(wasJustCopied ? "Copied" : "Copy", systemImage: wasJustCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Copy to the clipboard")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.textPrimary.opacity(0.06)))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

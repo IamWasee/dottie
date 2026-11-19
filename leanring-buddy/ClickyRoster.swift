@@ -462,9 +462,19 @@ final class ClickyRoster: ObservableObject {
         let agentWorkspaceURL = workspaceURL(for: agent)
         let agentID = agent.id
         let isTurnApprovedForComputerUse = isComputerUseApproved || ClickyComputerUse.isAlwaysAllowed
+        // Folders and files the task names, found now so the helper gets
+        // their paths and access instead of searching the Mac step by step.
+        let namedFolders = routineID == nil
+            ? DottieNamedPlaceFinder.findFolders(
+                in: messageForAgent,
+                searchFolderURLs: [FileManager.default.homeDirectoryForCurrentUser] + DottieWorkRoutes.homeFolderURLs
+            )
+            : []
+        let messageWithNamedPlaces = DottieNamedPlaceFinder.noteText(for: namedFolders)
+            .map { "\($0)\n\n\(messageForAgent)" } ?? messageForAgent
         let fullMessageForAgent = isTurnApprovedForComputerUse
-            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageForAgent)"
-            : messageForAgent
+            ? "\(ClickyComputerUse.approvedTurnPrefix)\n\n\(messageWithNamedPlaces)"
+            : messageWithNamedPlaces
         refreshAgentInstructions(for: agent)
         // Picks up a cua-driver installed since launch.
         GeminiCLIAgentRuntime.prepareCLIHome(at: cliHomeURL, skillLibraryURL: skillLibrary.libraryURL, helperToolInstructions: DottieToolRegistry.helperPromptSections)
@@ -478,6 +488,8 @@ final class ClickyRoster: ObservableObject {
         appendTranscriptItem(.tool, text: "Getting started…", to: agentID, toolID: gettingStartedToolID, persist: false)
 
         var additionalDirectoryURLs = [skillLibrary.libraryURL] + sharedFolderURLs
+        let namedFolderURLs = namedFolders.map(\.folderURL).filter { !sharedFolderURLs.contains($0) }
+        additionalDirectoryURLs += namedFolderURLs
         if agent.isBrain == true {
             additionalDirectoryURLs += [DottieBrain.defaultBrainFolderURL] + (brainFolderURLsProvider?() ?? [])
         }
@@ -750,8 +762,20 @@ final class ClickyRoster: ObservableObject {
         // Dot just stopped. Say so instead.
         if !succeeded, let lastItem = transcriptsByAgentID[agentID]?.last,
            lastItem.kind != .assistant, lastItem.kind != .error, lastItem.kind != .needsApproval, lastItem.text != "Stopped" {
-            let engineName = agent(withID: agentID)?.lastHelperEngine == "claude" ? "Claude" : "Gemini"
-            appendTranscriptItem(.error, text: "Couldn't finish this one: \(engineName) was too busy to answer. Try sending it again.", to: agentID)
+            // The real cause isn't known here (a busy model, or the run just
+            // ended), so say what happened and how to carry on. A helper set
+            // to Groq falls back to Gemini whenever a step is too big for
+            // Groq, so naming only one of them would mislead.
+            let finishedAgentForMessage = agent(withID: agentID)
+            let engineName: String
+            if finishedAgentForMessage?.lastHelperEngine == "claude" {
+                engineName = "Claude"
+            } else if finishedAgentForMessage?.engineChoice == "groq" || finishedAgentForMessage?.engineChoice == nil {
+                engineName = "Groq and its Gemini backup"
+            } else {
+                engineName = "Gemini"
+            }
+            appendTranscriptItem(.error, text: "Stopped before finishing: \(engineName) stopped answering partway, maybe because it was busy. Send \"carry on\" to pick up where it left off.", to: agentID)
         }
         saveTranscript(for: agentID)
 

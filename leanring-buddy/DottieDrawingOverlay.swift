@@ -215,7 +215,31 @@ struct DottieFigure: Identifiable, Equatable {
     }
 
     static func estimatedTextWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
-        CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.56 + 6
+        CGFloat(DottieInkText.plainText(text).count) * fontSize * 0.62 + 6
+    }
+
+    /// The same figure moved and scaled from one board to a resized one
+    /// (board_size), drawn again quickly in its new place.
+    func refitted(from oldBoard: CGRect, to newBoard: CGRect) -> DottieFigure {
+        let scale = newBoard.width / max(oldBoard.width, 1)
+        func moved(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: newBoard.minX + (point.x - oldBoard.minX) * scale, y: newBoard.minY + (point.y - oldBoard.minY) * scale)
+        }
+        let refittedShape: Shape
+        switch shape {
+        case .stroke(let points, let closed, let smooth, let dashed, let arrowAtStart, let arrowAtEnd):
+            refittedShape = .stroke(points: points.map(moved), closed: closed, smooth: smooth, dashed: dashed, arrowAtStart: arrowAtStart, arrowAtEnd: arrowAtEnd)
+        case .dot(let center, let radius):
+            refittedShape = .dot(center: moved(center), radius: radius * scale)
+        case .fill(let points):
+            refittedShape = .fill(points: points.map(moved))
+        case .text(let text, let origin, let fontSize):
+            refittedShape = .text(text, origin: moved(origin), fontSize: max(12, fontSize * scale))
+        case .board(let rect):
+            let movedCorner = moved(rect.origin)
+            refittedShape = .board(rect: CGRect(x: movedCorner.x, y: movedCorner.y, width: rect.width * scale, height: rect.height * scale))
+        }
+        return DottieFigure(shape: refittedShape, ink: ink, lineWidth: lineWidth, delay: 0, drawDuration: 0.2)
     }
 }
 
@@ -258,6 +282,16 @@ final class DottieDrawingOverlayManager: ObservableObject {
     func clearFigures() {
         figureFadeOutTask?.cancel()
         figures.removeAll()
+    }
+
+    /// Resizes the board that's up: the board and everything drawn on it
+    /// move and scale to the new rect; marks elsewhere on the screen stay.
+    func refitBoardFigures(from oldBoard: CGRect, to newBoard: CGRect) {
+        let boardArea = oldBoard.insetBy(dx: -40, dy: -40)
+        figures = figures.map { figure in
+            let figureCenter = CGPoint(x: figure.bounds.midX, y: figure.bounds.midY)
+            return boardArea.contains(figureCenter) ? figure.refitted(from: oldBoard, to: newBoard) : figure
+        }
     }
 
     /// Lets the user read the finished drawing, then fades it.
@@ -426,11 +460,10 @@ private struct DottieFigureView: View {
     /// Arrowheads go on once the line reaches its end.
     @State private var arrowHeadOpacity: Double = 0
 
-    /// A friendly handwriting face; macOS ships Noteworthy.
-    private static func handwriting(size: CGFloat) -> Font {
-        NSFont(name: "Noteworthy-Bold", size: size) != nil
-            ? .custom("Noteworthy-Bold", size: size)
-            : .system(size: size, weight: .semibold, design: .rounded)
+    /// Clean rounded lettering, like the Cognito explainers the user
+    /// picked over marker handwriting.
+    private static func boardLettering(size: CGFloat) -> Font {
+        .system(size: size, weight: .semibold, design: .rounded)
     }
 
     var body: some View {
@@ -487,7 +520,7 @@ private struct DottieFigureView: View {
         case .text(let text, let origin, let fontSize):
             let localOrigin = localPoint(origin)
             Text(DottieInkText.attributedString(text))
-                .font(Self.handwriting(size: fontSize))
+                .font(Self.boardLettering(size: fontSize))
                 .foregroundColor(figure.ink.color)
                 .fixedSize()
                 .shadow(color: .black.opacity(0.55), radius: 1.5, x: 0, y: 1)

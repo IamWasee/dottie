@@ -25,12 +25,13 @@ import SwiftUI
 
 struct DottieNoteBlock: Identifiable {
     enum Kind: String, CaseIterable {
-        case heading, subheading, paragraph, bullet, numbered, equation, picture, divider
+        case heading, subheading, paragraph, bullet, numbered, equation, code, picture, divider
     }
 
     let id = UUID()
     let kind: Kind
-    /// Pretty math with color markings (DottieInkText).
+    /// Pretty math with color markings (DottieInkText); for code, the
+    /// exact text, new lines included.
     let text: String
     let ink: DottieInk
     /// 0 for a top-level bullet, 1 or 2 for one under it.
@@ -57,6 +58,9 @@ final class DottieNotesBoard: ObservableObject {
     private var notesPanel: NSPanel?
     private var notesFileURL: URL?
     private var writingTask: Task<Void, Never>?
+    /// The kinds and texts of the last write_notes call, so a repeated
+    /// call doesn't write the same notes twice.
+    var lastWrittenBatchSignature: [String] = []
 
     /// Seconds between blocks of one batch, so they appear the way a
     /// person writes them, one after another.
@@ -112,6 +116,7 @@ final class DottieNotesBoard: ObservableObject {
         writingTask = nil
         rows.removeAll()
         newestBlockID = nil
+        lastWrittenBatchSignature = []
         title = newTitle?.isEmpty == false ? newTitle! : "Notes"
         notesFileURL = nil
     }
@@ -180,6 +185,7 @@ final class DottieNotesBoard: ObservableObject {
                 case .bullet: return "\(indent)- \(plainText)"
                 case .numbered: return "\(indent)\(block.number ?? 1). \(plainText)"
                 case .equation: return "    \(plainText)"
+                case .code: return "```\n\(block.text)\n```"
                 case .picture: return "[picture\(plainText.isEmpty ? "" : ": \(plainText)")]"
                 case .divider: return "---"
                 }
@@ -354,6 +360,9 @@ private struct DottieNoteBlockView: View {
             writtenText(size: 25)
                 .fixedSize()
                 .padding(.leading, indent)
+        case .code:
+            DottieNotesCodeBlockView(code: block.text)
+                .padding(.leading, indent)
         case .picture:
             VStack(alignment: .leading, spacing: 6) {
                 if let picture = block.picture {
@@ -397,7 +406,7 @@ enum DottieNotesTools: DottieToolModule {
         [
             DottieTool(
                 name: functionName,
-                description: "Write notes on Dottie's notes board, a dark notebook window beside the screen, while you explain: worked math and science, study notes, summaries, step-by-step solutions. Use it on your own whenever an explanation has working, formulas or several points worth keeping, and for any ask to take or write notes. blocks are written in order, like a person writing: heading for a topic, subheading for a part, paragraph for a sentence or two, bullet and numbered for lists (indent 1 or 2 for points under a point), equation for one line of math, picture for a screenshot or a picture from the web, divider between sections. Write math and science in real symbols, never in words: \"p = ¹⁄₁₆x⁴\", \"(¹⁄₁₆x⁴)^½ = ¼x²\", \"3 × 4 ÷ 2\", \"a² + b² = c²\", \"√x\", \"∫ x² dx\", \"Δv/Δt\", \"x ≤ 3\", \"π r²\", \"θ = 30°\", \"H₂O\", \"CO₂ + H₂O ⇌ H₂CO₃\", \"SO₄²⁻\", \"F = ma\", \"9.8 m/s²\"; x^2, *, sqrt, ->, <=>, H2O typed plainly are turned into symbols too. Color part of a line to highlight it: {red:key term}, {blue:…}, {green:…}, {yellow:…}, {highlight:…} for a marker wash, **bold**. Write for someone who doesn't think in symbols: state the rule first as a short line with {highlight:…} (\"Dividing powers: subtract the powers\"); then one small change per equation, each followed with place right by a short plain-words reason in a color (\"{blue:minus a minus is a plus}\"); give the parts that belong together the same color (the 3 and the −3 both {red:…}); when a shortcut way of seeing it helps, add it as a paragraph (\"x⁻³ on the bottom is the same as x³ on top\"); end with the answer alone as {highlight:…}. Never * or ^ in what you write. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on. place right keeps going on the same line: the next step of the same working, its reason, or a second equation beside it; down (the default) starts a new line, for a new problem, point or section. Equations never wrap; the board scrolls both ways. Each call adds to the page; new_page true starts a clean page with that title. After calling, say only a few words; say the explanation itself, don't read the notes out word for word.",
+                description: "Write notes on Dottie's notes board, a dark notebook window beside the screen, while you explain: worked math and science, study notes, summaries, step-by-step solutions. Use it on your own whenever an explanation has working, formulas or several points worth keeping, and for any ask to take or write notes. blocks are written in order, like a person writing: heading for a topic, subheading for a part, paragraph for a sentence or two, bullet and numbered for lists (indent 1 or 2 for points under a point), equation for one line of math, code for any code, terminal command or file contents (one block per snippet, new lines kept, written exactly with a Copy button; always use it when the user asks for commands or code), picture for a screenshot or a picture from the web, divider between sections. Write math and science in real symbols, never in words: \"p = ¹⁄₁₆x⁴\", \"(¹⁄₁₆x⁴)^½ = ¼x²\", \"3 × 4 ÷ 2\", \"a² + b² = c²\", \"√x\", \"∫ x² dx\", \"Δv/Δt\", \"x ≤ 3\", \"π r²\", \"θ = 30°\", \"H₂O\", \"CO₂ + H₂O ⇌ H₂CO₃\", \"SO₄²⁻\", \"F = ma\", \"9.8 m/s²\"; x^2, *, sqrt, ->, <=>, H2O typed plainly are turned into symbols too. Color part of a line to highlight it: {red:key term}, {blue:…}, {green:…}, {yellow:…}, {highlight:…} for a marker wash, **bold**. Write for someone who doesn't think in symbols: state the rule first as a short line with {highlight:…} (\"Dividing powers: subtract the powers\"); then one small change per equation, each followed with place right by a short plain-words reason in a color (\"{blue:minus a minus is a plus}\"); give the parts that belong together the same color (the 3 and the −3 both {red:…}); when a shortcut way of seeing it helps, add it as a paragraph (\"x⁻³ on the bottom is the same as x³ on top\"); end with the answer alone as {highlight:…}. Never * or ^ in what you write. Numbers: digits in math, measurements, money, times, dates, scores and anything 10 or more (3x⁶, 5 cm, $12, 9:30, 42); words for small everyday counts in a sentence (\"two ways to do this\", \"the first step\"); if the user asks for one style, use that from then on. place right keeps going on the same line: the next step of the same working, its reason, or a second equation beside it; down (the default) starts a new line, for a new problem, point or section. Equations never wrap; the board scrolls both ways. Each call adds to the page; new_page true starts a clean page with that title. After calling, say only a few words; say the explanation itself, don't read the notes out word for word.",
                 parameters: [
                     "type": "OBJECT",
                     "properties": [
@@ -428,6 +437,21 @@ enum DottieNotesTools: DottieToolModule {
         ]
     }
 
+    /// What a block is written as. Code is written exactly: made pretty,
+    /// from_pretrained became fromₚretrained and **inputs became × ×inputs,
+    /// so text blocks that hold code become code blocks.
+    static func writtenBlock(kind: DottieNoteBlock.Kind, rawText: String) -> (kind: DottieNoteBlock.Kind, text: String) {
+        let writtenAsText: Set<DottieNoteBlock.Kind> = [.paragraph, .bullet, .numbered, .equation]
+        let writtenKind = writtenAsText.contains(kind) && DottieMathText.looksLikeCode(rawText) ? .code : kind
+        return (kind: writtenKind, text: writtenKind == .code ? rawText : DottieMathText.pretty(rawText))
+    }
+
+    /// One batch of blocks as text, so a repeated call with the same notes
+    /// is noticed and written once.
+    static func batchSignature(of blocks: [DottieNoteBlock]) -> [String] {
+        blocks.map { "\($0.kind.rawValue):\($0.text)" }
+    }
+
     private static func perform(_ arguments: [String: Any]) async -> String {
         let notesBoard = DottieNotesBoard.shared
         switch (arguments["action"] as? String)?.lowercased() ?? "write" {
@@ -455,8 +479,11 @@ enum DottieNotesTools: DottieToolModule {
         var placedBlocks: [DottieNotesBoard.PlacedBlock] = []
         var pictureProblems: [String] = []
         for rawBlock in rawBlocks {
-            guard let kind = (rawBlock["kind"] as? String).flatMap({ DottieNoteBlock.Kind(rawValue: $0.lowercased()) }) else { continue }
-            let text = DottieMathText.pretty((rawBlock["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            guard var kind = (rawBlock["kind"] as? String).flatMap({ DottieNoteBlock.Kind(rawValue: $0.lowercased()) }) else { continue }
+            let rawText = (rawBlock["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let written = writtenBlock(kind: kind, rawText: rawText)
+            kind = written.kind
+            let text = written.text
             if kind != .picture && kind != .divider && text.isEmpty { continue }
             let defaultInk: DottieInk = (kind == .heading || kind == .subheading) ? .gold : .white
             let ink = (rawBlock["color"] as? String).flatMap { DottieInk(rawValue: $0.lowercased()) } ?? defaultInk
@@ -480,6 +507,12 @@ enum DottieNotesTools: DottieToolModule {
         guard !placedBlocks.isEmpty else {
             return pictureProblems.isEmpty ? "error: nothing to write." : "couldn't get the picture (\(pictureProblems.joined(separator: ", "))). say so in a few words."
         }
+        // The same notes sent twice (a repeated call) are written once.
+        let batchSignature = batchSignature(of: placedBlocks.map(\.block))
+        if batchSignature == notesBoard.lastWrittenBatchSignature {
+            return "those notes are already on the board. say a few words, don't write them again."
+        }
+        notesBoard.lastWrittenBatchSignature = batchSignature
         notesBoard.write(placedBlocks)
         var result = "writing \(placedBlocks.count) block\(placedBlocks.count == 1 ? "" : "s") on the notes board. say a few words, not the notes themselves."
         if !pictureProblems.isEmpty {
@@ -574,5 +607,42 @@ enum DottieNotesPictures {
             return String(pageText[addressRange]).replacingOccurrences(of: "&amp;", with: "&")
         }
         return nil
+    }
+}
+
+/// Code or a command on the notes board: exactly as given, in a monospaced
+/// box that never wraps, with a Copy button.
+struct DottieNotesCodeBlockView: View {
+    let code: String
+    @State private var wasJustCopied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Spacer()
+                Button {
+                    DottieClipboardTools.copy(code)
+                    wasJustCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { wasJustCopied = false }
+                } label: {
+                    Label(wasJustCopied ? "Copied" : "Copy", systemImage: wasJustCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(wasJustCopied ? 0.95 : 0.7))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(verbatim: code)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.92))
+                    .textSelection(.enabled)
+                    .fixedSize()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 560, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 }
