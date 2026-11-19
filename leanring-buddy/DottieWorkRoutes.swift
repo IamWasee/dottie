@@ -39,6 +39,12 @@ enum DottieWorkRoutes {
     }
 
     /// Standing instructions for every helper, on Claude and on Gemini CLI.
+    /// Voice Dottie's rule for asks no connected app, key or tool covers
+    /// (the user's Gmail with no Google connection, an account page):
+    /// she offers to do it on their screen and asks first, instead of
+    /// saying she can't. Joined to the voice prompt by CompanionManager.
+    static let voiceAskBeforeSayingNo = "before saying no: anything the user could do on their own Mac you can do too. when no connected app, key or tool covers it (their email with no Google connection, their calendar, a site or account), don't say you can't or that you need access: offer the screen in one short question, like \"I'm not connected to your Gmail. want me to open it on your screen and check?\" when they say yes, call do_task_on_screen with their whole goal. this goes for every kind of ask, not only email. refuse only what's harmful or illegal; say something didn't work only after the screen job really failed, and then say what it tried. paying, sending, posting or deleting still waits for their yes at that step."
+
     static let helperInstructions = """
     # Getting it done
 
@@ -52,6 +58,7 @@ enum DottieWorkRoutes {
        <SCREEN_JOB>Open Instagram in Safari, go to the post "summer drop", scroll through every comment, and report each commenter's name and what they asked for.</SCREEN_JOB>
        Write it so it stands on its own: the app or site, every step in order, and exactly what to report back. Dottie does it with her cursor and sends you the result as your next message; then carry on and finish the task.
     Try every route that fits before saying something can't be done, and then say what you tried.
+    A missing key, sign-in or connected app is never the end: the user's signed-in browser (route 3) or a <SCREEN_JOB> (route 4) gets to almost anything they could reach themselves, like their email, calendar or an account page. Never answer that you can't before trying them; only harmful or illegal asks are refused.
 
     ## Live information
 

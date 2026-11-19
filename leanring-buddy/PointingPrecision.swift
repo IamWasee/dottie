@@ -83,8 +83,16 @@ enum ScreenTextFinder {
                 width: normalizedBox.width * searchRect.width,
                 height: normalizedBox.height * searchRect.height
             )
-            let distanceFromGuess = hypot(frame.midX - roughPoint.x, frame.midY - roughPoint.y)
-            let score = matchQuality - distanceFromGuess / 4000
+            // Nearer the guess, and on its row, wins over a tighter match
+            // farther off, like the same word on a browser tab above.
+            let distanceFromGuess = PointingMatchScore.distance(horizontal: frame.midX - roughPoint.x, vertical: frame.midY - roughPoint.y)
+            guard let score = PointingMatchScore.score(
+                matchQuality: matchQuality,
+                extraWordCount: 0,
+                distanceFromGuess: distanceFromGuess,
+                containsGuess: frame.contains(roughPoint),
+                maximumDistanceFromGuess: PointingMatchScore.textSearchMaximumDistance
+            ) else { continue }
             if score > bestScore {
                 bestScore = score
                 bestFrame = frame

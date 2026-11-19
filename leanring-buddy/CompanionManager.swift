@@ -964,13 +964,14 @@ final class CompanionManager: ObservableObject {
         personality.promptSection + "\n\n" + companionVoiceResponseSystemPrompt
     }
 
-    private static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
+    static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
         let featureSections = DottieToolRegistry.voicePromptSections
         // The rarer tools aren't declared to Live (GeminiLiveToolCatalog);
         // this line is how the model knows they exist and to find them.
         let hiddenToolsLine = "more tools: find_tool finds the rest by what the user wants and use_tool runs one (call use_tool straight away when you know the name and arguments). never say you can't do something before checking find_tool. they cover " + GeminiLiveToolCatalog.hiddenToolAreasSummary + "."
         return personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
             + "\n\n" + hiddenToolsLine
+            + "\n\n" + DottieWorkRoutes.voiceAskBeforeSayingNo
             + (featureSections.isEmpty ? "" : "\n\n" + featureSections)
     }
 

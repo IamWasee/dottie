@@ -259,13 +259,18 @@ private enum AccessibilityElementSearch {
               frame.width >= 4, frame.height >= 4,
               frame.width <= maximumElementSize.width, frame.height <= maximumElementSize.height else { return nil }
 
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        let distanceFromGuess = hypot(center.x - roughPointInAXSpace.x, center.y - roughPointInAXSpace.y)
-        guard distanceFromGuess <= maximumDistanceFromGuess else { return nil }
-        // Tight names beat names that only contain the words.
-        let extraWordPenalty = Double(max(0, elementWords.count - labelWords.count)) * 0.03
-        let score = matchFraction - extraWordPenalty - distanceFromGuess / 1000
-        return Candidate(frame: frame, score: max(score, 0.0001))
+        let distanceFromGuess = PointingMatchScore.distance(
+            horizontal: frame.midX - roughPointInAXSpace.x,
+            vertical: frame.midY - roughPointInAXSpace.y
+        )
+        guard let score = PointingMatchScore.score(
+            matchQuality: matchFraction,
+            extraWordCount: max(0, elementWords.count - labelWords.count),
+            distanceFromGuess: distanceFromGuess,
+            containsGuess: frame.contains(roughPointInAXSpace),
+            maximumDistanceFromGuess: maximumDistanceFromGuess
+        ) else { return nil }
+        return Candidate(frame: frame, score: score)
     }
 
     private static func enclosingWindow(of element: AXUIElement) -> AXUIElement? {
@@ -525,5 +530,50 @@ private enum VisionElementLocator {
         guard (0...1000).contains(ymin), (0...1000).contains(xmin), (0...1000).contains(ymax), (0...1000).contains(xmax),
               ymax > ymin, xmax > xmin else { return nil }
         return (ymin, xmin, ymax, xmax)
+    }
+}
+
+/// How a found element is weighed against Live's guess. Being near the
+/// guess, or under it, counts for more than an exact name: "click my first
+/// email" (from GitHub) used to land on the browser's GitHub tab, whose
+/// short exact name beat the email row Live had pointed at.
+enum PointingMatchScore {
+    /// Each word the element has beyond the label costs this much.
+    static let extraWordPenaltyEach = 0.03
+    /// Extra words never cost more than this, so a long row under the
+    /// guess (sender, subject and preview) still counts.
+    static let largestExtraWordPenalty = 0.3
+    /// What the distance can cost at the farthest allowed match.
+    static let largestDistancePenalty = 0.6
+    /// What sitting right under Live's guess is worth.
+    static let underGuessBonus = 0.5
+    /// A step up or down counts this many times a step sideways: Live's
+    /// guess is usually on the right row (an email, a list item) but off
+    /// along it, while a match a few rows away is a different thing (a tab
+    /// bar above the page).
+    static let verticalDistanceWeight: CGFloat = 2.5
+    /// The farthest on-screen text still taken for what Live meant, in
+    /// weighed points. Farther text falls through to vision.
+    static let textSearchMaximumDistance: CGFloat = 450
+
+    /// How far a match is from the guess, with up and down weighed more.
+    static func distance(horizontal: CGFloat, vertical: CGFloat) -> CGFloat {
+        hypot(horizontal, vertical * verticalDistanceWeight)
+    }
+
+    /// The score, higher is better, or nil when it's too far from the
+    /// guess to be what Live meant (unless the guess is inside it).
+    static func score(
+        matchQuality: Double,
+        extraWordCount: Int,
+        distanceFromGuess: CGFloat,
+        containsGuess: Bool,
+        maximumDistanceFromGuess: CGFloat
+    ) -> Double? {
+        guard containsGuess || distanceFromGuess <= maximumDistanceFromGuess else { return nil }
+        let extraWordPenalty = min(largestExtraWordPenalty, Double(max(0, extraWordCount)) * extraWordPenaltyEach)
+        let distancePenalty = min(1, Double(distanceFromGuess / max(1, maximumDistanceFromGuess))) * largestDistancePenalty
+        let underGuess = containsGuess ? underGuessBonus : 0
+        return max(matchQuality - extraWordPenalty - distancePenalty + underGuess, 0.0001)
     }
 }
