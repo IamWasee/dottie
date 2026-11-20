@@ -2,7 +2,8 @@
 //  CompanionManager+ClassicVoice.swift
 //  leanring-buddy
 //
-//  Classic voice mode (Apple Speech, then Gemini Flash, then Gemini TTS),
+//  Classic voice mode (Apple Speech, then Groq talking with Claude Haiku
+//  doing requests, then Kokoro),
 //  handing a question to the higher model, and reading [POINT:] tags out
 //  of an answer. Part of CompanionManager, split out by topic.
 //
@@ -137,7 +138,7 @@ extension CompanionManager {
         }
     }
 
-    // MARK: - Classic Voice Pipeline (Apple Speech → Gemini Flash → Gemini TTS)
+    // MARK: - Classic Voice Pipeline (Apple Speech → Groq / Claude → Kokoro)
 
     /// Captures a screenshot, sends it along with the transcript to Gemini,
     /// and plays the response aloud via Gemini TTS. The cursor stays in
@@ -169,34 +170,47 @@ extension CompanionManager {
             voiceState = .processing
 
             do {
-                // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                // Groq talks: small talk it answers itself; anything else
+                // goes to Claude, with the screen only when Groq says so.
+                // A turn where the user circled something is about the screen.
+                let turnAnnotation = inputKind == .voice ? currentTurnAnnotation : nil
+                let personalityLine = selectedPersonality.promptSection
+                let talkDecision: DottieTalkDecision = turnAnnotation != nil
+                    ? .request(needsScreen: true)
+                    : await DottieTalker.decide(transcript: transcript, exchanges: conversationHistory, personalityLine: personalityLine)
 
                 guard !Task.isCancelled else { return }
 
-                // Label each image with its pixel dimensions so the model's
-                // coordinate space matches the image it sees. A voice turn
-                // where the user circled something gets the ring drawn in.
-                let turnAnnotation = inputKind == .voice ? currentTurnAnnotation : nil
-                let labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
-                let promptForModel = turnAnnotation == nil
-                    ? transcript
-                    : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
-
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                let (fullResponseText, _) = try await geminiAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.classicVoiceSystemPrompt(personality: selectedPersonality)
-                        + (brain.profileForPrompt.isEmpty ? "" : "\n\nwhat your second brain knows about the user:\n" + brain.profileForPrompt),
-                    conversationHistory: historyForAPI,
-                    userPrompt: promptForModel,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
+                var screenCaptures: [CompanionScreenCapture] = []
+                let fullResponseText: String
+                switch talkDecision {
+                case .say(let talkerAnswer):
+                    fullResponseText = talkerAnswer
+                case .request(let needsScreen):
+                    var labeledImages: [(data: Data, label: String)] = []
+                    if needsScreen {
+                        screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                        labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
                     }
-                )
+                    let promptForModel = turnAnnotation == nil
+                        ? transcript
+                        : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
+                    let requestToolDeclarations = DottieTalkerProtocol.requestToolDeclarations(
+                        from: GeminiLiveVoiceClient.everyFunctionDeclaration,
+                        findAndUseDeclarations: [GeminiLiveToolCatalog.findToolFunctionDeclaration, GeminiLiveToolCatalog.useToolFunctionDeclaration]
+                    )
+                    let liveToolRunner = liveVoiceClient
+                    fullResponseText = try await DottieTalker.answerRequest(
+                        transcript: promptForModel,
+                        exchanges: conversationHistory,
+                        labeledImages: labeledImages,
+                        systemPrompt: DottieTalkerProtocol.requestSystemPrompt(personalityLine: personalityLine, profile: brain.profileForPrompt),
+                        toolDeclarations: requestToolDeclarations,
+                        runTool: { functionName, functionArguments in
+                            await liveToolRunner.runToolForTextBrain(functionName: functionName, arguments: functionArguments)
+                        }
+                    )
+                }
 
                 guard !Task.isCancelled else { return }
 
@@ -236,23 +250,16 @@ extension CompanionManager {
 
                 // Keep the spinner until audio actually starts playing.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Kokoro on the Mac first (no AI service), then Gemini's
-                    // voice, then macOS's own.
+                    // Kokoro on the Mac (no AI service), then macOS's own voice.
                     do {
                         try await DottieKokoroSpeaker.shared.speak(spokenText)
                         voiceState = .responding
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
-                        DottieLog.warning("⚠️ Kokoro couldn't speak, trying Gemini's voice: \(error.localizedDescription)")
-                        do {
-                            try await geminiTTSClient.speakText(spokenText)
-                            voiceState = .responding
-                        } catch {
-                            ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                            DottieLog.warning("⚠️ Gemini TTS error, falling back to system voice: \(error)")
-                            speakWithSystemVoice(spokenText)
-                        }
+                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
+                        DottieLog.warning("⚠️ Kokoro couldn't speak, using the system voice: \(error.localizedDescription)")
+                        speakWithSystemVoice(spokenText)
                     }
                 }
             } catch is CancellationError {

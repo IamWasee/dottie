@@ -86,6 +86,8 @@ export interface Env {
   PICTURE_PROVIDER_ORDER?: string;
   TEXT_PROVIDER_ORDER?: string;
   HELPER_PROVIDER_ORDER?: string;
+  GROQ_TALK_MODELS?: string;
+  REQUEST_PROVIDER_ORDER?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -398,8 +400,17 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     requestedModel = env.GEMINI_HIGHER_MODEL || env.GEMINI_CHAT_MODEL;
   }
   const prefersGroq = requestBody.provider === "groq";
+  const wantedRole = requestBody.provider;
   delete requestBody.model;
   delete requestBody.provider;
+
+  // Talking: Groq alone, on its small talk model, text only.
+  if (wantedRole === "talk") return await answerTalk(env, requestBody);
+  // Requests the talker handed over: Claude (Haiku) only, nothing else.
+  if (wantedRole === "request") {
+    const requestResponse = await answerWithPaidProviders(env, requestBody, true, "/chat", env.REQUEST_PROVIDER_ORDER || "claude");
+    return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
+  }
 
   // Paid providers answer first when their keys are set; Groq and Gemini
   // are only backups then.
@@ -617,13 +628,15 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
  * HELPER_PROVIDER_ORDER and TEXT_PROVIDER_ORDER change the order without a
  * code change.
  */
-export function paidProviders(env: Env, geminiBody: Record<string, unknown>, isHelperTurn = false): ChatProvider[] {
+export function paidProviders(env: Env, geminiBody: Record<string, unknown>, isHelperTurn = false, forcedOrder?: string): ChatProvider[] {
   const available: Record<string, ChatProvider | undefined> = {
     claude: env.ANTHROPIC_API_KEY ? anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODELS) : undefined,
     glm: env.ZAI_API_KEY ? zaiProvider(env.ZAI_API_KEY, env.ZAI_MODELS) : undefined,
   };
   let order: string;
-  if (imageCount(geminiBody) > 0) {
+  if (forcedOrder) {
+    order = forcedOrder;
+  } else if (imageCount(geminiBody) > 0) {
     order = env.PICTURE_PROVIDER_ORDER || "glm,claude";
   } else if (isHelperTurn) {
     order = env.HELPER_PROVIDER_ORDER || "glm";
@@ -643,9 +656,10 @@ async function answerWithPaidProviders(
   env: Env,
   geminiBody: Record<string, unknown>,
   streaming: boolean,
-  routeName: string
+  routeName: string,
+  forcedOrder?: string
 ): Promise<Response | undefined> {
-  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini")) {
+  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
     // Screen jobs send a screenshot every step: only the newest ones go.
     const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
     if (!canAnswer(provider, fittedBody)) {
@@ -657,6 +671,23 @@ async function answerWithPaidProviders(
     console.warn(`[${routeName}] ${provider.name} couldn't answer`);
   }
   return undefined;
+}
+
+/** Groq's small talk models, cheapest first; text only, so no vision models. */
+export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-20b,qwen/qwen3.8-27b";
+
+/**
+ * Dottie's talker: Groq alone answers small talk or says the ask is a
+ * request (the app then sends it to Claude). Never a paid model or Gemini,
+ * so chatting costs next to nothing.
+ */
+async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promise<Response> {
+  if (!env.GROQ_API_KEY) return jsonResponse({ error: "talking needs GROQ_API_KEY" }, 503);
+  const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
+  const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
+  if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
+  const groqResponse = await answerWithProvider(groq, requestBody, true);
+  return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);
 }
 
 function groqFromEnv(env: Env): ChatProvider | undefined {

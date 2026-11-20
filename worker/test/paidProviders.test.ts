@@ -115,7 +115,7 @@ describe("toAnthropicRequest", () => {
     const required = toAnthropicRequest({ ...base, tool_choice: "required", max_tokens: 99, temperature: 1.7, response_format: { type: "json_object" } });
     expect(required.tools).toEqual([
       { name: "click", description: "Click", input_schema: { type: "object", properties: { x: { type: "number" } } } },
-      { name: "bare", description: "", input_schema: { type: "object", properties: {} } },
+      { name: "bare", description: "", input_schema: { type: "object", properties: {} }, cache_control: { type: "ephemeral" } },
     ]);
     expect(required.tool_choice).toEqual({ type: "any" });
     expect(required.max_tokens).toBe(99);
@@ -374,6 +374,54 @@ describe("/gemini (helpers) with paid keys", () => {
     const calls = fakeFetch([["/models/agent-model:", jsonAnswer({ ok: true })]]);
     await call("/gemini-only/v1beta/models/agent-model:generateContent", { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a" });
     expect(calls.every((recorded) => recorded.url.includes("generativelanguage"))).toBe(true);
+  });
+});
+
+describe("talking and requests", () => {
+  const talkBody = { provider: "talk", contents: [userText("hey dottie, how are you?")], generationConfig: { maxOutputTokens: 120 } };
+
+  it("answers talk from Groq's small model only, even with paid keys", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "Doing great!" })]]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g", ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("Doing great!");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].json.model).toBe("openai/gpt-oss-20b");
+    expect(calls[0].json.reasoning_effort).toBe("low");
+  });
+
+  it("follows GROQ_TALK_MODELS, trying the next when one fails", async () => {
+    const calls = fakeFetch([
+      ["api.groq.com", new Response("busy", { status: 503 })],
+      ["api.groq.com", chatAnswer({ content: "hi" })],
+    ]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g", GROQ_TALK_MODELS: "small-a,small-b" });
+    expect(calls.map((recorded) => recorded.json.model)).toEqual(["small-a", "small-b"]);
+  });
+
+  it("says so when talking can't happen", async () => {
+    expect((await call("/chat", talkBody, {})).status).toBe(503);
+    fakeFetch([["api.groq.com", new Response("down", { status: 500 })], ["api.groq.com", new Response("down", { status: 500 })]]);
+    expect((await call("/chat", talkBody, { GROQ_API_KEY: "g" })).status).toBe(503);
+    const tooBig = await call("/chat", { provider: "talk", contents: [userText("a".repeat(200_000))] }, { GROQ_API_KEY: "g" });
+    expect(tooBig.status).toBe(413);
+  });
+
+  it("sends a handed-over request to Claude only, with a picture, never GLM", async () => {
+    const calls = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "On it." }])]]);
+    const body = { provider: "request", contents: [{ role: "user", parts: [{ text: "what's this error?" }, imagePart(pngBase64(10, 10))] }] };
+    const response = await call("/chat", body, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", GROQ_API_KEY: "g" });
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("On it.");
+    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+  });
+
+  it("answers 503 for a request when Claude can't, and follows REQUEST_PROVIDER_ORDER", async () => {
+    const calls = fakeFetch([["api.anthropic.com", new Response("overloaded", { status: 529 })]]);
+    const failed = await call("/chat", { provider: "request", contents: [userText("do it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(failed.status).toBe(503);
+    expect(calls.every((recorded) => recorded.url.includes("anthropic"))).toBe(true);
+    const glmCalls = fakeFetch([["api.z.ai", chatAnswer({ content: "glm" })]]);
+    await call("/chat", { provider: "request", contents: [userText("do it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", REQUEST_PROVIDER_ORDER: "glm" });
+    expect(glmCalls).toHaveLength(1);
   });
 });
 

@@ -124,6 +124,10 @@ export function toAnthropicRequest(chatRequest: Record<string, unknown>): Record
           ? tool.function!.parameters
           : { type: "object", properties: {} },
       }));
+    // Tools are the same every turn: Claude keeps them cached, so later
+    // turns pay a tenth for them. Too short a list is simply not cached.
+    const toolList = anthropicRequest.tools as Array<Record<string, unknown>>;
+    if (toolList.length) toolList[toolList.length - 1].cache_control = { type: "ephemeral" };
     const choice = chatRequest.tool_choice;
     anthropicRequest.tool_choice = choice === "required" ? { type: "any" } : choice === "none" ? { type: "none" } : { type: "auto" };
   }

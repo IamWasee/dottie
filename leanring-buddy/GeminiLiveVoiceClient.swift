@@ -1539,6 +1539,44 @@ final class GeminiLiveVoiceClient {
         startResponseWatchdog()
     }
 
+    // MARK: - Tools for the text brain
+
+    /// Tool calls made by the text brain (Claude, behind the talker) instead
+    /// of Live: their answers come back here, never over the socket.
+    private var textBrainContinuations: [String: CheckedContinuation<[String: Any], Never>] = [:]
+    private static let textBrainCallIDPrefix = "text-brain-"
+    /// A screen job or helper can run for minutes; the text brain is told
+    /// it's still going rather than waiting that long.
+    private static let textBrainToolWaitSeconds: UInt64 = 90
+
+    /// Runs one of voice Dottie's tools for the text brain, through exactly
+    /// the dispatch Live's own calls get, and returns its response.
+    func runToolForTextBrain(functionName: String, arguments: [String: Any]) async -> [String: Any] {
+        let functionCallID = Self.textBrainCallIDPrefix + UUID().uuidString
+        let waitSeconds = Self.textBrainToolWaitSeconds
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: waitSeconds * 1_000_000_000)
+            self?.textBrainContinuations.removeValue(forKey: functionCallID)?
+                .resume(returning: ["result": "still working on it; it reports back by itself when done"])
+        }
+        return await withCheckedContinuation { continuation in
+            textBrainContinuations[functionCallID] = continuation
+            switch functionName {
+            case GeminiLiveToolCatalog.findToolFunctionName:
+                handleFindToolCall(functionCallID: functionCallID, functionArguments: arguments)
+            case GeminiLiveToolCatalog.useToolFunctionName:
+                handleUseToolCall(functionCallID: functionCallID, functionArguments: arguments)
+            default:
+                guard Self.everyFunctionName.contains(functionName) else {
+                    textBrainContinuations.removeValue(forKey: functionCallID)?
+                        .resume(returning: ["error": "there's no tool named \(functionName)"])
+                    return
+                }
+                dispatchFunctionCall(functionName: functionName, functionCallID: functionCallID, functionArguments: arguments)
+            }
+        }
+    }
+
     private func sendFunctionResponse(functionCallID: String, functionName: String, response: [String: Any]) {
         // Counts as activity for the watchdog: the model may take a moment to
         // start speaking after a slow tool result.
@@ -1549,6 +1587,10 @@ final class GeminiLiveVoiceClient {
         if let finishedFunctionCall = functionCallsAwaitingResponse.removeValue(forKey: functionCallID) {
             let resultText = (response["result"] as? String) ?? (response["error"].map { "error: \($0)" } ?? "")
             onFunctionCallFinished?(finishedFunctionCall.functionName, finishedFunctionCall.arguments, resultText)
+        }
+        if functionCallID.hasPrefix(Self.textBrainCallIDPrefix) {
+            textBrainContinuations.removeValue(forKey: functionCallID)?.resume(returning: response)
+            return
         }
         enqueueOrSend(message: [
             "toolResponse": [

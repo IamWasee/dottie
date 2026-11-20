@@ -197,4 +197,14 @@ struct SpeedCheckTests {
 
         #expect(median < 300, "1,000 Jev answers took \(median) ms")
     }
+
+    @Test func readingAThousandTalkerAnswersStaysQuick() {
+        let median = medianMilliseconds {
+            for answerNumber in 0..<1_000 {
+                _ = DottieTalkerProtocol.decision(fromTalkerAnswer: answerNumber.isMultiple(of: 2) ? "REQUEST SCREEN" : "hey, doing great")
+            }
+        }
+
+        #expect(median < 200, "1,000 talker answers took \(median) ms")
+    }
 }
