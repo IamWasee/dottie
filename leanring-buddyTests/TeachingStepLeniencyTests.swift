@@ -195,7 +195,88 @@ struct TeachingStepLeniencyTests {
         #expect(drawnFigures.allSatisfy { board.insetBy(dx: -80, dy: -80).contains(CGPoint(x: $0.bounds.midX, y: $0.bounds.midY)) })
     }
 
+    // MARK: - Points packed into one string (1.0.76's supply and demand)
+
+    @Test func packedPointsAreSplitIntoPairs() {
+        #expect(DottieTeaching.splittingPackedPoints(["200,800,200,600,800,800"]) == ["200,800", "200,600", "800,800"])
+        #expect(DottieTeaching.splittingPackedPoints(["300,500,700,700"]) == ["300,500", "700,700"])
+    }
+
+    @Test func packedPointsWithBracketsOrSpacesAreSplit() {
+        #expect(DottieTeaching.splittingPackedPoints(["(200, 800) (200, 600)"]) == ["200,800", "200,600"])
+        #expect(DottieTeaching.splittingPackedPoints(["[100 900 900 100]"]) == ["100,900", "900,100"])
+        #expect(DottieTeaching.splittingPackedPoints(["-10.5,20,30,40.25"]) == ["-10.5,20", "30,40.25"])
+    }
+
+    @Test func singlePointsNamesAndOddCountsAreLeftAsGiven() {
+        #expect(DottieTeaching.splittingPackedPoints(["500,600"]) == ["500,600"])
+        #expect(DottieTeaching.splittingPackedPoints(["x=300 y=700"]) == ["x=300 y=700"])
+        #expect(DottieTeaching.splittingPackedPoints(["label2 top 5 6 7"]) == ["label2 top 5 6 7"])
+        #expect(DottieTeaching.splittingPackedPoints(["circled.right"]) == ["circled.right"])
+        #expect(DottieTeaching.splittingPackedPoints(["100,200,300"]) == ["100,200,300"])
+        #expect(DottieTeaching.splittingPackedPoints(["500"]) == ["500"])
+        #expect(DottieTeaching.splittingPackedPoints([]) == [])
+    }
+
+    @Test func packedAndPlainPointsMixed() {
+        #expect(DottieTeaching.splittingPackedPoints(["100,100,200,200", "circled", "300,300"])
+            == ["100,100", "200,200", "circled", "300,300"])
+    }
+
+    @Test func packedPointsSentAsOneTextFieldAreSplit() throws {
+        let textPlan = try #require(DottieTeaching.Plan(arguments: ["steps": [["kind": "line", "points": "300,500,700,700"]]]))
+        #expect(textPlan.steps[0].points == ["300,500", "700,700"])
+        #expect(textPlan.problems.isEmpty)
+    }
+
+    /// The exact call 1.0.76 refused on celly's Mac: only the equilibrium
+    /// dot was drawn. Every step now reads and draws on the board.
+    @Test func theRefusedSupplyAndDemandCallNowDrawsEveryStep() throws {
+        let refusedPlan = try #require(DottieTeaching.Plan(arguments: [
+            "surface": "board_right",
+            "steps": [
+                ["caption": "the graph axes", "kind": "axes", "points": ["200,800,800,800,200,200"]],
+                ["caption": "demand curve", "color": "blue", "kind": "line", "points": ["250,300,750,750"], "text": "Demand"],
+                ["caption": "supply curve", "color": "red", "kind": "line", "points": ["250,750,750,300"], "text": "Supply"],
+                ["caption": "market equilibrium", "color": "green", "kind": "point", "points": ["500,525"], "text": "Equilibrium"]
+            ]
+        ]))
+        #expect(refusedPlan.problems.isEmpty)
+        #expect(refusedPlan.keepingOnlyDrawableSteps().steps.count == 4)
+        let space = DottieTeaching.Space(boardRect: board, anchorFrames: [:], screenPoint: { _, _ in nil })
+        var drawnFigures: [DottieFigure] = []
+        for step in refusedPlan.steps {
+            let drawn = try #require(DottieTeaching.draw(step, in: space), "\(step.kind.rawValue) should draw")
+            drawnFigures += drawn.figures
+        }
+        #expect(drawnFigures.contains { $0.ink == .blue })
+        #expect(drawnFigures.contains { $0.ink == .red })
+        #expect(drawnFigures.contains { $0.ink == .green })
+        #expect(drawnFigures.allSatisfy { board.insetBy(dx: -80, dy: -80).contains(CGPoint(x: $0.bounds.midX, y: $0.bounds.midY)) })
+    }
+
+    @Test func theFirstRefusedCallAlsoReads() throws {
+        let firstPlan = try #require(plan([
+            ["kind": "axes", "points": ["200,800,200,600,800,800"]],
+            ["kind": "line", "points": ["300,500,700,700"], "color": "blue"],
+            ["kind": "line", "points": ["300,700,700,500"], "color": "red"],
+            ["kind": "point", "points": ["500,600"], "color": "green"]
+        ]))
+        #expect(firstPlan.problems.isEmpty)
+        #expect(firstPlan.steps[0].points == ["200,800", "200,600", "800,800"])
+    }
+
     // MARK: - Speed
+
+    @Test func splittingThousandsOfPackedPointsIsQuick() {
+        let startedAt = Date()
+        var splitCount = 0
+        for index in 0..<10_000 {
+            splitCount += DottieTeaching.splittingPackedPoints(["\(index % 1000),200,300,\(index % 700),500,600"]).count
+        }
+        #expect(splitCount == 30_000)
+        #expect(Date().timeIntervalSince(startedAt) < 1.0)
+    }
 
     @Test func readingThousandsOfPointsIsQuick() {
         let startedAt = Date()

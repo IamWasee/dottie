@@ -98,6 +98,16 @@ enum PointingRefiner {
 
         guard let elementLabel, !elementLabel.isEmpty else { return nil }
 
+        // "the first email", "the third result": a place in a list, not
+        // words on screen. Live saw the whole list and picked the row;
+        // text search can't find "first", and the vision second look moved
+        // "the first email" in Gmail up into the browser's top bar. Keep
+        // Live's guess unless Accessibility found the thing above.
+        if referenceImageJPEG == nil, isPlaceInAList(elementLabel) {
+            DottieLog.notice("🎯 Pointing kept Live's guess for a place in a list")
+            return nil
+        }
+
         // On-device text recognition: exact for anything with a visible
         // label, even in apps with no accessibility info, and no AI call.
         // A count like "7M" is the number under an icon, not the icon, so
@@ -125,6 +135,21 @@ enum PointingRefiner {
         let snappedFrame = AccessibilitySnap.refinedFrame(visionFrame)
         DottieLog.notice("🎯 Pointing refined by vision: \(Int(roughPoint.x)),\(Int(roughPoint.y)) → \(Int(snappedFrame.midX)),\(Int(snappedFrame.midY))")
         return snappedFrame
+    }
+
+    /// Words that name a place in a list rather than something written on
+    /// screen.
+    static let placeInAListWords: Set<String> = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+        "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
+        "last", "latest", "newest", "oldest", "topmost", "bottommost", "next", "previous"
+    ]
+
+    /// True for "the first email", "3rd result", "latest message": a
+    /// label that says which one by its place, not by its text.
+    static func isPlaceInAList(_ label: String) -> Bool {
+        let words = label.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+        return words.contains { placeInAListWords.contains($0) }
     }
 
     /// "7M", "8,429", "1.2K": the number shown under a like or comment
