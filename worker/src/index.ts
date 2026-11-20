@@ -78,6 +78,10 @@ export interface Env {
   ZAI_API_KEY?: string;
   /** Comma-separated GLM models, best first. */
   ZAI_MODELS?: string;
+  /** Paid TypeSafe key for Jev (/jev): finding what to click and done checks. */
+  JEV_API_KEY?: string;
+  /** Jev model id; "jev-latest" by default. */
+  JEV_MODEL?: string;
   /** Who answers first: "glm,claude" for asks with pictures, "claude,glm" for text by default. */
   PICTURE_PROVIDER_ORDER?: string;
   TEXT_PROVIDER_ORDER?: string;
@@ -194,6 +198,7 @@ function tooManyRequestsResponse(): Response {
 /** What a caller is told when something breaks here; the detail goes to the log only. */
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
+import { handleJev } from "./jev";
 import { anthropicProvider, answerWithProvider, canAnswer, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
 import { attemptTimeoutMilliseconds, BUSY_STATUSES, fetchGeminiWithFallback, GEMINI_API_BASE, modelsToTry } from "./geminiFallback";
 import { isSameSecret, jsonResponse, readJSONObject, upstreamErrorResponse } from "./http";
@@ -289,6 +294,7 @@ export default {
           nimBackup: env.NVIDIA_API_KEY ? env.NIM_MODELS || "default" : "off",
           claude: env.ANTHROPIC_API_KEY ? env.ANTHROPIC_MODELS || "default" : "off",
           glm: env.ZAI_API_KEY ? env.ZAI_MODELS || "default" : "off",
+          jev: env.JEV_API_KEY ? env.JEV_MODEL || "default" : "off",
         });
       }
 
@@ -310,6 +316,10 @@ export default {
 
       if (url.pathname === "/dictate") {
         return await handleDictate(request, env);
+      }
+
+      if (url.pathname === "/jev") {
+        return await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);

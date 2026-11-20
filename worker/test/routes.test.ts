@@ -108,6 +108,7 @@ describe("GET /config", () => {
       nimBackup: "off",
       claude: "off",
       glm: "off",
+      jev: "off",
     });
   });
 
