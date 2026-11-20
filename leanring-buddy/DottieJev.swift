@@ -108,8 +108,10 @@ enum DottieJevProtocol {
     static func sendableSize(width: Int, height: Int) -> (width: Int, height: Int)? {
         guard width > 0, height > 0 else { return nil }
         let scale = min(1, Double(maximumImageSide) / Double(max(width, height)))
-        let scaledWidth = Int((Double(width) * scale).rounded(.down))
-        let scaledHeight = Int((Double(height) * scale).rounded(.down))
+        // Rounded to the nearest pixel and capped, so the long side lands on
+        // exactly 1568 instead of 1567 from floating point.
+        let scaledWidth = min(maximumImageSide, Int((Double(width) * scale).rounded()))
+        let scaledHeight = min(maximumImageSide, Int((Double(height) * scale).rounded()))
         guard min(scaledWidth, scaledHeight) >= minimumImageSide else { return nil }
         return (scaledWidth, scaledHeight)
     }

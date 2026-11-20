@@ -83,7 +83,7 @@ struct JevProtocolTests {
     @Test func picturesAreShrunkToJevsLimitsOrRefused() throws {
         let retina = try #require(DottieJevProtocol.sendableSize(width: 2880, height: 1800))
         #expect(retina.width == 1568)
-        #expect((979...980).contains(retina.height))
+        #expect(retina.height == 980)
         let small = try #require(DottieJevProtocol.sendableSize(width: 640, height: 640))
         #expect(small.width == 640 && small.height == 640)
         #expect(DottieJevProtocol.sendableSize(width: 200, height: 640) == nil)
