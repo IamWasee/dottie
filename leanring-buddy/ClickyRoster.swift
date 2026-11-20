@@ -506,12 +506,12 @@ final class ClickyRoster: ObservableObject {
         let mayUseClaude: Bool
         switch engineChoice {
         case "claude": mayUseClaude = true
-        case "groq", "gemini": mayUseClaude = false
+        // "groq" and "gemini" are older saved choices; both mean GLM now.
+        case "glm", "groq", "gemini": mayUseClaude = false
         default: mayUseClaude = conversation.mayUseClaude
         }
-        // "gemini" skips the Worker's Groq-first step; "groq" and the
-        // default try Groq first when the request fits its free plan.
-        let workerRoute = engineChoice == "gemini" ? "/gemini-only" : "/gemini"
+        // The Worker sends every helper turn on this route to GLM.
+        let workerRoute = "/gemini"
 
         Task { [weak self] in
             guard let self else { return }
@@ -532,7 +532,7 @@ final class ClickyRoster: ObservableObject {
             // backup.
             if routineID == nil {
                 let claudeWasWanted = mayUseClaude && (engineChoice == "claude" || DottieMausBot.shared.preference == .claudeWithBackup)
-                self.setLastHelperEngine(claudeWasWanted ? "gemini-backup" : (engineChoice == "groq" ? "groq" : "gemini"), forAgentID: agentID)
+                self.setLastHelperEngine(claudeWasWanted ? "gemini-backup" : "glm", forAgentID: agentID)
             }
             let geminiMessage = conversation.geminiNeedsHandover ? conversationContext + fullMessageForAgent : fullMessageForAgent
             do {
@@ -770,10 +770,8 @@ final class ClickyRoster: ObservableObject {
             let engineName: String
             if finishedAgentForMessage?.lastHelperEngine == "claude" {
                 engineName = "Claude"
-            } else if finishedAgentForMessage?.engineChoice == "groq" || finishedAgentForMessage?.engineChoice == nil {
-                engineName = "Groq and its Gemini backup"
             } else {
-                engineName = "Gemini"
+                engineName = "GLM"
             }
             appendTranscriptItem(.error, text: "Stopped before finishing: \(engineName) stopped answering partway, maybe because it was busy. Send \"carry on\" to pick up where it left off.", to: agentID)
         }

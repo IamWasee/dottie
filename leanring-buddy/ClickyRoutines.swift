@@ -542,7 +542,11 @@ enum ClickyRoutinePrompts {
         let routineLines = agentRoutines.map { routine in
             "- \"\(routine.title)\": \(routine.cadenceDescription)\(routine.isPaused ? " (paused)" : ""). Task: \(routine.task)"
         }
-        return "[Your current routines (the title is the handle you use to change one):\n" + routineLines.joined(separator: "\n") + "]"
+        // Claude helpers also see MausBot's own triggers; these are Dottie's,
+        // and only a <ROUTINE> block changes them.
+        return "[Your current routines (the title is the handle you use to change one):\n" + routineLines.joined(separator: "\n")
+            + "\nThese are Dottie's routines, not MausBot triggers or cron jobs. To stop, pause or resume one, end your reply with "
+            + "<ROUTINE>{\"action\":\"delete\",\"title\":\"<its title>\"}</ROUTINE> (or \"pause\" / \"resume\").]"
     }
 
     /// A run's whole reply when it found nothing worth telling the user.

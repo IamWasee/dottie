@@ -280,7 +280,7 @@ private struct HelperEngineBadge: View {
 
     var body: some View {
         if let engineName {
-            Text(engineName == "claude" ? "Claude" : (engineName == "gemini-backup" ? "Gemini backup" : (engineName == "groq" ? "Groq" : "Gemini")))
+            Text(engineName == "claude" ? "Claude" : (engineName == "gemini-backup" ? "GLM backup" : "GLM"))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(engineName == "claude" ? DS.Colors.accentText : DS.Colors.textTertiary)
                 .padding(.horizontal, 6)
@@ -671,15 +671,15 @@ private struct ClickyAgentChatView: View {
     }
 
     /// Which engine runs this helper: automatic (Settings and Dottie's own
-    /// routing), or always Claude, Groq or Gemini.
+    /// routing), or always Claude or GLM.
     private var engineMenu: some View {
         let engineChoices: [(value: String?, title: String, detail: String)] = [
-            (nil, "Automatic", "Settings decide; quick jobs may go to Groq or Gemini"),
+            (nil, "Automatic", "Settings decide between Claude and GLM"),
             ("claude", "Claude", "Always on your Claude plan through MausBot"),
-            ("groq", "Groq", "Groq first; jobs too big for its free plan go to Gemini"),
-            ("gemini", "Gemini", "Always Gemini")
+            ("glm", "GLM", "Always GLM on Z.ai")
         ]
-        let currentChoice = agent.engineChoice
+        // "groq" and "gemini" are older saved choices; both run on GLM now.
+        let currentChoice = ["groq", "gemini"].contains(agent.engineChoice ?? "") ? "glm" : agent.engineChoice
         let currentTitle = engineChoices.first { $0.value == currentChoice }?.title ?? "Automatic"
         return Menu {
             ForEach(engineChoices, id: \.title) { engineChoice in

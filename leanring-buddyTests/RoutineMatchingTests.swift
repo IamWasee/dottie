@@ -23,4 +23,17 @@ struct RoutineMatchingTests {
         #expect(!DottieKeepWorking.routineMatches(title: "Weather check", helperName: "Jarvis", spokenName: "the routine"))
         #expect(!DottieKeepWorking.routineMatches(title: "Weather check", helperName: "Jarvis", spokenName: ""))
     }
+
+    @Test func routineListTellsHelpersHowToStopDottiesRoutines() {
+        let bitcoinRoutine = ClickyRoutine(
+            id: UUID(), agentID: UUID(), title: "Bitcoin Price Alert", task: "check the price",
+            everyMinutes: 15, isPaused: false, createdAt: Date(), lastRunStartedAt: Date(),
+            runCount: 17, failedRunsInARow: 0
+        )
+        let context = ClickyRoutinePrompts.currentRoutinesContext(for: [bitcoinRoutine])
+        #expect(context.contains("\"Bitcoin Price Alert\""))
+        #expect(context.contains("not MausBot triggers"))
+        #expect(context.contains("<ROUTINE>{\"action\":\"delete\""))
+        #expect(ClickyRoutinePrompts.currentRoutinesContext(for: []) == "[Your current routines: none.]")
+    }
 }
