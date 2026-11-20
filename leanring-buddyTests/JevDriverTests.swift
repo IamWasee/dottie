@@ -9,6 +9,7 @@
 //  run against Jev's answers.
 //
 
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Dottie
