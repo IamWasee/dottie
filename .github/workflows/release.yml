@@ -225,6 +225,7 @@ jobs:
     uses: ./.github/workflows/preship.yml
     with:
       worker_url: ${{ needs.prepare.outputs.worker_url }}
+      trial: ${{ github.event_name == 'pull_request' }}
     secrets: inherit
 
   build-dmg:

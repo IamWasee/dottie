@@ -16,18 +16,31 @@ on:
         required: false
         type: string
         default: ""
+      trial:
+        description: A pull request's trial release, which has no Worker address and asks nothing
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   preship-check:
-    runs-on: macos-15
+    # A trial run only says it was skipped, so it needn't hold a Mac.
+    runs-on: ${{ inputs.trial && 'ubuntu-latest' || 'macos-15' }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Skip on a trial release
+        if: inputs.trial
+        run: |
+          echo "Trial release from a pull request, which has no Worker address, so the model isn't asked. Real releases run this check." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: ${{ !inputs.trial }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Pick Xcode
+        if: ${{ !inputs.trial }}
         run: |
           xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -1)"
           if [ -n "$xcode" ]; then
@@ -36,6 +49,7 @@ jobs:
           xcodebuild -version
 
       - name: Ask the real model and check its tool calls
+        if: ${{ !inputs.trial }}
         timeout-minutes: 20
         env:
           TEST_RUNNER_DOTTIE_PRESHIP_WORKER_URL: ${{ inputs.worker_url || vars.DOTTIE_WORKER_URL }}
@@ -62,7 +76,7 @@ jobs:
           grep -q "TEST SUCCEEDED" preship.log
 
       - name: Report
-        if: always()
+        if: ${{ always() && !inputs.trial }}
         run: |
           report="${{ runner.temp }}/preship-report.md"
           if [ -f "$report" ]; then
