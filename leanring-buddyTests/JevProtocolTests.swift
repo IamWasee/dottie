@@ -13,7 +13,7 @@ import Testing
 
 struct JevProtocolTests {
     private func answer(_ object: [String: Any]) -> Data {
-        try! JSONSerialization.data(withJSONObject: object)
+        (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
     }
 
     @Test func boxRequestCarriesThePictureTheTargetAndTheAsk() {
