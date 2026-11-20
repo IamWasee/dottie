@@ -106,6 +106,8 @@ describe("GET /config", () => {
       dictationModel: "dictation-model",
       groq: "off",
       nimBackup: "off",
+      claude: "off",
+      glm: "off",
     });
   });
 

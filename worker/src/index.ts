@@ -70,6 +70,17 @@ export interface Env {
   NIM_MODELS?: string;
   /** Biggest request (prompt + answer, in tokens) sent to Groq; 7000 fits its free plan. */
   GROQ_MAX_REQUEST_TOKENS?: string;
+  /** Paid Claude key; when set, text asks and Dot turns go to Claude first (see paidProviders). */
+  ANTHROPIC_API_KEY?: string;
+  /** Comma-separated Claude models, best first. */
+  ANTHROPIC_MODELS?: string;
+  /** Paid Z.ai key; when set, asks with pictures (screen steps, pointing) go to GLM first. */
+  ZAI_API_KEY?: string;
+  /** Comma-separated GLM models, best first. */
+  ZAI_MODELS?: string;
+  /** Who answers first: "glm,claude" for asks with pictures, "claude,glm" for text by default. */
+  PICTURE_PROVIDER_ORDER?: string;
+  TEXT_PROVIDER_ORDER?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -183,7 +194,7 @@ function tooManyRequestsResponse(): Response {
 /** What a caller is told when something breaks here; the detail goes to the log only. */
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
-import { answerWithProvider, canAnswer, fittedForProvider, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
+import { anthropicProvider, answerWithProvider, canAnswer, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
 import { attemptTimeoutMilliseconds, BUSY_STATUSES, fetchGeminiWithFallback, GEMINI_API_BASE, modelsToTry } from "./geminiFallback";
 import { isSameSecret, jsonResponse, readJSONObject, upstreamErrorResponse } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
@@ -276,6 +287,8 @@ export default {
             ? { textModels: env.GROQ_TEXT_MODELS || "default", visionModels: env.GROQ_VISION_MODELS || "default" }
             : "off",
           nimBackup: env.NVIDIA_API_KEY ? env.NIM_MODELS || "default" : "off",
+          claude: env.ANTHROPIC_API_KEY ? env.ANTHROPIC_MODELS || "default" : "off",
+          glm: env.ZAI_API_KEY ? env.ZAI_MODELS || "default" : "off",
         });
       }
 
@@ -376,6 +389,11 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   const prefersGroq = requestBody.provider === "groq";
   delete requestBody.model;
   delete requestBody.provider;
+
+  // Paid providers answer first when their keys are set; Groq and Gemini
+  // are only backups then.
+  const paidResponse = await answerWithPaidProviders(env, requestBody, true, "/chat");
+  if (paidResponse) return paidResponse;
 
   const groq = groqFromEnv(env);
   const groqCanAnswer = Boolean(groq && canAnswer(groq, requestBody));
@@ -581,6 +599,49 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ text });
 }
 
+/**
+ * The paid providers whose keys are set, in the order they answer: GLM
+ * first for asks with pictures (screen steps, pointing), Claude first for
+ * text (quick asks, helpers). PICTURE_PROVIDER_ORDER / TEXT_PROVIDER_ORDER
+ * change the order without a code change.
+ */
+export function paidProviders(env: Env, geminiBody: Record<string, unknown>): ChatProvider[] {
+  const available: Record<string, ChatProvider | undefined> = {
+    claude: env.ANTHROPIC_API_KEY ? anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODELS) : undefined,
+    glm: env.ZAI_API_KEY ? zaiProvider(env.ZAI_API_KEY, env.ZAI_MODELS) : undefined,
+  };
+  const order = imageCount(geminiBody) > 0
+    ? env.PICTURE_PROVIDER_ORDER || "glm,claude"
+    : env.TEXT_PROVIDER_ORDER || "claude,glm";
+  const providers: ChatProvider[] = [];
+  for (const name of order.split(",").map((part) => part.trim().toLowerCase())) {
+    const provider = available[name];
+    if (provider && !providers.includes(provider)) providers.push(provider);
+  }
+  return providers;
+}
+
+/** Asks the paid providers in turn; undefined when none is set or none answered. */
+async function answerWithPaidProviders(
+  env: Env,
+  geminiBody: Record<string, unknown>,
+  streaming: boolean,
+  routeName: string
+): Promise<Response | undefined> {
+  for (const provider of paidProviders(env, geminiBody)) {
+    // Screen jobs send a screenshot every step: only the newest ones go.
+    const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
+    if (!canAnswer(provider, fittedBody)) {
+      console.warn(`[${routeName}] too big for ${provider.name}`);
+      continue;
+    }
+    const response = await answerWithProvider(provider, fittedBody, streaming);
+    if (response) return response;
+    console.warn(`[${routeName}] ${provider.name} couldn't answer`);
+  }
+  return undefined;
+}
+
 function groqFromEnv(env: Env): ChatProvider | undefined {
   return env.GROQ_API_KEY
     ? groqProvider(env.GROQ_API_KEY, env.GROQ_TEXT_MODELS, env.GROQ_VISION_MODELS, env.GROQ_MAX_REQUEST_TOKENS)
@@ -625,6 +686,14 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env, ski
     parsedGeminiBody ??= JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
     return parsedGeminiBody;
   };
+  if (!skipsGroq && generateMethod && requestBody && request.method === "POST") {
+    try {
+      const paidResponse = await answerWithPaidProviders(env, geminiBodyForBackups(), Boolean(generateMethod[1]), "/gemini");
+      if (paidResponse) return paidResponse;
+    } catch (error) {
+      console.warn(`[/gemini] paid providers failed: ${error}`);
+    }
+  }
   if (groq && generateMethod && requestBody && request.method === "POST") {
     try {
       const geminiBody = geminiBodyForBackups();

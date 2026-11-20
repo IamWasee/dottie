@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { fittedForProvider, groqProvider, pixelBoxConversion, toChatRequest, toGeminiResponse, estimatedTokens } from "../../src/chatCompletions";
+import { fromAnthropicResponse, toAnthropicRequest } from "../../src/anthropicMessages";
 import { fetchReadableText, htmlToText, meaningfulQueryWords, queryWordCoverage, searchBing } from "../../src/search";
 
 /**
@@ -122,5 +123,17 @@ describe("search", () => {
     const query = "what is the best way to grow tomatoes indoors during winter without a greenhouse in a small apartment ".repeat(3);
     const results = Array.from({ length: 6 }, (_, index) => ({ title: `Growing tomatoes indoors ${index}`, url: `https://example.com/${index}`, snippet: "winter apartment greenhouse ".repeat(20) }));
     await expectWithinBudget("meaningfulQueryWords + queryWordCoverage", 3, () => queryWordCoverage(meaningfulQueryWords(query), results));
+  });
+});
+
+describe("Claude's Messages format", () => {
+  it("turns a 40-step screen job into a Messages request and an answer back quickly", async () => {
+    const contents = Array.from({ length: 40 }, (_, index) => index % 2 === 0
+      ? { role: "user", parts: [{ text: `step ${index} ${"word ".repeat(80)}` }, { inlineData: { mimeType: "image/jpeg", data: "A".repeat(20_000) } }] }
+      : { role: "model", parts: [{ functionCall: { name: "click", args: { box_2d: [1, 2, 3, 4] } } }] });
+    const tools = [{ functionDeclarations: Array.from({ length: 20 }, (_, index) => ({ name: `tool_${index}`, parameters: { type: "OBJECT", properties: { x: { type: "NUMBER" } } } })) }];
+    await expectWithinBudget("Gemini body → Claude Messages request (40 steps)", 15, () => toAnthropicRequest(toChatRequest({ contents, tools })));
+    const answer = { content: [{ type: "text", text: "ok" }, { type: "tool_use", id: "t", name: "click", input: { x: 1 } }], usage: { input_tokens: 1, output_tokens: 1 } };
+    await expectWithinBudget("Claude answer → Gemini response", 2, () => toGeminiResponse(fromAnthropicResponse(answer), "claude/x"));
   });
 });

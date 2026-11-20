@@ -162,10 +162,13 @@ final class DottieScreenTaskRunner {
     private var claudeHasSeenThisJob = false
     /// The newest screenshot's size in pixels, for Claude's pixel boxes.
     private var lastScreenshotPixelSize: CGSize = .zero
-    /// Who answered the last step, for the notch ("waiting on Claude…").
-    private var stepEngineName: String { usesClaudeForThisJob ? "Claude" : "Gemini" }
 
     var isRunning: Bool { runTask != nil }
+
+    /// What the notch shows while a step's answer is slow.
+    nonisolated static func slowStepNotice(secondsWaited: Int) -> String {
+        "thinking… \(max(0, secondsWaited)) s"
+    }
     /// Game jobs play through DottieGamePlayer (think, then play).
     private var gamePlayer: DottieGamePlayer?
     /// A game job says something out loud now and then.
@@ -413,14 +416,15 @@ final class DottieScreenTaskRunner {
             pendingFunctionResponseParts = []
             Self.dropOldScreenshots(from: &contents)
             let modelParts: [[String: Any]]
-            // A slow answer shows in the notch, so waiting on Gemini doesn't
-            // look like Dottie being stuck.
+            // A slow answer shows in the notch, so a long think doesn't look
+            // like Dottie being stuck. It doesn't name the model: people care
+            // that she's working, not who answers.
             let waitingStartedAt = Date()
             let slowAnswerNotice = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 while !Task.isCancelled {
                     guard let self else { return }
-                    self.onProgress?(stepNumber, "waiting on \(self.stepEngineName)… \(Int(Date().timeIntervalSince(waitingStartedAt))) s")
+                    self.onProgress?(stepNumber, Self.slowStepNotice(secondsWaited: Int(Date().timeIntervalSince(waitingStartedAt))))
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                 }
             }

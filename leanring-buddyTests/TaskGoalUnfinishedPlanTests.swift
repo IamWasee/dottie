@@ -111,3 +111,21 @@ struct ScreenJobStepLimitTests {
         }
     }
 }
+
+/// The notch's line for a slow step never names a model ("waiting on
+/// Gemini…" went away with the paid models).
+struct ScreenJobSlowStepNoticeTests {
+    @Test func showsTheSecondsWaited() {
+        #expect(DottieScreenTaskRunner.slowStepNotice(secondsWaited: 9) == "thinking… 9 s")
+    }
+
+    @Test func neverNamesAModel() {
+        let notice = DottieScreenTaskRunner.slowStepNotice(secondsWaited: 12).lowercased()
+        #expect(!notice.contains("gemini"))
+        #expect(!notice.contains("claude"))
+    }
+
+    @Test func neverShowsANegativeWait() {
+        #expect(DottieScreenTaskRunner.slowStepNotice(secondsWaited: -3) == "thinking… 0 s")
+    }
+}
