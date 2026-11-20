@@ -27,16 +27,6 @@ enum CompanionVoiceState {
     case responding
 }
 
-enum CompanionVoiceMode: String {
-    case live
-    case classic
-
-    static var configuredMode: CompanionVoiceMode {
-        AppBundleConfiguration.stringValue(forKey: "CompanionVoiceMode")
-            .flatMap { CompanionVoiceMode(rawValue: $0.lowercased()) } ?? .classic
-    }
-}
-
 @MainActor
 final class CompanionManager: ObservableObject {
     @Published var voiceState: CompanionVoiceState = .idle
@@ -81,7 +71,6 @@ final class CompanionManager: ObservableObject {
     private var onboardingMusicPlayer: AVAudioPlayer?
     private var onboardingMusicFadeTimer: Timer?
 
-    let voiceMode = CompanionVoiceMode.configuredMode
 
     /// The Gemini Live session used in live mode. Idle (no socket) until the
     /// first push-to-talk.
@@ -90,22 +79,8 @@ final class CompanionManager: ObservableObject {
     /// In live mode the mic audio goes to Gemini Live through a bridge
     /// provider; in classic mode it goes to Apple Speech. Lazy because the
     /// live provider's turn-start closure needs `self`.
-    private(set) lazy var buddyDictationManager: BuddyDictationManager = {
-        switch voiceMode {
-        case .live:
-            let liveProvider = GeminiLiveCompanionTranscriptionProvider(
-                liveVoiceClient: liveVoiceClient,
-                onDeviceTranscriber: liveTurnOnDeviceTranscriber,
-                whistleRecorder: liveTurnWhistleRecorder,
-                beginLiveTurn: { [weak self] in
-                    await self?.beginLiveTurnWithScreenFrame()
-                }
-            )
-            return BuddyDictationManager(transcriptionProvider: liveProvider)
-        case .classic:
-            return BuddyDictationManager()
-        }
-    }()
+    /// The mic goes to Apple Speech; the words then go to the talker.
+    private(set) lazy var buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
 
@@ -353,10 +328,8 @@ final class CompanionManager: ObservableObject {
         DottieSelfKnowledge.companionManager = self
         loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
-        // Classic mode speaks with Kokoro: load it now so the first answer isn't slow.
-        if voiceMode == .classic {
-            DottieKokoroSpeaker.shared.prepare()
-        }
+        // Dottie speaks with Kokoro: load it now so the first answer isn't slow.
+        DottieKokoroSpeaker.shared.prepare()
         refreshAllPermissions()
         DottieLog.notice("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -850,15 +823,6 @@ final class CompanionManager: ObservableObject {
             stopTeaching(clearingDrawing: false)
             currentTurnAnnotation = nil
             screenAnnotationManager.startTracking()
-            if voiceMode == .live {
-                liveTurnPlaybackDrainTask?.cancel()
-                isLiveTurnInFlight = true
-                voiceState = .idle
-                liveVoicePressCount += 1
-                currentLiveTurnOnDeviceText = nil
-                currentLiveTurnNamedShortcutName = nil
-                currentLiveTurnWasHandledInstantly = false
-            }
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -886,11 +850,7 @@ final class CompanionManager: ObservableObject {
                         self.lastTranscript = finalTranscript
                         DottieLog.notice("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        // In live mode Gemini already heard the audio and is
-                        // answering; the transcript is just for display/history.
-                        if self.voiceMode == .classic {
-                            self.sendTranscriptToGeminiWithScreenshot(transcript: finalTranscript)
-                        }
+                        self.sendTranscriptToGeminiWithScreenshot(transcript: finalTranscript)
                     }
                 )
             }
@@ -902,25 +862,12 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackPushToTalkReleased()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
-            // Before the turn closes, so Live gets the marked frame inside it.
+            // Before the turn closes, so the answer sees what was circled.
             currentTurnAnnotation = screenAnnotationManager.finishTracking()
             if let currentTurnAnnotation {
                 rememberCircledArea(currentTurnAnnotation.boundingRect)
             }
-            if voiceMode == .live, let currentTurnAnnotation {
-                sendAnnotationToLiveTurn(currentTurnAnnotation)
-            }
-            let couldBeInstant = voiceMode == .live && liveVoiceTurnCouldBeInstant()
-            if couldBeInstant {
-                // Before the turn closes, so none of Live's answer plays
-                // while the Mac checks what was said.
-                liveVoiceClient.isHoldingModelAnswer = true
-            }
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
-            if voiceMode == .live {
-                clearLiveTurnIfItNeverStarted()
-                checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: couldBeInstant)
-            }
         case .none:
             break
         }
@@ -1108,66 +1055,7 @@ final class CompanionManager: ObservableObject {
             (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
         }
 
-        connectLiveTurnCallbacks()
         connectLiveToolCallbacks()
-    }
-
-    /// What the Live client reports about a turn: speech starting, captions,
-    /// pointing, the turn ending, finished tool calls and errors.
-    private func connectLiveTurnCallbacks() {
-        liveVoiceClient.onModelSpeechStarted = { [weak self] in
-            guard let self, self.isLiveTurnInFlight else { return }
-            self.voiceState = .responding
-        }
-
-        liveVoiceClient.onModelTranscriptUpdate = { [weak self] modelTranscriptSoFar in
-            self?.notchPresenter.updateLiveCaption(modelTranscriptSoFar)
-        }
-
-        liveVoiceClient.onPointRequest = { [weak self] pointRequest in
-            self?.pointAtLiveElement(pointRequest)
-        }
-
-        liveVoiceClient.onModelTurnComplete = { [weak self] userTranscript, modelTranscript, isFollowUp in
-            self?.finishLiveTurn(userTranscript: userTranscript, modelTranscript: modelTranscript, isFollowUpAfterTools: isFollowUp)
-        }
-
-        liveVoiceClient.onLateTranscriptOfPreviousAnswer = { [weak self] lateTranscript in
-            guard let self else { return }
-            self.conversationStore.extendEntry(withID: self.lastLiveTurnConversationEntryID, clickyText: lateTranscript)
-        }
-
-        liveVoiceClient.helperNamesForHandOffCheck = { [weak self] in
-            guard let self else { return (allHelperNames: [], busyHelperNames: []) }
-            let helpers = self.clickyRoster.agents.filter { $0.isBrain != true }
-            return (
-                allHelperNames: helpers.map(\.name),
-                busyHelperNames: helpers.filter { self.clickyRoster.isRunning($0) }.map(\.name)
-            )
-        }
-
-        liveVoiceClient.onFunctionCallFinished = { [weak self] functionName, arguments, result in
-            self?.currentLiveTurnFinishedToolCalls.append(
-                DottieInstantLane.FinishedToolCall(functionName: functionName, arguments: arguments, result: result)
-            )
-        }
-
-        liveVoiceClient.onTurnError = { [weak self] error in
-            guard let self else { return }
-            ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-            DottieLog.warning("⚠️ Gemini Live turn error: \(error)")
-            self.isLiveTurnInFlight = false
-            self.currentLiveTurnIsNarration = false
-            self.liveVoiceClient.isAudioOutputMuted = false
-            self.fireLiveTurnFinishedHandler()
-            let failedRequestText = self.currentLiveTurnTypedText ?? self.currentLiveTurnOnDeviceText ?? ""
-            self.voiceState = .idle
-            self.scheduleTransientHideIfNeeded()
-            self.doOnMacOrSpeakConnectionError(
-                requestText: failedRequestText,
-                inputKind: self.currentLiveTurnTypedText == nil ? .voice : .typed
-            )
-        }
     }
 
     /// The tools Live can call, each handed to the part of the companion
@@ -1257,46 +1145,6 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Called by the live transcription provider when push-to-talk opens.
-    /// Grabs the screen frame and opens the user's turn on the Live session.
-    func beginLiveTurnWithScreenFrame(includesScreenFrame: Bool = true) async {
-        currentLiveTurnFinishedToolCalls = []
-        // So a web page's elements can be found by name if Dottie points.
-        PointingRefiner.prepareFrontmostApplicationForSearch()
-        var compositeScreenFrame: CompanionCompositeScreenFrame?
-        if includesScreenFrame {
-            do {
-                compositeScreenFrame = try await CompanionScreenCaptureUtility.captureCompositeFrameForLive()
-            } catch {
-                DottieLog.warning("⚠️ Gemini Live: screen capture failed, sending voice only: \(error)")
-            }
-        }
-
-        currentLiveTurnScreenFrame = compositeScreenFrame
-        currentLiveTurnScreenFrameCapturedAt = compositeScreenFrame == nil ? nil : Date()
-        DottieEpisodicMemory.shared.noteConversationScreenshot(compositeScreenFrame?.jpegData)
-        liveVoiceClient.beginUserTurn(
-            screenFrameJPEGData: compositeScreenFrame?.jpegData,
-            screenFrameFingerprint: compositeScreenFrame.flatMap { ScreenFrameFingerprint.make(fromJPEGData: $0.jpegData) }
-        )
-
-        if let compositeScreenFrame, compositeScreenFrame.regions.count > 1 {
-            liveVoiceClient.sendTurnContextText(compositeScreenFrame.layoutDescription)
-        }
-        // Not on a guide line, which must be said word for word.
-        if includesScreenFrame && !notesForNextLiveTurn.isEmpty {
-            liveVoiceClient.sendTurnContextText(notesForNextLiveTurn.joined(separator: "\n"))
-            notesForNextLiveTurn = []
-        }
-        // What the helpers did lately and which files they touched, so
-        // "open that file" or "change it again" goes back to the helper
-        // that did it. Live's own history only has what was said aloud,
-        // not which helper did the work.
-        if includesScreenFrame, let recentWorkNote = DottieRecentWorkNote.noteText(entries: clickyRoster.recentHelperWork()) {
-            liveVoiceClient.sendTurnContextText(recentWorkNote)
-        }
-    }
-
     /// Things that changed outside the conversation (the user stopped a job
     /// with the notch button or Escape), told to Live with the next turn.
     /// Without this, Live still thinks a stopped job is running and answers
@@ -1305,19 +1153,6 @@ final class CompanionManager: ObservableObject {
 
     func noteStoppedJob(_ description: String) {
         notesForNextLiveTurn.append("[note] \(description) was stopped and is not running anymore. if the user asks for it again, start it again with the tool; never say you're still working on it.")
-    }
-
-    /// Sends the turn's frame again with the circled area marked, plus a
-    /// note saying what the ring means. Only when this turn's frame has
-    /// been captured, which also means its Live turn is open.
-    private func sendAnnotationToLiveTurn(_ annotation: ScreenAnnotation) {
-        guard let currentLiveTurnScreenFrame,
-              let frameCapturedAt = currentLiveTurnScreenFrameCapturedAt,
-              let trackingStartedAt = screenAnnotationManager.trackingStartedAt,
-              frameCapturedAt >= trackingStartedAt,
-              let annotatedFrameJPEGData = annotation.drawRing(on: currentLiveTurnScreenFrame) else { return }
-        liveVoiceClient.sendScreenFrame(jpegData: annotatedFrameJPEGData)
-        liveVoiceClient.sendTurnContextText(ScreenAnnotation.modelContextText)
     }
 
     /// Screenshot images for the classic and higher models, with the turn's
@@ -2256,12 +2091,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
-        switch voiceMode {
-        case .classic:
-            sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
-        case .live:
-            startLiveTextTurn(recordedUserText: "(done: \(taskText))", turnText: instructionText)
-        }
+        sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
     }
 
     // MARK: - Guides (teaching the app on screen)
@@ -2535,209 +2365,6 @@ final class CompanionManager: ObservableObject {
         return (finalPoint, refinedFrame, displayFrame, frameWidthInPoints)
     }
 
-    private func pointAtLiveElement(_ pointRequest: GeminiLivePointRequest) {
-        guard let currentLiveTurnScreenFrame,
-              let resolvedPoint = currentLiveTurnScreenFrame.resolveNormalizedPoint(
-                normalizedX: pointRequest.normalizedX,
-                normalizedY: pointRequest.normalizedY
-              ) else {
-            DottieLog.notice("🎯 Live pointing ignored: no frame for this turn")
-            return
-        }
-
-        let roughScreenLocation = Self.globalScreenLocation(
-            forScreenshotPixel: resolvedPoint.pointInScreenshotPixels,
-            in: resolvedPoint.screenCapture
-        )
-        let displayFrame = resolvedPoint.screenCapture.displayFrame
-        ClickyAnalytics.trackElementPointed(elementLabel: pointRequest.elementLabel)
-        DottieLog.notice("🎯 Live pointing: (\(Int(pointRequest.normalizedX)), \(Int(pointRequest.normalizedY)))/1000 → \"\(pointRequest.elementLabel ?? "element")\"")
-
-        // Live's guess comes from a small frame; take a second, sharper look
-        // before the cursor flies, so it lands on the thing itself.
-        livePointingRefinementTask?.cancel()
-        // What the Mac heard is the best description of what's wanted (Live's
-        // own transcript only comes after its answer).
-        let userQuestion = currentLiveTurnTypedText ?? currentLiveTurnOnDeviceText ?? ""
-        let referenceImageJPEG = savedPictureJPEG(named: pointRequest.elementLabel)
-        livePointingRefinementTask = Task { [weak self] in
-            // When the sharper look is slow (a busy day for the free models),
-            // the cursor doesn't wait any longer than usual: it flies to Live's
-            // guess, and hops over to the real spot if that's found while it's
-            // still pointing.
-            let roughGuessFlight = Task { [weak self] () -> Bool in
-                try? await Task.sleep(nanoseconds: UInt64(PointingRefiner.refinementTimeoutSeconds * 1_000_000_000))
-                guard let self, !Task.isCancelled else { return false }
-                self.detectedElementScreenLocation = roughScreenLocation
-                self.detectedElementDisplayFrame = displayFrame
-                return true
-            }
-            // A newer point request cancels this one, and its flight with it.
-            let refinedScreenLocation = await withTaskCancellationHandler {
-                await PointingRefiner.refine(
-                    elementLabel: pointRequest.elementLabel,
-                    userQuestion: userQuestion,
-                    roughPoint: roughScreenLocation,
-                    displayFrame: displayFrame,
-                    referenceImageJPEG: referenceImageJPEG,
-                    timeoutSeconds: Self.livePointingLateRefinementSeconds
-                )
-            } onCancel: {
-                roughGuessFlight.cancel()
-            }
-            roughGuessFlight.cancel()
-            let didFlyToRoughGuess = await roughGuessFlight.value
-            guard let self, !Task.isCancelled else { return }
-            // Still on the display the guess was on, or the guess wins.
-            let foundScreenLocation = refinedScreenLocation.flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
-            guard didFlyToRoughGuess else {
-                self.detectedElementScreenLocation = foundScreenLocation ?? roughScreenLocation
-                self.detectedElementDisplayFrame = displayFrame
-                return
-            }
-            // Only while the cursor is still pointing at the guess (flying
-            // back clears it), and only for a real correction.
-            guard self.detectedElementScreenLocation == roughScreenLocation,
-                  let foundScreenLocation,
-                  hypot(foundScreenLocation.x - roughScreenLocation.x, foundScreenLocation.y - roughScreenLocation.y) > Self.livePointingSmallestCorrection else { return }
-            DottieLog.notice("🎯 Pointing corrected after the rough guess: \(Int(roughScreenLocation.x)),\(Int(roughScreenLocation.y)) → \(Int(foundScreenLocation.x)),\(Int(foundScreenLocation.y))")
-            self.detectedElementScreenLocation = foundScreenLocation
-        }
-    }
-
-    /// How long a sharper look at a pointing target may run in all. The
-    /// cursor flies to Live's guess after the usual wait
-    /// (PointingRefiner.refinementTimeoutSeconds) and is still pointing
-    /// there until about this long after the ask.
-    private static let livePointingLateRefinementSeconds: TimeInterval = 9
-    /// A late find closer than this to Live's guess isn't worth a hop.
-    private static let livePointingSmallestCorrection: CGFloat = 24
-
-    /// A press released before the mic session opened never reaches Gemini,
-    /// so no answer will come to clear the spinner. Check shortly after
-    /// release and fall back to idle in that case.
-    private func clearLiveTurnIfItNeverStarted() {
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard let self, self.isLiveTurnInFlight else { return }
-            guard !self.liveVoiceClient.isModelTurnInProgress,
-                  !self.buddyDictationManager.isDictationInProgress else { return }
-            self.isLiveTurnInFlight = false
-            self.voiceState = .idle
-            self.scheduleTransientHideIfNeeded()
-        }
-    }
-
-    /// The Home → Conversation entry and words of the newest Live question,
-    /// so its answer after a tool call lands on it and not on whatever was
-    /// logged in between.
-    private var lastLiveTurnConversationEntryID: UUID?
-    private var lastLiveTurnUserTranscript = ""
-
-    /// Records the exchange, then waits for the last of the audio to play
-    /// before returning the cursor to idle.
-    /// `isFollowUpAfterTools`: Live answered a tool result for a question
-    /// already recorded; its words join that exchange instead of logging
-    /// the question again.
-    private func finishLiveTurn(userTranscript: String, modelTranscript: String, isFollowUpAfterTools: Bool = false) {
-        liveVoiceClient.isAudioOutputMuted = false
-        // The Mac already did this one and showed it; Live's answer was
-        // silenced.
-        if currentLiveTurnWasHandledInstantly {
-            currentLiveTurnWasHandledInstantly = false
-            currentLiveTurnTypedText = nil
-            currentLiveTurnIsNarration = false
-            return
-        }
-        let typedTextForThisTurn = currentLiveTurnTypedText
-        currentLiveTurnTypedText = nil
-        let isNarrationTurn = currentLiveTurnIsNarration
-        currentLiveTurnIsNarration = false
-        // A typed turn has no audio, so Live's input transcript is empty.
-        let userTranscript = typedTextForThisTurn ?? userTranscript
-        // A screen job asked something and Live didn't pass the reply on.
-        if userTranscript.hasPrefix("(job asks:") {
-            DottieScreenJobQuestions.shared.noteAskedAloud()
-        } else if !isNarrationTurn, !userTranscript.isEmpty, !userTranscript.hasPrefix("("),
-                  DottieScreenJobQuestions.shared.wasAskedAloud {
-            DottieScreenJobQuestions.shared.answer(userTranscript)
-        }
-
-        // The secret phrase opens Home → Admin and stays out of history.
-        let isSecretPhraseTurn = !isNarrationTurn
-            && DottieAdminMode.shared.handleSecretPhraseIfSaid(userTranscript, companionManager: self)
-
-        if isFollowUpAfterTools && !isNarrationTurn && !isSecretPhraseTurn {
-            if !modelTranscript.isEmpty {
-                brain.record(.chat, "dottie: \(modelTranscript)")
-                conversationStore.extendEntry(withID: lastLiveTurnConversationEntryID, clickyText: modelTranscript)
-                // The exchange this answer belongs to, even if an instant
-                // command was logged after it while Live was still working.
-                let exchangeIndex = conversationHistory.lastIndex(where: { $0.userTranscript == lastLiveTurnUserTranscript })
-                    ?? (conversationHistory.isEmpty ? nil : conversationHistory.count - 1)
-                if let exchangeIndex {
-                    let exchangeToExtend = conversationHistory[exchangeIndex]
-                    let combinedResponse = [exchangeToExtend.assistantResponse, modelTranscript].filter { !$0.isEmpty }.joined(separator: " ")
-                    conversationHistory[exchangeIndex] = (userTranscript: exchangeToExtend.userTranscript, assistantResponse: combinedResponse)
-                    liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-                        (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-                    }
-                }
-            }
-        } else if !isNarrationTurn && !isSecretPhraseTurn && (!userTranscript.isEmpty || !modelTranscript.isEmpty) {
-            brain.record(.chat, "user: \(userTranscript)\ndottie: \(modelTranscript)")
-            lastLiveTurnConversationEntryID = conversationStore.append(
-                userText: userTranscript,
-                clickyText: modelTranscript,
-                inputKind: typedTextForThisTurn == nil ? .voice : .typed,
-                imageFileNames: typedTextForThisTurn == nil ? [] : currentTurnImageFileNames
-            )
-            lastLiveTurnUserTranscript = userTranscript
-            currentTurnImageFileNames = []
-            conversationHistory.append((userTranscript: userTranscript, assistantResponse: modelTranscript))
-            if conversationHistory.count > Self.rememberedExchangeCount {
-                conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
-            }
-            liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-                (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-            }
-            ClickyAnalytics.trackAIResponseReceived(response: modelTranscript)
-        }
-
-        let savedShortcutNote = (isNarrationTurn || isSecretPhraseTurn) ? nil : learnShortcutFromFinishedLiveTurn(
-            userTranscript: userTranscript,
-            typedText: typedTextForThisTurn,
-            modelTranscript: modelTranscript
-        )
-        currentLiveTurnFinishedToolCalls = []
-        currentLiveTurnNamedShortcutName = nil
-        currentLiveTurnOnDeviceText = nil
-
-        liveTurnPlaybackDrainTask?.cancel()
-        liveTurnPlaybackDrainTask = Task { [weak self] in
-            while self?.liveVoiceClient.isModelAudioPlaying == true {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard !Task.isCancelled else { return }
-            }
-            guard let self, !Task.isCancelled else { return }
-            self.isLiveTurnInFlight = false
-            // Only drop to idle if the user hasn't started a new turn.
-            if !self.buddyDictationManager.isDictationInProgress {
-                self.voiceState = .idle
-                if isNarrationTurn {
-                    // The guide's step stays in the notch instead.
-                    self.notchPresenter.collapse()
-                } else {
-                    self.notchPresenter.showFinishedResponse(
-                        savedShortcutNote.map { modelTranscript + "\n\n" + $0 } ?? modelTranscript
-                    )
-                }
-                self.scheduleTransientHideIfNeeded()
-            }
-            self.fireLiveTurnFinishedHandler()
-        }
-    }
-
     // MARK: - Shared Helpers
 
     /// Converts a pixel position in a screenshot (top-left origin) to a global
@@ -2769,19 +2396,11 @@ final class CompanionManager: ObservableObject {
     }
 
     var isAnySpeechPlaying: Bool {
-        switch voiceMode {
-        case .live:
-            return liveVoiceClient.isModelAudioPlaying
-        case .classic:
-            return DottieKokoroSpeaker.shared.isPlaying || geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
-        }
+        DottieKokoroSpeaker.shared.isPlaying || geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
     }
 
     func stopAllSpeechPlayback() {
-        liveVoiceClient.interruptModelSpeech()
-        if voiceMode == .classic {
-            geminiTTSClient.stopPlayback()
-        }
+        geminiTTSClient.stopPlayback()
         DottieKokoroSpeaker.shared.stop()
         systemSpeechSynthesizer.stopSpeaking()
     }

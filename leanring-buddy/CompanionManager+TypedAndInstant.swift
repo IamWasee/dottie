@@ -187,12 +187,7 @@ extension CompanionManager {
         lastTranscript = trimmedMessageText
         ClickyAnalytics.trackUserMessageSent(transcript: trimmedMessageText)
 
-        switch voiceMode {
-        case .classic:
-            sendTranscriptToGeminiWithScreenshot(transcript: turnText ?? trimmedMessageText, inputKind: .typed)
-        case .live:
-            startLiveTextTurn(recordedUserText: trimmedMessageText, turnText: turnText ?? trimmedMessageText)
-        }
+        sendTranscriptToGeminiWithScreenshot(transcript: turnText ?? trimmedMessageText, inputKind: .typed)
     }
 
     // MARK: - Instant lane (no AI)
@@ -210,77 +205,6 @@ extension CompanionManager {
     private func instantLanePlanIfAllowed(for requestText: String) -> DottieInstantLane.Plan? {
         guard isInstantLaneAllowedNow else { return nil }
         return DottieInstantLane.shared.plan(for: requestText)
-    }
-
-    /// At release: whether what the Mac heard so far might be something it
-    /// does itself, so Live's answer is held back while it checks.
-    func liveVoiceTurnCouldBeInstant() -> Bool {
-        guard isInstantLaneAllowedNow else { return false }
-        // Heard by Whistle: there are no words yet, so a short turn is
-        // held (instant asks are short) and a long one never waits.
-        if !liveTurnOnDeviceTranscriber.isRunning {
-            return liveTurnWhistleRecorder.isRecording
-                && liveTurnWhistleRecorder.recordedSeconds <= DottieWhistleTurnRecorder.longestHeldTurnSeconds
-        }
-        return DottieInstantLane.shared.couldBecomeInstant(partialText: liveTurnOnDeviceTranscriber.latestText)
-    }
-
-    /// After a voice turn is released: waits a moment for the Mac's
-    /// transcript of it. When it's an instant command or a learned
-    /// shortcut, Live's answer is silenced and the Mac does it; otherwise
-    /// Live's held answer plays as usual.
-    func checkInstantLaneAfterLiveVoiceRelease(holdsLiveAnswer: Bool) {
-        let whistleAudio = liveTurnWhistleRecorder.takeRecording()
-        guard liveTurnOnDeviceTranscriber.isRunning || whistleAudio != nil else {
-            liveVoiceClient.isHoldingModelAnswer = false
-            return
-        }
-        let pressNumber = liveVoicePressCount
-        Task { [weak self] in
-            guard let self else { return }
-            let heardText: String
-            if let whistleAudio {
-                // No Apple speech recognition: Whistle hears the short
-                // turn on the Mac (tens of milliseconds).
-                heardText = await DottieNeedleRouter.shared.hear(pcm16AudioData: whistleAudio)
-            } else {
-                // Short while Live's answer waits; longer otherwise, since then
-                // nothing is held up and the text is only for learning.
-                heardText = await self.liveTurnOnDeviceTranscriber.finishAndWaitForFinalText(
-                    timeoutSeconds: holdsLiveAnswer ? 0.6 : 1.5
-                )
-            }
-            guard self.liveVoicePressCount == pressNumber else { return }
-            self.currentLiveTurnOnDeviceText = heardText.isEmpty ? nil : heardText
-
-            var instantPlanOrNil = self.instantLanePlanIfAllowed(for: heardText)
-            // Needle only while Live's answer is held: otherwise it's
-            // already playing and the Mac shouldn't do something else too.
-            if instantPlanOrNil == nil, holdsLiveAnswer, self.isInstantLaneAllowedNow {
-                instantPlanOrNil = await DottieNeedleRouter.shared.plan(for: heardText)
-                guard self.liveVoicePressCount == pressNumber else { return }
-            }
-            guard let instantPlan = instantPlanOrNil else {
-                self.currentLiveTurnNamedShortcutName = DottieInstantLane.shared.namedShortcutRequest(in: heardText)?.name
-                self.liveVoiceClient.isHoldingModelAnswer = false
-                return
-            }
-
-            // Only a turn still running on the server will finish later;
-            // its (silenced) end must then be ignored.
-            self.currentLiveTurnWasHandledInstantly = self.liveVoiceClient.isModelTurnInProgress
-            self.liveVoiceClient.cancelCurrentModelResponse()
-            self.liveTurnPlaybackDrainTask?.cancel()
-            self.voiceState = .processing
-            switch await DottieInstantLane.shared.run(instantPlan) {
-            case .done(let doneText):
-                self.finishInstantLaneTurn(userText: heardText, doneText: doneText, inputKind: .voice)
-            case .askGemini:
-                guard self.liveVoicePressCount == pressNumber else { return }
-                self.currentLiveTurnWasHandledInstantly = false
-                self.startLiveTextTurn(recordedUserText: heardText, turnText: heardText)
-            }
-        }
     }
 
     /// "Tell me when the tests finish, then open the report": the watch
@@ -329,55 +253,6 @@ extension CompanionManager {
         scheduleTransientHideIfNeeded()
     }
 
-    /// Saves what Gemini did this turn as a shortcut when it can be done
-    /// again the same way. Returns a line for the answer card when the
-    /// user named the shortcut.
-    func learnShortcutFromFinishedLiveTurn(userTranscript: String, typedText: String?, modelTranscript: String) -> String? {
-        guard !currentLiveTurnFinishedToolCalls.isEmpty, !userTranscript.hasPrefix("(") else { return nil }
-        var requestTexts: [String] = []
-        // The Mac's own transcript first: it's what future asks are
-        // matched against.
-        for candidateText in [typedText, currentLiveTurnOnDeviceText, userTranscript] {
-            let trimmedCandidate = (candidateText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedCandidate.isEmpty && !requestTexts.contains(trimmedCandidate) {
-                requestTexts.append(trimmedCandidate)
-            }
-        }
-        let namedShortcutName = currentLiveTurnNamedShortcutName
-        guard let savedPhrase = DottieInstantLane.shared.learnFromFinishedTurn(
-            requestTexts: requestTexts,
-            finishedToolCalls: currentLiveTurnFinishedToolCalls,
-            modelReply: modelTranscript,
-            namedShortcutName: namedShortcutName
-        ), namedShortcutName != nil else { return nil }
-        return "Saved: say “\(savedPhrase)” any time."
-    }
-
-    /// A Live turn from text instead of the mic, with a fresh screen frame.
-    /// `recordedUserText` is what the conversation history keeps.
-    func startLiveTextTurn(recordedUserText: String, turnText: String, isNarration: Bool = false) {
-        liveTurnPlaybackDrainTask?.cancel()
-        isLiveTurnInFlight = true
-        currentLiveTurnTypedText = recordedUserText
-        currentLiveTurnIsNarration = isNarration
-        voiceState = .processing
-        Task { [weak self] in
-            guard let self else { return }
-            // A guide line needs no new look at the screen.
-            await self.beginLiveTurnWithScreenFrame(includesScreenFrame: !isNarration)
-            // Turns Dottie makes herself ("(done: …)", "(job asks: …)", a
-            // guide line) aren't the user asking for anything.
-            let isTurnMadeByDottie = isNarration || recordedUserText.isEmpty || recordedUserText.hasPrefix("(")
-            if isTurnMadeByDottie {
-                self.liveVoiceClient.skipHelperHandOffCheckForCurrentTurn()
-            } else {
-                self.liveVoiceClient.noteTypedQuestionForHelperHandOffCheck(recordedUserText)
-            }
-            self.liveVoiceClient.sendTurnContextText(turnText)
-            self.liveVoiceClient.endUserTurn()
-        }
-    }
-
     func fireLiveTurnFinishedHandler() {
         let handler = liveTurnFinishedHandler
         liveTurnFinishedHandler = nil
@@ -394,40 +269,11 @@ extension CompanionManager {
         }
         if Task.isCancelled { return }
 
-        switch voiceMode {
-        case .classic:
-            notchPresenter.updateLiveCaption(line)
-            speakWithSystemVoice(line)
-            let wordCount = line.split(separator: " ").count
-            try? await Task.sleep(nanoseconds: UInt64(max(1.5, Double(wordCount) * 0.38) * 1_000_000_000))
-            voiceState = .idle
-        case .live:
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                var hasResumed = false
-                let resumeOnce = {
-                    guard !hasResumed else { return }
-                    hasResumed = true
-                    continuation.resume()
-                }
-                fireLiveTurnFinishedHandler()
-                liveTurnFinishedHandler = resumeOnce
-                narrationCount += 1
-                let thisNarration = narrationCount
-                // Never hang the guide on a turn that goes quiet.
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 25_000_000_000)
-                    guard let self, self.narrationCount == thisNarration else { return }
-                    if self.liveTurnFinishedHandler != nil {
-                        self.fireLiveTurnFinishedHandler()
-                    }
-                }
-                startLiveTextTurn(
-                    recordedUserText: "",
-                    turnText: "[dottie guide] this step is already drawn on the screen. say exactly this line out loud, in your own warm voice, and nothing else. no tools.\n\"\(line)\"",
-                    isNarration: true
-                )
-            }
-        }
+        notchPresenter.updateLiveCaption(line)
+        speakWithSystemVoice(line)
+        let wordCount = line.split(separator: " ").count
+        try? await Task.sleep(nanoseconds: UInt64(max(1.5, Double(wordCount) * 0.38) * 1_000_000_000))
+        voiceState = .idle
     }
 
     /// With "Show Clicky" off, the cursor overlay appears only for the

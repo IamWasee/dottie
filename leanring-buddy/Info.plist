@@ -10,8 +10,6 @@
 	<string></string>
 	<key>DottieUpdateRepository</key>
 	<string>IamWasee/dottie</string>
-	<key>CompanionVoiceMode</key>
-	<string>classic</string>
 	<key>OnboardingVideoURL</key>
 	<string></string>
 	<key>PostHogAPIKey</key>

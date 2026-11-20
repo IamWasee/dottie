@@ -627,12 +627,8 @@ private struct HomeSettingsView: View {
                 }
 
                 settingsGroup(title: "Voice") {
-                    HomeVoiceChooser(companionManager: companionManager)
+                    HomeKokoroVoiceChooser()
                     DottiePersonalitySettings(companionManager: companionManager)
-                    settingsRow(label: "Voice mode") {
-                        Text(companionManager.voiceMode == .live ? "Gemini Live" : "Classic")
-                            .foregroundColor(DS.Colors.textSecondary)
-                    }
                 }
 
                 settingsGroup(title: "Shortcuts") {
@@ -1022,99 +1018,8 @@ private struct HomeSettingsView: View {
 
 // MARK: - Voice
 
-/// Settings → Voice: every voice with a play button, so the user can hear
-/// each one before choosing. Picking a voice plays it too.
-private struct HomeVoiceChooser: View {
-    @ObservedObject var companionManager: CompanionManager
-    @ObservedObject private var voicePreview = DottieVoicePreview.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Dottie's voice")
-                .font(.system(size: 13))
-                .foregroundColor(DS.Colors.textPrimary)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(DottieVoicePreview.voices) { voice in
-                    voiceTile(voice)
-                }
-            }
-            if let problem = voicePreview.problem {
-                Text(problem)
-                    .font(.system(size: 11))
-                    .foregroundColor(DS.Colors.warningText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HomeKokoroVoiceChooser()
-                .padding(.top, 6)
-        }
-        .onDisappear { voicePreview.stop() }
-    }
-
-    private func voiceTile(_ voice: DottieVoicePreview.Voice) -> some View {
-        let isSelected = companionManager.selectedVoiceName == voice.name
-        return HStack(spacing: 8) {
-            Button(action: {
-                companionManager.setSelectedVoiceName(voice.name)
-                voicePreview.play(voice.name)
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 13))
-                        .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(voice.name)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(DS.Colors.textPrimary)
-                        Text(voice.sound)
-                            .font(.system(size: 10))
-                            .foregroundColor(DS.Colors.textTertiary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-
-            previewButton(for: voice.name)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? DS.Colors.accentSubtle : DS.Colors.surface2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? DS.Colors.textTertiary : DS.Colors.borderSubtle, lineWidth: 0.5)
-        )
-    }
-
-    @ViewBuilder
-    private func previewButton(for voiceName: String) -> some View {
-        Button(action: { voicePreview.toggle(voiceName) }) {
-            Group {
-                if voicePreview.loadingVoiceName == voiceName {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: voicePreview.playingVoiceName == voiceName ? "stop.fill" : "play.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(DS.Colors.textPrimary)
-                }
-            }
-            .frame(width: 24, height: 24)
-            .background(Circle().fill(DS.Colors.surface3))
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .help("Hear \(voiceName)")
-    }
-}
-
-// MARK: - On-Mac voice
-
-/// Settings → Voice: the Kokoro voice Dottie speaks with on the Mac (classic
-/// mode), each with a play button. The first play downloads Kokoro once.
+/// Settings → Voice: Dottie's on-Mac Kokoro voices, each with a play
+/// button, so the user can hear one before choosing. Picking plays it too.
 private struct HomeKokoroVoiceChooser: View {
     @ObservedObject private var kokoroSpeaker = DottieKokoroSpeaker.shared
     @State private var chosenVoiceName = DottieKokoroVoices.chosenVoice().name
