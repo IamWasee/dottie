@@ -178,7 +178,7 @@ enum DottieTeaching {
                 }
                 return Step(
                     kind: kind,
-                    points: DottieTeaching.pairingLoneNumbers(points),
+                    points: DottieTeaching.pairingLoneNumbers(DottieTeaching.splittingPackedPoints(points)),
                     text: trimmed(fields["text"]),
                     ink: trimmed(fields["color"]).flatMap { DottieInk(rawValue: $0.lowercased()) },
                     size: trimmed(fields["size"])?.lowercased(),
@@ -266,6 +266,32 @@ enum DottieTeaching {
         let lettersLeft = reference.lowercased().filter(\.isLetter).filter { $0 != "x" && $0 != "y" }
         guard lettersLeft.isEmpty else { return nil }
         return (numbers[0], numbers[1])
+    }
+
+    /// Several points packed into one string, the way Live often sends
+    /// them ("200,800,200,600,800,800" or "(200,800) (200,600)"), become
+    /// one "x,y" each. A supply and demand graph came out as only its
+    /// equilibrium dot because the axes and both lines arrived like this.
+    /// Anchor names and single points are left as given.
+    static func splittingPackedPoints(_ points: [String]) -> [String] {
+        points.flatMap { reference -> [String] in
+            let numbers = numbersOfPackedPoints(reference)
+            guard numbers.count >= 4, numbers.count.isMultiple(of: 2) else { return [reference] }
+            return stride(from: 0, to: numbers.count, by: 2).map { "\(numbers[$0]),\(numbers[$0 + 1])" }
+        }
+    }
+
+    /// The numbers in a string that holds only numbers and separators
+    /// (commas, spaces, brackets, semicolons, x/y labels), as written.
+    /// Empty when there are other letters, since then it's a name.
+    private static func numbersOfPackedPoints(_ reference: String) -> [String] {
+        let lettersLeft = reference.lowercased().filter(\.isLetter).filter { $0 != "x" && $0 != "y" }
+        guard lettersLeft.isEmpty,
+              let numberPattern = try? NSRegularExpression(pattern: "-?\\d+(?:\\.\\d+)?") else { return [] }
+        let searchRange = NSRange(reference.startIndex..., in: reference)
+        return numberPattern.matches(in: reference, range: searchRange).compactMap { match in
+            Range(match.range, in: reference).map { String(reference[$0]) }
+        }
     }
 
     /// Points sent as lone numbers ["300", "700", "500", "200"] become
