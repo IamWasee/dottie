@@ -28,7 +28,6 @@ afterEach(() => {
 });
 
 const userText = (text: string) => ({ role: "user", parts: [{ text }] });
-const sseAnswer = (text: string) => new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\r\n\r\n`, { headers: { "content-type": "text/event-stream" } });
 
 /** A Messages API answer, as Claude sends it. */
 function claudeAnswer(content: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
@@ -306,18 +305,19 @@ describe("/chat with paid keys", () => {
   });
 
   it("skips a provider the request is too big for", async () => {
-    const calls = fakeFetch([["/models/chat-model:", sseAnswer("gemini")]]);
-    await call("/chat", { contents: [userText("a".repeat(700_000))] }, { ANTHROPIC_API_KEY: "a" });
-    expect(calls.every((recorded) => recorded.url.includes("generativelanguage"))).toBe(true);
+    const calls = fakeFetch([]);
+    const response = await call("/chat", { contents: [userText("a".repeat(700_000))] }, { ANTHROPIC_API_KEY: "a" });
+    expect(response.status).toBe(503);
+    expect(calls).toHaveLength(0);
   });
 
-  it("falls back to what's left when every paid provider fails", async () => {
+  it("falls back to Groq when every paid provider fails", async () => {
     const calls = fakeFetch([
       ["api.anthropic.com", new Response("overloaded", { status: 529 })],
-      ["/models/chat-model:", sseAnswer("gemini backup")],
+      ["api.groq.com", chatAnswer({ content: "groq backup" })],
     ]);
-    const response = await call("/chat", { contents: [userText("hi")] }, { ANTHROPIC_API_KEY: "a" });
-    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("gemini backup");
+    const response = await call("/chat", { contents: [userText("hi")] }, { ANTHROPIC_API_KEY: "a", GROQ_API_KEY: "g" });
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("groq backup");
     expect(calls[0].url).toContain("anthropic");
   });
 });
@@ -335,7 +335,6 @@ describe("/gemini (helpers) with paid keys", () => {
   it("never sends a helper's turn to Claude, even when GLM is down", async () => {
     const calls = fakeFetch([
       ["api.z.ai", new Response("down", { status: 500 })],
-      ["/models/agent-model:", jsonAnswer({ candidates: [{ content: { parts: [{ text: "old path" }] } }] })],
     ]);
     await call(generatePath, { contents: [userText("build it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
     expect(calls.some((recorded) => recorded.url.includes("anthropic"))).toBe(false);
@@ -354,26 +353,27 @@ describe("/gemini (helpers) with paid keys", () => {
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("streamed");
   });
 
-  it("goes on to Gemini when GLM can't answer", async () => {
+  it("goes on to NIM when GLM can't answer", async () => {
     fakeFetch([
       ["api.z.ai", new Response("down", { status: 500 })],
-      ["/models/agent-model:", jsonAnswer({ candidates: [{ content: { parts: [{ text: "gemini" }] } }] })],
+      ["integrate.api.nvidia.com", chatAnswer({ content: "nim" })],
     ]);
-    const response = await call(generatePath, { contents: [userText("go")] }, { ZAI_API_KEY: "z" });
-    expect(((await response.json()) as any).candidates[0].content.parts[0].text).toBe("gemini");
+    const response = await call(generatePath, { contents: [userText("go")] }, { ZAI_API_KEY: "z", NVIDIA_API_KEY: "n" });
+    expect(((await response.json()) as any).candidates[0].content.parts[0].text).toBe("nim");
   });
 
-  it("goes on to Gemini when the body isn't JSON", async () => {
-    const calls = fakeFetch([["/models/agent-model:", jsonAnswer({ ok: true })]]);
+  it("answers 400 in Gemini's error shape when the body isn't JSON", async () => {
+    const calls = fakeFetch([]);
     const response = await worker.fetch(new Request(`https://worker.test${generatePath}`, { method: "POST", body: "not json" }), makeEnv({ ZAI_API_KEY: "z" }));
-    expect(response.status).toBe(200);
-    expect(calls).toHaveLength(1);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error.status).toBe("INVALID_ARGUMENT");
+    expect(calls).toHaveLength(0);
   });
 
-  it("leaves a helper set to Gemini on Gemini", async () => {
-    const calls = fakeFetch([["/models/agent-model:", jsonAnswer({ ok: true })]]);
-    await call("/gemini-only/v1beta/models/agent-model:generateContent", { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a" });
-    expect(calls.every((recorded) => recorded.url.includes("generativelanguage"))).toBe(true);
+  it("has no /gemini-only route any more", async () => {
+    const calls = fakeFetch([]);
+    expect((await call("/gemini-only/v1beta/models/agent-model:generateContent", { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a" })).status).toBe(404);
+    expect(calls).toHaveLength(0);
   });
 });
 

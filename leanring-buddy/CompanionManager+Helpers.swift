@@ -34,7 +34,6 @@ extension CompanionManager {
             projectForTask = project
             messageForHelper = projects.taskPreamble(for: project, isNew: isNew) + taskText
             notes.append(isNew ? "made a new project, \"\(project.name)\"." : "this continues the project \"\(project.name)\".")
-            if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
         }
         // Back on a project: the Dot that last worked on it remembers it.
         let projectHelper = projectForTask?.helperNames.last.flatMap { helperName in
@@ -135,8 +134,7 @@ extension CompanionManager {
                 ?? "give the team at least two parts."
         }
         let fallbackProjectName = goal.split(separator: " ").prefix(4).joined(separator: " ")
-        let (project, isNew) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
-        if isNew { liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt() }
+        let (project, _) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
 
         let roster = teamParts.map { "- \($0.helper): \($0.task)" }.joined(separator: "\n")
         var startedLines: [String] = []
@@ -197,7 +195,6 @@ extension CompanionManager {
               let item = imageMemory.add(imageData: pngData, name: name, description: description, savedByDottie: true) else {
             return "couldn't save the picture."
         }
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
         return "saved as \"\(item.name)\"\(cropFrame == nil ? " (the whole screen)" : ""). it's in Home → Pictures, and you can find it by that name later. say so in a few words."
     }
 

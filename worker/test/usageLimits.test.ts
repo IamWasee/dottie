@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/index";
 import { DEFAULT_DAILY_LIMITS, dailyLimits, splitPassthroughKey, usageArea, usageIdentity, usageRefusal } from "../src/usageLimits";
-import { fakeFetch, geminiTextAnswer, jsonAnswer, makeEnv } from "./helpers";
+import { chatAnswer, fakeFetch, jsonAnswer, makeEnv } from "./helpers";
 
 const usageBinding = (workerBindings as unknown as Env).INSTALL_USAGE;
 
 /** A Worker with the real counters and small limits, so a test reaches them in a few requests. */
 function limitedEnv(limits: string, overrides: Partial<Env> = {}): Env {
-  return makeEnv({ INSTALL_USAGE: usageBinding, INSTALL_DAILY_LIMITS: limits, ...overrides });
+  return makeEnv({ GROQ_API_KEY: "test-groq-key", INSTALL_USAGE: usageBinding, INSTALL_DAILY_LIMITS: limits, ...overrides });
 }
 
 /** A fresh install for each test, so tests never share a counter. */
@@ -31,11 +31,8 @@ const speak = (installID: string | undefined, env: Env, headers?: Record<string,
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  fakeFetch([
-    [":streamGenerateContent", new Response("data: {}\r\n\r\n", { headers: { "content-type": "text/event-stream" } })],
-    [":generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ text: "ok" }, { inlineData: { data: btoa("pcm") } }] } }] })],
-    ["/auth_tokens", jsonAnswer({ name: "auth_tokens/abc" })],
-  ]);
+  // Every model answer comes from Groq: the Worker has no Gemini behind it.
+  fakeFetch([["api.groq.com", chatAnswer({ content: "ok" })]]);
 });
 
 afterEach(() => {
@@ -49,7 +46,6 @@ describe("usageArea", () => {
     ["POST", "/jev", "chat"],
     ["GET", "/search", "search"],
     ["POST", "/gemini/v1beta/models/m:generateContent", "helpers"],
-    ["POST", "/gemini-only/v1beta/models/m:generateContent", "helpers"],
   ])("counts %s %s as %s", (method, pathname, area) => {
     expect(usageArea(method, pathname)).toBe(area);
   });
@@ -172,7 +168,6 @@ describe("an install's limit for the day", () => {
     const installID = newInstallID();
     expect((await fromInstall(installID, "/health", { env })).status).toBe(200);
     expect((await fromInstall(installID, "/config", { env })).status).toBe(200);
-    fakeFetch([["generativelanguage.googleapis.com", jsonAnswer({ models: [] })]]);
     expect((await fromInstall(installID, "/gemini/v1beta/models", { env })).status).toBe(200);
   });
 
@@ -191,7 +186,7 @@ describe("an install's limit for the day", () => {
   });
 
   it("counts nothing without the counter binding", async () => {
-    const env = makeEnv({ INSTALL_DAILY_LIMITS: "chat=0" });
+    const env = makeEnv({ GROQ_API_KEY: "test-groq-key", INSTALL_DAILY_LIMITS: "chat=0" });
     expect((await speak(newInstallID(), env)).status).toBe(200);
   });
 
@@ -204,7 +199,7 @@ describe("an install's limit for the day", () => {
         },
       }),
     } as unknown as DurableObjectNamespace;
-    const env = makeEnv({ INSTALL_USAGE: brokenBinding, INSTALL_DAILY_LIMITS: "chat=0" });
+    const env = makeEnv({ GROQ_API_KEY: "test-groq-key", INSTALL_USAGE: brokenBinding, INSTALL_DAILY_LIMITS: "chat=0" });
     expect((await speak(newInstallID(), env)).status).toBe(200);
   });
 });
@@ -214,7 +209,6 @@ describe("a helper's calls through Gemini CLI", () => {
   const turn = (apiKey: string, env: Env) => fromInstall(undefined, generatePath, { body: { contents: [] }, headers: { "x-goog-api-key": apiKey }, env });
 
   it("are let in by the secret with the install id after it, and counted against that install", async () => {
-    fakeFetch([["generativelanguage.googleapis.com", geminiTextAnswer("done")]]);
     const env = limitedEnv("helpers=1", { APP_SHARED_SECRET: "the-secret" });
     const installID = newInstallID();
     expect((await turn(`the-secret:${installID}`, env)).status).toBe(200);
@@ -229,7 +223,6 @@ describe("a helper's calls through Gemini CLI", () => {
   });
 
   it("still take the bare secret from an older copy of the app", async () => {
-    fakeFetch([["generativelanguage.googleapis.com", geminiTextAnswer("done")]]);
     const env = limitedEnv("helpers=5", { APP_SHARED_SECRET: "the-secret" });
     expect((await turn("the-secret", env)).status).toBe(200);
   });

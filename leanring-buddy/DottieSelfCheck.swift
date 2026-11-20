@@ -198,9 +198,9 @@ final class DottieSelfCheck: ObservableObject {
         case .ready:
             result.append(Item(id: "worker", title: "Dottie's server", level: healthMilliseconds < 1500 ? .good : .warning,
                                detail: "Answered in \(healthMilliseconds) ms\(healthMilliseconds < 1500 ? "." : ", which is slow. Your connection may be busy.")"))
-        case .missingGeminiKey:
+        case .missingModelKey:
             return [Item(id: "worker", title: "Dottie's server", level: .problem,
-                         detail: "It answers, but has no Gemini key. Add GEMINI_API_KEY to the server (see INSTALL.md).")]
+                         detail: "It answers, but has no model key. Add ANTHROPIC_API_KEY and ZAI_API_KEY to the server (see INSTALL.md).")]
         case .unreachable(let reason):
             return [Item(id: "worker", title: "Dottie's server", level: .problem,
                          detail: "Can't reach it: \(reason)", fix: .checkAgain, fixLabel: "Try again")]

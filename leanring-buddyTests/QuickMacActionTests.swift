@@ -63,7 +63,7 @@ struct QuickMacActionTests {
     // MARK: - Where the tool shows up
 
     @Test func voiceDottieHasItUpFront() {
-        #expect(GeminiLiveToolCatalog.directFunctionNames.contains(DottieQuickMacAction.functionName))
+        #expect(DottieVoiceToolCatalog.directFunctionNames.contains(DottieQuickMacAction.functionName))
         #expect(DottieToolRegistry.handles(DottieQuickMacAction.functionName, for: .voice))
         let declaration = DottieToolRegistry.functionDeclarations(for: .voice).first { ($0["name"] as? String) == DottieQuickMacAction.functionName }
         let parameters = declaration?["parameters"] as? [String: Any]

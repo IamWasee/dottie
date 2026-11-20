@@ -273,8 +273,7 @@ final class GeminiCLIAgentRuntime {
             let existingPATH = processEnvironment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
             processEnvironment["PATH"] = existingPATH + ":" + DotsRuntimeInstaller.nodeBinFolderURL.path
         }
-        // "/gemini" tries Groq first when the request fits; "/gemini-only"
-        // (a helper set to Gemini) goes straight to Gemini.
+        // The Worker answers Gemini CLI's model calls with GLM (no Gemini).
         processEnvironment["GOOGLE_GEMINI_BASE_URL"] = ClickyWorkerConfiguration.workerBaseURL + workerRoute
         // The Worker swaps this for the real key. It carries the shared
         // secret (any placeholder works without one) and this install's id.

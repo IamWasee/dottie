@@ -196,10 +196,10 @@ extension CompanionManager {
                         ? transcript
                         : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
                     let requestToolDeclarations = DottieTalkerProtocol.requestToolDeclarations(
-                        from: GeminiLiveVoiceClient.everyFunctionDeclaration,
-                        findAndUseDeclarations: [GeminiLiveToolCatalog.findToolFunctionDeclaration, GeminiLiveToolCatalog.useToolFunctionDeclaration]
+                        from: DottieVoiceTools.everyFunctionDeclaration,
+                        findAndUseDeclarations: [DottieVoiceToolCatalog.findToolFunctionDeclaration, DottieVoiceToolCatalog.useToolFunctionDeclaration]
                     )
-                    let liveToolRunner = liveVoiceClient
+                    let liveToolRunner = voiceTools
                     fullResponseText = try await DottieTalker.answerRequest(
                         transcript: promptForModel,
                         exchanges: conversationHistory,
@@ -207,7 +207,7 @@ extension CompanionManager {
                         systemPrompt: DottieTalkerProtocol.requestSystemPrompt(personalityLine: personalityLine, profile: brain.profileForPrompt),
                         toolDeclarations: requestToolDeclarations,
                         runTool: { functionName, functionArguments in
-                            await liveToolRunner.runToolForTextBrain(functionName: functionName, arguments: functionArguments)
+                            await liveToolRunner.runTool(functionName: functionName, arguments: functionArguments)
                         }
                     )
                 }

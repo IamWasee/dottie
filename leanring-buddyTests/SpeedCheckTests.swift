@@ -162,20 +162,6 @@ struct SpeedCheckTests {
         #expect(median < 1_500, "a 40-step plan took \(median) ms")
     }
 
-    @Test func decidingWhetherToResendTheScreenStaysQuick() {
-        let fingerprint = [UInt8](repeating: 128, count: 256 * 160)
-        let lastSent = (sessionNumber: 1, fingerprint: fingerprint, sentAt: Date())
-
-        let median = medianMilliseconds {
-            for _ in 0..<20 {
-                _ = GeminiLiveVoiceClient.reusesLastScreenFrame(newFingerprint: fingerprint, lastSentScreenFrame: lastSent,
-                                                               currentSessionNumber: 1, now: Date())
-            }
-        }
-
-        #expect(median < 500, "20 screen comparisons took \(median) ms")
-    }
-
     @Test func pickingTheOnMacVoiceForAThousandAnswersStaysQuick() {
         let median = medianMilliseconds {
             for answerNumber in 0..<1_000 {
@@ -222,11 +208,11 @@ struct SpeedCheckTests {
     @Test func placingAThousandDrawingAnchorsStaysQuick() {
         let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let median = medianMilliseconds {
-            var jevFrames: [String: CGRect] = [:]
+            var anchorFrames: [String: CGRect] = [:]
             for anchorNumber in 0..<1_000 {
-                jevFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
+                anchorFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
             }
-            _ = DottieTeaching.mergedAnchorFrames(jevFrames: jevFrames, modelFrames: jevFrames)
+            _ = anchorFrames
         }
 
         #expect(median < 200, "1,000 drawing anchors took \(median) ms")

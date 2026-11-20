@@ -23,7 +23,6 @@ extension CompanionManager {
             // Typed in the notch: the answer shows as text unless the user
             // wants it read out (DottieTypeBar).
             DottieEveryday.shared.typeBar.remember(messageText)
-            self.liveVoiceClient.isAudioOutputMuted = !DottieTypeBar.speaksAnswers
             self.sendTypedMessage(messageText)
         }
         DottieEveryday.shared.attach(to: self)
@@ -119,7 +118,6 @@ extension CompanionManager {
                 if !trimmedMessageText.isEmpty { self.sendTypedMessage(trimmedMessageText) }
                 return
             }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
             let pictureNotes = savedItems.map { item in
                 "\"\(item.name)\"" + (item.description.isEmpty ? "" : " (\(item.description))")
             }.joined(separator: ", ")
@@ -244,9 +242,6 @@ extension CompanionManager {
         if conversationHistory.count > Self.rememberedExchangeCount {
             conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
         }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
         NSSound(named: "Pop")?.play()
         notchPresenter.showFinishedResponse(doneText)
         fireLiveTurnFinishedHandler()
@@ -307,7 +302,6 @@ extension CompanionManager {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         liveTurnPlaybackDrainTask?.cancel()
-        liveVoiceClient.cancelCurrentModelResponse()
         stopAllSpeechPlayback()
         clearDetectedElementLocation()
         screenAnnotationManager.clear()

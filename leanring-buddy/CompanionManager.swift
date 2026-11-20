@@ -74,7 +74,7 @@ final class CompanionManager: ObservableObject {
 
     /// The Gemini Live session used in live mode. Idle (no socket) until the
     /// first push-to-talk.
-    let liveVoiceClient = GeminiLiveVoiceClient()
+    let voiceTools = DottieVoiceTools()
 
     /// In live mode the mic audio goes to Gemini Live through a bridge
     /// provider; in classic mode it goes to Apple Speech. Lazy because the
@@ -242,16 +242,11 @@ final class CompanionManager: ObservableObject {
     func setSelectedPersonality(_ personality: DottiePersonality) {
         selectedPersonality = personality
         UserDefaults.standard.set(personality.rawValue, forKey: DottiePersonality.defaultsKey)
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        liveVoiceClient.startFreshSessionSoon()
     }
 
     func setSelectedVoiceName(_ voiceName: String) {
         selectedVoiceName = voiceName
         UserDefaults.standard.set(voiceName, forKey: "selectedGeminiLiveVoice")
-        // Starts a fresh session for her next answer (or right after the
-        // one she's giving), so the new voice is heard straight away.
-        liveVoiceClient.voiceName = voiceName
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -466,7 +461,6 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
-        liveVoiceClient.disconnect()
         notchWindowManager.hide()
         notchVoiceStateCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
@@ -806,8 +800,6 @@ final class CompanionManager: ObservableObject {
 
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-            // A spoken turn is always answered out loud.
-            liveVoiceClient.isAudioOutputMuted = false
 
             // Cancel any in-progress response and speech from a previous utterance
             currentResponseTask?.cancel()
@@ -913,9 +905,9 @@ final class CompanionManager: ObservableObject {
 
     static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
         let featureSections = DottieToolRegistry.voicePromptSections
-        // The rarer tools aren't declared to Live (GeminiLiveToolCatalog);
+        // The rarer tools aren't declared up front (DottieVoiceToolCatalog);
         // this line is how the model knows they exist and to find them.
-        let hiddenToolsLine = "more tools: find_tool finds the rest by what the user wants and use_tool runs one (call use_tool straight away when you know the name and arguments). never say you can't do something before checking find_tool. they cover " + GeminiLiveToolCatalog.hiddenToolAreasSummary + "."
+        let hiddenToolsLine = "more tools: find_tool finds the rest by what the user wants and use_tool runs one (call use_tool straight away when you know the name and arguments). never say you can't do something before checking find_tool. they cover " + DottieVoiceToolCatalog.hiddenToolAreasSummary + "."
         return personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
             + "\n\n" + hiddenToolsLine
             + "\n\n" + DottieWorkRoutes.voiceAskBeforeSayingNo
@@ -1030,25 +1022,16 @@ final class CompanionManager: ObservableObject {
         conversationHistory = conversationStore.entries
             .suffix(Self.rememberedExchangeCount)
             .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
-        liveVoiceClient.startFreshSessionSoon()
     }
 
     /// Hooks the Live client's callbacks into the companion's state.
     private func configureLiveVoiceClient() {
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        liveVoiceClient.voiceName = selectedVoiceName
 
         // Pick up where the last run left off: the saved conversation seeds
         // memory, so Dottie still knows the user's name after a relaunch.
         conversationHistory = conversationStore.entries
             .suffix(Self.rememberedExchangeCount)
             .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
 
         connectLiveToolCallbacks()
     }
@@ -1056,22 +1039,22 @@ final class CompanionManager: ObservableObject {
     /// The tools Live can call, each handed to the part of the companion
     /// that does it.
     private func connectLiveToolCallbacks() {
-        liveVoiceClient.onHigherModelRequest = { [weak self] question in
+        voiceTools.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
         }
 
-        liveVoiceClient.onScreenAction = { [weak self] screenAction in
+        voiceTools.onScreenAction = { [weak self] screenAction in
             guard let self else { return "couldn't do that right now." }
             return await self.performScreenAction(screenAction)
         }
 
-        liveVoiceClient.onStartScreenTask = { [weak self] taskText, referenceImageNames, restart in
+        voiceTools.onStartScreenTask = { [weak self] taskText, referenceImageNames, restart in
             guard let self else { return "couldn't start it right now." }
             return self.startScreenTask(ScreenJob(text: taskText, referenceImageNames: referenceImageNames, restart: restart))
         }
 
-        liveVoiceClient.onStopScreenTask = { [weak self] scope in
+        voiceTools.onStopScreenTask = { [weak self] scope in
             guard let self else { return "nothing is running." }
             switch scope {
             case "current":
@@ -1084,27 +1067,27 @@ final class CompanionManager: ObservableObject {
             }
         }
 
-        liveVoiceClient.onStartGuide = { [weak self] goal, modeName in
+        voiceTools.onStartGuide = { [weak self] goal, modeName in
             guard let self else { return "couldn't start it right now." }
             return self.startGuide(goal: goal, modeName: modeName)
         }
 
-        liveVoiceClient.onGuideNext = { [weak self] in
+        voiceTools.onGuideNext = { [weak self] in
             guard let self, self.guide.userSaidNext() else { return "no guide is running." }
             return "okay, moving on. say nothing more; the next step is coming."
         }
 
-        liveVoiceClient.onStopGuide = { [weak self] in
+        voiceTools.onStopGuide = { [weak self] in
             guard let self else { return "no guide is running." }
             return self.stopGuide() ? "stopped the guide." : "no guide was running."
         }
 
-        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText, projectName, restart in
+        voiceTools.onStartClickyTask = { [weak self] clickyName, taskText, projectName, restart in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText, projectName: projectName, restart: restart)
         }
 
-        liveVoiceClient.onBrainTool = { [weak self] functionName, text in
+        voiceTools.onBrainTool = { [weak self] functionName, text in
             guard let self else { return "the brain isn't available right now." }
             switch functionName {
             case "recall_memory":
@@ -1117,12 +1100,12 @@ final class CompanionManager: ObservableObject {
             }
         }
 
-        liveVoiceClient.onHelperTool = { [weak self] functionName, helperName in
+        voiceTools.onHelperTool = { [weak self] functionName, helperName in
             guard let self else { return "helpers aren't available right now." }
             return self.answerHelperTool(functionName: functionName, helperName: helperName)
         }
 
-        liveVoiceClient.onMacTool = { [weak self] functionName, arguments in
+        voiceTools.onMacTool = { [weak self] functionName, arguments in
             guard let self else { return "couldn't do that right now." }
             if DottieWorkTools.functionNames.contains(functionName) {
                 return await self.performWorkTool(functionName: functionName, arguments: arguments)
@@ -1192,7 +1175,7 @@ final class CompanionManager: ObservableObject {
             DottieScreenActionPerformer.click(at: target.point, clickCount: clickCount, isRightClick: isRightClick)
             // "sign in with this account": the click only starts the goal,
             // so a screen job finishes it (DottieTaskGoal).
-            let userRequest = currentLiveTurnTypedText ?? liveVoiceClient.userTranscriptSoFar
+            let userRequest = currentLiveTurnTypedText ?? lastTranscript ?? ""
             if DottieTaskGoals.clickLeavesGoalUnfinished(request: userRequest), !screenTaskRunner.isRunning {
                 let jobText = "\(userRequest.trimmingCharacters(in: .whitespacesAndNewlines)) (Dottie already clicked \"\(label ?? "it")\" for this; carry on from there)"
                 _ = startScreenTask(ScreenJob(text: jobText))

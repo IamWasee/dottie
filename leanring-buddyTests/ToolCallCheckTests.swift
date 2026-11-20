@@ -137,10 +137,10 @@ struct ToolCallCheckTests {
     // MARK: - Integration: the real declarations Live gets
 
     @Test func everyDirectToolIsKnownToTheChecker() {
-        for declaration in GeminiLiveVoiceClient.directFunctionDeclarations {
+        for declaration in DottieVoiceTools.directFunctionDeclarations {
             let toolName = declaration["name"] as? String ?? ""
             let found = DottieToolCallCheck.problems(with: .init(name: toolName, arguments: [:]),
-                                                     everyDeclaration: GeminiLiveVoiceClient.everyFunctionDeclaration)
+                                                     everyDeclaration: DottieVoiceTools.everyFunctionDeclaration)
             #expect(!found.contains { $0.contains("no tool has this name") }, "\(toolName) should be known")
         }
     }

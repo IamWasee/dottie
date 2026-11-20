@@ -1,50 +1,32 @@
 /**
- * Clicky Proxy Worker (Gemini edition)
+ * Dottie's Worker
  *
- * Holds the Gemini API key so the app never ships with it. The key is a
- * Cloudflare secret; the app only ever sees short-lived tokens or proxied
- * responses.
+ * Holds the model keys so the app never ships with them. No Gemini behind
+ * it any more: requests still use Gemini's body format (the app and Gemini
+ * CLI speak it) and are answered by Claude, GLM, Groq or NIM.
  *
  * Routes:
- *   POST /chat       → Gemini streamGenerateContent (SSE). Used for the
- *                      onboarding demo and the classic (non-Live) voice mode.
- *   GET  /search?q=  → web search without Google Search grounding (free-tier
- *                      keys can't use it): Bing and DuckDuckGo at once, the
- *                      one covering the query best (Wikipedia when neither
- *                      does), plus the top page's text. Used by the voice
- *                      model's search_web tool and by Dots.
+ *   POST /chat       → streamed answer in Gemini's SSE format. "provider":
+ *                      "talk" is Groq's small talk model, "request" is
+ *                      Claude; anything else goes to the paid providers
+ *                      (paidProviders), then Groq, then NIM.
+ *   GET  /search?q=  → free web search (Bing, DuckDuckGo, Wikipedia).
+ *   POST /jev        → Jev (TypeSafe's System One): boxes and done checks.
  *   GET  /config     → non-secret model names, for debugging.
- *   ANY  /gemini/*   → transparent Gemini API passthrough for the background
- *                      agents (Gemini CLI). The CLI is pointed here with
+ *   ANY  /gemini/*   → the Dots' route: Gemini CLI is pointed here with
  *                      GOOGLE_GEMINI_BASE_URL and sends the shared secret as
- *                      its "API key"; the real key is swapped in here.
- *
- * Groq: set the GROQ_API_KEY secret (free key from console.groq.com/keys).
- * /chat requests that ask for it with "provider": "groq" (live meeting help,
- * quick text asks, pointing, guides and screen jobs) go to Groq first, which
- * answers in well under a second, and to Gemini when Groq is busy or the
- * request is too big for it (GROQ_MAX_REQUEST_TOKENS). Dot turns that fit
- * go to Groq first too. Every other small /chat request gets Groq as a
- * backup when every Gemini model is busy. Voice, speech and dictation stay
- * on Gemini (see chatCompletions.ts).
- *
- * Last resort: set the NVIDIA_API_KEY secret (free key from build.nvidia.com)
- * and text/picture requests that everything else turns down as busy go to
- * NVIDIA NIM models.
+ *                      its "API key"; its model calls get the same models.
+ *   /phone/*, /telegram/webhook → Dottie's phone bot (phoneRelay.ts).
+ *   GET  /health     → up, and has a model key.
  *
  * Optional: set the APP_SHARED_SECRET secret and the same value as
  * ClickyAppSharedSecret in the app's Info.plist. Requests without the
  * matching `x-clicky-secret` header are rejected, so a stranger who finds
- * your worker URL can't burn your free-tier quota.
+ * your worker URL can't spend your keys.
  */
 
 export interface Env {
-  GEMINI_API_KEY: string;
   APP_SHARED_SECRET?: string;
-  GEMINI_CHAT_MODEL: string;
-  GEMINI_HIGHER_MODEL: string;
-  /** Comma-separated models to try, in order, when the chosen one is busy. */
-  GEMINI_FALLBACK_MODELS?: string;
   /** Free Groq key; when set, quick asks go to Groq first (see handleChat). */
   GROQ_API_KEY?: string;
   /** Comma-separated Groq models for text-only requests, best first. */
@@ -97,12 +79,11 @@ const MAXIMUM_BODY_BYTES = 32 * 1024 * 1024;
 const MAXIMUM_PHONE_FILE_BYTES = 52 * 1024 * 1024;
 
 /**
- * What the Gemini passthrough forwards: calling a model, and listing
- * models. Everything else the Gemini API offers with the same key
- * (uploading files, cached content, tuning models, deleting things) is
- * turned away, because no part of Dottie uses it.
+ * What the Dots' Gemini-shaped route answers: calling a model, counting
+ * tokens and listing models. Everything else Gemini CLI might ask for
+ * (uploading files, cached content, embeddings) is turned away.
  */
-const PASSTHROUGH_MODEL_CALL = /^\/v1(?:alpha|beta)?\/models\/[^/:]+:(?:generateContent|streamGenerateContent|countTokens|embedContent|batchEmbedContents)$/;
+const PASSTHROUGH_MODEL_CALL = /^\/v1(?:alpha|beta)?\/models\/[^/:]+:(?:generateContent|streamGenerateContent|countTokens)$/;
 const PASSTHROUGH_MODEL_LISTING = /^\/v1(?:alpha|beta)?\/models(?:\/[^/:]+)?$/;
 
 export function isAllowedPassthrough(method: string, upstreamPath: string): boolean {
@@ -180,9 +161,8 @@ function tooManyRequestsResponse(): Response {
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
 import { handleJev } from "./jev";
-import { anthropicProvider, answerWithProvider, canAnswer, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
-import { attemptTimeoutMilliseconds, BUSY_STATUSES, fetchGeminiWithFallback, modelsToTry } from "./geminiFallback";
-import { isSameSecret, jsonResponse, readJSONObject, upstreamErrorResponse } from "./http";
+import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
+import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
 import { splitPassthroughKey, usageRefusal } from "./usageLimits";
@@ -198,19 +178,16 @@ export default {
       return jsonResponse({ error: "That request is too big." }, 413);
     }
 
-    // Gemini CLI can only send an "API key", so the agents' passthrough
+    // Gemini CLI can only send an "API key", so the Dots' route
     // authenticates with that key instead of x-clicky-secret. Google's
     // clients send it as x-goog-api-key or, some of them, as ?key=.
-    // /gemini-only/ is the same passthrough without the Groq-first step,
-    // for a helper the user set to Gemini.
-    const isGeminiOnlyRoute = url.pathname.startsWith("/gemini-only/");
-    if (url.pathname.startsWith("/gemini/") || isGeminiOnlyRoute) {
+    if (url.pathname.startsWith("/gemini/")) {
       // The app puts its install id after the secret ("secret:install-id").
       const sentKey = splitPassthroughKey(request.headers.get("x-goog-api-key") ?? url.searchParams.get("key") ?? "").secret;
       if (env.APP_SHARED_SECRET && !isSameSecret(sentKey, env.APP_SHARED_SECRET)) {
         return new Response("Unauthorized", { status: 401 });
       }
-      const upstreamPath = url.pathname.slice((isGeminiOnlyRoute ? "/gemini-only" : "/gemini").length);
+      const upstreamPath = url.pathname.slice("/gemini".length);
       if (!isAllowedPassthrough(request.method, upstreamPath)) {
         return jsonResponse({ error: "This part of the Gemini API isn't available through Dottie." }, 403);
       }
@@ -218,7 +195,7 @@ export default {
       const passthroughUsageRefusal = await usageRefusal(request, url, env);
       if (passthroughUsageRefusal) return passthroughUsageRefusal;
       try {
-        return await handleGeminiPassthrough(request, url, env, isGeminiOnlyRoute);
+        return await handleGeminiPassthrough(request, url, env);
       } catch (error) {
         console.error(`[/gemini] Unhandled error:`, error);
         return jsonResponse({ error: SERVER_ERROR_MESSAGE }, 500);
@@ -230,7 +207,7 @@ export default {
       return (await handlePhoneRelay(request, url, env)) ?? new Response("Not found", { status: 404 });
     }
 
-    // Open to anyone: says the Worker is up and has a key, nothing more.
+    // Open to anyone: says the Worker is up and has a model key, nothing more.
     // The release workflow and Dottie's Settings use it to check an address.
     // It doesn't say which other keys are set or whether a secret is
     // needed: that would tell a stranger what is worth trying.
@@ -238,7 +215,7 @@ export default {
       return jsonResponse({
         ok: true,
         app: "dottie",
-        hasGeminiKey: Boolean(env.GEMINI_API_KEY),
+        hasModelKey: Boolean(env.ANTHROPIC_API_KEY || env.ZAI_API_KEY || env.GROQ_API_KEY || env.NVIDIA_API_KEY),
       });
     }
 
@@ -263,8 +240,6 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/config") {
         return jsonResponse({
-          chatModel: env.GEMINI_CHAT_MODEL,
-          higherModel: env.GEMINI_HIGHER_MODEL,
           groq: env.GROQ_API_KEY
             ? { textModels: env.GROQ_TEXT_MODELS || "default", visionModels: env.GROQ_VISION_MODELS || "default" }
             : "off",
@@ -296,27 +271,18 @@ export default {
 };
 
 /**
- * Proxies a Gemini generateContent body to the streaming endpoint. The app
- * sends a standard Gemini request body (contents, systemInstruction,
- * generationConfig). The model comes from the body's optional "model" field,
- * falling back to GEMINI_CHAT_MODEL. The alias "higher" maps to
- * GEMINI_HIGHER_MODEL, used when the voice model hands off a hard question.
- *
- * The optional "provider" field picks who answers first: "groq" tries Groq
- * before Gemini (when the Groq key is set and the request fits its free
- * plan); anything else tries Gemini first. Either way the others are
- * backups: Gemini's models in turn, then Groq, then NIM.
+ * Answers a chat request in Gemini's request and streaming format (the app
+ * and Gemini CLI speak it) with no Gemini behind it. The optional
+ * "provider" field picks the route: "talk" is Groq's small talk model
+ * alone, "request" is Claude alone. Anything else goes to the paid
+ * providers first (paidProviders), then Groq ("provider": "groq" or not),
+ * then NIM; when none of them answers the caller gets a 503.
  */
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const requestBody = await readJSONObject(request);
   if (!requestBody) {
     return jsonResponse({ error: "the body must be a JSON object" }, 400);
   }
-  let requestedModel = typeof requestBody.model === "string" ? requestBody.model : env.GEMINI_CHAT_MODEL;
-  if (requestedModel === "higher") {
-    requestedModel = env.GEMINI_HIGHER_MODEL || env.GEMINI_CHAT_MODEL;
-  }
-  const prefersGroq = requestBody.provider === "groq";
   const wantedRole = requestBody.provider;
   delete requestBody.model;
   delete requestBody.provider;
@@ -334,62 +300,42 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
   }
 
-  // Paid providers answer first when their keys are set; Groq and Gemini
-  // are only backups then.
-  const paidResponse = await answerWithPaidProviders(env, requestBody, true, "/chat");
+  const answer = await answerWithAnyProvider(env, requestBody, true, "/chat");
+  return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
+}
+
+/** What a caller hears when every model is busy, down or has no key. */
+const NO_MODEL_ANSWERED_MESSAGE = "No model could answer right now. Try again in a moment.";
+
+/**
+ * The paid providers, then Groq, then NIM; undefined when none answered.
+ * Screen jobs send a screenshot every step, so each one gets only as much
+ * of the request as fits it.
+ */
+async function answerWithAnyProvider(
+  env: Env,
+  geminiBody: Record<string, unknown>,
+  streaming: boolean,
+  routeName: string
+): Promise<Response | undefined> {
+  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName);
   if (paidResponse) return paidResponse;
-
+  const backups: ChatProvider[] = [];
   const groq = groqFromEnv(env);
-  const groqCanAnswer = Boolean(groq && canAnswer(groq, requestBody));
-
-  if (prefersGroq && groq) {
-    // Screen jobs send a screenshot every step: Groq gets the newest ones
-    // and the recent steps; Gemini, if it has to answer, gets everything.
-    const bodyForGroq = fittedForProvider(groq, requestBody, true);
-    if (canAnswer(groq, bodyForGroq)) {
-      const groqResponse = await answerWithProvider(groq, bodyForGroq, true);
-      if (groqResponse) return groqResponse;
-      console.warn(`[/chat] Groq couldn't answer; trying Gemini`);
-    } else {
-      console.warn(`[/chat] too big for Groq; trying Gemini`);
+  if (groq) backups.push(groq);
+  if (env.NVIDIA_API_KEY) backups.push(nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS));
+  for (const backup of backups) {
+    const fittedBody = fittedForProvider(backup, geminiBody, routeName === "/chat");
+    if (!canAnswer(backup, fittedBody)) {
+      console.warn(`[${routeName}] too big for ${backup.name}`);
+      continue;
     }
+    const backupResponse = await answerWithProvider(backup, fittedBody, streaming);
+    if (backupResponse) return backupResponse;
+    console.warn(`[${routeName}] ${backup.name} couldn't answer`);
   }
-
-  const response = await fetchGeminiWithFallback(
-    env.GEMINI_API_KEY,
-    modelsToTry(requestedModel, env.GEMINI_FALLBACK_MODELS),
-    "streamGenerateContent?alt=sse",
-    JSON.stringify(requestBody),
-    attemptTimeoutMilliseconds(request)
-  );
-
-  if (BUSY_STATUSES.includes(response.status)) {
-    const backups: ChatProvider[] = [];
-    // Groq was already tried when it was asked for first.
-    if (groq && groqCanAnswer && !prefersGroq) backups.push(groq);
-    if (env.NVIDIA_API_KEY) backups.push(nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS));
-    for (const backup of backups) {
-      if (!canAnswer(backup, requestBody)) continue;
-      const backupResponse = await answerWithProvider(backup, requestBody, true);
-      if (backupResponse) {
-        console.warn(`[/chat] every Gemini model was busy (${response.status}); ${backup.name} answered`);
-        await response.body?.cancel();
-        return backupResponse;
-      }
-    }
-  }
-
-  if (!response.ok) {
-    return await upstreamErrorResponse("/chat", response);
-  }
-
-  return new Response(response.body, {
-    status: response.status,
-    headers: {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-    },
-  });
+  console.error(`[${routeName}] no model answered`);
+  return undefined;
 }
 
 /**
@@ -468,103 +414,40 @@ function groqFromEnv(env: Env): ChatProvider | undefined {
 }
 
 /**
- * Forwards /gemini/<path> to generativelanguage.googleapis.com/<path> with the
- * real key. Bodies and streamed responses pass through untouched.
+ * Gemini CLI's side of the Dots: it thinks it is talking to Gemini at
+ * GOOGLE_GEMINI_BASE_URL, and this answers in Gemini's format with the
+ * same models /chat uses. Model calls go to answerWithAnyProvider,
+ * counting tokens is estimated here, and listing models lists the one
+ * name the CLI is told to use, so nothing ever reaches Google.
  */
-async function handleGeminiPassthrough(request: Request, url: URL, env: Env, skipsGroq = false): Promise<Response> {
-  const upstreamPath = url.pathname.slice((skipsGroq ? "/gemini-only" : "/gemini").length);
-  const upstreamQuery = new URLSearchParams();
-  url.searchParams.forEach((value, key) => {
-    if (key !== "key") upstreamQuery.set(key, value);
-  });
-
-  const upstreamHeaders = new Headers();
-  const contentType = request.headers.get("content-type");
-  if (contentType) upstreamHeaders.set("content-type", contentType);
-  upstreamHeaders.set("x-goog-api-key", env.GEMINI_API_KEY);
-
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  // Buffered so the same request can go to a backup model.
-  const requestBody = hasBody ? await request.arrayBuffer() : undefined;
-
-  // Dots (Gemini CLI) call models/<model>:<method>. A busy or out-of-quota
-  // model moves on to the backups, like /chat does; the CLI never knows.
-  const modelCall = upstreamPath.match(/^(.*\/models\/)([^/:]+)(:.+)$/);
-  const upstreamPaths = modelCall && request.method === "POST"
-    ? modelsToTry(decodeURIComponent(modelCall[2]), env.GEMINI_FALLBACK_MODELS)
-        .map((model) => `${modelCall[1]}${encodeURIComponent(model)}${modelCall[3]}`)
-    : [upstreamPath];
-
-  // Dot turns go to Groq first when they fit (on Groq's free plan most are
-  // too big, so those stay on Gemini); the CLI can't tell who answered.
-  const generateMethod = modelCall?.[3].match(/^:(stream)?generateContent$/i);
-  const groq = skipsGroq ? undefined : groqFromEnv(env);
-  // Parsed once, and only when Groq or NIM might answer instead of Gemini.
-  let parsedGeminiBody: Record<string, unknown> | undefined;
-  const geminiBodyForBackups = (): Record<string, unknown> => {
-    parsedGeminiBody ??= JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
-    return parsedGeminiBody;
-  };
-  if (!skipsGroq && generateMethod && requestBody && request.method === "POST") {
-    try {
-      const paidResponse = await answerWithPaidProviders(env, geminiBodyForBackups(), Boolean(generateMethod[1]), "/gemini");
-      if (paidResponse) return paidResponse;
-    } catch (error) {
-      console.warn(`[/gemini] paid providers failed: ${error}`);
-    }
-  }
-  if (groq && generateMethod && requestBody && request.method === "POST") {
-    try {
-      const geminiBody = geminiBodyForBackups();
-      const bodyForGroq = fittedForProvider(groq, geminiBody, false);
-      if (canAnswer(groq, bodyForGroq)) {
-        const groqResponse = await answerWithProvider(groq, bodyForGroq, Boolean(generateMethod[1]));
-        if (groqResponse) return groqResponse;
-        console.warn(`[/gemini] Groq couldn't answer; trying Gemini`);
-      }
-    } catch (error) {
-      console.warn(`[/gemini] Groq first failed: ${error}`);
-    }
+async function handleGeminiPassthrough(request: Request, url: URL, env: Env): Promise<Response> {
+  const upstreamPath = url.pathname.slice("/gemini".length);
+  if (request.method === "GET") {
+    const singleModel = upstreamPath.match(/\/models\/([^/:]+)$/);
+    const listedModel = (name: string) => ({ name: `models/${name}`, supportedGenerationMethods: ["generateContent", "countTokens"] });
+    return singleModel
+      ? jsonResponse(listedModel(decodeURIComponent(singleModel[1])))
+      : jsonResponse({ models: [listedModel(DOTS_MODEL_NAME)] });
   }
 
-  let upstreamResponse: Response | undefined;
-  for (const [index, path] of upstreamPaths.entries()) {
-    const upstreamURL = new URL(`https://generativelanguage.googleapis.com${path}`);
-    upstreamURL.search = upstreamQuery.toString();
-    upstreamResponse = await fetch(upstreamURL.toString(), {
-      method: request.method,
-      headers: upstreamHeaders,
-      body: requestBody,
-    });
-    const isBusy = BUSY_STATUSES.includes(upstreamResponse.status);
-    if (!isBusy || index === upstreamPaths.length - 1) break;
-    console.warn(`[/gemini] ${path} answered ${upstreamResponse.status}; trying ${upstreamPaths[index + 1]}`);
-    await upstreamResponse.body?.cancel();
+  const geminiBody = await readJSONObject(request);
+  if (!geminiBody) return geminiErrorResponse(400, "INVALID_ARGUMENT", "the body must be a JSON object");
+
+  const method = upstreamPath.slice(upstreamPath.lastIndexOf(":") + 1);
+  if (method === "countTokens") {
+    // Gemini CLI asks before squeezing a long chat; an estimate is enough.
+    const countedBody = (geminiBody.generateContentRequest as Record<string, unknown> | undefined) ?? geminiBody;
+    return jsonResponse({ totalTokens: estimatedTokens(countedBody) });
   }
 
-  // Every Gemini model busy: a Dot's generateContent goes to NIM instead.
-  if (BUSY_STATUSES.includes(upstreamResponse!.status) && env.NVIDIA_API_KEY && generateMethod && requestBody) {
-    try {
-      const geminiBody = geminiBodyForBackups();
-      const nim = nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS);
-      if (canAnswer(nim, geminiBody)) {
-        const nimResponse = await answerWithProvider(nim, geminiBody, Boolean(generateMethod[1]));
-        if (nimResponse) {
-          console.warn(`[/gemini] every Gemini model was busy (${upstreamResponse!.status}); NIM answered`);
-          await upstreamResponse!.body?.cancel();
-          return nimResponse;
-        }
-      }
-    } catch (error) {
-      console.warn(`[/gemini] NIM backup failed: ${error}`);
-    }
-  }
+  const answer = await answerWithAnyProvider(env, geminiBody, method === "streamGenerateContent", "/gemini");
+  return answer ?? geminiErrorResponse(503, "UNAVAILABLE", NO_MODEL_ANSWERED_MESSAGE);
+}
 
-  const responseHeaders = new Headers();
-  const upstreamContentType = upstreamResponse!.headers.get("content-type");
-  if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType);
-  return new Response(upstreamResponse!.body, {
-    status: upstreamResponse!.status,
-    headers: responseHeaders,
-  });
+/** The model name Gemini CLI is started with (GeminiCLIAgentRuntime.defaultAgentModel); only a label now. */
+const DOTS_MODEL_NAME = "gemini-3.6-flash";
+
+/** An error the way Gemini's API writes one, so Gemini CLI shows the message. */
+function geminiErrorResponse(code: number, status: string, message: string): Response {
+  return jsonResponse({ error: { code, status, message } }, code);
 }

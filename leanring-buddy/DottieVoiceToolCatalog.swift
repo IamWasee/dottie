@@ -1,8 +1,8 @@
 //
-//  GeminiLiveToolCatalog.swift
+//  DottieVoiceToolCatalog.swift
 //  leanring-buddy
 //
-//  Which tools Gemini Live gets declared up front and how it reaches the
+//  Which of voice Dottie's tools are declared up front and how it reaches the
 //  rest: only the everyday tools are declared directly, the others are
 //  found with find_tool and run with use_tool.
 //
@@ -10,14 +10,14 @@
 import AVFoundation
 import Foundation
 
-/// Which tools Live gets declared up front and how it reaches the rest.
+/// Which tools are declared up front and how it reaches the rest.
 /// Every declaration (name, description, schema) is read again at the start
 /// of each voice session, so only the everyday tools are declared directly.
 /// The others are found with find_tool, which returns their description and
 /// schema as text, and run with use_tool, which goes through the same
-/// dispatch as a direct call (GeminiLiveVoiceClient.dispatchFunctionCall).
+/// dispatch as a direct call (DottieVoiceTools.dispatchFunctionCall).
 @MainActor
-enum GeminiLiveToolCatalog {
+enum DottieVoiceToolCatalog {
     static let findToolFunctionName = "find_tool"
     static let useToolFunctionName = "use_tool"
 

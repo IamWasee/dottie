@@ -5,10 +5,6 @@ import type { Env } from "../src/index";
 /** The Worker's settings for a test: made-up keys, the real Durable Object binding, and any overrides. */
 export function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
-    GEMINI_API_KEY: "test-gemini-key",
-    GEMINI_CHAT_MODEL: "chat-model",
-    GEMINI_HIGHER_MODEL: "higher-model",
-    GEMINI_FALLBACK_MODELS: "backup-one,backup-two",
     PHONE_RELAY: (env as unknown as Env).PHONE_RELAY,
     ...overrides,
   };

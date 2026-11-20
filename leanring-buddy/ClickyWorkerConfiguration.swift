@@ -91,11 +91,11 @@ enum ClickyWorkerConfiguration {
 
     enum HealthCheckResult: Equatable {
         case ready
-        case missingGeminiKey
+        case missingModelKey
         case unreachable(String)
     }
 
-    /// Asks the Worker's /health route whether it's up and has a key.
+    /// Asks the Worker's /health route whether it's up and has a model key.
     static func checkHealth(ofBaseURL baseURLText: String) async -> HealthCheckResult {
         var trimmedBaseURL = baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
         while trimmedBaseURL.hasSuffix("/") { trimmedBaseURL.removeLast() }
@@ -111,7 +111,7 @@ enum ClickyWorkerConfiguration {
                   responseObject["ok"] as? Bool == true else {
                 return .unreachable("Something answered, but it isn't a Dottie server (an older server may need redeploying).")
             }
-            return responseObject["hasGeminiKey"] as? Bool == false ? .missingGeminiKey : .ready
+            return responseObject["hasModelKey"] as? Bool == false ? .missingModelKey : .ready
         } catch {
             return .unreachable(error.localizedDescription)
         }

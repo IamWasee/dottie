@@ -3,14 +3,14 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 
 # Secrets (set with `npx wrangler secret put <NAME>`):
-#   GEMINI_API_KEY     - from https://aistudio.google.com/apikey
+#   ANTHROPIC_API_KEY  - Claude (talker's requests, text asks)
+#   ZAI_API_KEY        - GLM (screen steps, pointing, helpers)
+#   JEV_API_KEY        - Jev (/jev)
 #   APP_SHARED_SECRET  - optional; must match ClickyAppSharedSecret in Info.plist
 #   GROQ_API_KEY       - optional; free key from https://console.groq.com/keys.
-#                        Quick asks (live meeting help, short text) go to Groq
-#                        first, and small requests use it as a backup.
+#                        The talker, and a backup when Claude and GLM can't answer.
 #   NVIDIA_API_KEY     - optional; free key from https://build.nvidia.com. NIM
-#                        models answer text/picture requests when every Gemini
-#                        model is busy.
+#                        models answer when everything else is busy.
 #   TELEGRAM_BOT_TOKEN - optional; Dottie's own Telegram bot (made once with
 #                        @BotFather). People then pair their phone in one tap
 #                        from Home → Phone instead of making a bot themselves.
@@ -44,13 +44,6 @@ namespace_id = "1001"
 simple = { limit = 300, period = 60 }
 
 [vars]
-GEMINI_CHAT_MODEL = "gemini-3.8-flash"
-# Used when the voice model hands off a hard question (send_to_higher_model).
-# Point it at a Pro model if your API tier allows it.
-GEMINI_HIGHER_MODEL = "gemini-3.8-flash"
-# Tried in order when a model is busy ("high demand") or over its limit.
-# Each model has its own free-tier limit, so this also stretches the quota.
-GEMINI_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.7-flash,gemini-3.5-flash-lite"
 # Groq models (only with GROQ_API_KEY), best first. Each has its own free
 # limit (about 30 requests and 8,000 tokens a minute).
 GROQ_TEXT_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b"

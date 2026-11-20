@@ -144,7 +144,7 @@ struct TalkerTests {
     }
 
     @Test func everyShortListToolIsARealVoiceTool() async {
-        let realNames = await MainActor.run { Set(GeminiLiveVoiceClient.everyFunctionDeclaration.compactMap { $0["name"] as? String }) }
+        let realNames = await MainActor.run { Set(DottieVoiceTools.everyFunctionDeclaration.compactMap { $0["name"] as? String }) }
         for toolName in DottieTalkerProtocol.requestToolNames {
             #expect(realNames.contains(toolName), "\(toolName) isn't one of voice Dottie's tools")
         }

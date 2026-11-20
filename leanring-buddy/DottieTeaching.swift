@@ -448,8 +448,8 @@ enum DottieTeaching {
 
     // MARK: - Finding anchors
 
-    /// One sharp screenshot of the display, and Gemini Flash finds every
-    /// anchor on it at once. Returns each found anchor's frame in global
+    /// One sharp screenshot of the display, and GLM finds every anchor on
+    /// it at once. Returns each found anchor's frame in global
     /// AppKit coordinates, keyed by lowercased name.
     @MainActor
     static func locateAnchors(_ anchors: [Anchor], displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
@@ -458,21 +458,8 @@ enum DottieTeaching {
               let jpegData = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
             return [:]
         }
-        // Jev boxes each anchor first: it's quick and lands tight on the
-        // thing. Only the anchors it misses go to the box models below.
-        let jevFrames = await jevAnchorFrames(anchors, image: image, displayFrame: displayFrame, userQuestion: userQuestion)
-        let missingAnchors = anchors.filter { jevFrames[$0.name.lowercased()] == nil }
-        if missingAnchors.isEmpty {
-            DottieLog.notice("✏️ Jev found all \(anchors.count) anchors")
-            return jevFrames
-        }
-        let modelFrames = await modelAnchorFrames(missingAnchors, jpegData: jpegData, displayFrame: displayFrame, userQuestion: userQuestion)
-        return mergedAnchorFrames(jevFrames: jevFrames, modelFrames: modelFrames)
-    }
-
-    /// Jev's frames win; the models fill in only what Jev didn't find.
-    static func mergedAnchorFrames(jevFrames: [String: CGRect], modelFrames: [String: CGRect]) -> [String: CGRect] {
-        jevFrames.merging(modelFrames) { jevFrame, _ in jevFrame }
+        // GLM finds them (celly: drawings stay off Jev).
+        return await modelAnchorFrames(anchors, jpegData: jpegData, displayFrame: displayFrame, userQuestion: userQuestion)
     }
 
     /// A 0-1000 [ymin, xmin, ymax, xmax] box on the display's picture as a
@@ -484,30 +471,6 @@ enum DottieTeaching {
             width: (box[3] - box[1]) / 1000 * displayFrame.width,
             height: (box[2] - box[0]) / 1000 * displayFrame.height
         )
-    }
-
-    /// Asks Jev for every anchor at once (in parallel, short wait each).
-    @MainActor
-    private static func jevAnchorFrames(_ anchors: [Anchor], image: CGImage, displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
-        var frames: [String: CGRect] = [:]
-        await withTaskGroup(of: (String, DottieJevBox?).self) { jevRequests in
-            for anchor in anchors {
-                jevRequests.addTask { @MainActor in
-                    let box = await DottieJev.findBox(target: anchor.description.isEmpty ? anchor.name : anchor.description,
-                                                      userContext: userQuestion, in: image, timeoutSeconds: 3)
-                    return (anchor.name.lowercased(), box)
-                }
-            }
-            for await (anchorName, box) in jevRequests {
-                guard let box else { continue }
-                let normalized = box.normalizedBox
-                frames[anchorName] = appKitFrame(
-                    normalizedBox: [normalized.ymin, normalized.xmin, normalized.ymax, normalized.xmax],
-                    displayFrame: displayFrame
-                )
-            }
-        }
-        return frames
     }
 
     @MainActor
