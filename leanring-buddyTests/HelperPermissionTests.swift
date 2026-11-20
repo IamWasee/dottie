@@ -107,6 +107,30 @@ struct InstallIdentifierTests {
         #expect(UUID(uuidString: firstRead) != nil)
     }
 
+    @Test func readsFromManyThreadsAtOnceAllGetTheSameIdentifier() async {
+        let identifiers = await withTaskGroup(of: String.self) { taskGroup in
+            for _ in 0..<64 {
+                taskGroup.addTask { ClickyWorkerConfiguration.installIdentifier }
+            }
+            var collectedIdentifiers: Set<String> = []
+            for await identifier in taskGroup {
+                collectedIdentifiers.insert(identifier)
+            }
+            return collectedIdentifiers
+        }
+
+        #expect(identifiers.count == 1)
+        #expect(identifiers.first == ClickyWorkerConfiguration.installIdentifier)
+    }
+
+    @Test func readingTheIdentifierManyTimesIsQuick() {
+        let startedAt = Date()
+        for _ in 0..<10_000 {
+            _ = ClickyWorkerConfiguration.installIdentifier
+        }
+        #expect(Date().timeIntervalSince(startedAt) < 1.0)
+    }
+
     @Test func thePassthroughKeyEndsWithTheInstallIdentifier() {
         let passthroughAPIKey = ClickyWorkerConfiguration.passthroughAPIKey
 

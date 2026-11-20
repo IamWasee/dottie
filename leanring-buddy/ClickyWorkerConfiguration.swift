@@ -61,6 +61,11 @@ enum ClickyWorkerConfiguration {
     /// day under it (worker/src/usageLimits.ts). It says nothing about the
     /// user or the Mac, and it isn't a secret.
     static var installIdentifier: String {
+        // Requests start from many threads. Without the lock, two of them
+        // on a fresh install could each make a different id, and one
+        // request would be counted under an id that was never kept.
+        installIdentifierLock.lock()
+        defer { installIdentifierLock.unlock() }
         if let savedInstallIdentifier = UserDefaults.standard.string(forKey: installIdentifierDefaultsKey),
            !savedInstallIdentifier.isEmpty {
             return savedInstallIdentifier
@@ -69,6 +74,7 @@ enum ClickyWorkerConfiguration {
         UserDefaults.standard.set(newInstallIdentifier, forKey: installIdentifierDefaultsKey)
         return newInstallIdentifier
     }
+    private static let installIdentifierLock = NSLock()
 
     /// What Gemini CLI and the Gemini passthrough send as their "API key":
     /// the shared secret (any placeholder works without one) with the
