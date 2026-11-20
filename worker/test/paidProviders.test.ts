@@ -406,6 +406,25 @@ describe("talking and requests", () => {
     expect(tooBig.status).toBe(413);
   });
 
+  it("keeps the words Groq wrote when it calls a plain answer a broken tool call", async () => {
+    const toolUseFailed = JSON.stringify({ error: { code: "tool_use_failed", failed_generation: "REQUEST SCREEN" } });
+    const calls = fakeFetch([["api.groq.com", new Response(toolUseFailed, { status: 400 })]]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect(response.status).toBe(200);
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("REQUEST SCREEN");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("answers 503 at once and says why when the request route has no key", async () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const calls = fakeFetch([]);
+    const response = await call("/chat", { provider: "request", contents: [userText("can you see my screen")] }, { GROQ_API_KEY: "g", ZAI_API_KEY: "z" });
+    expect(response.status).toBe(503);
+    expect(calls).toHaveLength(0);
+    expect(warnings.mock.calls.some((args) => String(args[0]).includes("ANTHROPIC_API_KEY"))).toBe(true);
+    warnings.mockRestore();
+  });
+
   it("sends a handed-over request to Claude only, with a picture, never GLM", async () => {
     const calls = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "On it." }])]]);
     const body = { provider: "request", contents: [{ role: "user", parts: [{ text: "what's this error?" }, imagePart(pngBase64(10, 10))] }] };
