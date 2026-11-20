@@ -198,6 +198,19 @@ struct SpeedCheckTests {
         #expect(median < 300, "1,000 Jev answers took \(median) ms")
     }
 
+    @Test func placingAThousandDrawingAnchorsStaysQuick() {
+        let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let median = medianMilliseconds {
+            var jevFrames: [String: CGRect] = [:]
+            for anchorNumber in 0..<1_000 {
+                jevFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
+            }
+            _ = DottieTeaching.mergedAnchorFrames(jevFrames: jevFrames, modelFrames: jevFrames)
+        }
+
+        #expect(median < 200, "1,000 drawing anchors took \(median) ms")
+    }
+
     @Test func readingAThousandTalkerAnswersStaysQuick() {
         let median = medianMilliseconds {
             for answerNumber in 0..<1_000 {

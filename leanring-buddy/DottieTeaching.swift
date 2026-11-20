@@ -458,6 +458,63 @@ enum DottieTeaching {
               let jpegData = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
             return [:]
         }
+        // Jev boxes each anchor first: it's quick and lands tight on the
+        // thing. Only the anchors it misses go to the box models below.
+        let jevFrames = await jevAnchorFrames(anchors, image: image, displayFrame: displayFrame, userQuestion: userQuestion)
+        let missingAnchors = anchors.filter { jevFrames[$0.name.lowercased()] == nil }
+        if missingAnchors.isEmpty {
+            DottieLog.notice("✏️ Jev found all \(anchors.count) anchors")
+            return jevFrames
+        }
+        let modelFrames = await modelAnchorFrames(missingAnchors, jpegData: jpegData, displayFrame: displayFrame, userQuestion: userQuestion)
+        return mergedAnchorFrames(jevFrames: jevFrames, modelFrames: modelFrames)
+    }
+
+    /// Jev's frames win; the models fill in only what Jev didn't find.
+    static func mergedAnchorFrames(jevFrames: [String: CGRect], modelFrames: [String: CGRect]) -> [String: CGRect] {
+        jevFrames.merging(modelFrames) { jevFrame, _ in jevFrame }
+    }
+
+    /// A 0-1000 [ymin, xmin, ymax, xmax] box on the display's picture as a
+    /// frame in global AppKit coordinates (bottom-left origin).
+    static func appKitFrame(normalizedBox box: [Double], displayFrame: CGRect) -> CGRect {
+        CGRect(
+            x: displayFrame.minX + box[1] / 1000 * displayFrame.width,
+            y: displayFrame.maxY - box[2] / 1000 * displayFrame.height,
+            width: (box[3] - box[1]) / 1000 * displayFrame.width,
+            height: (box[2] - box[0]) / 1000 * displayFrame.height
+        )
+    }
+
+    /// Asks Jev for every anchor at once (in parallel, short wait each).
+    @MainActor
+    private static func jevAnchorFrames(_ anchors: [Anchor], image: CGImage, displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
+        var frames: [String: CGRect] = [:]
+        // A captured screenshot is never changed, so sharing it with the
+        // parallel requests is safe.
+        nonisolated(unsafe) let sharedImage = image
+        await withTaskGroup(of: (String, DottieJevBox?).self) { jevRequests in
+            for anchor in anchors {
+                jevRequests.addTask { @MainActor in
+                    let box = await DottieJev.findBox(target: anchor.description.isEmpty ? anchor.name : anchor.description,
+                                                      userContext: userQuestion, in: sharedImage, timeoutSeconds: 3)
+                    return (anchor.name.lowercased(), box)
+                }
+            }
+            for await (anchorName, box) in jevRequests {
+                guard let box else { continue }
+                let normalized = box.normalizedBox
+                frames[anchorName] = appKitFrame(
+                    normalizedBox: [normalized.ymin, normalized.xmin, normalized.ymax, normalized.xmax],
+                    displayFrame: displayFrame
+                )
+            }
+        }
+        return frames
+    }
+
+    @MainActor
+    private static func modelAnchorFrames(_ anchors: [Anchor], jpegData: Data, displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
         let itemList = anchors.map { "- \($0.name): \($0.description)" }.joined(separator: "\n")
         let prompt = """
         This is the user's screen. The user asked: "\(userQuestion)".
@@ -500,12 +557,7 @@ enum DottieTeaching {
         }
         var frames: [String: CGRect] = [:]
         for (name, box) in foundBoxes.boxes {
-            frames[name.lowercased()] = CGRect(
-                x: displayFrame.minX + box[1] / 1000 * displayFrame.width,
-                y: displayFrame.maxY - box[2] / 1000 * displayFrame.height,
-                width: (box[3] - box[1]) / 1000 * displayFrame.width,
-                height: (box[2] - box[0]) / 1000 * displayFrame.height
-            )
+            frames[name.lowercased()] = appKitFrame(normalizedBox: box, displayFrame: displayFrame)
         }
         DottieLog.notice("✏️ Found \(frames.count) of \(anchors.count) anchors with \(foundBoxes.model)")
         return frames
