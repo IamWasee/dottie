@@ -403,8 +403,16 @@ private enum VisionElementLocator {
         Someone guessed it is near x=\(hintX), y=\(hintY) (0-1000 across the image), but the guess may be far off, so look at the whole screen.
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000, tight around the element itself. If it is not visible, reply {"box_2d": null}.
         """
-        let overviewFrame = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt, referenceImageJPEG: referenceImageJPEG)
-            .map { frame(of: $0, in: displayFrame) }
+        // Jev boxes a named thing quickly and exactly; it can't compare with
+        // a shared picture, so those (and Jev's misses) go to the models.
+        var overviewBox: Box?
+        if referenceImageJPEG == nil {
+            overviewBox = await DottieJev.findBox(target: elementLabel, userContext: userQuestion, in: overviewImage, timeoutSeconds: 2.5)?.normalizedBox
+        }
+        if overviewBox == nil {
+            overviewBox = await askForBox(jpegData: overviewJPEG, prompt: overviewPrompt, referenceImageJPEG: referenceImageJPEG)
+        }
+        let overviewFrame = overviewBox.map { frame(of: $0, in: displayFrame) }
 
         // Big, clear targets are done. Tiny ones, or a miss, get a closer look.
         if let overviewFrame, min(overviewFrame.width, overviewFrame.height) >= smallTargetSize {
@@ -431,9 +439,14 @@ private enum VisionElementLocator {
         It may be an icon with no text (a heart or thumbs-up for like, a speech bubble for comments, a bell for notifications).
         Reply with only JSON: {"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized 0-1000 across this zoomed image, for the element itself. If it is not in this image, reply {"box_2d": null}.
         """
-        guard let zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt, referenceImageJPEG: referenceImageJPEG) else {
-            return overviewFrame
+        var zoomedBox: Box?
+        if referenceImageJPEG == nil {
+            zoomedBox = await DottieJev.findBox(target: elementLabel, userContext: userQuestion, in: zoomedImage, timeoutSeconds: 2)?.normalizedBox
         }
+        if zoomedBox == nil {
+            zoomedBox = await askForBox(jpegData: zoomedJPEG, prompt: zoomPrompt, referenceImageJPEG: referenceImageJPEG)
+        }
+        guard let zoomedBox else { return overviewFrame }
         DottieLog.notice("🎯 Zoom pass refined the vision guess")
         return frame(of: zoomedBox, in: zoomRect)
     }

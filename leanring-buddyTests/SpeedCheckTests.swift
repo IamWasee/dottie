@@ -186,4 +186,15 @@ struct SpeedCheckTests {
 
         #expect(median < 200, "1,000 voice picks took \(median) ms")
     }
+
+    @Test func readingAThousandJevBoxesStaysQuick() throws {
+        let answerData = try JSONSerialization.data(withJSONObject: ["answers": ["target": ["box": ["top": 0.1, "bottom": 0.2, "left": 0.3, "right": 0.5], "confidence": 0.9]]])
+        let median = medianMilliseconds {
+            for _ in 0..<1_000 {
+                _ = DottieJevProtocol.box(fromAnswer: answerData)
+            }
+        }
+
+        #expect(median < 300, "1,000 Jev answers took \(median) ms")
+    }
 }

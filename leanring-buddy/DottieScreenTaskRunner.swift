@@ -890,6 +890,15 @@ final class DottieScreenTaskRunner {
         if (doneCheck ?? "").isEmpty {
             return "check the done-when on this screenshot first (done when: \(doneWhen)). If it's met, call finish again with done_check saying what on screen shows it. If not, keep going."
         }
+        // A second opinion from Jev on a fresh screen: only a clear "no" holds
+        // the finish back, so a slow or unsure Jev never stops a done job.
+        if let specificDoneWhen = currentGoal?.doneWhen, !specificDoneWhen.isEmpty,
+           let freshScreen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension),
+           let doneProbability = await DottieJev.probability(of: specificDoneWhen, in: freshScreen.image),
+           DottieJevProtocol.clearlyNotDone(probability: doneProbability) {
+            DottieLog.notice("🎯 Jev says the job isn't done yet")
+            return "a check of the screen says it isn't done yet (done when: \(doneWhen)). Look at the next screenshot and keep going; finish only once it shows."
+        }
         return nil
     }
 
@@ -981,7 +990,8 @@ final class DottieScreenTaskRunner {
             return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
         case "click":
-            return await performClick(at: clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
+            let jevClickPoint = await Self.jevClickPoint(label: text("label"), screen: screen)
+            return await performClick(at: jevClickPoint ?? clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
@@ -1300,6 +1310,22 @@ final class DottieScreenTaskRunner {
         let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
         guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
         return (x: (numbers[1] + numbers[3]) / 2, y: (numbers[0] + numbers[2]) / 2)
+    }
+
+    /// Where Jev finds what the step model named, snapped to the real control
+    /// under it, or nil (no useful label, Jev unsure or not set up) so the
+    /// model's own box is used. The model says what to click; Jev says
+    /// exactly where.
+    private static func jevClickPoint(label: String?, screen: DottieDisplayCapture.Screenshot) async -> CGPoint? {
+        guard let label, DottieJevProtocol.isUsefulTargetLabel(label),
+              let jevBox = await DottieJev.findBox(target: label, in: screen.image) else { return nil }
+        let normalizedBox = jevBox.normalizedBox
+        let topLeft = screen.globalPoint(normalizedX: normalizedBox.xmin, normalizedY: normalizedBox.ymin)
+        let bottomRight = screen.globalPoint(normalizedX: normalizedBox.xmax, normalizedY: normalizedBox.ymax)
+        let boxFrame = CGRect(x: topLeft.x, y: bottomRight.y, width: bottomRight.x - topLeft.x, height: topLeft.y - bottomRight.y)
+        let snappedFrame = AccessibilitySnap.refinedFrame(boxFrame)
+        DottieLog.notice("🎯 Jev found the click target")
+        return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
     }
 
     private static func clickPoint(arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
