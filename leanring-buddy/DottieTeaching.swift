@@ -137,7 +137,7 @@ enum DottieTeaching {
     struct Plan {
         let surface: Surface
         let anchors: [Anchor]
-        let steps: [Step]
+        private(set) var steps: [Step]
         let keepsDrawing: Bool
         /// Draw onto the drawing that's already up (same board) instead of
         /// starting over, for "now add…" or "continue it" later on.
@@ -178,7 +178,7 @@ enum DottieTeaching {
                 }
                 return Step(
                     kind: kind,
-                    points: points,
+                    points: DottieTeaching.pairingLoneNumbers(points),
                     text: trimmed(fields["text"]),
                     ink: trimmed(fields["color"]).flatMap { DottieInk(rawValue: $0.lowercased()) },
                     size: trimmed(fields["size"])?.lowercased(),
@@ -215,6 +215,65 @@ enum DottieTeaching {
         }
 
         var anchorNames: Set<String> { Set(anchors.map { $0.name.lowercased() }) }
+
+        /// The same plan with only the steps that can be drawn. Refusing a
+        /// whole drawing for one bad step left Live retrying in a loop
+        /// (35 refusals for one supply and demand graph) and the user with
+        /// nothing on screen.
+        func keepingOnlyDrawableSteps() -> Plan {
+            let knownAnchorNames = anchorNames.union(["circled"])
+            var drawablePlan = self
+            drawablePlan.steps = steps.filter { DottieTeaching.problem(with: $0, knownAnchorNames: knownAnchorNames) == nil }
+            return drawablePlan
+        }
+    }
+
+    /// Every refused drawing with its reasons, newest last (the last 50),
+    /// in Application Support/Dottie/Diagnostics, so a drawing Live gets
+    /// wrong can be read exactly instead of guessed at. The log hides the
+    /// reasons unless details are switched on.
+    static func recordRefusedDrawing(problems: [String], arguments: [String: Any], drewOtherSteps: Bool,
+                                     into fileURL: URL = refusedDrawingsFileURL) {
+        var entries = (try? JSONSerialization.jsonObject(with: Data(contentsOf: fileURL))) as? [[String: Any]] ?? []
+        var entry: [String: Any] = ["at": ISO8601DateFormatter().string(from: Date()), "problems": problems, "drewOtherSteps": drewOtherSteps]
+        if JSONSerialization.isValidJSONObject(arguments) { entry["arguments"] = arguments }
+        entries.append(entry)
+        entries = Array(entries.suffix(50))
+        guard let data = try? JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        _ = DottieFileSaver.save(data, to: fileURL)
+    }
+
+    static var refusedDrawingsFileURL: URL {
+        let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return applicationSupportDirectory
+            .appendingPathComponent("Dottie/Diagnostics", isDirectory: true)
+            .appendingPathComponent("refused-drawings.json")
+    }
+
+    /// The two numbers of a point written any common way: "300,700",
+    /// "300, 700", "(300, 700)", "[300 700]", "x=300 y=700". Nil unless
+    /// there are exactly two.
+    static func pointNumbers(_ reference: String) -> (Double, Double)? {
+        guard let numberPattern = try? NSRegularExpression(pattern: "-?\\d+(?:\\.\\d+)?") else { return nil }
+        let searchRange = NSRange(reference.startIndex..., in: reference)
+        let numbers = numberPattern.matches(in: reference, range: searchRange).compactMap { match in
+            Range(match.range, in: reference).flatMap { Double(reference[$0]) }
+        }
+        guard numbers.count == 2 else { return nil }
+        // Words other than x/y labels mean it's a name ("label2 top"), not a point.
+        let lettersLeft = reference.lowercased().filter(\.isLetter).filter { $0 != "x" && $0 != "y" }
+        guard lettersLeft.isEmpty else { return nil }
+        return (numbers[0], numbers[1])
+    }
+
+    /// Points sent as lone numbers ["300", "700", "500", "200"] become
+    /// pairs ["300,700", "500,200"]; anything else is left as given.
+    static func pairingLoneNumbers(_ points: [String]) -> [String] {
+        guard points.count >= 2, points.count.isMultiple(of: 2),
+              points.allSatisfy({ Double($0) != nil }) else { return points }
+        return stride(from: 0, to: points.count, by: 2).map { "\(points[$0]),\(points[$0 + 1])" }
     }
 
     /// Words on the board in capitals, like Cognito's lettering. Math,
@@ -232,10 +291,9 @@ enum DottieTeaching {
     /// draw function needs.
     static func problem(with step: Step, knownAnchorNames: Set<String>) -> String? {
         func isUsablePoint(_ reference: String) -> Bool {
-            let numbers = reference.components(separatedBy: CharacterSet(charactersIn: ", ")).filter { !$0.isEmpty }
-            if numbers.count == 2, numbers.allSatisfy({ Double($0) != nil }) { return true }
             let name = reference.lowercased()
             if knownAnchorNames.contains(name) { return true }
+            if pointNumbers(reference) != nil { return true }
             guard let dotIndex = name.lastIndex(of: ".") else { return false }
             return knownAnchorNames.contains(String(name[..<dotIndex]))
         }
@@ -526,12 +584,11 @@ enum DottieTeaching {
         }
 
         func point(_ reference: String) -> CGPoint? {
-            let numbers = reference
-                .components(separatedBy: CharacterSet(charactersIn: ", "))
-                .filter { !$0.isEmpty }
-                .compactMap(Double.init)
-            if numbers.count == 2 { return numericPoint(numbers[0], numbers[1]) }
-            guard let match = anchorFrame(reference) else { return nil }
+            let match = anchorFrame(reference)
+            if match == nil, let (horizontalPosition, verticalPosition) = DottieTeaching.pointNumbers(reference) {
+                return numericPoint(horizontalPosition, verticalPosition)
+            }
+            guard let match else { return nil }
             let frame = match.frame
             switch match.part ?? "center" {
             case "left": return CGPoint(x: frame.minX, y: frame.midY)
