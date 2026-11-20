@@ -198,6 +198,27 @@ struct SpeedCheckTests {
         #expect(median < 300, "1,000 Jev answers took \(median) ms")
     }
 
+    /// Every Jev step builds options from a full screen of text and a
+    /// request; that must stay far below Jev's own answer time.
+    @Test func buildingAJevStepFromAFullScreenStaysQuick() {
+        let screenTexts = (0..<400).map { DottieJevDriverPlan.ScreenText(text: "Item number \($0)", centerX: Double($0 % 1000), centerY: Double($0)) }
+        let taskText = "open youtube and search for \"lofi beats\" then play the first one"
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                let options = DottieJevDriverPlan.options(
+                    screenTexts: DottieJevDriverPlan.clickableTexts(from: screenTexts, taskText: taskText),
+                    textPieces: DottieJevDriverPlan.textPieces(from: taskText),
+                    siteAddresses: DottieJevDriverPlan.siteAddresses(from: taskText),
+                    appNames: ["Safari"],
+                    alreadyTriedSignatures: []
+                )
+                _ = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: ["opened youtube.com"], knownHowTo: "", options: options)
+            }
+        }
+
+        #expect(median < 200, "20 Jev steps took \(median) ms to build")
+    }
+
     @Test func placingAThousandDrawingAnchorsStaysQuick() {
         let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let median = medianMilliseconds {

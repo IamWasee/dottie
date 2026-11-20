@@ -345,6 +345,32 @@ final class DottieScreenTaskRunner {
                 break
             }
         }
+        // Jev drives: every step it picks the next move from everything
+        // Dottie could do now (screen texts, the request's words, sites,
+        // apps). The step model below only carries on where Jev got unsure.
+        if !isGameMode, referenceImageParts.isEmpty, replayUsed == nil {
+            let jevActions = DottieJevDriver.Actions(
+                progress: { [weak self] stepNumber, line in self?.onProgress?(stepNumber, line) },
+                click: { [weak self] point, label, screen, stepNumber in
+                    _ = await self?.performClick(at: point, label: label, isDoubleClick: false, isRightClick: false, screen: screen, stepNumber: stepNumber)
+                },
+                openSite: { [weak self] address, stepNumber in
+                    _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+                }
+            )
+            let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, actions: jevActions)
+            if Task.isCancelled { return .stopped }
+            switch jevOutcome {
+            case .finished(let stepCount):
+                DottieScreenLessons.shared.recordOutcome(lessonIDs: lessonSelection.lessonIDs, succeeded: true)
+                lastReplayReport = "🎯 Jev did it alone in \(stepCount) step\(stepCount == 1 ? "" : "s")"
+                return .finished(answer: "Done.")
+            case .handedOver(let note):
+                if !note.isEmpty { lessonsText += "\n" + note }
+            case .notTried:
+                break
+            }
+        }
         // How hard the job is decides the model; asked while the first
         // screenshot is taken.
         let isGameJob = isGameMode
