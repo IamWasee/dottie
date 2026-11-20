@@ -85,6 +85,7 @@ export interface Env {
   /** Who answers first: "glm,claude" for asks with pictures, "claude,glm" for text by default. */
   PICTURE_PROVIDER_ORDER?: string;
   TEXT_PROVIDER_ORDER?: string;
+  HELPER_PROVIDER_ORDER?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -611,18 +612,24 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
 
 /**
  * The paid providers whose keys are set, in the order they answer: GLM
- * first for asks with pictures (screen steps, pointing), Claude first for
- * text (quick asks, helpers). PICTURE_PROVIDER_ORDER / TEXT_PROVIDER_ORDER
- * change the order without a code change.
+ * first for asks with pictures (screen steps, pointing), only GLM for
+ * helpers' text turns (celly's call), Claude first for other text. PICTURE_PROVIDER_ORDER,
+ * HELPER_PROVIDER_ORDER and TEXT_PROVIDER_ORDER change the order without a
+ * code change.
  */
-export function paidProviders(env: Env, geminiBody: Record<string, unknown>): ChatProvider[] {
+export function paidProviders(env: Env, geminiBody: Record<string, unknown>, isHelperTurn = false): ChatProvider[] {
   const available: Record<string, ChatProvider | undefined> = {
     claude: env.ANTHROPIC_API_KEY ? anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODELS) : undefined,
     glm: env.ZAI_API_KEY ? zaiProvider(env.ZAI_API_KEY, env.ZAI_MODELS) : undefined,
   };
-  const order = imageCount(geminiBody) > 0
-    ? env.PICTURE_PROVIDER_ORDER || "glm,claude"
-    : env.TEXT_PROVIDER_ORDER || "claude,glm";
+  let order: string;
+  if (imageCount(geminiBody) > 0) {
+    order = env.PICTURE_PROVIDER_ORDER || "glm,claude";
+  } else if (isHelperTurn) {
+    order = env.HELPER_PROVIDER_ORDER || "glm";
+  } else {
+    order = env.TEXT_PROVIDER_ORDER || "claude,glm";
+  }
   const providers: ChatProvider[] = [];
   for (const name of order.split(",").map((part) => part.trim().toLowerCase())) {
     const provider = available[name];
@@ -638,7 +645,7 @@ async function answerWithPaidProviders(
   streaming: boolean,
   routeName: string
 ): Promise<Response | undefined> {
-  for (const provider of paidProviders(env, geminiBody)) {
+  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini")) {
     // Screen jobs send a screenshot every step: only the newest ones go.
     const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
     if (!canAnswer(provider, fittedBody)) {

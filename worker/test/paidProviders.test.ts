@@ -264,6 +264,14 @@ describe("paidProviders", () => {
     expect(paidProviders(env, text).map((provider) => provider.name)).toEqual(["glm"]);
   });
 
+  it("uses only GLM for a helper's text turn, and follows HELPER_PROVIDER_ORDER", () => {
+    const env = makeEnv({ ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(paidProviders(env, text, true).map((provider) => provider.name)).toEqual(["glm"]);
+    expect(paidProviders(env, picture, true).map((provider) => provider.name)).toEqual(["glm", "claude"]);
+    const reordered = makeEnv({ ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", HELPER_PROVIDER_ORDER: "claude", TEXT_PROVIDER_ORDER: "glm" });
+    expect(paidProviders(reordered, text, true).map((provider) => provider.name)).toEqual(["claude"]);
+  });
+
   it("uses only the providers with keys", () => {
     expect(paidProviders(makeEnv({ ZAI_API_KEY: "z" }), text).map((provider) => provider.name)).toEqual(["glm"]);
   });
@@ -317,31 +325,47 @@ describe("/chat with paid keys", () => {
 describe("/gemini (helpers) with paid keys", () => {
   const generatePath = "/gemini/v1beta/models/agent-model:generateContent";
 
-  it("answers a helper's turn from Claude", async () => {
+  it("answers a helper's turn from GLM first when both keys are set", async () => {
+    const calls = fakeFetch([["api.z.ai", chatAnswer({ content: "made it on GLM" })]]);
+    const response = await call(generatePath, { contents: [userText("build it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(((await response.json()) as any).candidates[0].content.parts[0].text).toBe("made it on GLM");
+    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+  });
+
+  it("never sends a helper's turn to Claude, even when GLM is down", async () => {
+    const calls = fakeFetch([
+      ["api.z.ai", new Response("down", { status: 500 })],
+      ["/models/agent-model:", jsonAnswer({ candidates: [{ content: { parts: [{ text: "old path" }] } }] })],
+    ]);
+    await call(generatePath, { contents: [userText("build it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(calls.some((recorded) => recorded.url.includes("anthropic"))).toBe(false);
+  });
+
+  it("answers a helper's turn from Claude only when HELPER_PROVIDER_ORDER says so", async () => {
     const calls = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "made the site" }])]]);
-    const response = await call(generatePath, { contents: [userText("build it")] }, { ANTHROPIC_API_KEY: "a" });
+    const response = await call(generatePath, { contents: [userText("build it")] }, { ANTHROPIC_API_KEY: "a", HELPER_PROVIDER_ORDER: "claude" });
     expect(((await response.json()) as any).candidates[0].content.parts[0].text).toBe("made the site");
     expect(calls).toHaveLength(1);
   });
 
   it("streams a helper's turn as one event", async () => {
     fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "streamed" }])]]);
-    const response = await call("/gemini/v1beta/models/agent-model:streamGenerateContent?alt=sse", { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a" });
+    const response = await call("/gemini/v1beta/models/agent-model:streamGenerateContent?alt=sse", { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a", HELPER_PROVIDER_ORDER: "claude" });
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("streamed");
   });
 
-  it("goes on to Gemini when Claude can't answer", async () => {
+  it("goes on to Gemini when GLM can't answer", async () => {
     fakeFetch([
-      ["api.anthropic.com", new Response("down", { status: 500 })],
+      ["api.z.ai", new Response("down", { status: 500 })],
       ["/models/agent-model:", jsonAnswer({ candidates: [{ content: { parts: [{ text: "gemini" }] } }] })],
     ]);
-    const response = await call(generatePath, { contents: [userText("go")] }, { ANTHROPIC_API_KEY: "a" });
+    const response = await call(generatePath, { contents: [userText("go")] }, { ZAI_API_KEY: "z" });
     expect(((await response.json()) as any).candidates[0].content.parts[0].text).toBe("gemini");
   });
 
   it("goes on to Gemini when the body isn't JSON", async () => {
     const calls = fakeFetch([["/models/agent-model:", jsonAnswer({ ok: true })]]);
-    const response = await worker.fetch(new Request(`https://worker.test${generatePath}`, { method: "POST", body: "not json" }), makeEnv({ ANTHROPIC_API_KEY: "a" }));
+    const response = await worker.fetch(new Request(`https://worker.test${generatePath}`, { method: "POST", body: "not json" }), makeEnv({ ZAI_API_KEY: "z" }));
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
   });
