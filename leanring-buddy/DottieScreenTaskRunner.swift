@@ -865,6 +865,9 @@ final class DottieScreenTaskRunner {
                 return "the screen still shows \"\(visibleSign)\", so it isn't done (done when: \(doneWhen)). Keep going on the next screenshot: pick the account, use the password the browser offers, or ask_user for what's missing."
             }
         }
+        if let unfinishedPlanProblem = currentGoal?.unfinishedPlanProblem {
+            return unfinishedPlanProblem
+        }
         if actedThisTurn {
             return "you acted and finished in the same turn, so you haven't seen the result yet. Look at the next screenshot and finish only if it shows the job is done (done when: \(doneWhen)); otherwise keep going."
         }
