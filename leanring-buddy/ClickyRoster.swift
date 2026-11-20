@@ -508,7 +508,9 @@ final class ClickyRoster: ObservableObject {
         case "claude": mayUseClaude = true
         // "groq" and "gemini" are older saved choices; both mean GLM now.
         case "glm", "groq", "gemini": mayUseClaude = false
-        default: mayUseClaude = conversation.mayUseClaude
+        // Automatic is GLM: Claude only when the user picks it for this
+        // helper (celly's call, so helpers don't spend her Claude plan).
+        default: mayUseClaude = false
         }
         // The Worker sends every helper turn on this route to GLM.
         let workerRoute = "/gemini"

@@ -674,7 +674,7 @@ private struct ClickyAgentChatView: View {
     /// routing), or always Claude or GLM.
     private var engineMenu: some View {
         let engineChoices: [(value: String?, title: String, detail: String)] = [
-            (nil, "Automatic", "Settings decide between Claude and GLM"),
+            (nil, "Automatic", "GLM; Claude only if you pick it here"),
             ("claude", "Claude", "Always on your Claude plan through MausBot"),
             ("glm", "GLM", "Always GLM on Z.ai")
         ]
