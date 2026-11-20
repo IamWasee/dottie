@@ -94,7 +94,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `Onboarding
 | `GeminiAPI.swift` | ~210 | Gemini vision chat with SSE streaming via Worker `/chat`. |
 | `DottieWebSearch.swift` | ~240 | `search_web` for voice and screen jobs: the Worker's `/search`, and when its results miss the question's words (engines often answer server addresses for one word of it), DuckDuckGo and Bing asked from the Mac itself. |
 | `GeminiTTSClient.swift` | ~75 | Gemini TTS via Worker `/tts` (classic mode). |
-| `NotchPresenter.swift` | ~440 | State of the notch surface (compact, listening, thinking, speaking, text input, text response), how open the island is (`IslandPresentation`: closed, wings, expanded), the answer card's auto-dismiss, and the Dot summaries for the badge and hover peek. |
+| `NotchPresenter.swift` | ~510 | State of the notch surface (compact, listening, thinking, speaking, text input, text response), how open the island is (`IslandPresentation`: closed, wings, expanded), the answer card's auto-dismiss, and the Dot summaries for the badge and hover peek. |
 | `NotchWindowManager.swift` | ~360 | Borderless dark-appearance panel pinned over the notch (or a top-center pill), resized per surface (wings beside the notch, or a card below it) so it never blocks more of the menu bar than needed. |
 | `NotchRootView.swift` | ~860 | The Dynamic Island: `DottieIslandShape` (notch shoulders and rounded bottom), spring transitions between wings and cards, every notch surface, `NotchEyeView` (Dottie's eyes), `NotchWaveformView` and `NotchThinkingDots`. |
 | `HomeSpaceRootView.swift` | ~1240 | Home window with the native sidebar (Talk, Make, You groups), conversation transcript, typed composer, and `HomeWindowManager`. |
