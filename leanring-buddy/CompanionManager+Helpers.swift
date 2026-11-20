@@ -134,7 +134,7 @@ extension CompanionManager {
                 ?? "give the team at least two parts."
         }
         let fallbackProjectName = goal.split(separator: " ").prefix(4).joined(separator: " ")
-        let (project, _) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
+        let (project, isNew) = projects.findOrCreate(named: projectName ?? fallbackProjectName, summary: String(goal.prefix(140)))
 
         let roster = teamParts.map { "- \($0.helper): \($0.task)" }.joined(separator: "\n")
         var startedLines: [String] = []

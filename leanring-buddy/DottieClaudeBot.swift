@@ -100,7 +100,7 @@ final class DottieClaudeBot {
         defaults.set(identity.botName, forKey: botNameKey)
         defaults.set(identity.specHash, forKey: specHashKey)
 
-        let replyCollector = DottieGameReplyCollector()
+        let replyCollector = DottieStreamedReplyCollector()
         let runtime = mausBotRuntime
         let stoppedAgentID = agentID
         let timeoutTask = Task { @MainActor in
@@ -178,4 +178,10 @@ final class DottieClaudeBot {
               let jsonData = String(replyText[jsonStart...jsonEnd]).data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
     }
+}
+
+/// Gathers a streamed reply.
+@MainActor
+final class DottieStreamedReplyCollector {
+    var text = ""
 }

@@ -139,7 +139,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `Onboarding
 | `DottieAwayMode.swift` | ~330 | Away mode: on/off (panel, voice `away_mode`, phone "away"/"back", talk shortcut ends it), phone questions with Allow / Deny, risky-button check, the away log and report, Settings → Working on its own. |
 | `DottieClaudeBot.swift` | ~145 | One of Dottie's own MausBot Claude bots (made/updated with team apply, one message with a time limit, skipped two minutes after a failure); JSON-in-reply helper. |
 | `DottieScreenJobClaudeBrain.swift` | ~195 | Screen job steps on Claude Sonnet: newest turn → message with screenshot files, JSON actions with pixel boxes → Gemini function-call parts. |
-| `DottieScreenJobGuesser.swift` | ~350 | Guess first: steps in words from Claude/Gemini, done by name through Accessibility (menus, controls), done check by on-Mac OCR, hand-over note on a miss. |
+| `DottieScreenJobGuesser.swift` | ~410 | Guess first: steps in words from Claude/Gemini, done by name through Accessibility (menus, controls), done check by on-Mac OCR, hand-over note on a miss. |
 | `DottieWatchAndLearn.swift` | ~380 | Watch and learn: frames + action lines → a how-to in words (Claude, Gemini backup), saved as a skill; `watch_and_learn` voice tool. |
 | `DottieFormDetails.swift` | ~300 | Form details: the user's everyday details (name, email, address…) in `FormDetails.json`, given to form-looking screen jobs, used to answer `ask_user` questions that name a `field`, and saved from the user's answers; passwords, card/bank/ID numbers and codes are refused by field name and value. `form_details` voice tool. |
 | `HomeFormDetailsSection.swift` | ~170 | Home → Profile → Form details: list, edit, add, forget, and the remember switch. |
