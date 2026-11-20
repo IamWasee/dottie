@@ -66,6 +66,25 @@ enum DottieTeaching {
         }
     }
 
+    /// The board that's up, moved to where `surface` puts a board (right,
+    /// left, bottom or center of the screen) at its current size, kept on
+    /// the screen. nil for .screen, which has no board.
+    static func movedBoard(_ currentBoard: CGRect, to surface: Surface, on visibleFrame: CGRect) -> CGRect? {
+        guard let usualPlace = surface.boardRect(on: visibleFrame) else { return nil }
+        let margin: CGFloat = 24
+        let side = min(currentBoard.width, min(visibleFrame.width, visibleFrame.height) - margin * 2)
+        var movedBoard = CGRect(x: usualPlace.midX - side / 2, y: usualPlace.midY - side / 2, width: side, height: side)
+        switch surface {
+        case .board_right: movedBoard.origin.x = visibleFrame.maxX - side - margin
+        case .board_left: movedBoard.origin.x = visibleFrame.minX + margin
+        case .board_bottom: movedBoard.origin.y = visibleFrame.minY + margin
+        case .board_center, .screen: break
+        }
+        movedBoard.origin.x = min(max(movedBoard.minX, visibleFrame.minX + margin), visibleFrame.maxX - margin - side)
+        movedBoard.origin.y = min(max(movedBoard.minY, visibleFrame.minY + margin), visibleFrame.maxY - margin - side)
+        return movedBoard
+    }
+
     /// board_size: how big the board is. small, medium, large and full
     /// are sizes; bigger and smaller change the board that's up.
     enum BoardSize: String, CaseIterable {
@@ -188,8 +207,9 @@ enum DottieTeaching {
                     style: trimmed(fields["style"])?.lowercased()
                 )
             }
-            // Only resizing the board that's up needs no steps.
-            guard !steps.isEmpty || (addsToLastDrawing && boardSize != nil) else { return nil }
+            // Only resizing or moving the board that's up needs no steps.
+            let movesBoardOnly = givenSurface.map { $0 != .screen } ?? false
+            guard !steps.isEmpty || (addsToLastDrawing && (boardSize != nil || movesBoardOnly)) else { return nil }
             // A graph, chart or picture that isn't about something on the
             // screen goes on a board: drawn over whatever the screen shows,
             // its lines and labels got lost in the page behind them.
@@ -418,7 +438,7 @@ enum DottieTeaching {
                     "surface": [
                         "type": "STRING",
                         "enum": Surface.allCases.map(\.rawValue),
-                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. Graphs, curves, charts and pictures go on a board unless they mark something on screen (left out, they open board_right). Steps that use anchors still point at the screen."
+                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. With add_to_last, a different board_… moves the board that's up and everything on it there (steps can then be empty): use it when the user asks to move the board or it covers what they need. Graphs, curves, charts and pictures go on a board unless they mark something on screen (left out, they open board_right). Steps that use anchors still point at the screen."
                     ],
                     "anchors": [
                         "type": "ARRAY",

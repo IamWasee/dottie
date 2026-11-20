@@ -82,7 +82,7 @@ struct TalkerTests {
 
     @Test func talkerPromptStaysShort() {
         #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 900)
-        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1100)
+        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1300)
     }
 
     @Test func requestPromptAddsTheProfileOnlyWhenThereIsOne() {

@@ -67,6 +67,48 @@ final class DottieNotesBoard: ObservableObject {
     private static let secondsBetweenBlocks: Double = 0.55
 
     var isShowing: Bool { notesPanel?.isVisible == true }
+    /// Folded down to its title bar; writing goes on underneath.
+    @Published private(set) var isMinimized = false
+    /// The window's height before it was folded, to unfold to.
+    private var heightBeforeMinimizing: CGFloat?
+    /// Height of the board folded down: the header alone.
+    static let minimizedHeight: CGFloat = 34
+
+    /// Where Dottie can put the board when asked to move it.
+    enum Position: String, CaseIterable {
+        case left, right, center, top_left, top_right, bottom_left, bottom_right
+    }
+
+    /// The window's frame at `position` on a screen, at its current size,
+    /// kept on the screen.
+    static func frame(of currentFrame: CGRect, movedTo position: Position, on visibleFrame: CGRect) -> CGRect {
+        let margin: CGFloat = 20
+        let width = min(currentFrame.width, visibleFrame.width - margin * 2)
+        let height = min(currentFrame.height, visibleFrame.height - margin * 2)
+        let leftX = visibleFrame.minX + margin
+        let rightX = visibleFrame.maxX - width - margin
+        let bottomY = visibleFrame.minY + margin
+        let topY = visibleFrame.maxY - height - margin
+        let middleX = visibleFrame.midX - width / 2
+        let middleY = visibleFrame.midY - height / 2
+        let origin: CGPoint
+        switch position {
+        case .left: origin = CGPoint(x: leftX, y: middleY)
+        case .right: origin = CGPoint(x: rightX, y: middleY)
+        case .center: origin = CGPoint(x: middleX, y: middleY)
+        case .top_left: origin = CGPoint(x: leftX, y: topY)
+        case .top_right: origin = CGPoint(x: rightX, y: topY)
+        case .bottom_left: origin = CGPoint(x: leftX, y: bottomY)
+        case .bottom_right: origin = CGPoint(x: rightX, y: bottomY)
+        }
+        return CGRect(origin: origin, size: CGSize(width: width, height: height))
+    }
+
+    /// The frame folded down to its header (or unfolded back to
+    /// `fullHeight`), keeping the top edge where it is.
+    static func frame(of currentFrame: CGRect, foldedTo height: CGFloat) -> CGRect {
+        CGRect(x: currentFrame.minX, y: currentFrame.maxY - height, width: currentFrame.width, height: height)
+    }
 
     // MARK: - Writing
 
@@ -128,6 +170,8 @@ final class DottieNotesBoard: ObservableObject {
             notesPanel.orderFrontRegardless()
             return
         }
+        isMinimized = false
+        heightBeforeMinimizing = nil
         let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame
             ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let panelWidth = min(640, screenFrame.width * 0.45)
@@ -148,7 +192,9 @@ final class DottieNotesBoard: ObservableObject {
         )
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
+        // Moved by its header only (DottieWindowDragArea): dragging over the
+        // notes selects text, so the user can copy any part of them.
+        panel.isMovableByWindowBackground = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
@@ -162,6 +208,34 @@ final class DottieNotesBoard: ObservableObject {
 
     func close() {
         notesPanel?.orderOut(nil)
+    }
+
+    /// Folds the board down to its header, out of the way.
+    func minimize() {
+        guard let notesPanel, !isMinimized else { return }
+        heightBeforeMinimizing = notesPanel.frame.height
+        notesPanel.minSize = CGSize(width: 360, height: Self.minimizedHeight)
+        isMinimized = true
+        notesPanel.setFrame(Self.frame(of: notesPanel.frame, foldedTo: Self.minimizedHeight), display: true, animate: true)
+    }
+
+    /// Unfolds a minimized board.
+    func restore() {
+        guard let notesPanel else { return }
+        notesPanel.orderFrontRegardless()
+        guard isMinimized else { return }
+        isMinimized = false
+        let fullHeight = heightBeforeMinimizing ?? 600
+        notesPanel.setFrame(Self.frame(of: notesPanel.frame, foldedTo: fullHeight), display: true, animate: true)
+        notesPanel.minSize = CGSize(width: 360, height: 300)
+    }
+
+    /// Moves the board to a side or corner of its screen.
+    func move(to position: Position) {
+        show()
+        guard let notesPanel else { return }
+        let visibleFrame = (notesPanel.screen ?? NSScreen.main)?.visibleFrame ?? notesPanel.frame
+        notesPanel.setFrame(Self.frame(of: notesPanel.frame, movedTo: position, on: visibleFrame), display: true, animate: true)
     }
 
     // MARK: - Saving
@@ -228,34 +302,40 @@ private struct DottieNotesBoardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ScrollViewReader { scrollProxy in
-                // Both ways: equations never wrap, so a long line of
-                // working scrolls sideways instead of running off the edge.
-                ScrollView([.vertical, .horizontal]) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ForEach(notesBoard.rows) { row in
-                            HStack(alignment: .firstTextBaseline, spacing: 36) {
-                                ForEach(row.blocks) { block in
-                                    DottieNoteBlockView(block: block)
-                                        .id(block.id)
-                                }
+            if !notesBoard.isMinimized {
+                notesScroll
+            }
+        }
+        .frame(minWidth: 360, minHeight: DottieNotesBoard.minimizedHeight, alignment: .topLeading)
+        .background(Color(red: 0.08, green: 0.09, blue: 0.12))
+    }
+
+    private var notesScroll: some View {
+        ScrollViewReader { scrollProxy in
+            // Both ways: equations never wrap, so a long line of
+            // working scrolls sideways instead of running off the edge.
+            ScrollView([.vertical, .horizontal]) {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(notesBoard.rows) { row in
+                        HStack(alignment: .firstTextBaseline, spacing: 36) {
+                            ForEach(row.blocks) { block in
+                                DottieNoteBlockView(block: block)
+                                    .id(block.id)
                             }
                         }
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 20)
-                    .frame(minWidth: 0, alignment: .topLeading)
                 }
-                .onChange(of: notesBoard.newestBlockID) { _, newestBlockID in
-                    guard let newestBlockID else { return }
-                    withAnimation(.easeOut(duration: 0.35)) {
-                        scrollProxy.scrollTo(newestBlockID, anchor: .bottomTrailing)
-                    }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 20)
+                .frame(minWidth: 0, alignment: .topLeading)
+            }
+            .onChange(of: notesBoard.newestBlockID) { _, newestBlockID in
+                guard let newestBlockID else { return }
+                withAnimation(.easeOut(duration: 0.35)) {
+                    scrollProxy.scrollTo(newestBlockID, anchor: .bottomTrailing)
                 }
             }
         }
-        .frame(minWidth: 360, minHeight: 300, alignment: .topLeading)
-        .background(Color(red: 0.08, green: 0.09, blue: 0.12))
     }
 
     private var header: some View {
@@ -265,6 +345,10 @@ private struct DottieNotesBoardView: View {
                 .foregroundColor(.white.opacity(0.75))
                 .lineLimit(1)
             Spacer()
+            headerButton(systemImageName: notesBoard.isMinimized ? "chevron.down" : "minus",
+                         helpText: notesBoard.isMinimized ? "Show the notes" : "Minimize the notes") {
+                if notesBoard.isMinimized { notesBoard.restore() } else { notesBoard.minimize() }
+            }
             headerButton(systemImageName: "folder", helpText: "Show saved notes") {
                 notesBoard.revealSavedNotes()
             }
@@ -280,6 +364,8 @@ private struct DottieNotesBoardView: View {
         .padding(.leading, 78)
         .padding(.trailing, 14)
         .frame(height: 30)
+        // The header is the handle that moves the window.
+        .background(DottieWindowDragArea())
     }
 
     private func headerButton(systemImageName: String, helpText: String, action: @escaping () -> Void) -> some View {
@@ -312,6 +398,15 @@ private struct DottieNoteBlockView: View {
 
     var body: some View {
         content
+            .contextMenu {
+                if block.kind != .picture && block.kind != .divider {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            block.kind == .code ? block.text : DottieInkText.plainText(block.text), forType: .string)
+                    }
+                }
+            }
             .mask(
                 GeometryReader { proxy in
                     Rectangle().frame(width: proxy.size.width * writingProgress, height: proxy.size.height)
@@ -427,7 +522,8 @@ enum DottieNotesTools: DottieToolModule {
                         ],
                         "new_page": ["type": "BOOLEAN", "description": "Start a clean page first. Use for a new topic; leave it out to keep adding."],
                         "title": ["type": "STRING", "description": "With new_page: the page's title, like \"Indices: fractional powers\"."],
-                        "action": ["type": "STRING", "enum": ["write", "show", "close", "clear"], "description": "write (default) adds the blocks; show brings the board back; close hides it; clear empties the page."]
+                        "action": ["type": "STRING", "enum": ["write", "show", "close", "clear", "move", "minimize", "restore"], "description": "write (default) adds the blocks; show brings the board back; close hides it; clear empties the page; move puts the board at position (when the user asks to move it or it covers what they need); minimize folds it down to its title bar; restore unfolds it."],
+                        "position": ["type": "STRING", "enum": DottieNotesBoard.Position.allCases.map(\.rawValue), "description": "With move: where the board goes on the screen."]
                     ]
                 ],
                 audiences: [.voice]
@@ -464,6 +560,18 @@ enum DottieNotesTools: DottieToolModule {
         case "clear":
             notesBoard.startNewPage(title: arguments["title"] as? String)
             return "cleared the notes board."
+        case "move":
+            guard let position = (arguments["position"] as? String).flatMap({ DottieNotesBoard.Position(rawValue: $0.lowercased()) }) else {
+                return "error: give a position: " + DottieNotesBoard.Position.allCases.map(\.rawValue).joined(separator: ", ") + "."
+            }
+            notesBoard.move(to: position)
+            return "moved the notes board to the \(position.rawValue.replacingOccurrences(of: "_", with: " "))."
+        case "minimize":
+            notesBoard.minimize()
+            return "minimized the notes board."
+        case "restore":
+            notesBoard.restore()
+            return "the notes board is open again."
         default:
             break
         }
@@ -645,4 +753,18 @@ struct DottieNotesCodeBlockView: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
+}
+
+/// A view the window can be dragged by. The notes board isn't moved by
+/// its background (that would steal drags meant for selecting text), so
+/// its header is this.
+struct DottieWindowDragArea: NSViewRepresentable {
+    final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

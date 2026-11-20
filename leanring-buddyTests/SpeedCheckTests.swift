@@ -205,6 +205,23 @@ struct SpeedCheckTests {
         #expect(median < 200, "20 Jev steps took \(median) ms to build")
     }
 
+    @Test func movingTheBoardAndNotesAThousandTimesStaysQuick() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let median = medianMilliseconds {
+            var board = CGRect(x: 800, y: 100, width: 600, height: 600)
+            var notesFrame = CGRect(x: 700, y: 100, width: 600, height: 700)
+            for moveNumber in 0..<1_000 {
+                let surface: DottieTeaching.Surface = moveNumber.isMultiple(of: 2) ? .board_left : .board_right
+                board = DottieTeaching.movedBoard(board, to: surface, on: screenFrame) ?? board
+                _ = DottieDrawingOverlayManager.boardHandleFrame(for: board)
+                let position = DottieNotesBoard.Position.allCases[moveNumber % DottieNotesBoard.Position.allCases.count]
+                notesFrame = DottieNotesBoard.frame(of: notesFrame, movedTo: position, on: screenFrame)
+            }
+        }
+
+        #expect(median < 100, "1,000 board and notes moves took \(median) ms")
+    }
+
     @Test func placingAThousandDrawingAnchorsStaysQuick() {
         let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let median = medianMilliseconds {

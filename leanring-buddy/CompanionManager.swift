@@ -1024,8 +1024,20 @@ final class CompanionManager: ObservableObject {
             .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
     }
 
-    /// Hooks the Live client's callbacks into the companion's state.
+    /// Hooks the voice tools' callbacks into the companion's state.
     private func configureLiveVoiceClient() {
+        // The user moved or closed the teaching board with its grip.
+        drawingOverlayManager.onUserMovedBoard = { [weak self] oldBoard, newBoard in
+            guard let self, self.lastTeachingBoardRect == oldBoard else { return }
+            self.lastTeachingBoardRect = newBoard
+        }
+        drawingOverlayManager.onUserClosedBoard = { [weak self] in
+            guard let self else { return }
+            self.stopTeaching(clearingDrawing: true)
+            self.drawingOverlayManager.clear()
+            self.lastTeachingBoardRect = nil
+            self.lastTeachingDisplayFrame = nil
+        }
 
         // Pick up where the last run left off: the saved conversation seeds
         // memory, so Dottie still knows the user's name after a relaunch.
@@ -1296,6 +1308,22 @@ final class CompanionManager: ObservableObject {
         } else if !staysOnScreenDrawing {
             plannedBoardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame, sizeScale: plan.boardSize?.scaleFromUsualSize ?? 1)
         }
+        // "move the board to the left": a different board_… moves the board
+        // that's up and its drawing there. The same surface as before leaves
+        // it where it is, so a board the user dragged doesn't jump back.
+        var movedBoardThisCall = false
+        if reusesEarlierBoard, plan.surfaceWasGiven, plan.surface != lastTeachingBoardSurface,
+           let currentBoard = lastTeachingBoardRect {
+            let boardScreen = NSScreen.screens.first(where: { $0.frame.intersects(currentBoard) }) ?? cursorScreen
+            if let movedBoard = DottieTeaching.movedBoard(currentBoard, to: plan.surface, on: boardScreen.visibleFrame) {
+                drawingOverlayManager.refitBoardFigures(from: currentBoard, to: movedBoard)
+                lastTeachingBoardRect = movedBoard
+                lastTeachingBoardSurface = plan.surface
+                plannedBoardRect = movedBoard
+                movedBoardThisCall = true
+                DottieLog.notice("✏️ Board moved to \(plan.surface.rawValue)")
+            }
+        }
         // "make the board bigger": the board that's up and its drawing
         // move and scale together.
         if reusesEarlierBoard, let boardSize = plan.boardSize, let currentBoard = lastTeachingBoardRect {
@@ -1308,13 +1336,17 @@ final class CompanionManager: ObservableObject {
         }
         if plan.steps.isEmpty {
             guard reusesEarlierBoard else {
-                return "there's no board up to resize. to draw on a bigger board, call explain_on_screen with board_size and the steps."
+                return "there's no board up to resize or move. to draw on a board, call explain_on_screen with the steps."
             }
             lastTeachingBoardRect = plannedBoardRect
+            if movedBoardThisCall && plan.boardSize == nil {
+                return "moved the board; everything on it moved with it. say it in a few words."
+            }
             return "resized the board; everything on it moved with it. say it in a few words."
         }
         let boardRect = plannedBoardRect
         let drawsNewBoard = boardRect != nil && !reusesEarlierBoard
+        if drawsNewBoard { lastTeachingBoardSurface = plan.surface }
         let teachingDisplayFrame = reusesEarlierBoard ? (lastTeachingDisplayFrame ?? cursorScreen.frame) : cursorScreen.frame
         lastTeachingBoardRect = boardRect
         lastTeachingDisplayFrame = teachingDisplayFrame
@@ -1396,6 +1428,9 @@ final class CompanionManager: ObservableObject {
     /// The board the last explanation drew on and its display, so steps
     /// added later (add_to_last) land on the same board.
     private var lastTeachingBoardRect: CGRect?
+    /// Where Dottie last put the board (board_right, …); a call naming
+    /// another place moves it.
+    private var lastTeachingBoardSurface: DottieTeaching.Surface?
     private var lastTeachingDisplayFrame: CGRect?
     /// Counts explanations, so one that finishes before steps added to it
     /// doesn't forget the newer task.

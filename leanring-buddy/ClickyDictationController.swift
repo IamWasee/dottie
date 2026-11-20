@@ -325,6 +325,7 @@ final class ClickyDictationController: ObservableObject {
         audioPowerLevel = 0
         state = .idle
     }
+}
 
 /// Puts dictated text where the user was typing. Pastes with a temporary
 /// clipboard swap (the most reliable way across native, web and Electron
