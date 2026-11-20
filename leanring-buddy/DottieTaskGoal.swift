@@ -68,6 +68,19 @@ struct DottieTaskGoal {
         }
         return lines.joined(separator: "\n")
     }
+
+    /// Why finishing now would skip planned steps, or nil when the plan is
+    /// on its last step (or there's no plan). "Scroll to find the free
+    /// days, then spread the 115 tasks over them" finished after the
+    /// scroll: the model called it done with the moving still ahead.
+    var unfinishedPlanProblem: String? {
+        guard steps.count >= 2, currentStepIndex < steps.count - 1 else { return nil }
+        let stepsLeft = steps[(currentStepIndex + 1)...]
+            .enumerated()
+            .map { offset, step in "\(currentStepIndex + offset + 2). \(step)" }
+            .joined(separator: "; ")
+        return "your plan is only on step \(currentStepIndex + 1) of \(steps.count), and these steps aren't done yet: \(stepsLeft). Keep going with them. If the screen really shows they're done, call plan with current_step \(steps.count) first, then finish with done_check saying what on screen shows it."
+    }
 }
 
 // MARK: - Sorting and common goals

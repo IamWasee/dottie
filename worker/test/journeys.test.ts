@@ -125,6 +125,30 @@ describe("a quick ask that goes to Groq first", () => {
   });
 });
 
+describe("a screen job and a helper on the paid models", () => {
+  it("sends screen steps and a helper's turn to GLM, and never asks Claude, Groq or Gemini", async () => {
+    const callWorker = appCaller(deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", ZAI_API_KEY: "test-zai-key", GROQ_API_KEY: "test-groq-key" }));
+    const calls = fakeFetch([
+      ["api.z.ai", chatAnswer({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "click", arguments: '{"box_2d":[1,2,3,4]}' } }] })],
+    ]);
+    const screenStep = await callWorker("/chat", {
+      body: {
+        provider: "groq",
+        contents: [{ role: "user", parts: [{ text: "open the first email" }, { inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } }] }],
+        tools: [{ functionDeclarations: [{ name: "click", parameters: { type: "OBJECT", properties: { box_2d: { type: "ARRAY", items: { type: "NUMBER" } } } } }] }],
+      },
+    });
+    expect((await sseJSON(screenStep)).candidates[0].content.parts[0].functionCall).toMatchObject({ name: "click", args: { box_2d: [1, 2, 3, 4] } });
+
+    const helperCalls = fakeFetch([["api.z.ai", chatAnswer({ content: "Site built." })]]);
+    const helperTurn = await callWorker("/gemini/v1beta/models/gemini-3.8-flash:generateContent", { body: { contents: [userText("build my site")] } });
+    expect(((await helperTurn.json()) as any).candidates[0].content.parts[0].text).toBe("Site built.");
+
+    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+    expect(helperCalls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+  });
+});
+
 describe("hold to dictate", () => {
   it("sends the recording with what the app knows and gets clean text back", async () => {
     const callWorker = appCaller(deployedEnv());

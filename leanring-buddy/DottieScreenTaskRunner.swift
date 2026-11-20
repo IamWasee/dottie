@@ -49,8 +49,18 @@ final class DottieScreenTaskRunner {
     }
 
     static let maximumSteps = 30
+    /// A planned job with many parts ("spread these 115 tasks over the
+    /// free days") needs far more than 30 looks; 30 cut those off.
+    static let maximumLongJobSteps = 120
     /// Games take many small moves.
     static let maximumGameSteps = 150
+
+    /// How many looks a job gets. A job can turn long after it starts
+    /// (the model plans it), so this is asked again on every step.
+    static func stepLimit(isGameMode: Bool, isLongJob: Bool) -> Int {
+        if isGameMode { return maximumGameSteps }
+        return isLongJob ? maximumLongJobSteps : maximumSteps
+    }
     /// Fast and on the free tier; the Worker falls back to other Flash
     /// models when it's busy.
     private static let taskModel = "gemini-3.6-flash"
@@ -152,10 +162,13 @@ final class DottieScreenTaskRunner {
     private var claudeHasSeenThisJob = false
     /// The newest screenshot's size in pixels, for Claude's pixel boxes.
     private var lastScreenshotPixelSize: CGSize = .zero
-    /// Who answered the last step, for the notch ("waiting on Claude…").
-    private var stepEngineName: String { usesClaudeForThisJob ? "Claude" : "Gemini" }
 
     var isRunning: Bool { runTask != nil }
+
+    /// What the notch shows while a step's answer is slow.
+    nonisolated static func slowStepNotice(secondsWaited: Int) -> String {
+        "thinking… \(max(0, secondsWaited)) s"
+    }
     /// Game jobs play through DottieGamePlayer (think, then play).
     private var gamePlayer: DottieGamePlayer?
     /// A game job says something out loud now and then.
@@ -340,9 +353,11 @@ final class DottieScreenTaskRunner {
             return await DottieModelPicker.isSimpleScreenJob(taskText) ? .tiny : .normal
         }
 
-        let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
-        for stepNumber in 1...stepLimit {
+        var stepLimit = Self.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob)
+        for stepNumber in 1...max(Self.maximumGameSteps, Self.maximumLongJobSteps) {
             if Task.isCancelled { return .stopped }
+            stepLimit = Self.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob)
+            if stepNumber > stepLimit { break }
 
             // Before looking: if the last click opened something in an app
             // behind this one, bring it forward so the screenshot shows it.
@@ -401,14 +416,15 @@ final class DottieScreenTaskRunner {
             pendingFunctionResponseParts = []
             Self.dropOldScreenshots(from: &contents)
             let modelParts: [[String: Any]]
-            // A slow answer shows in the notch, so waiting on Gemini doesn't
-            // look like Dottie being stuck.
+            // A slow answer shows in the notch, so a long think doesn't look
+            // like Dottie being stuck. It doesn't name the model: people care
+            // that she's working, not who answers.
             let waitingStartedAt = Date()
             let slowAnswerNotice = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 while !Task.isCancelled {
                     guard let self else { return }
-                    self.onProgress?(stepNumber, "waiting on \(self.stepEngineName)… \(Int(Date().timeIntervalSince(waitingStartedAt))) s")
+                    self.onProgress?(stepNumber, Self.slowStepNotice(secondsWaited: Int(Date().timeIntervalSince(waitingStartedAt))))
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                 }
             }
@@ -865,11 +881,23 @@ final class DottieScreenTaskRunner {
                 return "the screen still shows \"\(visibleSign)\", so it isn't done (done when: \(doneWhen)). Keep going on the next screenshot: pick the account, use the password the browser offers, or ask_user for what's missing."
             }
         }
+        if let unfinishedPlanProblem = currentGoal?.unfinishedPlanProblem {
+            return unfinishedPlanProblem
+        }
         if actedThisTurn {
             return "you acted and finished in the same turn, so you haven't seen the result yet. Look at the next screenshot and finish only if it shows the job is done (done when: \(doneWhen)); otherwise keep going."
         }
         if (doneCheck ?? "").isEmpty {
             return "check the done-when on this screenshot first (done when: \(doneWhen)). If it's met, call finish again with done_check saying what on screen shows it. If not, keep going."
+        }
+        // A second opinion from Jev on a fresh screen: only a clear "no" holds
+        // the finish back, so a slow or unsure Jev never stops a done job.
+        if let specificDoneWhen = currentGoal?.doneWhen, !specificDoneWhen.isEmpty,
+           let freshScreen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension),
+           let doneProbability = await DottieJev.probability(of: specificDoneWhen, in: freshScreen.image),
+           DottieJevProtocol.clearlyNotDone(probability: doneProbability) {
+            DottieLog.notice("🎯 Jev says the job isn't done yet")
+            return "a check of the screen says it isn't done yet (done when: \(doneWhen)). Look at the next screenshot and keep going; finish only once it shows."
         }
         return nil
     }
@@ -952,11 +980,18 @@ final class DottieScreenTaskRunner {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             return didOpen ? "opened \(appName); it's in front now" : "couldn't find an app called \(appName)"
 
+        case DottieQuickMacAction.functionName:
+            onProgress?(stepNumber, "doing it on the Mac: \(text("action") ?? "a quick action")")
+            let quickActionResult = await DottieQuickMacAction.perform(arguments: arguments)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            return quickActionResult
+
         case "open_url":
             return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
         case "click":
-            return await performClick(at: clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
+            let jevClickPoint = await Self.jevClickPoint(label: text("label"), screen: screen)
+            return await performClick(at: jevClickPoint ?? clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
@@ -967,6 +1002,17 @@ final class DottieScreenTaskRunner {
             return DottieScreenActionPerformer.press(keyCombination: keys)
                 ? "pressed \(keys)"
                 : "unknown key \(keys); use names like cmd+l, enter, escape, tab, up, down"
+
+        case "drag":
+            guard let dragStart = boxCenter(),
+                  let dragEnd = Self.centerOfBox(arguments["to_box_2d"], screen: screen) else {
+                return "error: give box_2d (what to grab) and to_box_2d (where to drop it), each [ymin, xmin, ymax, xmax] 0-1000"
+            }
+            let dragLabel = text("label") ?? "it"
+            onProgress?(stepNumber, "dragging \(dragLabel)")
+            await DottieScreenActionPerformer.drag(from: dragStart, to: dragEnd)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return "dragged \(dragLabel). Check on the next screenshot that it landed where you meant; if it snapped back, try grabbing its drag handle or the item's title."
 
         case "scroll":
             return await performScroll(arguments: arguments, directionName: text("direction"), boxCenter: boxCenter(), screen: screen, stepNumber: stepNumber)
@@ -1250,6 +1296,38 @@ final class DottieScreenTaskRunner {
 
     /// The box's middle, moved to the middle of the real control under it
     /// when there is one, so a box a few pixels off still hits.
+    /// The middle of a 0-1000 box on the screenshot, in global AppKit
+    /// points, or nil when it isn't four numbers in order.
+    static func centerOfBox(_ boxValue: Any?, screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
+        guard let numbers = normalizedBoxCenter(boxValue) else { return nil }
+        return screen.globalPoint(normalizedX: numbers.x, normalizedY: numbers.y)
+    }
+
+    /// The middle of a [ymin, xmin, ymax, xmax] box in its own 0-1000
+    /// space, or nil. Pure, so it can be tested.
+    nonisolated static func normalizedBoxCenter(_ boxValue: Any?) -> (x: Double, y: Double)? {
+        guard let box = boxValue as? [Any] else { return nil }
+        let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
+        return (x: (numbers[1] + numbers[3]) / 2, y: (numbers[0] + numbers[2]) / 2)
+    }
+
+    /// Where Jev finds what the step model named, snapped to the real control
+    /// under it, or nil (no useful label, Jev unsure or not set up) so the
+    /// model's own box is used. The model says what to click; Jev says
+    /// exactly where.
+    private static func jevClickPoint(label: String?, screen: DottieDisplayCapture.Screenshot) async -> CGPoint? {
+        guard let label, DottieJevProtocol.isUsefulTargetLabel(label),
+              let jevBox = await DottieJev.findBox(target: label, in: screen.image) else { return nil }
+        let normalizedBox = jevBox.normalizedBox
+        let topLeft = screen.globalPoint(normalizedX: normalizedBox.xmin, normalizedY: normalizedBox.ymin)
+        let bottomRight = screen.globalPoint(normalizedX: normalizedBox.xmax, normalizedY: normalizedBox.ymax)
+        let boxFrame = CGRect(x: topLeft.x, y: bottomRight.y, width: bottomRight.x - topLeft.x, height: topLeft.y - bottomRight.y)
+        let snappedFrame = AccessibilitySnap.refinedFrame(boxFrame)
+        DottieLog.notice("🎯 Jev found the click target")
+        return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
+    }
+
     private static func clickPoint(arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
         guard let box = arguments["box_2d"] as? [Any] else { return nil }
         let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
@@ -1490,7 +1568,7 @@ final class DottieScreenTaskRunner {
         ]
     }
 
-    private static var functionDeclarations: [[String: Any]] {
+    static var functionDeclarations: [[String: Any]] {
         let boxProperty: [String: Any] = [
             "type": "array",
             "items": ["type": "integer"],
@@ -1501,6 +1579,11 @@ final class DottieScreenTaskRunner {
                 "name": "open_app",
                 "description": "Open a Mac app by name, or bring it to the front if it's already running.",
                 "parameters": ["type": "object", "properties": ["name": ["type": "string", "description": "The app's name, like 'Opera GX', 'Safari', 'Notes'."]], "required": ["name"]]
+            ],
+            [
+                "name": DottieQuickMacAction.functionName,
+                "description": DottieQuickMacAction.toolDescription,
+                "parameters": ["type": "object", "properties": ["action": ["type": "string", "description": "The action in a few plain words: \"open Spotify\", \"move this window to the left\", \"volume 30\"."]], "required": ["action"]]
             ],
             [
                 "name": "open_url",
@@ -1534,6 +1617,15 @@ final class DottieScreenTaskRunner {
                 "name": "press_keys",
                 "description": "Press a key or shortcut, like 'enter', 'escape', 'tab', 'cmd+l', 'cmd+t', 'cmd+[' (back).",
                 "parameters": ["type": "object", "properties": ["keys": ["type": "string"]], "required": ["keys"]]
+            ],
+            [
+                "name": "drag",
+                "description": "Drag and drop like a hand on a mouse: press on the thing in box_2d (a card, a task, a file, its drag handle ⠿ when it has one), move it, and let go on to_box_2d. Use it to move items between lists, days, columns or folders, reorder a list, or move a slider. Never click a checkbox to move something: ticking marks it done. One item per drag; look at the next screenshot to check it landed.",
+                "parameters": ["type": "object", "properties": [
+                    "box_2d": boxProperty,
+                    "to_box_2d": ["type": "array", "items": ["type": "number"], "description": "[ymin, xmin, ymax, xmax] of where to drop it on the latest screenshot, each 0-1000 (the list, day or column itself, not its title)."],
+                    "label": ["type": "string", "description": "What's dragged and where, like 'Read 4A to Saturday'."]
+                ], "required": ["box_2d", "to_box_2d"]]
             ],
             [
                 "name": "scroll",

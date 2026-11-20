@@ -1044,6 +1044,8 @@ private struct HomeVoiceChooser: View {
                     .foregroundColor(DS.Colors.warningText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            HomeKokoroVoiceChooser()
+                .padding(.top, 6)
         }
         .onDisappear { voicePreview.stop() }
     }
@@ -1106,6 +1108,89 @@ private struct HomeVoiceChooser: View {
         .buttonStyle(.plain)
         .pointerCursor()
         .help("Hear \(voiceName)")
+    }
+}
+
+// MARK: - On-Mac voice
+
+/// Settings → Voice: the Kokoro voice Dottie speaks with on the Mac (classic
+/// mode), each with a play button. The first play downloads Kokoro once.
+private struct HomeKokoroVoiceChooser: View {
+    @ObservedObject private var kokoroSpeaker = DottieKokoroSpeaker.shared
+    @State private var chosenVoiceName = DottieKokoroVoices.chosenVoice().name
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("On-Mac voice (Kokoro)")
+                .font(.system(size: 13))
+                .foregroundColor(DS.Colors.textPrimary)
+            Text("Speaks on this Mac with no AI service. The first time downloads the voice once.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(DottieKokoroVoices.all) { voice in
+                    voiceTile(voice)
+                }
+            }
+        }
+        .onDisappear { kokoroSpeaker.stop() }
+    }
+
+    private func voiceTile(_ voice: DottieKokoroVoice) -> some View {
+        let isSelected = chosenVoiceName == voice.name
+        return HStack(spacing: 8) {
+            Button(action: {
+                DottieKokoroVoices.choose(voice.name)
+                chosenVoiceName = voice.name
+                kokoroSpeaker.togglePreview(voice)
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(voice.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(DS.Colors.textPrimary)
+                        Text(voice.sound)
+                            .font(.system(size: 10))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            Button(action: { kokoroSpeaker.togglePreview(voice) }) {
+                Group {
+                    if kokoroSpeaker.loadingVoiceName == voice.name {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: kokoroSpeaker.playingVoiceName == voice.name ? "stop.fill" : "play.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(DS.Colors.textPrimary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(DS.Colors.surface3))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Hear \(voice.name)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? DS.Colors.accentSubtle : DS.Colors.surface2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? DS.Colors.textTertiary : DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
     }
 }
 

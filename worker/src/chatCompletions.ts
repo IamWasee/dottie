@@ -17,6 +17,8 @@
  * and dictation stay on Gemini: neither has those.
  */
 
+import { ANTHROPIC_API_URL, ANTHROPIC_VERSION, fromAnthropicResponse, toAnthropicRequest } from "./anthropicMessages";
+
 export interface ChatProvider {
   /** For logs and the modelVersion the app sees, like "groq". */
   name: string;
@@ -38,10 +40,20 @@ export interface ChatProvider {
   attemptTimeoutMilliseconds: number;
   /** Model-specific switches (thinking off); retried without them on a 400. */
   extrasForModel: (model: string) => Record<string, unknown>;
+  /** "anthropic" speaks Claude's Messages API; otherwise OpenAI's chat format. */
+  format?: "chat" | "anthropic";
+  /** Asked for boxes in pixels of the newest picture (see pixelBoxConversion). */
+  usesPixelBoxes?: boolean;
 }
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const NIM_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const ZAI_API_URL = "https://api.z.ai/api/paas/v4/chat/completions";
+
+/** Claude models for paid asks, best first (Haiku: fast and cheap). */
+export const DEFAULT_ANTHROPIC_MODELS = "claude-haiku-5-5";
+/** Z.ai's GLM models, best first; GLM-5.3-Flash takes pictures and tools. */
+export const DEFAULT_ZAI_MODELS = "glm-5.3-flash";
 
 /** Groq text models, best first; each has its own free per-minute limit. */
 export const DEFAULT_GROQ_TEXT_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b";
@@ -65,6 +77,7 @@ export function groqProvider(apiKey: string, textModels?: string, visionModels?:
     textModels: modelList(textModels || DEFAULT_GROQ_TEXT_MODELS),
     visionModels: modelList(visionModels || DEFAULT_GROQ_VISION_MODELS),
     maximumImages: 3,
+    usesPixelBoxes: true,
     attemptTimeoutMilliseconds: 30_000,
     maximumTokens: Number.isFinite(configuredMaximumTokens) && configuredMaximumTokens > 0
       ? configuredMaximumTokens
@@ -91,6 +104,42 @@ export function nimProvider(apiKey: string, models?: string): ChatProvider {
     // NIM's free endpoints are slow to start.
     attemptTimeoutMilliseconds: 60_000,
     extrasForModel: () => ({ chat_template_kwargs: { enable_thinking: false, thinking: false } }),
+  };
+}
+
+/** Claude through Anthropic's Messages API (paid key, ANTHROPIC_API_KEY). */
+export function anthropicProvider(apiKey: string, models?: string): ChatProvider {
+  const claudeModels = modelList(models || DEFAULT_ANTHROPIC_MODELS);
+  return {
+    name: "claude",
+    apiURL: ANTHROPIC_API_URL,
+    apiKey,
+    textModels: claudeModels,
+    visionModels: claudeModels,
+    maximumImages: 6,
+    maximumTokens: 150_000,
+    attemptTimeoutMilliseconds: 60_000,
+    format: "anthropic",
+    // Claude measures pictures in pixels, so it gets the same pixel boxes as Groq.
+    usesPixelBoxes: true,
+    // Quick asks and screen steps don't need thinking time.
+    extrasForModel: () => ({ thinking: { type: "disabled" } }),
+  };
+}
+
+/** GLM through Z.ai's own API (paid key, ZAI_API_KEY). */
+export function zaiProvider(apiKey: string, models?: string): ChatProvider {
+  const glmModels = modelList(models || DEFAULT_ZAI_MODELS);
+  return {
+    name: "glm",
+    apiURL: ZAI_API_URL,
+    apiKey,
+    textModels: glmModels,
+    visionModels: glmModels,
+    maximumImages: 5,
+    maximumTokens: 100_000,
+    attemptTimeoutMilliseconds: 45_000,
+    extrasForModel: () => ({ thinking: { type: "disabled" } }),
   };
 }
 
@@ -243,23 +292,24 @@ export async function answerWithProvider(
   const models = imageCount(geminiBody) > 0 ? provider.visionModels : provider.textModels;
   // Groq's models write boxes in pixels, left first; Gemini's box_2d is
   // 0-1000, top first. Groq is asked for pixels and its answer turned back.
-  const boxConversion = provider.name === "groq" ? pixelBoxConversion(geminiBody) : undefined;
+  const boxConversion = provider.usesPixelBoxes ? pixelBoxConversion(geminiBody) : undefined;
   const chatRequest = toChatRequest(boxConversion ? boxConversion.bodyForProvider : geminiBody);
   if (provider.name === "groq" && typeof chatRequest.max_tokens !== "number") {
     chatRequest.max_tokens = DEFAULT_ANSWER_TOKENS;
   }
+  const speaksAnthropic = provider.format === "anthropic";
+  const requestForProvider = speaksAnthropic ? toAnthropicRequest(chatRequest) : chatRequest;
+  const headers: Record<string, string> = speaksAnthropic
+    ? { "x-api-key": provider.apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json", accept: "application/json" }
+    : { authorization: `Bearer ${provider.apiKey}`, "content-type": "application/json", accept: "application/json" };
   for (const model of models) {
     for (const extras of [provider.extrasForModel(model), {}]) {
       let response: Response;
       try {
         response = await fetch(provider.apiURL, {
           method: "POST",
-          headers: {
-            authorization: `Bearer ${provider.apiKey}`,
-            "content-type": "application/json",
-            accept: "application/json",
-          },
-          body: JSON.stringify({ ...chatRequest, ...extras, model, stream: false }),
+          headers,
+          body: JSON.stringify({ ...requestForProvider, ...extras, model, stream: false }),
           signal: AbortSignal.timeout(provider.attemptTimeoutMilliseconds),
         });
       } catch (error) {
@@ -268,8 +318,9 @@ export async function answerWithProvider(
         break;
       }
       if (response.ok) {
-        const chatResponse = await response.json<Record<string, unknown>>().catch(() => undefined);
-        if (!chatResponse) break;
+        const providerResponse = await response.json<Record<string, unknown>>().catch(() => undefined);
+        if (!providerResponse) break;
+        const chatResponse = speaksAnthropic ? fromAnthropicResponse(providerResponse) : providerResponse;
         let geminiResponse = toGeminiResponse(chatResponse, `${provider.name}/${model}`);
         if (!geminiResponse) break;
         if (boxConversion) geminiResponse = boxConversion.responseForGemini(geminiResponse);

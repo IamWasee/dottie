@@ -175,4 +175,49 @@ struct SpeedCheckTests {
 
         #expect(median < 500, "20 screen comparisons took \(median) ms")
     }
+
+    @Test func pickingTheOnMacVoiceForAThousandAnswersStaysQuick() {
+        let median = medianMilliseconds {
+            for answerNumber in 0..<1_000 {
+                _ = DottieKokoroVoices.voice(named: answerNumber.isMultiple(of: 2) ? " jarvis " : "unknown")
+                _ = DottieKokoroVoices.speakableText("  Here is answer \(answerNumber).  ")
+            }
+        }
+
+        #expect(median < 200, "1,000 voice picks took \(median) ms")
+    }
+
+    @Test func readingAThousandJevBoxesStaysQuick() throws {
+        let answerData = try JSONSerialization.data(withJSONObject: ["answers": ["target": ["box": ["top": 0.1, "bottom": 0.2, "left": 0.3, "right": 0.5], "confidence": 0.9]]])
+        let median = medianMilliseconds {
+            for _ in 0..<1_000 {
+                _ = DottieJevProtocol.box(fromAnswer: answerData)
+            }
+        }
+
+        #expect(median < 300, "1,000 Jev answers took \(median) ms")
+    }
+
+    @Test func placingAThousandDrawingAnchorsStaysQuick() {
+        let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let median = medianMilliseconds {
+            var jevFrames: [String: CGRect] = [:]
+            for anchorNumber in 0..<1_000 {
+                jevFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
+            }
+            _ = DottieTeaching.mergedAnchorFrames(jevFrames: jevFrames, modelFrames: jevFrames)
+        }
+
+        #expect(median < 200, "1,000 drawing anchors took \(median) ms")
+    }
+
+    @Test func readingAThousandTalkerAnswersStaysQuick() {
+        let median = medianMilliseconds {
+            for answerNumber in 0..<1_000 {
+                _ = DottieTalkerProtocol.decision(fromTalkerAnswer: answerNumber.isMultiple(of: 2) ? "REQUEST SCREEN" : "hey, doing great")
+            }
+        }
+
+        #expect(median < 200, "1,000 talker answers took \(median) ms")
+    }
 }

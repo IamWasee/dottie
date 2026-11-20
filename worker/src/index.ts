@@ -70,6 +70,24 @@ export interface Env {
   NIM_MODELS?: string;
   /** Biggest request (prompt + answer, in tokens) sent to Groq; 7000 fits its free plan. */
   GROQ_MAX_REQUEST_TOKENS?: string;
+  /** Paid Claude key; when set, text asks and Dot turns go to Claude first (see paidProviders). */
+  ANTHROPIC_API_KEY?: string;
+  /** Comma-separated Claude models, best first. */
+  ANTHROPIC_MODELS?: string;
+  /** Paid Z.ai key; when set, asks with pictures (screen steps, pointing) go to GLM first. */
+  ZAI_API_KEY?: string;
+  /** Comma-separated GLM models, best first. */
+  ZAI_MODELS?: string;
+  /** Paid TypeSafe key for Jev (/jev): finding what to click and done checks. */
+  JEV_API_KEY?: string;
+  /** Jev model id; "jev-latest" by default. */
+  JEV_MODEL?: string;
+  /** Who answers first: "glm,claude" for asks with pictures, "claude,glm" for text by default. */
+  PICTURE_PROVIDER_ORDER?: string;
+  TEXT_PROVIDER_ORDER?: string;
+  HELPER_PROVIDER_ORDER?: string;
+  GROQ_TALK_MODELS?: string;
+  REQUEST_PROVIDER_ORDER?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -183,7 +201,8 @@ function tooManyRequestsResponse(): Response {
 /** What a caller is told when something breaks here; the detail goes to the log only. */
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
-import { answerWithProvider, canAnswer, fittedForProvider, groqProvider, nimProvider, type ChatProvider } from "./chatCompletions";
+import { handleJev } from "./jev";
+import { anthropicProvider, answerWithProvider, canAnswer, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
 import { attemptTimeoutMilliseconds, BUSY_STATUSES, fetchGeminiWithFallback, GEMINI_API_BASE, modelsToTry } from "./geminiFallback";
 import { isSameSecret, jsonResponse, readJSONObject, upstreamErrorResponse } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
@@ -276,6 +295,9 @@ export default {
             ? { textModels: env.GROQ_TEXT_MODELS || "default", visionModels: env.GROQ_VISION_MODELS || "default" }
             : "off",
           nimBackup: env.NVIDIA_API_KEY ? env.NIM_MODELS || "default" : "off",
+          claude: env.ANTHROPIC_API_KEY ? env.ANTHROPIC_MODELS || "default" : "off",
+          glm: env.ZAI_API_KEY ? env.ZAI_MODELS || "default" : "off",
+          jev: env.JEV_API_KEY ? env.JEV_MODEL || "default" : "off",
         });
       }
 
@@ -297,6 +319,10 @@ export default {
 
       if (url.pathname === "/dictate") {
         return await handleDictate(request, env);
+      }
+
+      if (url.pathname === "/jev") {
+        return await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
@@ -374,8 +400,22 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     requestedModel = env.GEMINI_HIGHER_MODEL || env.GEMINI_CHAT_MODEL;
   }
   const prefersGroq = requestBody.provider === "groq";
+  const wantedRole = requestBody.provider;
   delete requestBody.model;
   delete requestBody.provider;
+
+  // Talking: Groq alone, on its small talk model, text only.
+  if (wantedRole === "talk") return await answerTalk(env, requestBody);
+  // Requests the talker handed over: Claude (Haiku) only, nothing else.
+  if (wantedRole === "request") {
+    const requestResponse = await answerWithPaidProviders(env, requestBody, true, "/chat", env.REQUEST_PROVIDER_ORDER || "claude");
+    return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
+  }
+
+  // Paid providers answer first when their keys are set; Groq and Gemini
+  // are only backups then.
+  const paidResponse = await answerWithPaidProviders(env, requestBody, true, "/chat");
+  if (paidResponse) return paidResponse;
 
   const groq = groqFromEnv(env);
   const groqCanAnswer = Boolean(groq && canAnswer(groq, requestBody));
@@ -581,6 +621,75 @@ async function handleDictate(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ text });
 }
 
+/**
+ * The paid providers whose keys are set, in the order they answer: GLM
+ * first for asks with pictures (screen steps, pointing), only GLM for
+ * helpers' text turns (celly's call), Claude first for other text. PICTURE_PROVIDER_ORDER,
+ * HELPER_PROVIDER_ORDER and TEXT_PROVIDER_ORDER change the order without a
+ * code change.
+ */
+export function paidProviders(env: Env, geminiBody: Record<string, unknown>, isHelperTurn = false, forcedOrder?: string): ChatProvider[] {
+  const available: Record<string, ChatProvider | undefined> = {
+    claude: env.ANTHROPIC_API_KEY ? anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODELS) : undefined,
+    glm: env.ZAI_API_KEY ? zaiProvider(env.ZAI_API_KEY, env.ZAI_MODELS) : undefined,
+  };
+  let order: string;
+  if (forcedOrder) {
+    order = forcedOrder;
+  } else if (imageCount(geminiBody) > 0) {
+    order = env.PICTURE_PROVIDER_ORDER || "glm,claude";
+  } else if (isHelperTurn) {
+    order = env.HELPER_PROVIDER_ORDER || "glm";
+  } else {
+    order = env.TEXT_PROVIDER_ORDER || "claude,glm";
+  }
+  const providers: ChatProvider[] = [];
+  for (const name of order.split(",").map((part) => part.trim().toLowerCase())) {
+    const provider = available[name];
+    if (provider && !providers.includes(provider)) providers.push(provider);
+  }
+  return providers;
+}
+
+/** Asks the paid providers in turn; undefined when none is set or none answered. */
+async function answerWithPaidProviders(
+  env: Env,
+  geminiBody: Record<string, unknown>,
+  streaming: boolean,
+  routeName: string,
+  forcedOrder?: string
+): Promise<Response | undefined> {
+  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
+    // Screen jobs send a screenshot every step: only the newest ones go.
+    const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
+    if (!canAnswer(provider, fittedBody)) {
+      console.warn(`[${routeName}] too big for ${provider.name}`);
+      continue;
+    }
+    const response = await answerWithProvider(provider, fittedBody, streaming);
+    if (response) return response;
+    console.warn(`[${routeName}] ${provider.name} couldn't answer`);
+  }
+  return undefined;
+}
+
+/** Groq's small talk models, cheapest first; text only, so no vision models. */
+export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-20b,qwen/qwen3.8-27b";
+
+/**
+ * Dottie's talker: Groq alone answers small talk or says the ask is a
+ * request (the app then sends it to Claude). Never a paid model or Gemini,
+ * so chatting costs next to nothing.
+ */
+async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promise<Response> {
+  if (!env.GROQ_API_KEY) return jsonResponse({ error: "talking needs GROQ_API_KEY" }, 503);
+  const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
+  const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
+  if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
+  const groqResponse = await answerWithProvider(groq, requestBody, true);
+  return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);
+}
+
 function groqFromEnv(env: Env): ChatProvider | undefined {
   return env.GROQ_API_KEY
     ? groqProvider(env.GROQ_API_KEY, env.GROQ_TEXT_MODELS, env.GROQ_VISION_MODELS, env.GROQ_MAX_REQUEST_TOKENS)
@@ -625,6 +734,14 @@ async function handleGeminiPassthrough(request: Request, url: URL, env: Env, ski
     parsedGeminiBody ??= JSON.parse(new TextDecoder().decode(requestBody)) as Record<string, unknown>;
     return parsedGeminiBody;
   };
+  if (!skipsGroq && generateMethod && requestBody && request.method === "POST") {
+    try {
+      const paidResponse = await answerWithPaidProviders(env, geminiBodyForBackups(), Boolean(generateMethod[1]), "/gemini");
+      if (paidResponse) return paidResponse;
+    } catch (error) {
+      console.warn(`[/gemini] paid providers failed: ${error}`);
+    }
+  }
   if (groq && generateMethod && requestBody && request.method === "POST") {
     try {
       const geminiBody = geminiBodyForBackups();

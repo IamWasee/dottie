@@ -61,7 +61,7 @@ export function usageArea(method: string, pathname: string): UsageArea | undefin
   if (method === "GET" && pathname === "/search") return "search";
   if (method !== "POST") return undefined;
   if (pathname === "/live-token") return "voice";
-  if (pathname === "/chat") return "chat";
+  if (pathname === "/chat" || pathname === "/jev") return "chat";
   if (pathname === "/tts") return "speech";
   if (pathname === "/dictate") return "dictation";
   return undefined;

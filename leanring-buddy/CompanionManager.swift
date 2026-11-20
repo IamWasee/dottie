@@ -7,10 +7,11 @@
 //  exposes observable voice state for the panel UI.
 //
 //  Two voice modes (Info.plist key CompanionVoiceMode):
-//    live    (default) Gemini Live: mic audio + one screenshot frame stream in,
+//    classic (default) Apple Speech → Groq talks, Claude Haiku does requests
+//            with voice Dottie's tools (DottieTalker) → Kokoro, pointing via
+//            [POINT:] tags. No Gemini.
+//    live    Gemini Live: mic audio + one screenshot frame stream in,
 //            spoken audio streams back, pointing arrives as a tool call.
-//    classic Apple Speech → Gemini Flash vision → Gemini TTS, pointing via
-//            [POINT:] tags.
 //
 
 import AVFoundation
@@ -32,7 +33,7 @@ enum CompanionVoiceMode: String {
 
     static var configuredMode: CompanionVoiceMode {
         AppBundleConfiguration.stringValue(forKey: "CompanionVoiceMode")
-            .flatMap { CompanionVoiceMode(rawValue: $0.lowercased()) } ?? .live
+            .flatMap { CompanionVoiceMode(rawValue: $0.lowercased()) } ?? .classic
     }
 }
 
@@ -352,6 +353,10 @@ final class CompanionManager: ObservableObject {
         DottieSelfKnowledge.companionManager = self
         loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
+        // Classic mode speaks with Kokoro: load it now so the first answer isn't slow.
+        if voiceMode == .classic {
+            DottieKokoroSpeaker.shared.prepare()
+        }
         refreshAllPermissions()
         DottieLog.notice("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -2768,7 +2773,7 @@ final class CompanionManager: ObservableObject {
         case .live:
             return liveVoiceClient.isModelAudioPlaying
         case .classic:
-            return geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
+            return DottieKokoroSpeaker.shared.isPlaying || geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
         }
     }
 
@@ -2777,6 +2782,7 @@ final class CompanionManager: ObservableObject {
         if voiceMode == .classic {
             geminiTTSClient.stopPlayback()
         }
+        DottieKokoroSpeaker.shared.stop()
         systemSpeechSynthesizer.stopSpeaking()
     }
 
