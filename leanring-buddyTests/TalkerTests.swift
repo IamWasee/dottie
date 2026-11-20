@@ -34,6 +34,13 @@ struct TalkerTests {
         #expect(DottieTalkerProtocol.looksLikeAPlan("1) open it\n2) move it"))
     }
 
+    @Test func sayingItCantDoSomethingGoesToClaude() {
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "I can't draw on your screen, but I can open an app.") == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "sorry, i’m unable to do that") == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "you can't go wrong with pizza") == .say("you can't go wrong with pizza"))
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("never say you can't do something"))
+    }
+
     @Test func oneNumberOrOneLineIsStillTalk() {
         #expect(!DottieTalkerProtocol.looksLikeAPlan("i'd say 2. maybe 3 if you're feeling brave!"))
         #expect(!DottieTalkerProtocol.looksLikeAPlan("1. that's my favorite number"))

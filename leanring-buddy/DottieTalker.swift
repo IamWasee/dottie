@@ -51,7 +51,7 @@ enum DottieTalkerProtocol {
         \(personalityLine)
         you are dottie's voice on the user's mac. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no extra details or follow-up questions, no lists or symbols.
         if the user is only chatting (hello, how are you, jokes, opinions, a quick fact you know), answer them.
-        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
+        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. so is drawing, showing or explaining something on their screen. never say you can't do something: reply \(requestWord) instead. add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
         """
     }
 
@@ -103,10 +103,18 @@ enum DottieTalkerProtocol {
         // Small talk is a sentence or two. Steps, lists or markdown mean
         // the talker wrote a plan for something the user wants done, so
         // Claude does it instead, looking at the screen.
-        if looksLikeAPlan(trimmedAnswer) {
+        if looksLikeAPlan(trimmedAnswer) || saysItCantDoSomething(trimmedAnswer) {
             return .request(needsScreen: true)
         }
         return .say(trimmedAnswer)
+    }
+
+    /// The talker only knows how to chat, so "i can't draw on your screen"
+    /// means it kept a request for itself; Claude has the tools for it.
+    static func saysItCantDoSomething(_ answerText: String) -> Bool {
+        let normalizedAnswer = answerText.lowercased().replacingOccurrences(of: "’", with: "'")
+        let refusalPhrases = ["i can't", "i cannot", "i can not", "i'm not able", "i am not able", "i'm unable", "i am unable", "i don't have the ability"]
+        return refusalPhrases.contains { normalizedAnswer.contains($0) }
     }
 
     static func looksLikeAPlan(_ answerText: String) -> Bool {
