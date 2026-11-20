@@ -38,6 +38,7 @@ struct PreShipLiveCheckTests {
         EverydayAsk(feature: "teaching", words: "draw a horse", fittingTools: ["explain_on_screen"]),
         EverydayAsk(feature: "notes", words: "write me notes on photosynthesis", fittingTools: ["write_notes"]),
         EverydayAsk(feature: "screen", words: "click on my first email", fittingTools: ["click_on_screen", "point_at_element", "do_task_on_screen"]),
+        EverydayAsk(feature: "screen", words: "move this task to saturday in my study planner", fittingTools: ["do_task_on_screen"]),
         EverydayAsk(feature: "screen", words: "check my emails", fittingTools: []),
         EverydayAsk(feature: "mac", words: "remind me to call mom at 5 pm", fittingTools: ["add_reminder"]),
         EverydayAsk(feature: "mac", words: "open youtube", fittingTools: ["open_url", "run_applescript", "control_device", "quick_mac_action"]),
