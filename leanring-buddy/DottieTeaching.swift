@@ -490,14 +490,11 @@ enum DottieTeaching {
     @MainActor
     private static func jevAnchorFrames(_ anchors: [Anchor], image: CGImage, displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
         var frames: [String: CGRect] = [:]
-        // A captured screenshot is never changed, so sharing it with the
-        // parallel requests is safe.
-        nonisolated(unsafe) let sharedImage = image
         await withTaskGroup(of: (String, DottieJevBox?).self) { jevRequests in
             for anchor in anchors {
                 jevRequests.addTask { @MainActor in
                     let box = await DottieJev.findBox(target: anchor.description.isEmpty ? anchor.name : anchor.description,
-                                                      userContext: userQuestion, in: sharedImage, timeoutSeconds: 3)
+                                                      userContext: userQuestion, in: image, timeoutSeconds: 3)
                     return (anchor.name.lowercased(), box)
                 }
             }
