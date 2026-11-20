@@ -62,7 +62,13 @@ final class DottieClaudeBot {
     /// continues, so it remembers the earlier messages of the same job.
     func send(_ message: String, newConversation: Bool, timeoutSeconds: Double) async -> String? {
         guard isWorthTrying else { return nil }
-        guard case .ready(let launcher) = await DottieMausBot.shared.readinessForHelperTurn() else { return nil }
+        let readiness = await DottieMausBot.shared.readinessForHelperTurn()
+        guard case .ready(let launcher) = readiness else {
+            // Every screen job fell back to Gemini on celly's Mac with no
+            // word of why; the reason now shows in the log.
+            DottieLog.warning("⚠️ \(helperName): Claude not used: \(Self.whyNotReady(readiness))")
+            return nil
+        }
 
         let modelSelection = await DottieMausBot.shared.modelSelection(matching: modelKeyword, launcher: launcher)
         let defaults = UserDefaults.standard
@@ -125,8 +131,39 @@ final class DottieClaudeBot {
             DottieLog.warning("⚠️ \(helperName): Claude took over \(Int(timeoutSeconds)) s")
             return nil
         default:
+            DottieLog.warning("⚠️ \(helperName): Claude's turn didn't give an answer: \(Self.whyTurnFailed(outcome, replyWasEmpty: replyCollector.text.isEmpty))")
             skipForAWhile()
             return nil
+        }
+    }
+
+    /// Plain words for the log on why Claude wasn't asked.
+    static func whyNotReady(_ readiness: DottieClaudeReadiness) -> String {
+        switch readiness {
+        case .ready: return "ready"
+        case .skip: return "helpers aren't set to Claude, MausBot isn't found, or Claude is paused after an earlier problem"
+        case .fallback(let reason):
+            switch reason {
+            case .usageLimit: return "the Claude plan's usage limit ran out"
+            case .busy: return "Claude is busy or rate limited"
+            case .notSignedIn: return "Claude Code isn't signed in"
+            case .notReachable: return "MausBot's workspace didn't answer"
+            case .engineProblem(let detail): return "engine problem: \(detail)"
+            }
+        }
+    }
+
+    /// Plain words for the log on why a turn gave no answer.
+    static func whyTurnFailed(_ outcome: DottieMausBotTurnOutcome, replyWasEmpty: Bool) -> String {
+        switch outcome {
+        case .finished(let succeeded, let errorText):
+            if !succeeded { return "it failed (\(errorText ?? "no error text"))" }
+            return replyWasEmpty ? "it finished with an empty reply" : "it finished"
+        case .needsInput: return "it's waiting on an approval or a question in MausBot"
+        case .stillRunning: return "it's still running in MausBot"
+        case .stopped: return "it was stopped"
+        case .botMissing: return "the bot is missing in MausBot"
+        case .fallback(let reason): return whyNotReady(.fallback(reason))
         }
     }
 
