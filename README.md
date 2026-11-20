@@ -2,14 +2,13 @@
 
 An AI buddy that lives next to your cursor on macOS. Hold **ctrl + option** (or a shortcut you pick in Settings), talk, and it sees your screen, answers out loud, and can fly a little blue cursor to the thing you're asking about. While you hold it, circle something with the cursor and Dottie knows that's what you mean.
 
-Every AI call runs on **Google Gemini's free tier**, so the only key you need is one from [Google AI Studio](https://aistudio.google.com/apikey).
+No Gemini anywhere: Groq talks, Claude Haiku does requests, GLM and Jev do the screen, Kokoro speaks on the Mac and Needle handles everyday Mac actions on the Mac.
 
 | | Dottie |
 |---|---|
-| Voice companion | **Gemini Live**: voice in, screen frame in, voice out, in one stream |
-| Pointing | `point_at_element` tool call (Live), `[POINT:x,y]` tags in classic mode |
-| Keys needed | **one Gemini key** |
-| Fallback mode | `classic`: Apple Speech → Gemini Flash → Gemini TTS |
+| Voice companion | Apple Speech in, Groq / Claude Haiku thinking, Kokoro voice out |
+| Pointing | `[POINT:x,y]` tags, checked by Jev |
+| Keys needed | Anthropic, Z.ai, Jev (and a free Groq key), all on the Worker |
 
 See [ROADMAP.md](ROADMAP.md) for which features are done and what's next.
 
@@ -19,16 +18,19 @@ See [ROADMAP.md](ROADMAP.md) for which features are done and what's next.
 
 ## Build from source
 
-You need a Mac with macOS 14.2+, Xcode 16+, Node 18+, a free [Cloudflare](https://cloudflare.com) account, and a Gemini API key.
+You need a Mac with macOS 14.2+, Xcode 16+, Node 18+, a free [Cloudflare](https://cloudflare.com) account, and the model keys above.
 
 ### 1. Deploy the Worker
 
-The Worker holds your Gemini key so it never ships inside the app. The app gets short-lived tokens from it.
+The Worker holds the model keys so they never ship inside the app.
 
 ```bash
 cd worker
 npm install
-npx wrangler secret put GEMINI_API_KEY      # paste your AI Studio key
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put ZAI_API_KEY
+npx wrangler secret put JEV_API_KEY
+npx wrangler secret put GROQ_API_KEY
 npx wrangler secret put APP_SHARED_SECRET   # optional: any random string
 npx wrangler deploy
 ```
@@ -54,7 +56,7 @@ Open `leanring-buddy/Info.plist` and set the keys below (or leave the URL empty 
 
 ### Background Dots (optional)
 
-Dots are helpers that work on their own in a folder on your Mac and report back in the notch. They run on Google's open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli). Nothing to install: on first launch Dottie downloads pinned copies of Node.js and Gemini CLI (about 70 MB, checked against hashes in `DotsRuntimeInstaller.swift`) into `~/Library/Application Support/Dottie/Runtime`. A Gemini CLI you installed yourself works too. The app points Gemini CLI at your Worker, so the same Gemini key is used and it never leaves the Worker. Create Dots in Home → Dots, or just ask Dottie out loud to hand a task off.
+Dots are helpers that work on their own in a folder on your Mac and report back in the notch. They run on Google's open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli). Nothing to install: on first launch Dottie downloads pinned copies of Node.js and Gemini CLI (about 70 MB, checked against hashes in `DotsRuntimeInstaller.swift`) into `~/Library/Application Support/Dottie/Runtime`. A Gemini CLI you installed yourself works too. The app points Gemini CLI at your Worker, which answers its model calls with GLM, so no Gemini key is needed. Create Dots in Home → Dots, or just ask Dottie out loud to hand a task off.
 
 Dots click and type in your apps through the open-source [cua-driver](https://github.com/trycua/cua/tree/main/libs/cua-driver), which the build puts inside Dottie.app for you (a build phase downloads a pinned release once, checks its checksum and caches it). It runs under Dottie's own Accessibility and Screen Recording permissions, so there's nothing extra to install or allow. If the build was offline, Settings says the driver is missing; rebuild online, or install it yourself with `/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"`.
 

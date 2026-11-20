@@ -106,24 +106,6 @@ extension CompanionManager {
         // Projects first (ClickyRoster reads the first as the projects
         // folder); then the user's own folders, when they let helpers in.
         clickyRoster.sharedFolderURLs = [projects.rootFolderURL] + DottieWorkRoutes.homeFolderURLs
-        // Pictures, projects and smart home devices edited in Home reach
-        // voice Dottie on her next connection.
-        Publishers.Merge3(
-            imageMemory.$items.map { _ in () }.dropFirst(),
-            projects.$projects.map { _ in () }.dropFirst(),
-            smartHome.$setup.map { _ in () }.dropFirst()
-        )
-        .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
-        .sink { [weak self] in
-            guard let self else { return }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-        }
-        .store(in: &brainCancellables)
-        brain.onProfileChanged = { [weak self] _ in
-            guard let self else { return }
-            // Takes effect on the next Live connection.
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
-        }
         brain.$isScreenJournalEnabled
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isEnabled in
@@ -137,7 +119,6 @@ extension CompanionManager {
             for episode in newEpisodes where episode.source == .screen {
                 self.brain.record(.screen, "\(episode.title): \(episode.summary.prefix(300))")
             }
-            self.liveVoiceClient.baseSystemInstruction = self.currentLiveSystemPrompt()
         }
         DottieEpisodicMemory.shared.start()
         DottieHabits.shared.start()
@@ -280,7 +261,7 @@ extension CompanionManager {
             if DottieToolRegistry.handles(functionName, for: .voice) {
                 return await DottieToolRegistry.run(functionName, arguments: arguments, for: .voice) ?? "couldn't do that right now."
             }
-            guard let onMacTool = self.liveVoiceClient.onMacTool else { return "couldn't do that right now." }
+            guard let onMacTool = self.voiceTools.onMacTool else { return "couldn't do that right now." }
             return await onMacTool(functionName, arguments)
         }
         // Starts listening for Spotify and Music playing or pausing, so

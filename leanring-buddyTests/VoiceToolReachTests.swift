@@ -18,13 +18,13 @@ struct VoiceToolReachTests {
 
     @Test func typingCopyingClickingAndOpeningPagesAreDeclaredUpFront() {
         for toolName in ["type_text", "copy_to_clipboard", "click_on_screen", "open_url", "do_task_on_screen", "write_notes", "explain_on_screen"] {
-            #expect(GeminiLiveToolCatalog.directFunctionNames.contains(toolName), "\(toolName) should be a direct tool")
+            #expect(DottieVoiceToolCatalog.directFunctionNames.contains(toolName), "\(toolName) should be a direct tool")
         }
     }
 
     @Test func theHiddenToolsLineNoLongerListsTyping() {
-        #expect(GeminiLiveToolCatalog.hiddenToolAreasSummary.hasPrefix("scrolling"))
-        #expect(GeminiLiveToolCatalog.hiddenToolAreasSummary.contains("typing") == false)
+        #expect(DottieVoiceToolCatalog.hiddenToolAreasSummary.hasPrefix("scrolling"))
+        #expect(DottieVoiceToolCatalog.hiddenToolAreasSummary.contains("typing") == false)
     }
 
     @Test func theClipboardModuleIsRegistered() {

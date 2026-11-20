@@ -2,7 +2,7 @@ import { env as workerBindings } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/index";
-import { chatAnswer, fakeFetch, geminiTextAnswer, jsonAnswer, sseJSON } from "./helpers";
+import { chatAnswer, fakeFetch, jsonAnswer, sseJSON } from "./helpers";
 
 /**
  * Whole journeys, the way the app makes them: several requests in a row
@@ -15,7 +15,7 @@ const BOT_TOKEN = "123456:journey-bot-token";
 
 /** wrangler.toml's own settings and bindings, plus made-up keys. */
 function deployedEnv(overrides: Partial<Env> = {}): Env {
-  return { ...(workerBindings as unknown as Env), GEMINI_API_KEY: "test-gemini-key", ...overrides };
+  return { ...(workerBindings as unknown as Env), ...overrides };
 }
 
 let nextCallerNumber = 0;
@@ -39,8 +39,6 @@ function appCaller(env: Env, callerAddress = newCallerAddress()) {
 }
 
 const userText = (text: string) => ({ role: "user", parts: [{ text }] });
-const sseAnswer = (text: string) => new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\r\n\r\n`, { headers: { "content-type": "text/event-stream" } });
-const busy = () => new Response("busy", { status: 503 });
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -52,76 +50,50 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("opening Dottie and asking out loud (live mode)", () => {
-  it("checks the Worker, reads the model names and gets a token for the live model", async () => {
+describe("opening Dottie", () => {
+  it("checks the Worker and reads the model names without calling out", async () => {
     const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([["/auth_tokens", jsonAnswer({ name: "auth_tokens/journey" })]]);
+    const calls = fakeFetch([]);
 
-    expect(await (await callWorker("/health")).json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: true });
+    expect(await (await callWorker("/health")).json()).toEqual({ ok: true, app: "dottie", hasModelKey: false });
+    const configuration = (await (await callWorker("/config")).json()) as Record<string, unknown>;
+    expect(configuration.claude).toBe("off");
+    expect(configuration.chatModel).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
 
-    const configuration = (await (await callWorker("/config")).json()) as { liveModel: string; chatModel: string; ttsVoice: string };
-    expect(configuration.liveModel).toBe("gemini-3.8-live");
+  it("no longer serves the old Gemini voice, speech and dictation routes", async () => {
+    const callWorker = appCaller(deployedEnv());
+    fakeFetch([]);
+    for (const removedRoute of ["/live-token", "/tts", "/dictate"]) {
+      expect((await callWorker(removedRoute, { body: {} })).status).toBe(404);
+    }
+  });
+});
 
-    const token = (await (await callWorker("/live-token", { method: "POST" })).json()) as { token: string; model: string };
-    expect(token).toMatchObject({ token: "auth_tokens/journey", model: configuration.liveModel });
-    // Only the token request left the Worker, and it carried the real key.
+describe("a chat turn", () => {
+  it("streams the answer from Claude, and from Groq when Claude is down, never from Google", async () => {
+    const callWorker = appCaller(deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", GROQ_API_KEY: "test-groq-key" }));
+    let calls = fakeFetch([["api.anthropic.com", jsonAnswer({ type: "message", role: "assistant", content: [{ type: "text", text: "It's the blue button." }], stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 5 } })]]);
+    let chatResponse = await callWorker("/chat", { body: { contents: [userText("where do I click?")] } });
+    expect((await sseJSON(chatResponse)).candidates[0].content.parts[0].text).toBe("It's the blue button.");
     expect(calls).toHaveLength(1);
-    expect(calls[0].headers.get("x-goog-api-key")).toBe("test-gemini-key");
-  });
-});
-
-describe("a classic voice turn", () => {
-  it("streams the answer, then speaks that same answer", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const audioBytes = [1, 2, 3, 4];
-    const calls = fakeFetch([
-      ["gemini-3.8-flash:streamGenerateContent", sseAnswer("It's the blue button.")],
-      ["gemini-3.8-flash-lite-tts:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ inlineData: { data: btoa(String.fromCharCode(...audioBytes)) } }] } }] })],
-    ]);
-
-    const chatResponse = await callWorker("/chat", { body: { contents: [userText("where do I click?")] } });
-    const answerText = (await sseJSON(chatResponse)).candidates[0].content.parts[0].text as string;
-
-    const speechResponse = await callWorker("/tts", { body: { text: answerText } });
-    expect([...new Uint8Array(await speechResponse.arrayBuffer())]).toEqual(audioBytes);
-    expect(calls[1].json.contents[0].parts[0].text).toBe("It's the blue button.");
-    expect(calls[1].json.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
-  });
-
-  it("still answers and speaks when the first chat model and the first voice model are busy", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([
-      ["gemini-3.8-flash:streamGenerateContent", busy()],
-      ["gemini-3.6-flash:streamGenerateContent", sseAnswer("From the backup.")],
-      ["gemini-3.8-flash-lite-tts:generateContent", busy()],
-      ["gemini-3.8-flash-tts:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ inlineData: { data: btoa("pcm") } }] } }] })],
-    ]);
-
-    const chatResponse = await callWorker("/chat", { body: { contents: [userText("hi")] } });
-    expect((await sseJSON(chatResponse)).candidates[0].content.parts[0].text).toBe("From the backup.");
-    const speechResponse = await callWorker("/tts", { body: { text: "From the backup." } });
-    expect(speechResponse.status).toBe(200);
-    expect(new TextDecoder().decode(await speechResponse.arrayBuffer())).toBe("pcm");
-    expect(calls).toHaveLength(4);
-  });
-});
-
-describe("a quick ask that goes to Groq first", () => {
-  it("answers from Groq in Gemini's shape, and from Gemini when Groq is down", async () => {
-    const callWorker = appCaller(deployedEnv({ GROQ_API_KEY: "test-groq-key" }));
-    let calls = fakeFetch([["api.groq.com", chatAnswer({ role: "assistant", content: "Paris." })]]);
-    let response = await callWorker("/chat", { body: { provider: "groq", contents: [userText("capital of France?")] } });
-    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("Paris.");
-    expect(calls[0].json.model).toBe("openai/gpt-oss-120b");
-    expect(calls[0].headers.get("authorization")).toBe("Bearer test-groq-key");
 
     calls = fakeFetch([
-      ["api.groq.com", new Response("down", { status: 500 })],
-      ["generativelanguage.googleapis.com", sseAnswer("Paris, from Gemini.")],
+      ["api.anthropic.com", new Response("overloaded", { status: 529 })],
+      ["api.groq.com", chatAnswer({ role: "assistant", content: "Paris." })],
     ]);
-    response = await callWorker("/chat", { body: { provider: "groq", contents: [userText("capital of France?")] } });
-    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("Paris, from Gemini.");
-    expect(calls.at(-1)?.url).toContain("generativelanguage.googleapis.com");
+    chatResponse = await callWorker("/chat", { body: { provider: "groq", contents: [userText("capital of France?")] } });
+    expect((await sseJSON(chatResponse)).candidates[0].content.parts[0].text).toBe("Paris.");
+    expect(calls.some((recorded) => recorded.url.includes("googleapis"))).toBe(false);
+    expect(calls.at(-1)?.headers.get("authorization")).toBe("Bearer test-groq-key");
+  });
+
+  it("says no model could answer when none has a key", async () => {
+    const callWorker = appCaller(deployedEnv());
+    const calls = fakeFetch([]);
+    expect((await callWorker("/chat", { body: { contents: [userText("hi")] } })).status).toBe(503);
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -149,48 +121,25 @@ describe("a screen job and a helper on the paid models", () => {
   });
 });
 
-describe("hold to dictate", () => {
-  it("sends the recording with what the app knows and gets clean text back", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([["gemini-3.5-flash-lite:generateContent", geminiTextAnswer(" Send it to Dottie. ")]]);
-    const response = await callWorker("/dictate", { body: { audio: "QUJD", appName: "Notes", customWords: ["Dottie"] } });
-    expect(await response.json()).toEqual({ text: "Send it to Dottie." });
-    expect(JSON.stringify(calls[0].json)).toContain("Notes");
-    expect(JSON.stringify(calls[0].json)).toContain("Dottie");
-  });
-});
-
 describe("a helper's turn through Gemini CLI", () => {
-  it("lists models, runs a turn with the real key, and is refused anything else", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([
-      [/\/v1beta\/models\?/, jsonAnswer({ models: [{ name: "models/gemini-3.8-flash" }] })],
-      ["gemini-3.8-flash:generateContent", geminiTextAnswer("Done. The file is in output/.")],
-    ]);
+  it("lists models and counts tokens here, runs a turn on GLM, and is refused anything else", async () => {
+    const callWorker = appCaller(deployedEnv({ ZAI_API_KEY: "test-zai-key" }));
+    const calls = fakeFetch([["api.z.ai", chatAnswer({ content: "Done. The file is in output/." })]]);
     const cliHeaders = { "x-goog-api-key": "whatever-the-cli-was-given" };
 
     const listResponse = await callWorker("/gemini/v1beta/models?pageSize=50", { headers: cliHeaders });
     expect(((await listResponse.json()) as { models: unknown[] }).models).toHaveLength(1);
+    const countResponse = await callWorker("/gemini/v1beta/models/gemini-3.6-flash:countTokens", { body: { contents: [userText("make the report")] }, headers: cliHeaders });
+    expect(((await countResponse.json()) as { totalTokens: number }).totalTokens).toBeGreaterThan(0);
+    expect(calls).toHaveLength(0);
 
-    const turnResponse = await callWorker("/gemini/v1beta/models/gemini-3.8-flash:generateContent", { body: { contents: [userText("make the report")] }, headers: cliHeaders });
+    const turnResponse = await callWorker("/gemini/v1beta/models/gemini-3.6-flash:generateContent", { body: { contents: [userText("make the report")] }, headers: cliHeaders });
     expect(((await turnResponse.json()) as any).candidates[0].content.parts[0].text).toBe("Done. The file is in output/.");
-    for (const call of calls) expect(call.headers.get("x-goog-api-key")).toBe("test-gemini-key");
+    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
 
-    const callCountBefore = calls.length;
     const refused = await callWorker("/gemini/v1beta/files", { body: { file: "x" }, headers: cliHeaders });
     expect(refused.status).toBe(403);
-    expect(calls).toHaveLength(callCountBefore);
-  });
-
-  it("moves a busy turn to the next model without the helper noticing", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([
-      ["gemini-3.8-flash:generateContent", busy()],
-      ["gemini-3.6-flash:generateContent", geminiTextAnswer("From the backup.")],
-    ]);
-    const response = await callWorker("/gemini/v1beta/models/gemini-3.8-flash:generateContent", { body: { contents: [userText("hi")] } });
-    expect(response.status).toBe(200);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
   });
 });
 

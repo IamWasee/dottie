@@ -6,12 +6,9 @@
 //  Apple's speech recognizer on the Mac (on-device when available) next to
 //  the recording and shows its partial results.
 //
-//  This used to be a listen-only Gemini Live session, but Live now only
-//  transcribes the microphone after each pause and refuses sessions with
-//  voice detection turned off, so the words never showed while talking.
-//  The text that gets typed still comes from the Worker's /dictate cleanup,
-//  so this is only ever a preview: if speech recognition isn't allowed or
-//  available, dictation works the same without it.
+//  Its final transcript is also what dictation types: dictation runs on
+//  the Mac with no AI service. The user's own spellings are given to the
+//  recognizer as contextual words.
 //
 
 import AVFoundation
@@ -72,6 +69,7 @@ final class DictationLiveTranscriber {
         recognitionRequest.shouldReportPartialResults = true
         recognitionRequest.taskHint = .dictation
         recognitionRequest.addsPunctuation = true
+        recognitionRequest.contextualStrings = Array(ClickyDictationController.customWords.prefix(100))
         if speechRecognizer.supportsOnDeviceRecognition {
             recognitionRequest.requiresOnDeviceRecognition = true
         }

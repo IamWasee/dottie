@@ -29,6 +29,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import Vision
 
 @MainActor
 final class DottieScreenJobGuesser {
@@ -365,10 +366,28 @@ final class DottieScreenJobGuesser {
         guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1600) else { return false }
         let image = screen.image
         let lines = await Task.detached(priority: .userInitiated) {
-            DottieGameVision.readText(in: image)
+            DottieScreenJobGuesser.readTextLines(in: image)
         }.value
         let wanted = text.lowercased()
         return lines.contains { $0.lowercased().contains(wanted) }
+    }
+
+    /// The lines of text on a screenshot, top to bottom, read with Apple's
+    /// on-Mac text recognition (fast pass, confident lines only).
+    nonisolated static func readTextLines(in image: CGImage) -> [String] {
+        let textRequest = VNRecognizeTextRequest()
+        textRequest.recognitionLevel = .fast
+        textRequest.usesLanguageCorrection = false
+        let requestHandler = VNImageRequestHandler(cgImage: image, options: [:])
+        try? requestHandler.perform([textRequest])
+        let observations = (textRequest.results ?? [])
+            .filter { ($0.topCandidates(1).first?.confidence ?? 0) > 0.4 }
+            .sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+        return observations
+            .compactMap { $0.topCandidates(1).first?.string.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 2 }
+            .prefix(40)
+            .map { $0 }
     }
 }
 

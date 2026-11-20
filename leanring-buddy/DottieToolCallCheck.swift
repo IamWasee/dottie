@@ -22,12 +22,12 @@ enum DottieToolCallCheck {
 
     /// Everything wrong with one call, or nothing when Dottie would take it.
     static func problems(with toolCall: ToolCall, everyDeclaration: [[String: Any]]) -> [String] {
-        if toolCall.name == GeminiLiveToolCatalog.useToolFunctionName {
+        if toolCall.name == DottieVoiceToolCatalog.useToolFunctionName {
             return problemsWithUseTool(arguments: toolCall.arguments, everyDeclaration: everyDeclaration)
         }
         let allDeclarations = everyDeclaration + [
-            GeminiLiveToolCatalog.findToolFunctionDeclaration,
-            GeminiLiveToolCatalog.useToolFunctionDeclaration
+            DottieVoiceToolCatalog.findToolFunctionDeclaration,
+            DottieVoiceToolCatalog.useToolFunctionDeclaration
         ]
         guard let declaration = allDeclarations.first(where: { ($0["name"] as? String) == toolCall.name }) else {
             return ["\(toolCall.name): no tool has this name"]
@@ -45,7 +45,7 @@ enum DottieToolCallCheck {
         guard let innerToolName = arguments["name"] as? String, !innerToolName.isEmpty else {
             return ["use_tool: no tool name"]
         }
-        guard let innerArguments = GeminiLiveToolCatalog.parsedToolArguments(from: arguments["arguments_json"]) else {
+        guard let innerArguments = DottieVoiceToolCatalog.parsedToolArguments(from: arguments["arguments_json"]) else {
             return ["use_tool \(innerToolName): arguments_json isn't a JSON object"]
         }
         return problems(with: ToolCall(name: innerToolName, arguments: innerArguments), everyDeclaration: everyDeclaration)

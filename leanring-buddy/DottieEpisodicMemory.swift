@@ -27,7 +27,6 @@
 //    index.json        a light day-by-day list of titles (for helpers)
 //    pending.json      the conversation not yet turned into episodes
 //    moments.jsonl     screen notes not yet folded into episodes
-//    embeddings.json   optional meaning vectors for smarter search
 //    Thumbnails/       small pictures for some episodes
 //
 
@@ -147,8 +146,6 @@ final class DottieEpisodicMemory: ObservableObject {
 
     /// The optional "Remember what's on my screen" notes.
     let screenMemory: DottieScreenMemory
-    /// Optional meaning search; plain word search works without it.
-    let embeddings: DottieEpisodeEmbeddings
 
     private struct PendingExchange: Codable {
         let id: UUID
@@ -184,7 +181,6 @@ final class DottieEpisodicMemory: ObservableObject {
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: folderURL.appendingPathComponent("Thumbnails", isDirectory: true), withIntermediateDirectories: true)
         screenMemory = DottieScreenMemory(folderURL: folderURL)
-        embeddings = DottieEpisodeEmbeddings(fileURL: folderURL.appendingPathComponent("embeddings.json"))
         episodes = loadEpisodes()
         pendingExchanges = loadPending()
         if pruneIfNeeded() { rewriteEpisodesFile() }
@@ -212,7 +208,6 @@ final class DottieEpisodicMemory: ObservableObject {
         if !pendingExchanges.isEmpty {
             scheduleConversationSave(after: 45)
         }
-        embeddings.embedMissing(in: episodes)
     }
 
     // MARK: - Conversations
@@ -584,7 +579,6 @@ final class DottieEpisodicMemory: ObservableObject {
             appendToEpisodesFile(usableEpisodes)
             writeIndex()
         }
-        embeddings.embedMissing(in: usableEpisodes)
         onEpisodesChanged?(usableEpisodes)
     }
 
@@ -595,7 +589,6 @@ final class DottieEpisodicMemory: ObservableObject {
         }
         episodes.removeAll { episodeIDs.contains($0.id) }
         episodeIDs.forEach { cachedSearchWords[$0] = nil }
-        embeddings.remove(episodeIDs)
         rewriteEpisodesFile()
         onEpisodesChanged?([])
     }
@@ -609,7 +602,6 @@ final class DottieEpisodicMemory: ObservableObject {
         DottieHabits.shared.forgetEverything()
         try? FileManager.default.removeItem(at: thumbnailsFolderURL)
         try? FileManager.default.createDirectory(at: thumbnailsFolderURL, withIntermediateDirectories: true)
-        embeddings.removeAll()
         screenMemory.forgetPendingMoments()
         rewriteEpisodesFile()
         savePending()
@@ -637,7 +629,6 @@ final class DottieEpisodicMemory: ObservableObject {
             removedEpisodes.forEach(removeThumbnail(of:))
             let removedIDs = Set(removedEpisodes.map(\.id))
             episodes.removeAll { removedIDs.contains($0.id) }
-            embeddings.remove(removedIDs)
         }
         return episodes.count != countBefore
     }
@@ -766,23 +757,6 @@ enum DottieMemoryNetwork {
         guard statusCode == 200 else { return .failed }
         let answerText = GeminiServerSentEvents.text(from: responseData)
         return answerText.isEmpty ? .failed : .text(answerText)
-    }
-
-    /// The Worker's Gemini passthrough, which adds the key. Returns the
-    /// JSON reply, or nil.
-    static func postToGemini(path: String, body: [String: Any], timeout: TimeInterval) async -> [String: Any]? {
-        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/gemini" + path))
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-        // The passthrough checks the shared secret as the API key.
-        request.setValue(ClickyWorkerConfiguration.passthroughAPIKey, forHTTPHeaderField: "x-goog-api-key")
-        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        request.httpBody = bodyData
-        guard let (responseData, response) = await DottieLoggedRequest.send(request),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return try? JSONSerialization.jsonObject(with: responseData) as? [String: Any]
     }
 
     /// The first JSON array in a reply, even when wrapped in a code fence.

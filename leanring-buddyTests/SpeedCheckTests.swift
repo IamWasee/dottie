@@ -162,20 +162,6 @@ struct SpeedCheckTests {
         #expect(median < 1_500, "a 40-step plan took \(median) ms")
     }
 
-    @Test func decidingWhetherToResendTheScreenStaysQuick() {
-        let fingerprint = [UInt8](repeating: 128, count: 256 * 160)
-        let lastSent = (sessionNumber: 1, fingerprint: fingerprint, sentAt: Date())
-
-        let median = medianMilliseconds {
-            for _ in 0..<20 {
-                _ = GeminiLiveVoiceClient.reusesLastScreenFrame(newFingerprint: fingerprint, lastSentScreenFrame: lastSent,
-                                                               currentSessionNumber: 1, now: Date())
-            }
-        }
-
-        #expect(median < 500, "20 screen comparisons took \(median) ms")
-    }
-
     @Test func pickingTheOnMacVoiceForAThousandAnswersStaysQuick() {
         let median = medianMilliseconds {
             for answerNumber in 0..<1_000 {
@@ -198,14 +184,52 @@ struct SpeedCheckTests {
         #expect(median < 300, "1,000 Jev answers took \(median) ms")
     }
 
+    /// Every Jev step builds options from a full screen of text and a
+    /// request; that must stay far below Jev's own answer time.
+    @Test func buildingAJevStepFromAFullScreenStaysQuick() {
+        let screenTexts = (0..<400).map { DottieJevDriverPlan.ScreenText(text: "Item number \($0)", centerX: Double($0 % 1000), centerY: Double($0)) }
+        let taskText = "open youtube and search for \"lofi beats\" then play the first one"
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                let options = DottieJevDriverPlan.options(
+                    screenTexts: DottieJevDriverPlan.clickableTexts(from: screenTexts, taskText: taskText),
+                    textPieces: DottieJevDriverPlan.textPieces(from: taskText),
+                    siteAddresses: DottieJevDriverPlan.siteAddresses(from: taskText),
+                    appNames: ["Safari"],
+                    alreadyTriedSignatures: []
+                )
+                _ = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: ["opened youtube.com"], knownHowTo: "", options: options)
+            }
+        }
+
+        #expect(median < 200, "20 Jev steps took \(median) ms to build")
+    }
+
+    @Test func movingTheBoardAndNotesAThousandTimesStaysQuick() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let median = medianMilliseconds {
+            var board = CGRect(x: 800, y: 100, width: 600, height: 600)
+            var notesFrame = CGRect(x: 700, y: 100, width: 600, height: 700)
+            for moveNumber in 0..<1_000 {
+                let surface: DottieTeaching.Surface = moveNumber.isMultiple(of: 2) ? .board_left : .board_right
+                board = DottieTeaching.movedBoard(board, to: surface, on: screenFrame) ?? board
+                _ = DottieDrawingOverlayManager.boardHandleFrame(for: board)
+                let position = DottieNotesBoard.Position.allCases[moveNumber % DottieNotesBoard.Position.allCases.count]
+                notesFrame = DottieNotesBoard.frame(of: notesFrame, movedTo: position, on: screenFrame)
+            }
+        }
+
+        #expect(median < 100, "1,000 board and notes moves took \(median) ms")
+    }
+
     @Test func placingAThousandDrawingAnchorsStaysQuick() {
         let displayFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let median = medianMilliseconds {
-            var jevFrames: [String: CGRect] = [:]
+            var anchorFrames: [String: CGRect] = [:]
             for anchorNumber in 0..<1_000 {
-                jevFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
+                anchorFrames["anchor \(anchorNumber)"] = DottieTeaching.appKitFrame(normalizedBox: [100, 200, 300, 400], displayFrame: displayFrame)
             }
-            _ = DottieTeaching.mergedAnchorFrames(jevFrames: jevFrames, modelFrames: jevFrames)
+            _ = anchorFrames
         }
 
         #expect(median < 200, "1,000 drawing anchors took \(median) ms")

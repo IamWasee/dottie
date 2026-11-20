@@ -74,7 +74,7 @@ final class CompanionManager: ObservableObject {
 
     /// The Gemini Live session used in live mode. Idle (no socket) until the
     /// first push-to-talk.
-    let liveVoiceClient = GeminiLiveVoiceClient()
+    let voiceTools = DottieVoiceTools()
 
     /// In live mode the mic audio goes to Gemini Live through a bridge
     /// provider; in classic mode it goes to Apple Speech. Lazy because the
@@ -183,11 +183,6 @@ final class CompanionManager: ObservableObject {
         return GeminiAPI(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/chat"))
     }()
 
-    /// Classic mode only. Live mode speaks through the Live session itself.
-    lazy var geminiTTSClient: GeminiTTSClient = {
-        return GeminiTTSClient(proxyURL: ClickyWorkerConfiguration.url(forRoute: "/tts"))
-    }()
-
     /// Conversation history so the companion remembers prior exchanges within
     /// a session. Each entry is the user's transcript and the spoken reply.
     var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
@@ -247,16 +242,11 @@ final class CompanionManager: ObservableObject {
     func setSelectedPersonality(_ personality: DottiePersonality) {
         selectedPersonality = personality
         UserDefaults.standard.set(personality.rawValue, forKey: DottiePersonality.defaultsKey)
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        liveVoiceClient.startFreshSessionSoon()
     }
 
     func setSelectedVoiceName(_ voiceName: String) {
         selectedVoiceName = voiceName
         UserDefaults.standard.set(voiceName, forKey: "selectedGeminiLiveVoice")
-        // Starts a fresh session for her next answer (or right after the
-        // one she's giving), so the new voice is heard straight away.
-        liveVoiceClient.voiceName = voiceName
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -471,7 +461,6 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
-        liveVoiceClient.disconnect()
         notchWindowManager.hide()
         notchVoiceStateCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
@@ -811,8 +800,6 @@ final class CompanionManager: ObservableObject {
 
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-            // A spoken turn is always answered out loud.
-            liveVoiceClient.isAudioOutputMuted = false
 
             // Cancel any in-progress response and speech from a previous utterance
             currentResponseTask?.cancel()
@@ -918,9 +905,9 @@ final class CompanionManager: ObservableObject {
 
     static func liveVoiceSystemPrompt(personality: DottiePersonality) -> String {
         let featureSections = DottieToolRegistry.voicePromptSections
-        // The rarer tools aren't declared to Live (GeminiLiveToolCatalog);
+        // The rarer tools aren't declared up front (DottieVoiceToolCatalog);
         // this line is how the model knows they exist and to find them.
-        let hiddenToolsLine = "more tools: find_tool finds the rest by what the user wants and use_tool runs one (call use_tool straight away when you know the name and arguments). never say you can't do something before checking find_tool. they cover " + GeminiLiveToolCatalog.hiddenToolAreasSummary + "."
+        let hiddenToolsLine = "more tools: find_tool finds the rest by what the user wants and use_tool runs one (call use_tool straight away when you know the name and arguments). never say you can't do something before checking find_tool. they cover " + DottieVoiceToolCatalog.hiddenToolAreasSummary + "."
         return personality.promptSection + "\n\n" + companionLiveVoiceSystemPrompt
             + "\n\n" + hiddenToolsLine
             + "\n\n" + DottieWorkRoutes.voiceAskBeforeSayingNo
@@ -998,7 +985,7 @@ final class CompanionManager: ObservableObject {
     asked again: when the user asks for something you already did ("make a note called test" twice, "search lofi" again), they want it done again: do it again with your tools. never answer "that's already done".
     you can always work the user's screen: anything they could do with their own mouse and keyboard in any app or website (move an event or task to another day or list, drag something between boards, plans or folders, change a setting, fill a form) you can do with do_task_on_screen. never say you don't have access, can't use that app, or that they should do it themselves; never hand screen work to a helper or ask_brain (they have no screen). only after a screen job really failed, say what it tried.
     these all work, so never say you can't or ask the user to do them: you see their screen (a fresh picture comes with every turn); open any web page with open_url (search first when you don't know the exact address, then open the real page, like a model's hugging face page); click with click_on_screen, and "click around" or anything with several steps is do_task_on_screen; write or type for them into the field in front with type_text ("write it for me" means type it); copy anything with copy_to_clipboard. when they ask for commands or code, write each on the notes board as a code block (write_notes, kind code, exactly as typed), copy it with copy_to_clipboard, and say only what it does; never read code aloud as words or describe it instead of giving it.
-        multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it. inside a video game ("grab that sword", "play this level for me", "map this game for me" while they play, "for this commercial: walk slowly to the shop, then face the camera"), set game true and keep the game's name and the user's exact words in the task. while a game job runs, whatever the user says about the game ("jump", "this is the shop, remember it", "in this game F opens the shop") goes to game_command, not to screenshots, notes or memory.
+        multi-step jobs: when something on screen takes more than one step ("open opera, search kaggle, go to my competitions and tell me my rank"), call do_task_on_screen once with the whole request, every step in order; don't do the steps yourself. say you're on it in a few words and stop; the result comes in a later message, which you tell in one short sentence. a job asked while another runs waits its turn: call do_task_on_screen for it too. separate jobs in one breath are separate calls in the user's order; inside one task keep their order and words, never reorder. stop_screen_task: current skips to the next job, all stops everything (stop, cancel, never mind), list says what's running and waiting. a job the user stopped (stop button, escape, or asking) is gone: if they ask again, call do_task_on_screen again, never say you're still on it.
 
     teaching: helping people learn their apps matters most, and being right matters more than being fast. never answer how to do something in an app, or where a feature lives, from your own memory: apps change and you'll guess wrong. any "how do i..." or "where do i..." in an app ("how do i isolate the audio in capcut", "where do i extract it", "walk me through exporting") goes to guide_user with mode steps: it checks the app's real help pages and the screen, points at each step, waits for their click, then shows the next. say only a few words like "let me show you". if the ask could mean two different features, ask one short question first (isolate audio: "split the sound onto its own track, or keep just the voice and remove the background?"). for a rundown or tour of the app or screen, mode tour. when the user corrects you about how an app works, call use_tool save_app_lesson with the right way, then say thanks in a few words. during a guide, next / done / got it is guide_next; stop is stop_guide. lines that start with [dottie guide] are steps already drawn on screen: say just that line.
     worked math, step-by-step solutions, formulas and study notes go on the notes board with write_notes (headings, lists, equations, pictures; place right to continue the same working on one line), always in real symbols (¹⁄₁₆x⁴, ×, √, H₂O), never math spelled out in words; color the part that matters with {red:…} or {highlight:…}. Make it easy for someone who doesn't think in symbols: the rule first in plain words, one small change per line with a short "why" beside it, matching colors for parts that go together, and the answer highlighted at the end; say the explanation out loud in everyday words. when you write numbers (notes, the screen, typed answers), use digits for math, measurements, money, times, dates, scores and anything 10 or more, and words for small everyday counts in a sentence ("two ways", "the first step"); if the user says which they want, keep to it.
@@ -1035,25 +1022,28 @@ final class CompanionManager: ObservableObject {
         conversationHistory = conversationStore.entries
             .suffix(Self.rememberedExchangeCount)
             .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
-        liveVoiceClient.startFreshSessionSoon()
     }
 
-    /// Hooks the Live client's callbacks into the companion's state.
+    /// Hooks the voice tools' callbacks into the companion's state.
     private func configureLiveVoiceClient() {
-        liveVoiceClient.baseSystemInstruction = currentLiveSystemPrompt()
-        liveVoiceClient.voiceName = selectedVoiceName
+        // The user moved or closed the teaching board with its grip.
+        drawingOverlayManager.onUserMovedBoard = { [weak self] oldBoard, newBoard in
+            guard let self, self.lastTeachingBoardRect == oldBoard else { return }
+            self.lastTeachingBoardRect = newBoard
+        }
+        drawingOverlayManager.onUserClosedBoard = { [weak self] in
+            guard let self else { return }
+            self.stopTeaching(clearingDrawing: true)
+            self.drawingOverlayManager.clear()
+            self.lastTeachingBoardRect = nil
+            self.lastTeachingDisplayFrame = nil
+        }
 
         // Pick up where the last run left off: the saved conversation seeds
         // memory, so Dottie still knows the user's name after a relaunch.
         conversationHistory = conversationStore.entries
             .suffix(Self.rememberedExchangeCount)
             .map { (userTranscript: $0.userText, assistantResponse: $0.clickyText) }
-        liveVoiceClient.recentConversationHistory = conversationHistory.map { exchange in
-            (userTranscript: exchange.userTranscript, modelTranscript: exchange.assistantResponse)
-        }
 
         connectLiveToolCallbacks()
     }
@@ -1061,22 +1051,22 @@ final class CompanionManager: ObservableObject {
     /// The tools Live can call, each handed to the part of the companion
     /// that does it.
     private func connectLiveToolCallbacks() {
-        liveVoiceClient.onHigherModelRequest = { [weak self] question in
+        voiceTools.onHigherModelRequest = { [weak self] question in
             guard let self else { return "the deeper model isn't available right now. answer as best you can." }
             return await self.answerWithHigherModel(question: question)
         }
 
-        liveVoiceClient.onScreenAction = { [weak self] screenAction in
+        voiceTools.onScreenAction = { [weak self] screenAction in
             guard let self else { return "couldn't do that right now." }
             return await self.performScreenAction(screenAction)
         }
 
-        liveVoiceClient.onStartScreenTask = { [weak self] taskText, isGame, referenceImageNames, restart in
+        voiceTools.onStartScreenTask = { [weak self] taskText, referenceImageNames, restart in
             guard let self else { return "couldn't start it right now." }
-            return self.startScreenTask(ScreenJob(text: taskText, isGame: isGame, referenceImageNames: referenceImageNames, restart: restart))
+            return self.startScreenTask(ScreenJob(text: taskText, referenceImageNames: referenceImageNames, restart: restart))
         }
 
-        liveVoiceClient.onStopScreenTask = { [weak self] scope in
+        voiceTools.onStopScreenTask = { [weak self] scope in
             guard let self else { return "nothing is running." }
             switch scope {
             case "current":
@@ -1089,27 +1079,27 @@ final class CompanionManager: ObservableObject {
             }
         }
 
-        liveVoiceClient.onStartGuide = { [weak self] goal, modeName in
+        voiceTools.onStartGuide = { [weak self] goal, modeName in
             guard let self else { return "couldn't start it right now." }
             return self.startGuide(goal: goal, modeName: modeName)
         }
 
-        liveVoiceClient.onGuideNext = { [weak self] in
+        voiceTools.onGuideNext = { [weak self] in
             guard let self, self.guide.userSaidNext() else { return "no guide is running." }
             return "okay, moving on. say nothing more; the next step is coming."
         }
 
-        liveVoiceClient.onStopGuide = { [weak self] in
+        voiceTools.onStopGuide = { [weak self] in
             guard let self else { return "no guide is running." }
             return self.stopGuide() ? "stopped the guide." : "no guide was running."
         }
 
-        liveVoiceClient.onStartClickyTask = { [weak self] clickyName, taskText, projectName, restart in
+        voiceTools.onStartClickyTask = { [weak self] clickyName, taskText, projectName, restart in
             guard let self else { return "couldn't start it right now." }
             return self.startClickyTask(clickyName: clickyName, taskText: taskText, projectName: projectName, restart: restart)
         }
 
-        liveVoiceClient.onBrainTool = { [weak self] functionName, text in
+        voiceTools.onBrainTool = { [weak self] functionName, text in
             guard let self else { return "the brain isn't available right now." }
             switch functionName {
             case "recall_memory":
@@ -1122,12 +1112,12 @@ final class CompanionManager: ObservableObject {
             }
         }
 
-        liveVoiceClient.onHelperTool = { [weak self] functionName, helperName in
+        voiceTools.onHelperTool = { [weak self] functionName, helperName in
             guard let self else { return "helpers aren't available right now." }
             return self.answerHelperTool(functionName: functionName, helperName: helperName)
         }
 
-        liveVoiceClient.onMacTool = { [weak self] functionName, arguments in
+        voiceTools.onMacTool = { [weak self] functionName, arguments in
             guard let self else { return "couldn't do that right now." }
             if DottieWorkTools.functionNames.contains(functionName) {
                 return await self.performWorkTool(functionName: functionName, arguments: arguments)
@@ -1197,7 +1187,7 @@ final class CompanionManager: ObservableObject {
             DottieScreenActionPerformer.click(at: target.point, clickCount: clickCount, isRightClick: isRightClick)
             // "sign in with this account": the click only starts the goal,
             // so a screen job finishes it (DottieTaskGoal).
-            let userRequest = currentLiveTurnTypedText ?? liveVoiceClient.userTranscriptSoFar
+            let userRequest = currentLiveTurnTypedText ?? lastTranscript ?? ""
             if DottieTaskGoals.clickLeavesGoalUnfinished(request: userRequest), !screenTaskRunner.isRunning {
                 let jobText = "\(userRequest.trimmingCharacters(in: .whitespacesAndNewlines)) (Dottie already clicked \"\(label ?? "it")\" for this; carry on from there)"
                 _ = startScreenTask(ScreenJob(text: jobText))
@@ -1318,6 +1308,22 @@ final class CompanionManager: ObservableObject {
         } else if !staysOnScreenDrawing {
             plannedBoardRect = plan.surface.boardRect(on: cursorScreen.visibleFrame, sizeScale: plan.boardSize?.scaleFromUsualSize ?? 1)
         }
+        // "move the board to the left": a different board_… moves the board
+        // that's up and its drawing there. The same surface as before leaves
+        // it where it is, so a board the user dragged doesn't jump back.
+        var movedBoardThisCall = false
+        if reusesEarlierBoard, plan.surfaceWasGiven, plan.surface != lastTeachingBoardSurface,
+           let currentBoard = lastTeachingBoardRect {
+            let boardScreen = NSScreen.screens.first(where: { $0.frame.intersects(currentBoard) }) ?? cursorScreen
+            if let movedBoard = DottieTeaching.movedBoard(currentBoard, to: plan.surface, on: boardScreen.visibleFrame) {
+                drawingOverlayManager.refitBoardFigures(from: currentBoard, to: movedBoard)
+                lastTeachingBoardRect = movedBoard
+                lastTeachingBoardSurface = plan.surface
+                plannedBoardRect = movedBoard
+                movedBoardThisCall = true
+                DottieLog.notice("✏️ Board moved to \(plan.surface.rawValue)")
+            }
+        }
         // "make the board bigger": the board that's up and its drawing
         // move and scale together.
         if reusesEarlierBoard, let boardSize = plan.boardSize, let currentBoard = lastTeachingBoardRect {
@@ -1330,13 +1336,17 @@ final class CompanionManager: ObservableObject {
         }
         if plan.steps.isEmpty {
             guard reusesEarlierBoard else {
-                return "there's no board up to resize. to draw on a bigger board, call explain_on_screen with board_size and the steps."
+                return "there's no board up to resize or move. to draw on a board, call explain_on_screen with the steps."
             }
             lastTeachingBoardRect = plannedBoardRect
+            if movedBoardThisCall && plan.boardSize == nil {
+                return "moved the board; everything on it moved with it. say it in a few words."
+            }
             return "resized the board; everything on it moved with it. say it in a few words."
         }
         let boardRect = plannedBoardRect
         let drawsNewBoard = boardRect != nil && !reusesEarlierBoard
+        if drawsNewBoard { lastTeachingBoardSurface = plan.surface }
         let teachingDisplayFrame = reusesEarlierBoard ? (lastTeachingDisplayFrame ?? cursorScreen.frame) : cursorScreen.frame
         lastTeachingBoardRect = boardRect
         lastTeachingDisplayFrame = teachingDisplayFrame
@@ -1418,6 +1428,9 @@ final class CompanionManager: ObservableObject {
     /// The board the last explanation drew on and its display, so steps
     /// added later (add_to_last) land on the same board.
     private var lastTeachingBoardRect: CGRect?
+    /// Where Dottie last put the board (board_right, …); a call naming
+    /// another place moves it.
+    private var lastTeachingBoardSurface: DottieTeaching.Surface?
     private var lastTeachingDisplayFrame: CGRect?
     /// Counts explanations, so one that finishes before steps added to it
     /// doesn't forget the newer task.
@@ -1609,11 +1622,10 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Multi-step screen tasks
 
-    /// A job for the screen task runner: what to do, whether it's a game,
-    /// and which saved pictures it's about.
+    /// A job for the screen task runner: what to do and which saved
+    /// pictures it's about.
     struct ScreenJob {
         let text: String
-        var isGame = false
         var referenceImageNames: [String] = []
         /// Asked for by text: the result is texted back, not spoken.
         var repliesToPhone = false
@@ -1746,7 +1758,7 @@ final class CompanionManager: ObservableObject {
     private func runScreenTask(_ job: ScreenJob) {
         let taskText = job.text
         stopGuide()
-        DottieLog.notice("🧭 Screen task\(job.isGame ? " (game)" : ""): \(taskText)")
+        DottieLog.notice("🧭 Screen task: \(taskText)")
         showOverlayTransientlyIfNeeded()
 
         screenTaskRunner.onProgress = { [weak self] stepNumber, stepDescription in
@@ -1759,13 +1771,6 @@ final class CompanionManager: ObservableObject {
         }
         screenTaskRunner.onAskUser = { [weak self] question, kind in
             self?.askUserForScreenJob(question, kind: kind, repliesToPhone: job.repliesToPhone)
-        }
-        screenTaskRunner.onThinkAloud = { [weak self] line in
-            guard !job.repliesToPhone else { return }
-            self?.speakWhenFree(
-                recordedUserText: "(playing the game, thinking aloud)",
-                instructionText: "you're playing a game for the user. say this in one short line, in your own voice, as if thinking out loud next to them: \"\(line)\". then stop talking. don't call any tool."
-            )
         }
         screenTaskRunner.onSavePicture = { [weak self] imageData, name, description in
             guard let self,
@@ -1802,7 +1807,7 @@ final class CompanionManager: ObservableObject {
                 DottieScreenTaskRunner.ReferenceImage(name: item.name, description: item.description, jpegData: $0)
             }
         }
-        screenTaskRunner.start(task: taskText, isGameMode: job.isGame, referenceImages: referenceImages) { [weak self] outcome in
+        screenTaskRunner.start(task: taskText, referenceImages: referenceImages) { [weak self] outcome in
             self?.finishScreenTask(taskText: taskText, outcome: outcome, repliesToPhone: job.repliesToPhone, closingMessage: job.closingMessage, returnsToHelperAgentID: job.returnsToHelperAgentID)
         }
     }
@@ -1859,7 +1864,6 @@ final class CompanionManager: ObservableObject {
         let resumedText = runningJob.text.contains("paused partway when the screen locked") ? runningJob.text : runningJob.text + resumeNote
         queuedScreenTasks.insert(ScreenJob(
             text: resumedText,
-            isGame: runningJob.isGame,
             referenceImageNames: runningJob.referenceImageNames,
             repliesToPhone: runningJob.repliesToPhone,
             restart: true
@@ -2009,7 +2013,6 @@ final class CompanionManager: ObservableObject {
                 let failedJob = (currentScreenJob?.text == taskText ? currentScreenJob : nil) ?? ScreenJob(text: taskText, repliesToPhone: repliesToPhone)
                 let retryJob = ScreenJob(
                     text: taskText + "\n\n" + Self.awayRetryMarker + " the last try stopped because: \(reason). look at the screen first, keep what's already done, and take a different route this time (another menu, a keyboard shortcut, the app's search, a direct link, or closing whatever popup is in the way).",
-                    isGame: failedJob.isGame,
                     referenceImageNames: failedJob.referenceImageNames,
                     repliesToPhone: failedJob.repliesToPhone,
                     restart: true,
@@ -2396,11 +2399,10 @@ final class CompanionManager: ObservableObject {
     }
 
     var isAnySpeechPlaying: Bool {
-        DottieKokoroSpeaker.shared.isPlaying || geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
+        DottieKokoroSpeaker.shared.isPlaying || systemSpeechSynthesizer.isSpeaking
     }
 
     func stopAllSpeechPlayback() {
-        geminiTTSClient.stopPlayback()
         DottieKokoroSpeaker.shared.stop()
         systemSpeechSynthesizer.stopSpeaking()
     }

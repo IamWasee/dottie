@@ -65,7 +65,7 @@ struct PreShipLiveCheckTests {
         }
         let sharedSecret = environment["DOTTIE_PRESHIP_SECRET"] ?? ""
         let voicePrompt = CompanionManager.liveVoiceSystemPrompt(personality: .cheekyFriend)
-        let declarations = GeminiLiveVoiceClient.directFunctionDeclarations
+        let declarations = DottieVoiceTools.directFunctionDeclarations
 
         var outcomes: [Outcome] = []
         for ask in Self.everydayAsks {
@@ -116,7 +116,7 @@ struct PreShipLiveCheckTests {
                 }
                 let toolCalls = DottieToolCallCheck.toolCalls(inStreamedAnswer: String(decoding: answerData, as: UTF8.self))
                 let problems = toolCalls.flatMap {
-                    DottieToolCallCheck.problems(with: $0, everyDeclaration: GeminiLiveVoiceClient.everyFunctionDeclaration)
+                    DottieToolCallCheck.problems(with: $0, everyDeclaration: DottieVoiceTools.everyFunctionDeclaration)
                 }
                 let missedFittingTool = !ask.fittingTools.isEmpty && !toolCalls.contains { ask.fittingTools.contains($0.name) }
                 return Outcome(ask: ask, toolCalls: toolCalls, problems: problems, missedFittingTool: missedFittingTool, failedToAsk: nil)
@@ -153,8 +153,8 @@ struct PreShipLiveCheckTests {
     // MARK: - The ask list itself (runs in every test run)
 
     @Test func everyFittingToolIsARealTool() {
-        let knownNames = Set((GeminiLiveVoiceClient.everyFunctionDeclaration.compactMap { $0["name"] as? String })
-            + [GeminiLiveToolCatalog.findToolFunctionName, GeminiLiveToolCatalog.useToolFunctionName])
+        let knownNames = Set((DottieVoiceTools.everyFunctionDeclaration.compactMap { $0["name"] as? String })
+            + [DottieVoiceToolCatalog.findToolFunctionName, DottieVoiceToolCatalog.useToolFunctionName])
         for ask in Self.everydayAsks {
             for toolName in ask.fittingTools {
                 #expect(knownNames.contains(toolName), "\(toolName) for \"\(ask.words)\" isn't a tool")

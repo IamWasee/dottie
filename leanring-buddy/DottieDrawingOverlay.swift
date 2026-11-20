@@ -327,8 +327,18 @@ final class DottieDrawingOverlayManager: ObservableObject {
     @Published private(set) var drawings: [DottieDrawing] = []
     /// Teaching drawings. They stay until cleared, or a while after the
     /// explanation ends.
-    @Published private(set) var figures: [DottieFigure] = []
+    @Published private(set) var figures: [DottieFigure] = [] {
+        didSet { updateBoardHandle() }
+    }
     private var figureFadeOutTask: Task<Void, Never>?
+    /// The user dragged the board somewhere else (old rect, new rect).
+    var onUserMovedBoard: ((CGRect, CGRect) -> Void)?
+    /// The user closed the board with its × button.
+    var onUserClosedBoard: (() -> Void)?
+    /// The small grip at the board's corner: the overlay itself lets every
+    /// click through, so this is how the user moves or closes the board.
+    private var boardHandlePanel: NSPanel?
+    static let boardHandleSize = CGSize(width: 62, height: 28)
 
     private static let drawingLifetimeSeconds: TimeInterval = 8
     private var overlayWindows: [NSWindow] = []
@@ -384,6 +394,65 @@ final class DottieDrawingOverlayManager: ObservableObject {
             let figureCenter = CGPoint(x: figure.bounds.midX, y: figure.bounds.midY)
             return boardArea.contains(figureCenter) ? figure.refitted(from: oldBoard, to: newBoard) : figure
         }
+    }
+
+    /// Where the grip sits for a board: inside its top-left corner.
+    static func boardHandleFrame(for boardRect: CGRect) -> CGRect {
+        CGRect(x: boardRect.minX + 8, y: boardRect.maxY - boardHandleSize.height - 8,
+               width: boardHandleSize.width, height: boardHandleSize.height)
+    }
+
+    /// The board, moved by the user's drag: same size, shifted by how far
+    /// the grip went.
+    static func boardMovedByDrag(_ boardRect: CGRect, dragDistance: CGSize) -> CGRect {
+        boardRect.offsetBy(dx: dragDistance.width, dy: dragDistance.height)
+    }
+
+    /// Shows the grip on the first board, or hides it when no board is up.
+    private func updateBoardHandle() {
+        guard let boardRect = DottieFigure.boardRects(in: figures).first else {
+            boardHandlePanel?.orderOut(nil)
+            return
+        }
+        let handleFrame = Self.boardHandleFrame(for: boardRect)
+        if let boardHandlePanel {
+            boardHandlePanel.setFrame(handleFrame, display: true)
+            boardHandlePanel.orderFrontRegardless()
+            return
+        }
+        let panel = NSPanel(contentRect: handleFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        // Above the drawing's overlay, so it takes the clicks the overlay lets through.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentView = NSHostingView(rootView: DottieBoardHandleView(
+            onDragEnded: { [weak self] dragDistance in self?.finishBoardDrag(dragDistance: dragDistance) },
+            onDragChanged: { [weak self] dragDistance in self?.followBoardDrag(dragDistance: dragDistance) },
+            onClose: { [weak self] in self?.onUserClosedBoard?() }
+        ))
+        panel.orderFrontRegardless()
+        boardHandlePanel = panel
+    }
+
+    /// While dragging only the grip follows the pointer; the board moves
+    /// once, when the drag ends, so the drawing isn't redrawn every frame.
+    private func followBoardDrag(dragDistance: CGSize) {
+        guard let boardRect = DottieFigure.boardRects(in: figures).first else { return }
+        let movedHandleFrame = Self.boardHandleFrame(for: Self.boardMovedByDrag(boardRect, dragDistance: dragDistance))
+        boardHandlePanel?.setFrameOrigin(movedHandleFrame.origin)
+    }
+
+    private func finishBoardDrag(dragDistance: CGSize) {
+        guard let boardRect = DottieFigure.boardRects(in: figures).first,
+              dragDistance.width != 0 || dragDistance.height != 0 else { return }
+        let movedBoard = Self.boardMovedByDrag(boardRect, dragDistance: dragDistance)
+        refitBoardFigures(from: boardRect, to: movedBoard)
+        onUserMovedBoard?(boardRect, movedBoard)
     }
 
     /// Lets the user read the finished drawing, then fades it.
@@ -890,5 +959,53 @@ private struct SeededRandom {
         mixed ^= mixed >> 31
         let unit = Double(mixed >> 11) / Double(UInt64(1) << 53)
         return range.lowerBound + (range.upperBound - range.lowerBound) * unit
+    }
+}
+
+/// The board's grip: drag the arrows to move the board, × to close it.
+/// Drag distances are in AppKit's direction (up is positive), measured
+/// from the screen so the grip moving under the pointer doesn't skew them.
+private struct DottieBoardHandleView: View {
+    let onDragEnded: (CGSize) -> Void
+    let onDragChanged: (CGSize) -> Void
+    let onClose: () -> Void
+    @State private var dragStartMouseLocation: CGPoint?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 32, height: 28)
+                .contentShape(Rectangle())
+                .help("Drag to move the board")
+                .gesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { _ in
+                            let mouseLocation = NSEvent.mouseLocation
+                            let startLocation = dragStartMouseLocation ?? mouseLocation
+                            if dragStartMouseLocation == nil { dragStartMouseLocation = mouseLocation }
+                            onDragChanged(CGSize(width: mouseLocation.x - startLocation.x, height: mouseLocation.y - startLocation.y))
+                        }
+                        .onEnded { _ in
+                            let mouseLocation = NSEvent.mouseLocation
+                            let startLocation = dragStartMouseLocation ?? mouseLocation
+                            dragStartMouseLocation = nil
+                            onDragEnded(CGSize(width: mouseLocation.x - startLocation.x, height: mouseLocation.y - startLocation.y))
+                        }
+                )
+                .pointerCursor()
+            Divider().frame(height: 16)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close the board")
+            .pointerCursor()
+        }
+        .foregroundColor(.white.opacity(0.85))
+        .background(Capsule().fill(Color.black.opacity(0.72)))
     }
 }

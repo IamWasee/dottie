@@ -57,13 +57,10 @@ const KEY_WITH_INSTALL_ID_PATTERN = /^(.*):([A-Za-z0-9-]{16,64})$/;
 
 /** The area a request counts toward, or undefined for requests that cost nothing (health, config, the phone). */
 export function usageArea(method: string, pathname: string): UsageArea | undefined {
-  if (pathname.startsWith("/gemini/") || pathname.startsWith("/gemini-only/")) return method === "POST" ? "helpers" : undefined;
+  if (pathname.startsWith("/gemini/")) return method === "POST" ? "helpers" : undefined;
   if (method === "GET" && pathname === "/search") return "search";
   if (method !== "POST") return undefined;
-  if (pathname === "/live-token") return "voice";
   if (pathname === "/chat" || pathname === "/jev") return "chat";
-  if (pathname === "/tts") return "speech";
-  if (pathname === "/dictate") return "dictation";
   return undefined;
 }
 

@@ -1,8 +1,8 @@
 //
-//  GeminiLiveToolCatalog.swift
+//  DottieVoiceToolCatalog.swift
 //  leanring-buddy
 //
-//  Which tools Gemini Live gets declared up front and how it reaches the
+//  Which of voice Dottie's tools are declared up front and how it reaches the
 //  rest: only the everyday tools are declared directly, the others are
 //  found with find_tool and run with use_tool.
 //
@@ -10,14 +10,14 @@
 import AVFoundation
 import Foundation
 
-/// Which tools Live gets declared up front and how it reaches the rest.
+/// Which tools are declared up front and how it reaches the rest.
 /// Every declaration (name, description, schema) is read again at the start
 /// of each voice session, so only the everyday tools are declared directly.
 /// The others are found with find_tool, which returns their description and
 /// schema as text, and run with use_tool, which goes through the same
-/// dispatch as a direct call (GeminiLiveVoiceClient.dispatchFunctionCall).
+/// dispatch as a direct call (DottieVoiceTools.dispatchFunctionCall).
 @MainActor
-enum GeminiLiveToolCatalog {
+enum DottieVoiceToolCatalog {
     static let findToolFunctionName = "find_tool"
     static let useToolFunctionName = "use_tool"
 
@@ -39,8 +39,6 @@ enum GeminiLiveToolCatalog {
         // Drawing. Through use_tool, a drawing's steps were JSON inside
         // JSON, and asks that didn't say "draw" never found the tool.
         "explain_on_screen", "draw_on_screen", "clear_drawings", "write_notes", "read_closely",
-        // Co-op mid-game needs to be instant.
-        "game_command",
         // Opening apps, windows, music and volume done on the Mac by the
         // instant lane and Needle, mid-answer, with no screenshot.
         "quick_mac_action"
@@ -49,7 +47,7 @@ enum GeminiLiveToolCatalog {
     /// One line for the voice prompt naming what the hidden tools cover, so
     /// the model knows to look for them. Keep it in step with what isn't in
     /// directFunctionNames.
-    static let hiddenToolAreasSummary = "scrolling, your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), the user's saved form details (form_details), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, the code editor (code_editor: open, show or change code in Home → Code), saved game maps (game_maps), watch-and-learn how-tos (watch_and_learn), and away mode (away_mode)"
+    static let hiddenToolAreasSummary = "scrolling, your cursor's shape (change_cursor), the browser and its tabs, screenshots, apple shortcuts, adding calendar events, the reminders list and ticking one off, contacts, meeting notes, projects (list_projects) and helper teams, stopping helpers and opening what they made, saved pictures (find_pictures, save_picture), smart home device list (home_devices) and tv jobs, memories by time and forgetting (memories), games, recording gameplay (gameplay_recording), your level, 24/7 jobs, rewriting selected text, watching the screen for something, focus mode, folder cleanup, replays of past screen jobs, learned shortcuts (learned_shortcuts), the user's saved form details (form_details), smart replays (smart_replays: watch the user do a job once, then redo it by meaning; commercial ones for filming), self-check, about yourself and your settings (about_me), saving the user's corrections about how an app works (save_app_lesson), installing skills for the Dots from a folder (install_skills), installing command-line tools, the code editor (code_editor: open, show or change code in Home → Code), watch-and-learn how-tos (watch_and_learn), and away mode (away_mode)"
 
     /// Extra words find_tool matches on, for asks that don't share words
     /// with the tool's description ("turn into a cat" → change_cursor).
@@ -100,7 +98,6 @@ enum GeminiLiveToolCatalog {
         "about_me": "dottie yourself settings version features permission help how tour update account",
         "install_tool": "install command line cli homebrew brew npm pip uninstall",
         "code_editor": "code editor file open edit change program script coder project source",
-        "game_maps": "game map maps show open delete 3d overview where explored",
         "watch_and_learn": "watch me learn how to show you teach seconds",
         "away_mode": "away leaving heading out back home phone while gone"
     ]

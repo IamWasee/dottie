@@ -87,27 +87,19 @@ struct TaskGoalUnfinishedPlanTests {
 @MainActor
 struct ScreenJobStepLimitTests {
     @Test func aQuickJobKeepsThirtySteps() {
-        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: false, isLongJob: false) == 30)
+        #expect(DottieScreenTaskRunner.stepLimit(isLongJob: false) == 30)
     }
 
     @Test func aLongJobGetsMoreSteps() {
-        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: false, isLongJob: true) == DottieScreenTaskRunner.maximumLongJobSteps)
+        #expect(DottieScreenTaskRunner.stepLimit(isLongJob: true) == DottieScreenTaskRunner.maximumLongJobSteps)
         #expect(DottieScreenTaskRunner.maximumLongJobSteps > DottieScreenTaskRunner.maximumSteps)
-    }
-
-    @Test func gamesKeepTheirOwnLimitEitherWay() {
-        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: true, isLongJob: false) == DottieScreenTaskRunner.maximumGameSteps)
-        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: true, isLongJob: true) == DottieScreenTaskRunner.maximumGameSteps)
     }
 
     /// The loop runs up to the biggest limit and stops at the current one,
     /// so a job that becomes long mid-way gets the longer limit.
     @Test func theLoopReachesEveryLimit() {
-        let loopEnd = max(DottieScreenTaskRunner.maximumGameSteps, DottieScreenTaskRunner.maximumLongJobSteps)
-        for isGameMode in [false, true] {
-            for isLongJob in [false, true] {
-                #expect(DottieScreenTaskRunner.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob) <= loopEnd)
-            }
+        for isLongJob in [false, true] {
+            #expect(DottieScreenTaskRunner.stepLimit(isLongJob: isLongJob) <= DottieScreenTaskRunner.maximumLongJobSteps)
         }
     }
 }

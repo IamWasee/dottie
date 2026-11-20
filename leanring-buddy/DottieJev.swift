@@ -154,6 +154,16 @@ enum DottieJev {
         return DottieJevProtocol.probability(fromAnswer: answerData)
     }
 
+    /// Jev's raw answer to a request body built elsewhere (the screen-job
+    /// driver's choice of next move), with the screenshot added as the
+    /// "screen" asset. Nil on any failure.
+    static func answer(to requestBody: [String: Any], screenImage image: CGImage, timeoutSeconds: TimeInterval = 5) async -> Data? {
+        guard let imageBase64 = sendableJPEGBase64(image) else { return nil }
+        var requestBodyWithScreen = requestBody
+        requestBodyWithScreen["assets"] = [DottieJevProtocol.screenshotAssetName: ["type": "image", "format": "jpeg", "data_base64": imageBase64]]
+        return await ask(requestBodyWithScreen, timeoutSeconds: timeoutSeconds)
+    }
+
     private static func ask(_ requestBody: [String: Any], timeoutSeconds: TimeInterval) async -> Data? {
         guard Date() >= pausedUntil,
               let requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }

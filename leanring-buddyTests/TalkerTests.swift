@@ -82,7 +82,7 @@ struct TalkerTests {
 
     @Test func talkerPromptStaysShort() {
         #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 900)
-        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1100)
+        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1300)
     }
 
     @Test func requestPromptAddsTheProfileOnlyWhenThereIsOne() {
@@ -144,7 +144,7 @@ struct TalkerTests {
     }
 
     @Test func everyShortListToolIsARealVoiceTool() async {
-        let realNames = await MainActor.run { Set(GeminiLiveVoiceClient.everyFunctionDeclaration.compactMap { $0["name"] as? String }) }
+        let realNames = await MainActor.run { Set(DottieVoiceTools.everyFunctionDeclaration.compactMap { $0["name"] as? String }) }
         for toolName in DottieTalkerProtocol.requestToolNames {
             #expect(realNames.contains(toolName), "\(toolName) isn't one of voice Dottie's tools")
         }

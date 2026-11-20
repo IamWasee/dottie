@@ -85,7 +85,7 @@ final class DottieGuideBrain {
         defaults.set(identity.botName, forKey: Self.botNameDefaultsKey)
         defaults.set(identity.specHash, forKey: Self.botSpecHashDefaultsKey)
 
-        let replyCollector = DottieGameReplyCollector()
+        let replyCollector = DottieStreamedReplyCollector()
         let runtime = mausBotRuntime
         let timeoutTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(Self.claudeAnswerTimeoutSeconds * 1_000_000_000))

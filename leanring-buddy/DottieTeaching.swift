@@ -66,6 +66,25 @@ enum DottieTeaching {
         }
     }
 
+    /// The board that's up, moved to where `surface` puts a board (right,
+    /// left, bottom or center of the screen) at its current size, kept on
+    /// the screen. nil for .screen, which has no board.
+    static func movedBoard(_ currentBoard: CGRect, to surface: Surface, on visibleFrame: CGRect) -> CGRect? {
+        guard let usualPlace = surface.boardRect(on: visibleFrame) else { return nil }
+        let margin: CGFloat = 24
+        let side = min(currentBoard.width, min(visibleFrame.width, visibleFrame.height) - margin * 2)
+        var movedBoard = CGRect(x: usualPlace.midX - side / 2, y: usualPlace.midY - side / 2, width: side, height: side)
+        switch surface {
+        case .board_right: movedBoard.origin.x = visibleFrame.maxX - side - margin
+        case .board_left: movedBoard.origin.x = visibleFrame.minX + margin
+        case .board_bottom: movedBoard.origin.y = visibleFrame.minY + margin
+        case .board_center, .screen: break
+        }
+        movedBoard.origin.x = min(max(movedBoard.minX, visibleFrame.minX + margin), visibleFrame.maxX - margin - side)
+        movedBoard.origin.y = min(max(movedBoard.minY, visibleFrame.minY + margin), visibleFrame.maxY - margin - side)
+        return movedBoard
+    }
+
     /// board_size: how big the board is. small, medium, large and full
     /// are sizes; bigger and smaller change the board that's up.
     enum BoardSize: String, CaseIterable {
@@ -188,8 +207,9 @@ enum DottieTeaching {
                     style: trimmed(fields["style"])?.lowercased()
                 )
             }
-            // Only resizing the board that's up needs no steps.
-            guard !steps.isEmpty || (addsToLastDrawing && boardSize != nil) else { return nil }
+            // Only resizing or moving the board that's up needs no steps.
+            let movesBoardOnly = givenSurface.map { $0 != .screen } ?? false
+            guard !steps.isEmpty || (addsToLastDrawing && (boardSize != nil || movesBoardOnly)) else { return nil }
             // A graph, chart or picture that isn't about something on the
             // screen goes on a board: drawn over whatever the screen shows,
             // its lines and labels got lost in the page behind them.
@@ -418,7 +438,7 @@ enum DottieTeaching {
                     "surface": [
                         "type": "STRING",
                         "enum": Surface.allCases.map(\.rawValue),
-                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. Graphs, curves, charts and pictures go on a board unless they mark something on screen (left out, they open board_right). Steps that use anchors still point at the screen."
+                        "description": "screen draws over what's on screen, to mark the video or diagram itself. board_right, board_left, board_bottom or board_center opens a dark square board there for your own clean diagram and worked steps (0-1000 across and down the board); pick the side where it covers the least of what matters. With add_to_last, a different board_… moves the board that's up and everything on it there (steps can then be empty): use it when the user asks to move the board or it covers what they need. Graphs, curves, charts and pictures go on a board unless they mark something on screen (left out, they open board_right). Steps that use anchors still point at the screen."
                     ],
                     "anchors": [
                         "type": "ARRAY",
@@ -448,8 +468,8 @@ enum DottieTeaching {
 
     // MARK: - Finding anchors
 
-    /// One sharp screenshot of the display, and Gemini Flash finds every
-    /// anchor on it at once. Returns each found anchor's frame in global
+    /// One sharp screenshot of the display, and GLM finds every anchor on
+    /// it at once. Returns each found anchor's frame in global
     /// AppKit coordinates, keyed by lowercased name.
     @MainActor
     static func locateAnchors(_ anchors: [Anchor], displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
@@ -458,21 +478,8 @@ enum DottieTeaching {
               let jpegData = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
             return [:]
         }
-        // Jev boxes each anchor first: it's quick and lands tight on the
-        // thing. Only the anchors it misses go to the box models below.
-        let jevFrames = await jevAnchorFrames(anchors, image: image, displayFrame: displayFrame, userQuestion: userQuestion)
-        let missingAnchors = anchors.filter { jevFrames[$0.name.lowercased()] == nil }
-        if missingAnchors.isEmpty {
-            DottieLog.notice("✏️ Jev found all \(anchors.count) anchors")
-            return jevFrames
-        }
-        let modelFrames = await modelAnchorFrames(missingAnchors, jpegData: jpegData, displayFrame: displayFrame, userQuestion: userQuestion)
-        return mergedAnchorFrames(jevFrames: jevFrames, modelFrames: modelFrames)
-    }
-
-    /// Jev's frames win; the models fill in only what Jev didn't find.
-    static func mergedAnchorFrames(jevFrames: [String: CGRect], modelFrames: [String: CGRect]) -> [String: CGRect] {
-        jevFrames.merging(modelFrames) { jevFrame, _ in jevFrame }
+        // GLM finds them (celly: drawings stay off Jev).
+        return await modelAnchorFrames(anchors, jpegData: jpegData, displayFrame: displayFrame, userQuestion: userQuestion)
     }
 
     /// A 0-1000 [ymin, xmin, ymax, xmax] box on the display's picture as a
@@ -484,30 +491,6 @@ enum DottieTeaching {
             width: (box[3] - box[1]) / 1000 * displayFrame.width,
             height: (box[2] - box[0]) / 1000 * displayFrame.height
         )
-    }
-
-    /// Asks Jev for every anchor at once (in parallel, short wait each).
-    @MainActor
-    private static func jevAnchorFrames(_ anchors: [Anchor], image: CGImage, displayFrame: CGRect, userQuestion: String) async -> [String: CGRect] {
-        var frames: [String: CGRect] = [:]
-        await withTaskGroup(of: (String, DottieJevBox?).self) { jevRequests in
-            for anchor in anchors {
-                jevRequests.addTask { @MainActor in
-                    let box = await DottieJev.findBox(target: anchor.description.isEmpty ? anchor.name : anchor.description,
-                                                      userContext: userQuestion, in: image, timeoutSeconds: 3)
-                    return (anchor.name.lowercased(), box)
-                }
-            }
-            for await (anchorName, box) in jevRequests {
-                guard let box else { continue }
-                let normalized = box.normalizedBox
-                frames[anchorName] = appKitFrame(
-                    normalizedBox: [normalized.ymin, normalized.xmin, normalized.ymax, normalized.xmax],
-                    displayFrame: displayFrame
-                )
-            }
-        }
-        return frames
     }
 
     @MainActor

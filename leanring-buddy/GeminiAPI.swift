@@ -6,7 +6,7 @@
 //  pass labeled images, a system prompt, history and the user prompt.
 //
 //  Used by the onboarding demo and by the classic (non-Live) voice mode. The
-//  main voice companion talks to Gemini Live instead (GeminiLiveVoiceClient).
+//  main voice companion talks to Gemini Live instead (DottieVoiceTools).
 //
 
 import Foundation

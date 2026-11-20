@@ -198,18 +198,15 @@ final class DottieSelfCheck: ObservableObject {
         case .ready:
             result.append(Item(id: "worker", title: "Dottie's server", level: healthMilliseconds < 1500 ? .good : .warning,
                                detail: "Answered in \(healthMilliseconds) ms\(healthMilliseconds < 1500 ? "." : ", which is slow. Your connection may be busy.")"))
-        case .missingGeminiKey:
+        case .missingModelKey:
             return [Item(id: "worker", title: "Dottie's server", level: .problem,
-                         detail: "It answers, but has no Gemini key. Add GEMINI_API_KEY to the server (see INSTALL.md).")]
+                         detail: "It answers, but has no model key. Add ANTHROPIC_API_KEY and ZAI_API_KEY to the server (see INSTALL.md).")]
         case .unreachable(let reason):
             return [Item(id: "worker", title: "Dottie's server", level: .problem,
                          detail: "Can't reach it: \(reason)", fix: .checkAgain, fixLabel: "Try again")]
         }
 
-        async let geminiItem = checkGeminiReply()
-        async let liveItem = checkLiveToken()
-        result.append(await geminiItem)
-        result.append(await liveItem)
+        result.append(await checkGeminiReply())
         return result
     }
 
@@ -244,26 +241,6 @@ final class DottieSelfCheck: ObservableObject {
             return Item(id: "gemini", title: "Gemini", level: .problem, detail: "No answer: \(error.localizedDescription)",
                         fix: .checkAgain, fixLabel: "Try again")
         }
-    }
-
-    private static func checkLiveToken() async -> Item {
-        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/live-token"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-        let startedAt = Date()
-        guard let (responseData, response) = await DottieLoggedRequest.send(request) else {
-            return Item(id: "live", title: "Voice connection", level: .problem, detail: "Couldn't get a voice token from the server.",
-                        fix: .checkAgain, fixLabel: "Try again")
-        }
-        let milliseconds = Int(Date().timeIntervalSince(startedAt) * 1000)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-        let payload = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any]
-        guard statusCode == 200, (payload?["token"] as? String)?.isEmpty == false else {
-            return Item(id: "live", title: "Voice connection", level: .problem,
-                        detail: "The server didn't give a voice token (error \(statusCode)).", fix: .checkAgain, fixLabel: "Try again")
-        }
-        return Item(id: "live", title: "Voice connection", level: .good, detail: "Got a voice token in \(milliseconds) ms.")
     }
 
     // MARK: - Microphone

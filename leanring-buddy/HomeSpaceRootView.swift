@@ -949,8 +949,8 @@ private struct HomeSettingsView: View {
             switch healthCheckResult {
             case .ready:
                 serverCheckMessage = "Connected. Dottie is ready to talk."
-            case .missingGeminiKey:
-                serverCheckMessage = "The server is up but has no Gemini key yet. Add GEMINI_API_KEY to it (see INSTALL.md)."
+            case .missingModelKey:
+                serverCheckMessage = "The server is up but has no model key yet. Add ANTHROPIC_API_KEY and ZAI_API_KEY to it (see INSTALL.md)."
             case .unreachable(let reason):
                 serverCheckMessage = "Couldn't reach it: \(reason)"
             }
