@@ -463,6 +463,58 @@ enum DottieScreenActionPerformer {
         }
     }
 
+    /// The points a drag passes through, from `start` to `end`: eased (slow
+    /// start and end), a few points past the start first so drag-and-drop
+    /// lists notice the drag, and always ending exactly on `end`. Pure, so
+    /// it can be tested.
+    nonisolated static func dragPath(from start: CGPoint, to end: CGPoint, stepCount: Int) -> [CGPoint] {
+        let clampedStepCount = max(4, stepCount)
+        // Web drag-and-drop (sortable lists, kanban boards) only starts once
+        // the pointer moved a few pixels with the button down.
+        let distance = hypot(end.x - start.x, end.y - start.y)
+        let nudgeLength: CGFloat = min(8, distance / 4)
+        let nudge = distance > 0
+            ? CGPoint(x: start.x + (end.x - start.x) / distance * nudgeLength, y: start.y + (end.y - start.y) / distance * nudgeLength)
+            : start
+        var points = [nudge]
+        for stepIndex in 1...clampedStepCount {
+            let progress = CGFloat(stepIndex) / CGFloat(clampedStepCount)
+            let easedProgress = progress * progress * (3 - 2 * progress)
+            points.append(CGPoint(x: nudge.x + (end.x - nudge.x) * easedProgress, y: nudge.y + (end.y - nudge.y) * easedProgress))
+        }
+        points[points.count - 1] = end
+        return points
+    }
+
+    /// Drags like a hand with a mouse: presses at `start`, waits a moment
+    /// (lists that need a press-and-hold), moves over about half a second,
+    /// rests over the drop spot so it can highlight, then lets go. Both
+    /// points are global AppKit points.
+    static func drag(from start: CGPoint, to end: CGPoint) async {
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        let quartzStart = quartzPoint(fromAppKit: start)
+        let quartzEnd = quartzPoint(fromAppKit: end)
+        CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: quartzStart, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown, mouseCursorPosition: quartzStart, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 180_000_000)
+        let pathPoints = dragPath(from: quartzStart, to: quartzEnd, stepCount: 30)
+        for pathPoint in pathPoints {
+            CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged, mouseCursorPosition: pathPoint, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 16_000_000)
+        }
+        // Drop targets highlight on hover; letting go at once can miss them.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged, mouseCursorPosition: quartzEnd, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: quartzEnd, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+    }
+
     /// Scrolls whatever is under the pointer, or under `appKitPoint` when
     /// given (the pointer goes back where it was afterwards).
     static func scroll(direction: DottieScreenAction.ScrollDirection, amount: Int, at appKitPoint: CGPoint? = nil) {

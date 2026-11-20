@@ -989,6 +989,17 @@ final class DottieScreenTaskRunner {
                 ? "pressed \(keys)"
                 : "unknown key \(keys); use names like cmd+l, enter, escape, tab, up, down"
 
+        case "drag":
+            guard let dragStart = boxCenter(),
+                  let dragEnd = Self.centerOfBox(arguments["to_box_2d"], screen: screen) else {
+                return "error: give box_2d (what to grab) and to_box_2d (where to drop it), each [ymin, xmin, ymax, xmax] 0-1000"
+            }
+            let dragLabel = text("label") ?? "it"
+            onProgress?(stepNumber, "dragging \(dragLabel)")
+            await DottieScreenActionPerformer.drag(from: dragStart, to: dragEnd)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return "dragged \(dragLabel). Check on the next screenshot that it landed where you meant; if it snapped back, try grabbing its drag handle or the item's title."
+
         case "scroll":
             return await performScroll(arguments: arguments, directionName: text("direction"), boxCenter: boxCenter(), screen: screen, stepNumber: stepNumber)
 
@@ -1271,6 +1282,22 @@ final class DottieScreenTaskRunner {
 
     /// The box's middle, moved to the middle of the real control under it
     /// when there is one, so a box a few pixels off still hits.
+    /// The middle of a 0-1000 box on the screenshot, in global AppKit
+    /// points, or nil when it isn't four numbers in order.
+    static func centerOfBox(_ boxValue: Any?, screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
+        guard let numbers = normalizedBoxCenter(boxValue) else { return nil }
+        return screen.globalPoint(normalizedX: numbers.x, normalizedY: numbers.y)
+    }
+
+    /// The middle of a [ymin, xmin, ymax, xmax] box in its own 0-1000
+    /// space, or nil. Pure, so it can be tested.
+    nonisolated static func normalizedBoxCenter(_ boxValue: Any?) -> (x: Double, y: Double)? {
+        guard let box = boxValue as? [Any] else { return nil }
+        let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard numbers.count == 4, numbers[2] >= numbers[0], numbers[3] >= numbers[1] else { return nil }
+        return (x: (numbers[1] + numbers[3]) / 2, y: (numbers[0] + numbers[2]) / 2)
+    }
+
     private static func clickPoint(arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) -> CGPoint? {
         guard let box = arguments["box_2d"] as? [Any] else { return nil }
         let numbers = box.compactMap { ($0 as? NSNumber)?.doubleValue }
@@ -1560,6 +1587,15 @@ final class DottieScreenTaskRunner {
                 "name": "press_keys",
                 "description": "Press a key or shortcut, like 'enter', 'escape', 'tab', 'cmd+l', 'cmd+t', 'cmd+[' (back).",
                 "parameters": ["type": "object", "properties": ["keys": ["type": "string"]], "required": ["keys"]]
+            ],
+            [
+                "name": "drag",
+                "description": "Drag and drop like a hand on a mouse: press on the thing in box_2d (a card, a task, a file, its drag handle ⠿ when it has one), move it, and let go on to_box_2d. Use it to move items between lists, days, columns or folders, reorder a list, or move a slider. Never click a checkbox to move something: ticking marks it done. One item per drag; look at the next screenshot to check it landed.",
+                "parameters": ["type": "object", "properties": [
+                    "box_2d": boxProperty,
+                    "to_box_2d": ["type": "array", "items": ["type": "number"], "description": "[ymin, xmin, ymax, xmax] of where to drop it on the latest screenshot, each 0-1000 (the list, day or column itself, not its title)."],
+                    "label": ["type": "string", "description": "What's dragged and where, like 'Read 4A to Saturday'."]
+                ], "required": ["box_2d", "to_box_2d"]]
             ],
             [
                 "name": "scroll",
