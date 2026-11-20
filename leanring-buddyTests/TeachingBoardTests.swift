@@ -244,7 +244,8 @@ struct TeachingBoardTests {
     @Test func pointsMayBeNumbersWithSpacesAnchorEdgesOrTheCircledArea() {
         #expect(plan([["kind": "line", "points": ["100, 200", "300 400"]]])?.problems == [])
         #expect(plan([["kind": "line", "points": ["circled.right", "900,900"]]])?.problems == [])
-        #expect(plan([["kind": "line", "points": ["(100,200)", "300,400"]]])?.problems.count == 1)
+        #expect(plan([["kind": "line", "points": ["(100,200)", "300,400"]]])?.problems == [])
+        #expect(plan([["kind": "line", "points": ["somewhere", "300,400"]]])?.problems.count == 1)
         #expect(plan([["kind": "line", "points": ["title.left", "300,400"]]])?.problems.count == 1)
     }
 

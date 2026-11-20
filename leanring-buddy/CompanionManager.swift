@@ -1430,17 +1430,26 @@ final class CompanionManager: ObservableObject {
     /// cursor as the pen. Returns at once so Live can say "okay, watch";
     /// each step's line is spoken as it's drawn.
     private func startTeaching(arguments: [String: Any]) -> String {
-        guard let plan = DottieTeaching.Plan(arguments: arguments) else {
+        guard let givenPlan = DottieTeaching.Plan(arguments: arguments) else {
             return "error: give steps, each with a kind and points."
         }
         // Checked before anything is drawn or cleared: a step that can't be
         // drawn used to be skipped quietly while Live said it was drawn.
-        let stepProblems = plan.problems
+        // Steps that can be drawn still are; refusing the whole drawing for
+        // one bad step had Live retrying in a loop with nothing on screen.
+        let stepProblems = givenPlan.problems
+        let plan = givenPlan.keepingOnlyDrawableSteps()
+        var skippedStepsNote = ""
         if !stepProblems.isEmpty {
             DottieLog.notice("✏️ Teaching steps refused: \(stepProblems.joined(separator: "; "))")
-            return "error: nothing was drawn. fix these and call explain_on_screen again with all the steps: "
-                + stepProblems.joined(separator: "; ")
-                + ". don't tell the user anything was drawn until it is."
+            DottieTeaching.recordRefusedDrawing(problems: stepProblems, arguments: arguments, drewOtherSteps: !plan.steps.isEmpty)
+            if plan.steps.isEmpty {
+                return "error: nothing was drawn. fix these and call explain_on_screen again with all the steps: "
+                    + stepProblems.joined(separator: "; ")
+                    + ". don't tell the user anything was drawn until it is."
+            }
+            skippedStepsNote = " these steps were left out and not drawn: " + stepProblems.joined(separator: "; ")
+                + ". don't say they were drawn; explain those parts in words, or add them later with add_to_last true."
         }
         // Adding to a drawing that's still up keeps it, and its board, so
         // "now show a downward trend on it" lands on the same grid. Every
@@ -1527,7 +1536,7 @@ final class CompanionManager: ObservableObject {
         }
         return continuingNote + (hasSpokenLines
             ? "drawing it now. say only two or three words like 'okay, watch'; each step's line comes to you to say while it's drawn."
-            : "drawing it now, step by step. explain it in the same order, briefly, while it draws.") + laterNote + circledNote
+            : "drawing it now, step by step. explain it in the same order, briefly, while it draws.") + laterNote + circledNote + skippedStepsNote
     }
 
     /// The last area the user circled while talking, so a drawing can sit
