@@ -50,8 +50,8 @@ enum DottieHelperEngine: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .claudeWithBackup: return "Claude (MausBot), backup: Gemini"
-        case .geminiOnly: return "Gemini only"
+        case .claudeWithBackup: return "Claude (MausBot), backup: GLM"
+        case .geminiOnly: return "GLM only"
         }
     }
 
@@ -107,10 +107,10 @@ enum DottieClaudeFallbackReason: Error, Equatable {
     /// The small note in the helper's chat.
     var noteForTranscript: String {
         switch self {
-        case .usageLimit: return "Claude limit reached, using the free backup"
-        case .busy: return "Claude is busy right now, using the free backup"
-        case .notSignedIn: return "Claude isn't signed in, using the free backup"
-        case .notReachable: return "MausBot isn't answering, using the free backup"
+        case .usageLimit: return "Claude limit reached, using GLM"
+        case .busy: return "Claude is busy right now, using GLM"
+        case .notSignedIn: return "Claude isn't signed in, using GLM"
+        case .notReachable: return "MausBot isn't answering, using GLM"
         case .engineProblem(let detail):
             // Node's own warnings share stderr with the real error.
             let shortDetail = String(detail
@@ -119,8 +119,8 @@ enum DottieClaudeFallbackReason: Error, Equatable {
                 .first { !$0.isEmpty && !$0.contains("ExperimentalWarning") && !$0.contains("--trace-warnings") }?
                 .prefix(160) ?? "")
             return shortDetail.isEmpty
-                ? "Claude couldn't take this one, using the free backup"
-                : "Claude couldn't take this one (\(shortDetail)), using the free backup"
+                ? "Claude couldn't take this one, using GLM"
+                : "Claude couldn't take this one (\(shortDetail)), using GLM"
         }
     }
 

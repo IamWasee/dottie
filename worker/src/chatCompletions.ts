@@ -334,12 +334,51 @@ export async function answerWithProvider(
       }
       const errorText = await response.text();
       console.warn(`[${provider.name}] ${model} answered ${response.status}: ${errorText.slice(0, 300)}`);
+      // Groq's gpt-oss sometimes writes a plain answer but calls it a
+      // broken tool call (tool_use_failed) when the request had no tools.
+      // The words it wrote are the answer.
+      const salvagedText = response.status === 400 ? salvagedToolUseFailure(errorText, chatRequest) : undefined;
+      if (salvagedText !== undefined) {
+        const salvagedResponse = toGeminiResponse(
+          { choices: [{ message: { role: "assistant", content: salvagedText }, finish_reason: "stop" }] },
+          `${provider.name}/${model}`
+        );
+        if (salvagedResponse) {
+          const payload = JSON.stringify(salvagedResponse);
+          return streaming
+            ? new Response(`data: ${payload}\r\n\r\n`, {
+                status: 200,
+                headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+              })
+            : new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+        }
+      }
       // Only a rejected request is worth retrying without the extras.
       if (response.status !== 400 && response.status !== 422) break;
       if (Object.keys(extras).length === 0) break;
     }
   }
   return undefined;
+}
+
+/**
+ * The words a model wrote when its provider refused the answer as a broken
+ * tool call (`tool_use_failed` with `failed_generation`), or undefined.
+ * Only for requests that offered no tools: then nothing was meant as a call.
+ */
+export function salvagedToolUseFailure(errorText: string, chatRequest: Record<string, unknown>): string | undefined {
+  const offeredTools = Array.isArray(chatRequest.tools) && chatRequest.tools.length > 0;
+  if (offeredTools) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch {
+    return undefined;
+  }
+  const error = (parsed as { error?: { code?: unknown; failed_generation?: unknown } } | null)?.error;
+  if (error?.code !== "tool_use_failed" || typeof error.failed_generation !== "string") return undefined;
+  const text = error.failed_generation.trim();
+  return text.length > 0 ? text : undefined;
 }
 
 // MARK: - Gemini → chat

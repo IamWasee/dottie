@@ -408,7 +408,12 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   if (wantedRole === "talk") return await answerTalk(env, requestBody);
   // Requests the talker handed over: Claude (Haiku) only, nothing else.
   if (wantedRole === "request") {
-    const requestResponse = await answerWithPaidProviders(env, requestBody, true, "/chat", env.REQUEST_PROVIDER_ORDER || "claude");
+    const requestOrder = env.REQUEST_PROVIDER_ORDER || "claude";
+    if (paidProviders(env, requestBody, false, requestOrder).length === 0) {
+      console.warn(`[/chat] no key for the request route (${requestOrder}): set ANTHROPIC_API_KEY`);
+      return jsonResponse({ error: "Claude couldn't answer this request" }, 503);
+    }
+    const requestResponse = await answerWithPaidProviders(env, requestBody, true, "/chat", requestOrder);
     return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
   }
 

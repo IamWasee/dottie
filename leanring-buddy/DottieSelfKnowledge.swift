@@ -813,7 +813,7 @@ extension DottieSelfKnowledge {
         let talkKeys = currentTalkShortcutText
         let dictateKeys = currentDictationShortcutText
         let personalityNames = DottiePersonality.presets.map(\.displayName).joined(separator: ", ")
-        let voiceNames = DottieVoicePreview.voices.map(\.name).joined(separator: ", ")
+        let voiceNames = DottieKokoroVoices.all.map(\.name).joined(separator: ", ")
         let askBarKeys = DottieEveryday.shared.shortcuts.hotkey(for: .askBar)?.displayText
         let fixTextKeys = DottieEveryday.shared.shortcuts.hotkey(for: .fixText)?.displayText
         let askBarKeyName: String = askBarKeys ?? "a shortcut you pick"
@@ -858,7 +858,7 @@ extension DottieSelfKnowledge {
                 id: "voice",
                 title: "My voice and personality",
                 keywords: ["voice", "sound", "accent", "personality", "tone", "sarcastic", "funny", "calm", "tutor", "hype", "butler", "british"],
-                summary: "Pick how I sound (tap play to hear each voice: \(voiceNames)) and my personality: \(personalityNames), or make your own (\"a grumpy pirate who loves cats\"). Butler is a calm, refined British voice (\(DottieVoicePreview.sound(of: DottieVoicePreview.butlerVoiceName))); it pairs well with the Butler personality.",
+                summary: "Pick how I sound (tap play to hear each voice: \(voiceNames)) and my personality: \(personalityNames), or make your own (\"a grumpy pirate who loves cats\"). Butler is a calm, refined British voice; it pairs well with the Butler personality.",
                 whereToFind: "Settings → Voice.",
                 place: .settings("Voice"),
                 steps: [
@@ -1055,8 +1055,7 @@ extension DottieSelfKnowledge {
             return lines.joined(separator: "\n")
         }
 
-        let voiceModeName = companionManager.voiceMode == .live ? "Gemini Live" : "classic"
-        lines.append("Voice: \(companionManager.selectedVoiceName), personality \(companionManager.selectedPersonality.displayName), \(voiceModeName) mode.")
+        lines.append("Voice: \(DottieKokoroVoices.chosenVoice().name) (Kokoro, on this Mac), personality \(companionManager.selectedPersonality.displayName).")
         lines.append(shortcutsDescription())
         lines.append(await helpersDescription())
         lines.append(helperEngineDescription())

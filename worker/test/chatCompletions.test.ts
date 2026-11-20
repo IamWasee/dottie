@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  salvagedToolUseFailure,
   answerWithProvider,
   canAnswer,
   estimatedTokens,
@@ -756,5 +757,24 @@ describe("answerWithProvider", () => {
     expect(calls[0].json.max_tokens).toBeUndefined();
     expect(calls[0].json.chat_template_kwargs).toEqual({ enable_thinking: false, thinking: false });
     expect(((await response!.json()) as any).modelVersion).toBe("nim/nim-one");
+  });
+});
+
+describe("salvagedToolUseFailure", () => {
+  const failure = (failedGeneration: unknown, code = "tool_use_failed") =>
+    JSON.stringify({ error: { code, failed_generation: failedGeneration } });
+
+  it("returns the words the model wrote when no tools were offered", () => {
+    expect(salvagedToolUseFailure(failure("  Hi there!  "), {})).toBe("Hi there!");
+    expect(salvagedToolUseFailure(failure("REQUEST"), { tools: [] })).toBe("REQUEST");
+  });
+
+  it("leaves real tool requests, other errors and junk alone", () => {
+    expect(salvagedToolUseFailure(failure("hi"), { tools: [{ type: "function" }] })).toBeUndefined();
+    expect(salvagedToolUseFailure(failure("hi", "invalid_request_error"), {})).toBeUndefined();
+    expect(salvagedToolUseFailure(failure(42), {})).toBeUndefined();
+    expect(salvagedToolUseFailure(failure("   "), {})).toBeUndefined();
+    expect(salvagedToolUseFailure("not json", {})).toBeUndefined();
+    expect(salvagedToolUseFailure("null", {})).toBeUndefined();
   });
 });

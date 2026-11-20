@@ -30,6 +30,11 @@ final class DottieKokoroSpeaker: ObservableObject {
 
     var isPlaying: Bool { audioPlayer?.isPlaying ?? false }
 
+    /// True once Kokoro is loaded. Until then (the first download can take
+    /// minutes), classic mode answers with the Mac's own voice instead of
+    /// waiting in silence.
+    var isReady: Bool { kokoroManager != nil }
+
     /// Loads Kokoro once (downloading it the first time); later calls share it.
     private func readyManager() async throws -> KokoroAneManager {
         if let kokoroManager { return kokoroManager }

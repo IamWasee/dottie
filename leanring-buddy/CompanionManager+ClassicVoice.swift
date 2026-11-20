@@ -250,17 +250,7 @@ extension CompanionManager {
 
                 // Keep the spinner until audio actually starts playing.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Kokoro on the Mac (no AI service), then macOS's own voice.
-                    do {
-                        try await DottieKokoroSpeaker.shared.speak(spokenText)
-                        voiceState = .responding
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        DottieLog.warning("⚠️ Kokoro couldn't speak, using the system voice: \(error.localizedDescription)")
-                        speakWithSystemVoice(spokenText)
-                    }
+                    try await speakClassicAnswer(spokenText)
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
@@ -275,6 +265,28 @@ extension CompanionManager {
                 notchPresenter.showFinishedResponse(notchPresenter.liveCaptionText)
                 scheduleTransientHideIfNeeded()
             }
+        }
+    }
+
+    /// Kokoro on the Mac (no AI service), then macOS's own voice. While
+    /// Kokoro is still downloading or loading, the Mac's voice answers
+    /// right away instead of leaving silence.
+    private func speakClassicAnswer(_ spokenText: String) async throws {
+        guard DottieKokoroSpeaker.shared.isReady else {
+            DottieLog.notice("🗣️ Kokoro isn't loaded yet, using the system voice")
+            DottieKokoroSpeaker.shared.prepare()
+            speakWithSystemVoice(spokenText)
+            return
+        }
+        do {
+            try await DottieKokoroSpeaker.shared.speak(spokenText)
+            voiceState = .responding
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            ClickyAnalytics.trackTTSError(error: error.localizedDescription)
+            DottieLog.warning("⚠️ Kokoro couldn't speak, using the system voice: \(error.localizedDescription)")
+            speakWithSystemVoice(spokenText)
         }
     }
 

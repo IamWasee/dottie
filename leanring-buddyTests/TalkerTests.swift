@@ -27,6 +27,35 @@ struct TalkerTests {
         #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "") == .request(needsScreen: false))
     }
 
+    @Test func aWrittenPlanGoesToClaudeWithTheScreen() {
+        let plan = "**Here's the plan**\n\n1. Open Calendar.\n2. Find the event.\n3. Drag it to Saturday."
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: plan) == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "- open calendar\n- drag it") == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.looksLikeAPlan("1) open it\n2) move it"))
+    }
+
+    @Test func sayingItCantDoSomethingGoesToClaude() {
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "I can't draw on your screen, but I can open an app.") == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "sorry, i’m unable to do that") == .request(needsScreen: true))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "you can't go wrong with pizza") == .say("you can't go wrong with pizza"))
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("never say you can't do something"))
+    }
+
+    @Test func oneNumberOrOneLineIsStillTalk() {
+        #expect(!DottieTalkerProtocol.looksLikeAPlan("i'd say 2. maybe 3 if you're feeling brave!"))
+        #expect(!DottieTalkerProtocol.looksLikeAPlan("1. that's my favorite number"))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "ha, good one") == .say("ha, good one"))
+    }
+
+    @Test func promptsSendDoingToClaudeAndClaudeToScreenJobs() {
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("never write steps or a plan"))
+        let requestPrompt = DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "")
+        #expect(requestPrompt.contains("do_task_on_screen"))
+        #expect(requestPrompt.contains("never tell them to do it themselves"))
+        #expect(requestPrompt.contains("answer only what they asked"))
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("answer only what they asked"))
+    }
+
     @Test func aSentenceThatOnlyMentionsRequestsIsStillTalk() {
         #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "requests are fine, ask away") == .say("requests are fine, ask away"))
     }

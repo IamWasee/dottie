@@ -200,12 +200,7 @@ extension CompanionManager {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             guard let self else { return }
-            switch self.voiceMode {
-            case .classic:
-                self.sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
-            case .live:
-                self.startLiveTextTurn(recordedUserText: recordedUserText, turnText: instructionText)
-            }
+            self.sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
         }
     }
 

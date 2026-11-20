@@ -16,6 +16,7 @@ struct CompanionPanelView: View {
     @ObservedObject private var gameplayRecorder = DottieGameplayRecorder.shared
     @ObservedObject private var awayMode = DottieAwayMode.shared
     @State private var emailInput: String = ""
+    @State private var chosenKokoroVoiceName = DottieKokoroVoices.chosenVoice().name
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -584,27 +585,19 @@ struct CompanionPanelView: View {
 
     // MARK: - Voice Picker
 
-    /// Picks the Gemini Live voice; the model itself is set on the Worker.
+    /// Picks Dottie's on-Mac Kokoro voice. Picking one plays a sample.
     private var modelPickerRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Voice")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-
-                Spacer()
-
-                VoicePreviewButton(voiceName: companionManager.selectedVoiceName)
-            }
+            Text("Voice")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(DS.Colors.textSecondary)
 
             // Five voices don't fit beside the label in the 320pt panel,
             // so they get a row of their own.
             HStack(spacing: 0) {
-                voiceOptionButton(voiceName: "Kore")
-                voiceOptionButton(voiceName: "Puck")
-                voiceOptionButton(voiceName: "Aoede")
-                voiceOptionButton(voiceName: "Charon")
-                voiceOptionButton(voiceName: DottieVoicePreview.butlerVoiceName)
+                ForEach(DottieKokoroVoices.all) { voice in
+                    voiceOptionButton(voice)
+                }
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -618,13 +611,14 @@ struct CompanionPanelView: View {
         .padding(.vertical, 4)
     }
 
-    private func voiceOptionButton(voiceName: String) -> some View {
-        let isSelected = companionManager.selectedVoiceName == voiceName
+    private func voiceOptionButton(_ voice: DottieKokoroVoice) -> some View {
+        let isSelected = chosenKokoroVoiceName == voice.name
         return Button(action: {
-            companionManager.setSelectedVoiceName(voiceName)
-            DottieVoicePreview.shared.play(voiceName)
+            DottieKokoroVoices.choose(voice.name)
+            chosenKokoroVoiceName = voice.name
+            DottieKokoroSpeaker.shared.togglePreview(voice)
         }) {
-            Text(voiceName)
+            Text(voice.name)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
                 .padding(.horizontal, 7)
@@ -639,7 +633,7 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .help(DottieVoicePreview.sound(of: voiceName))
+        .help(voice.sound)
     }
 
     // MARK: - Gameplay Recording
@@ -832,30 +826,6 @@ struct CompanionPanelView: View {
 
 }
 
-/// Plays (or stops) a sample of the chosen voice in the panel.
-private struct VoicePreviewButton: View {
-    let voiceName: String
-    @ObservedObject private var voicePreview = DottieVoicePreview.shared
-
-    var body: some View {
-        Button(action: { voicePreview.toggle(voiceName) }) {
-            Group {
-                if voicePreview.loadingVoiceName == voiceName {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: voicePreview.playingVoiceName == voiceName ? "stop.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(DS.Colors.textSecondary)
-                }
-            }
-            .frame(width: 22, height: 22)
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .padding(.leading, 6)
-        .help("Hear \(voiceName)")
-    }
-}
 
 /// "Hold <talk shortcut> to talk." Watches the shortcut monitor itself so
 /// the hint changes as soon as a new shortcut is recorded in Settings.

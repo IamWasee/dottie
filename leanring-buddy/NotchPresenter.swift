@@ -244,6 +244,13 @@ final class NotchPresenter: ObservableObject {
     /// back into the notch.
     func showFinishedResponse(_ responseText: String) {
         guard surface != .textInput else { return }
+        // A job Dottie just started on the screen matters more than "on it":
+        // its card (with Stop) stays up instead of the answer card.
+        if isScreenTaskRunning {
+            cancelAutoDismiss()
+            surface = .screenTask
+            return
+        }
         let trimmedResponseText = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedResponseText.isEmpty else {
             collapse()
@@ -313,15 +320,21 @@ final class NotchPresenter: ObservableObject {
         onAskMeetingHelp?()
     }
 
-    /// A screen task started or moved on to its next step. Doesn't cover a
-    /// voice turn or a card that's showing; the step shows once they close.
+    /// A screen task started or moved on to its next step. Takes over from
+    /// "thinking" and an answer card, so the job and its Stop button show
+    /// right away; doesn't cover the user typing, talking or Dottie speaking.
     func showScreenTaskStep(_ stepText: String, title: String = "on it") {
         isScreenTaskRunning = true
         screenTaskStepText = stepText
         screenTaskTitle = title
-        if surface == .compact {
+        if Self.screenTaskTakesOver(from: surface) {
+            cancelAutoDismiss()
             surface = .screenTask
         }
+    }
+
+    static func screenTaskTakesOver(from currentSurface: Surface) -> Bool {
+        [.compact, .thinking, .textResponse].contains(currentSurface)
     }
 
     /// A long screen job made or moved on in its plan.
