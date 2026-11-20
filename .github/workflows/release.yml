@@ -218,8 +218,17 @@ jobs:
           fi
           echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
 
-  build-dmg:
+  # Everyday asks go to the real model with this commit's voice prompt and
+  # tools; a tool call Dottie would refuse stops the release here.
+  preship-check:
     needs: prepare
+    uses: ./.github/workflows/preship.yml
+    with:
+      worker_url: ${{ needs.prepare.outputs.worker_url }}
+    secrets: inherit
+
+  build-dmg:
+    needs: [prepare, preship-check]
     runs-on: macos-15
     timeout-minutes: 40
     env:

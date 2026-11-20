@@ -1,0 +1,72 @@
+name: Pre-ship check
+
+# Everyday asks for each feature go to the real model through the deployed
+# Worker, with Dottie's real voice prompt and tools, and every tool call
+# that comes back is checked the way the app would take it
+# (leanring-buddyTests/PreShipLiveCheckTests.swift). The release workflow
+# runs this before building, so a release whose tool calls Dottie would
+# refuse doesn't ship. It can also be run by hand from the Actions tab.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      worker_url:
+        description: The Worker's address
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  preship-check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pick Xcode
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -n "$xcode" ]; then
+            sudo xcode-select -s "$xcode/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: Ask the real model and check its tool calls
+        timeout-minutes: 20
+        env:
+          TEST_RUNNER_DOTTIE_PRESHIP_WORKER_URL: ${{ inputs.worker_url || vars.DOTTIE_WORKER_URL }}
+          TEST_RUNNER_DOTTIE_PRESHIP_SECRET: ${{ secrets.DOTTIE_APP_SECRET }}
+          TEST_RUNNER_DOTTIE_PRESHIP_REPORT: ${{ runner.temp }}/preship-report.md
+        run: |
+          if [ -z "$TEST_RUNNER_DOTTIE_PRESHIP_WORKER_URL" ]; then
+            echo "::error::No Worker address: set the DOTTIE_WORKER_URL repository variable."
+            exit 1
+          fi
+          set -o pipefail
+          xcodebuild test \
+            -project leanring-buddy.xcodeproj \
+            -scheme leanring-buddy \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:leanring-buddyTests/PreShipLiveCheckTests \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_DEFAULT_ACTOR_ISOLATION=nonisolated \
+            SWIFT_APPROACHABLE_CONCURRENCY=NO \
+            2>&1 | tee preship.log | grep -E "error:|Issue recorded|✘|TEST (SUCCEEDED|FAILED)|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "TEST SUCCEEDED" preship.log
+
+      - name: Report
+        if: always()
+        run: |
+          report="${{ runner.temp }}/preship-report.md"
+          if [ -f "$report" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report: the check didn't reach the model (see the log)." >> "$GITHUB_STEP_SUMMARY"
+          fi

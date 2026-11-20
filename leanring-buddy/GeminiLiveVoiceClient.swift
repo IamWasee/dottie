@@ -826,7 +826,7 @@ final class GeminiLiveVoiceClient {
     ///
     /// Made once: none of them change while Dottie runs, and every
     /// find_tool and use_tool call used to build the whole list again.
-    private static let everyFunctionDeclaration: [[String: Any]] = {
+    static let everyFunctionDeclaration: [[String: Any]] = {
         var declarations: [[String: Any]] = coreFunctionDeclarations
         declarations += DottieScreenAction.functionDeclarations
         declarations += DottieMacTools.functionDeclarations
@@ -841,7 +841,7 @@ final class GeminiLiveVoiceClient {
     /// What the session's setup declares: the everyday tools, plus find_tool
     /// and use_tool for the rest. Every declaration is read again at the
     /// start of each session, so the rarely used ones stay out of it.
-    private static var directFunctionDeclarations: [[String: Any]] {
+    static var directFunctionDeclarations: [[String: Any]] {
         let everydayDeclarations = everyFunctionDeclaration.filter { declaration in
             guard let toolName = declaration["name"] as? String else { return false }
             return GeminiLiveToolCatalog.directFunctionNames.contains(toolName)

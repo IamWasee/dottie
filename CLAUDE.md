@@ -286,6 +286,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieHelperFollowThrough.swift` | ~210 | Two checks that keep voice Dottie honest about her helpers (Dots). The hand-off check: when an answer says a helper is on it, or the user asked for a helper, but start_helper was never called, the app tells Live so and asks it to hand the work over now. |
 | `DottieNamedPlaceFinder.swift` | ~160 | Finds the folders and files a helper's task names ("in the 'bull and shit' folder, open 'invoice cleanup.demo.xlsx'") before the helper starts, so it gets the real paths and access to the folder instead of searching the whole Mac step by step (each step is a full model round trip) and being refused outside its own folders. Foundation only, so the matching can be unit tested. |
 | `DottieClipboardTools.swift` | ~44 | copy_to_clipboard: voice Dottie puts text (a command, code, an address, a draft) on the user's clipboard, so they can paste it anywhere. Before this she had no way to and told the user she couldn't. |
+| `DottieToolCallCheck.swift` | ~130 | Checks a tool call the way Dottie would take it, without doing it: is the tool real, are its arguments the right shape for its declaration, and would the tool's own checker take it (a drawing's steps, for one). |
 
 ## Build & Run
 
@@ -305,7 +306,7 @@ open leanring-buddy.xcodeproj
 
 Every pull request runs the Build workflow on a Mac: it builds the app, runs the unit tests in `leanring-buddyTests/` (the app hosts them but starts nothing, see `isHostingUnitTests` in `leanring_buddyApp.swift`), counts compiler warnings and runs SwiftLint (`.swiftlint.yml`). Warnings and SwiftLint findings may not go over the ceilings in `scripts/ci/budgets.env`; when cleanup lowers a number, lower its ceiling in the same pull request. New pure logic comes with unit tests.
 
-The Release workflow runs in this order so nothing people use changes until everything passed: `prepare` (Worker tests, the Build workflow must be green for the commit, version = one after the newest release, the Worker's address), `build-dmg`, `deploy-worker` (deploys, tries `/health` and `/config`, goes back to the Worker before if they fail), `publish`. Actions are pinned to commits; Dependabot (`.github/dependabot.yml`) moves the pins and the Worker's packages.
+The Release workflow runs in this order so nothing people use changes until everything passed: `prepare` (Worker tests, the Build workflow must be green for the commit, version = one after the newest release, the Worker's address), `preship-check` (the Pre-ship check workflow: everyday asks per feature go to the real model through `/chat` with the real voice prompt and Live's tools, and every tool call is checked the way the app would take it by `DottieToolCallCheck`; a refused call stops the release; add an ask to `PreShipLiveCheckTests.everydayAsks` for each new feature), `build-dmg`, `deploy-worker` (deploys, tries `/health` and `/config`, goes back to the Worker before if they fail), `publish`. Actions are pinned to commits; Dependabot (`.github/dependabot.yml`) moves the pins and the Worker's packages.
 
 ## Cloudflare Worker
 
