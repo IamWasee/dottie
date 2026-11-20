@@ -68,7 +68,6 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         ClickyAnalytics.configure()
         ClickyAnalytics.trackAppOpened()
-        DottieGameWorldMap.removeOldFlatMaps()
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()

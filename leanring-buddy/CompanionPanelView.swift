@@ -668,24 +668,9 @@ struct CompanionPanelView: View {
                 .buttonStyle(.plain)
                 .pointerCursor()
                 .disabled(gameplayRecorder.isStarting)
-                .help("Save every frame of the screen with your keys and mouse, to train Dottie's game reflexes")
+                .help("Save every frame of the screen with your keys and mouse")
 
                 Spacer()
-
-                Button(action: {
-                    DottieGameMapPicture.openInFinder(nil)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "map")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("Game maps")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(DS.Colors.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help("Show Dottie's 3D game maps in Finder: each game's map folder has a picture of the map (overview.png) and a report")
 
                 Button(action: {
                     gameplayRecorder.openGameDataFolder()

@@ -39,8 +39,6 @@ enum GeminiLiveToolCatalog {
         // Drawing. Through use_tool, a drawing's steps were JSON inside
         // JSON, and asks that didn't say "draw" never found the tool.
         "explain_on_screen", "draw_on_screen", "clear_drawings", "write_notes", "read_closely",
-        // Co-op mid-game needs to be instant.
-        "game_command",
         // Opening apps, windows, music and volume done on the Mac by the
         // instant lane and Needle, mid-answer, with no screenshot.
         "quick_mac_action"
@@ -100,7 +98,6 @@ enum GeminiLiveToolCatalog {
         "about_me": "dottie yourself settings version features permission help how tour update account",
         "install_tool": "install command line cli homebrew brew npm pip uninstall",
         "code_editor": "code editor file open edit change program script coder project source",
-        "game_maps": "game map maps show open delete 3d overview where explored",
         "watch_and_learn": "watch me learn how to show you teach seconds",
         "away_mode": "away leaving heading out back home phone while gone"
     ]

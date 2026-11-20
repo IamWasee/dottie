@@ -27,11 +27,12 @@ function fromInstall(installID: string | undefined, path: string, options: { met
   return worker.fetch(request, options.env);
 }
 
-const speak = (installID: string | undefined, env: Env, headers?: Record<string, string>) => fromInstall(installID, "/tts", { body: { text: "hi" }, env, headers });
+const speak = (installID: string | undefined, env: Env, headers?: Record<string, string>) => fromInstall(installID, "/chat", { body: { contents: [] }, env, headers });
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   fakeFetch([
+    [":streamGenerateContent", new Response("data: {}\r\n\r\n", { headers: { "content-type": "text/event-stream" } })],
     [":generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ text: "ok" }, { inlineData: { data: btoa("pcm") } }] } }] })],
     ["/auth_tokens", jsonAnswer({ name: "auth_tokens/abc" })],
   ]);
@@ -44,10 +45,8 @@ afterEach(() => {
 
 describe("usageArea", () => {
   it.each([
-    ["POST", "/live-token", "voice"],
     ["POST", "/chat", "chat"],
-    ["POST", "/tts", "speech"],
-    ["POST", "/dictate", "dictation"],
+    ["POST", "/jev", "chat"],
     ["GET", "/search", "search"],
     ["POST", "/gemini/v1beta/models/m:generateContent", "helpers"],
     ["POST", "/gemini-only/v1beta/models/m:generateContent", "helpers"],
@@ -122,21 +121,21 @@ describe("usageIdentity", () => {
 
 describe("an install's limit for the day", () => {
   it("lets the area's requests through, then answers 429 until the next day", async () => {
-    const env = limitedEnv("speech=2");
+    const env = limitedEnv("chat=2");
     const installID = newInstallID();
     expect((await speak(installID, env)).status).toBe(200);
     expect((await speak(installID, env)).status).toBe(200);
 
     const refused = await speak(installID, env);
     expect(refused.status).toBe(429);
-    expect(await refused.json()).toEqual({ error: "That's today's limit for spoken answers. It starts over at midnight UTC.", limit: "speech" });
+    expect(await refused.json()).toEqual({ error: "That's today's limit for questions and screen work. It starts over at midnight UTC.", limit: "chat" });
     const retryAfterSeconds = Number(refused.headers.get("retry-after"));
     expect(retryAfterSeconds).toBeGreaterThan(0);
     expect(retryAfterSeconds).toBeLessThanOrEqual(24 * 60 * 60);
   });
 
   it("doesn't ask the model once the limit is reached", async () => {
-    const env = limitedEnv("speech=1");
+    const env = limitedEnv("chat=1");
     const installID = newInstallID();
     await speak(installID, env);
     const calls = fakeFetch([]);
@@ -145,16 +144,16 @@ describe("an install's limit for the day", () => {
   });
 
   it("counts each area and each install by itself", async () => {
-    const env = limitedEnv("speech=1,voice=1");
+    const env = limitedEnv("chat=1,helpers=1");
     const installID = newInstallID();
     expect((await speak(installID, env)).status).toBe(200);
     expect((await speak(installID, env)).status).toBe(429);
-    expect((await fromInstall(installID, "/live-token", { method: "POST", env })).status).toBe(200);
+    expect((await fromInstall(installID, "/gemini/v1beta/models/m:generateContent", { body: { contents: [] }, env })).status).toBe(200);
     expect((await speak(newInstallID(), env)).status).toBe(200);
   });
 
   it("starts again the next day", async () => {
-    const env = limitedEnv("speech=1");
+    const env = limitedEnv("chat=1");
     const installID = newInstallID();
     await speak(installID, env);
     expect((await speak(installID, env)).status).toBe(429);
@@ -178,7 +177,7 @@ describe("an install's limit for the day", () => {
   });
 
   it("counts a caller without an install id by its address", async () => {
-    const env = limitedEnv("speech=1");
+    const env = limitedEnv("chat=1");
     const address = `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
     expect((await speak(undefined, env, { "cf-connecting-ip": address })).status).toBe(200);
     expect((await speak(undefined, env, { "cf-connecting-ip": address })).status).toBe(429);
@@ -186,13 +185,13 @@ describe("an install's limit for the day", () => {
 
   it("never limits an install on the unlimited list", async () => {
     const installID = newInstallID();
-    const env = limitedEnv("speech=0", { UNLIMITED_INSTALL_IDS: ` other-install , ${installID} ` });
+    const env = limitedEnv("chat=0", { UNLIMITED_INSTALL_IDS: ` other-install , ${installID} ` });
     expect((await speak(installID, env)).status).toBe(200);
     expect((await speak(newInstallID(), env)).status).toBe(429);
   });
 
   it("counts nothing without the counter binding", async () => {
-    const env = makeEnv({ INSTALL_DAILY_LIMITS: "speech=0" });
+    const env = makeEnv({ INSTALL_DAILY_LIMITS: "chat=0" });
     expect((await speak(newInstallID(), env)).status).toBe(200);
   });
 
@@ -205,7 +204,7 @@ describe("an install's limit for the day", () => {
         },
       }),
     } as unknown as DurableObjectNamespace;
-    const env = makeEnv({ INSTALL_USAGE: brokenBinding, INSTALL_DAILY_LIMITS: "speech=0" });
+    const env = makeEnv({ INSTALL_USAGE: brokenBinding, INSTALL_DAILY_LIMITS: "chat=0" });
     expect((await speak(newInstallID(), env)).status).toBe(200);
   });
 });
@@ -236,8 +235,8 @@ describe("a helper's calls through Gemini CLI", () => {
   });
 
   it("let the secret with an install id through on the other routes too", async () => {
-    const env = limitedEnv("speech=5", { APP_SHARED_SECRET: "the-secret" });
-    const response = await fromInstall(undefined, "/tts", { body: { text: "hi" }, headers: { "x-goog-api-key": `the-secret:${newInstallID()}` }, env });
+    const env = limitedEnv("chat=5", { APP_SHARED_SECRET: "the-secret" });
+    const response = await fromInstall(undefined, "/chat", { body: { contents: [] }, headers: { "x-goog-api-key": `the-secret:${newInstallID()}` }, env });
     expect(response.status).toBe(200);
   });
 });
@@ -263,8 +262,8 @@ describe("new installs in a day", () => {
       }),
     } as unknown as DurableObjectNamespace;
     const settings = { INSTALL_USAGE: smallWorld, INSTALL_DAILY_LIMITS: "newInstalls=1" };
-    const requestFrom = (installID: string) => new Request("https://worker.test/tts", { method: "POST", headers: { "x-dottie-install": installID } });
-    const url = new URL("https://worker.test/tts");
+    const requestFrom = (installID: string) => new Request("https://worker.test/chat", { method: "POST", headers: { "x-dottie-install": installID } });
+    const url = new URL("https://worker.test/chat");
     const firstInstall = newInstallID();
 
     expect(await usageRefusal(requestFrom(firstInstall), url, settings)).toBeUndefined();
@@ -275,14 +274,14 @@ describe("new installs in a day", () => {
   });
 
   it("are counted by the real directory: a day with no room turns a new install away and takes it the next day", async () => {
-    const env = limitedEnv("speech=5,newInstalls=0");
+    const env = limitedEnv("chat=5,newInstalls=0");
     const installID = newInstallID();
     const refused = await speak(installID, env);
     expect(refused.status).toBe(429);
     expect(((await refused.json()) as { limit: string }).limit).toBe("newInstalls");
 
     // With room again the same install is let in, and stays known after that.
-    const roomyEnv = limitedEnv("speech=5,newInstalls=100000");
+    const roomyEnv = limitedEnv("chat=5,newInstalls=100000");
     expect((await speak(installID, roomyEnv)).status).toBe(200);
     expect((await speak(installID, env)).status).toBe(200);
   });

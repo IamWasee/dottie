@@ -52,57 +52,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("opening Dottie and asking out loud (live mode)", () => {
-  it("checks the Worker, reads the model names and gets a token for the live model", async () => {
+describe("opening Dottie", () => {
+  it("checks the Worker and reads the model names without calling out", async () => {
     const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([["/auth_tokens", jsonAnswer({ name: "auth_tokens/journey" })]]);
+    const calls = fakeFetch([]);
 
     expect(await (await callWorker("/health")).json()).toEqual({ ok: true, app: "dottie", hasGeminiKey: true });
+    const configuration = (await (await callWorker("/config")).json()) as { chatModel: string };
+    expect(configuration.chatModel).toBe("gemini-3.8-flash");
+    expect(calls).toHaveLength(0);
+  });
 
-    const configuration = (await (await callWorker("/config")).json()) as { liveModel: string; chatModel: string; ttsVoice: string };
-    expect(configuration.liveModel).toBe("gemini-3.8-live");
-
-    const token = (await (await callWorker("/live-token", { method: "POST" })).json()) as { token: string; model: string };
-    expect(token).toMatchObject({ token: "auth_tokens/journey", model: configuration.liveModel });
-    // Only the token request left the Worker, and it carried the real key.
-    expect(calls).toHaveLength(1);
-    expect(calls[0].headers.get("x-goog-api-key")).toBe("test-gemini-key");
+  it("no longer serves the old Gemini voice, speech and dictation routes", async () => {
+    const callWorker = appCaller(deployedEnv());
+    fakeFetch([]);
+    for (const removedRoute of ["/live-token", "/tts", "/dictate"]) {
+      expect((await callWorker(removedRoute, { body: {} })).status).toBe(404);
+    }
   });
 });
 
-describe("a classic voice turn", () => {
-  it("streams the answer, then speaks that same answer", async () => {
+describe("a chat turn", () => {
+  it("streams the answer", async () => {
     const callWorker = appCaller(deployedEnv());
-    const audioBytes = [1, 2, 3, 4];
-    const calls = fakeFetch([
-      ["gemini-3.8-flash:streamGenerateContent", sseAnswer("It's the blue button.")],
-      ["gemini-3.8-flash-lite-tts:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ inlineData: { data: btoa(String.fromCharCode(...audioBytes)) } }] } }] })],
-    ]);
-
+    fakeFetch([["gemini-3.8-flash:streamGenerateContent", sseAnswer("It's the blue button.")]]);
     const chatResponse = await callWorker("/chat", { body: { contents: [userText("where do I click?")] } });
-    const answerText = (await sseJSON(chatResponse)).candidates[0].content.parts[0].text as string;
-
-    const speechResponse = await callWorker("/tts", { body: { text: answerText } });
-    expect([...new Uint8Array(await speechResponse.arrayBuffer())]).toEqual(audioBytes);
-    expect(calls[1].json.contents[0].parts[0].text).toBe("It's the blue button.");
-    expect(calls[1].json.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
+    expect((await sseJSON(chatResponse)).candidates[0].content.parts[0].text).toBe("It's the blue button.");
   });
 
-  it("still answers and speaks when the first chat model and the first voice model are busy", async () => {
+  it("still answers when the first chat model is busy", async () => {
     const callWorker = appCaller(deployedEnv());
     const calls = fakeFetch([
       ["gemini-3.8-flash:streamGenerateContent", busy()],
       ["gemini-3.6-flash:streamGenerateContent", sseAnswer("From the backup.")],
-      ["gemini-3.8-flash-lite-tts:generateContent", busy()],
-      ["gemini-3.8-flash-tts:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ inlineData: { data: btoa("pcm") } }] } }] })],
     ]);
-
     const chatResponse = await callWorker("/chat", { body: { contents: [userText("hi")] } });
     expect((await sseJSON(chatResponse)).candidates[0].content.parts[0].text).toBe("From the backup.");
-    const speechResponse = await callWorker("/tts", { body: { text: "From the backup." } });
-    expect(speechResponse.status).toBe(200);
-    expect(new TextDecoder().decode(await speechResponse.arrayBuffer())).toBe("pcm");
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(2);
   });
 });
 
@@ -146,17 +132,6 @@ describe("a screen job and a helper on the paid models", () => {
 
     expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
     expect(helperCalls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
-  });
-});
-
-describe("hold to dictate", () => {
-  it("sends the recording with what the app knows and gets clean text back", async () => {
-    const callWorker = appCaller(deployedEnv());
-    const calls = fakeFetch([["gemini-3.5-flash-lite:generateContent", geminiTextAnswer(" Send it to Dottie. ")]]);
-    const response = await callWorker("/dictate", { body: { audio: "QUJD", appName: "Notes", customWords: ["Dottie"] } });
-    expect(await response.json()).toEqual({ text: "Send it to Dottie." });
-    expect(JSON.stringify(calls[0].json)).toContain("Notes");
-    expect(JSON.stringify(calls[0].json)).toContain("Dottie");
   });
 });
 

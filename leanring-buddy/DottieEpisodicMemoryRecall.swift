@@ -4,9 +4,7 @@
 //
 //  Finding episodes again: word matching (titles and places count most),
 //  how recent and how important each one is, and plain time phrases like
-//  "yesterday", "this morning", "last week" or "tuesday". When words find
-//  little, Gemini embeddings (through the Worker) look for the same
-//  meaning instead, if they answer quickly; otherwise words alone.
+//  "yesterday", "this morning", "last week" or "tuesday". All on the Mac.
 //
 
 import AppKit
@@ -23,19 +21,9 @@ extension DottieEpisodicMemory {
         let isOutsideWindow: Bool
     }
 
-    /// The best episodes for a question, newest first. Word search, plus
-    /// meaning search when words find little and embeddings answer fast.
-    func recall(query: String, when: String? = nil, limit: Int = 6, usesMeaningSearch: Bool = true) async -> RecallResult {
-        let request = RecallRequest(query: query, when: when)
-        var scored = score(request.candidates(in: episodes), queryWords: request.queryWords, hints: request.hints)
-        if usesMeaningSearch, !request.queryWords.isEmpty, scored.filter({ $0.score >= 0.5 }).count < 2,
-           let meaningMatches = await embeddings.closest(to: request.searchText, among: request.candidates(in: episodes), limit: limit) {
-            let alreadyFound = Set(scored.map(\.episode.id))
-            for match in meaningMatches where !alreadyFound.contains(match.episode.id) {
-                scored.append((episode: match.episode, score: (match.similarity - 0.5) * 2 + recencyBonus(match.episode)))
-            }
-        }
-        return finishRecall(scored, request: request, limit: limit)
+    /// The best episodes for a question, newest first, found by words.
+    func recall(query: String, when: String? = nil, limit: Int = 6) async -> RecallResult {
+        recallNow(query: query, when: when, limit: limit)
     }
 
     /// Word search only, right away (for recall_memory, which can't wait).
@@ -123,7 +111,7 @@ extension DottieEpisodicMemory {
         if let id = id?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "# ")), !id.isEmpty {
             doomed = episodes.filter { $0.shortID == id || $0.id.uuidString.lowercased() == id }
         } else if let query, !DottieEpisodeSearch.queryWords(in: DottieMemoryTimeWindow.find(in: query).remainingText).isEmpty {
-            let result = await recall(query: query, when: when, limit: 3, usesMeaningSearch: false)
+            let result = await recall(query: query, when: when, limit: 3)
             doomed = result.isOutsideWindow ? [] : result.episodes
         } else if let window = (when ?? query).flatMap({ DottieMemoryTimeWindow.find(in: $0).window }) {
             doomed = episodes.filter { window.contains($0) }
@@ -544,138 +532,5 @@ enum DottieEpisodeSearch {
         let withScheme = urlText.contains("://") ? urlText : "https://" + urlText
         guard let host = URL(string: withScheme)?.host else { return nil }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-    }
-}
-
-// MARK: - Meaning search (optional)
-
-/// Gemini embeddings for episodes, used only when word search finds
-/// little. Any failure just means word search alone for a while.
-@MainActor
-final class DottieEpisodeEmbeddings {
-    private static let model = "gemini-embedding-001"
-    private static let dimensions = 256
-    /// Never hold up a voice answer longer than this.
-    private static let queryTimeout: TimeInterval = 1.5
-    private static let maximumEpisodesPerCall = 50
-
-    private let fileURL: URL
-    private var vectors: [String: [Float]] = [:]
-    private var pausedUntil = Date.distantPast
-    private var isEmbedding = false
-    private var saveTask: Task<Void, Never>?
-
-    init(fileURL: URL) {
-        self.fileURL = fileURL
-        if let saved = DottieFileLoader.load([String: [Float]].self, from: fileURL) {
-            vectors = saved
-        }
-    }
-
-    private var isAvailable: Bool {
-        ClickyWorkerConfiguration.isWorkerConfigured && Date() >= pausedUntil
-    }
-
-    private func pause() {
-        pausedUntil = Date().addingTimeInterval(600)
-    }
-
-    /// Embeds episodes that have no vector yet, newest first, in one call.
-    func embedMissing(in episodes: [DottieEpisode]) {
-        guard isAvailable, !isEmbedding else { return }
-        let missing = Array(episodes.reversed().filter { vectors[$0.id.uuidString] == nil }.prefix(Self.maximumEpisodesPerCall))
-        guard !missing.isEmpty else { return }
-        isEmbedding = true
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.isEmbedding = false }
-            let requests: [[String: Any]] = missing.map { episode in
-                [
-                    "model": "models/\(Self.model)",
-                    "content": ["parts": [["text": Self.text(for: episode)]]],
-                    "taskType": "RETRIEVAL_DOCUMENT",
-                    "outputDimensionality": Self.dimensions
-                ]
-            }
-            guard let reply = await DottieMemoryNetwork.postToGemini(
-                path: "/v1beta/models/\(Self.model):batchEmbedContents",
-                body: ["requests": requests],
-                timeout: 30
-            ), let embeddings = reply["embeddings"] as? [[String: Any]], embeddings.count == missing.count else {
-                self.pause()
-                return
-            }
-            for (episode, embedding) in zip(missing, embeddings) {
-                if let values = embedding["values"] as? [NSNumber] {
-                    self.vectors[episode.id.uuidString] = values.map { $0.floatValue }
-                }
-            }
-            self.saveSoon()
-        }
-    }
-
-    /// Episodes closest in meaning to the question, or nil when embeddings
-    /// aren't available or too slow right now.
-    func closest(to query: String, among episodes: [DottieEpisode], limit: Int) async -> [(episode: DottieEpisode, similarity: Double)]? {
-        guard isAvailable, !vectors.isEmpty else { return nil }
-        let body: [String: Any] = [
-            "content": ["parts": [["text": query]]],
-            "taskType": "RETRIEVAL_QUERY",
-            "outputDimensionality": Self.dimensions
-        ]
-        guard let reply = await DottieMemoryNetwork.postToGemini(
-            path: "/v1beta/models/\(Self.model):embedContent", body: body, timeout: Self.queryTimeout
-        ), let embedding = reply["embedding"] as? [String: Any],
-              let values = embedding["values"] as? [NSNumber] else {
-            pause()
-            return nil
-        }
-        let queryVector = values.map { $0.floatValue }
-        let matches = episodes.compactMap { episode -> (episode: DottieEpisode, similarity: Double)? in
-            guard let vector = vectors[episode.id.uuidString] else { return nil }
-            let similarity = Self.cosineSimilarity(queryVector, vector)
-            return similarity >= 0.6 ? (episode: episode, similarity: similarity) : nil
-        }
-        return Array(matches.sorted { $0.similarity > $1.similarity }.prefix(limit))
-    }
-
-    func remove(_ episodeIDs: Set<UUID>) {
-        guard !episodeIDs.isEmpty else { return }
-        for episodeID in episodeIDs { vectors[episodeID.uuidString] = nil }
-        saveSoon()
-    }
-
-    func removeAll() {
-        vectors = [:]
-        try? FileManager.default.removeItem(at: fileURL)
-    }
-
-    private func saveSoon() {
-        saveTask?.cancel()
-        saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self, !Task.isCancelled else { return }
-            if let fileData = try? JSONEncoder().encode(self.vectors) {
-                DottieFileSaver.save(fileData, to: self.fileURL)
-            }
-        }
-    }
-
-    private static func text(for episode: DottieEpisode) -> String {
-        "\(episode.title). \(episode.summary) \(episode.pictureDescription ?? "") \(episode.whereText) \(episode.tags.joined(separator: " "))"
-    }
-
-    private static func cosineSimilarity(_ first: [Float], _ second: [Float]) -> Double {
-        guard first.count == second.count, !first.isEmpty else { return 0 }
-        var dotProduct: Float = 0
-        var firstLength: Float = 0
-        var secondLength: Float = 0
-        for index in first.indices {
-            dotProduct += first[index] * second[index]
-            firstLength += first[index] * first[index]
-            secondLength += second[index] * second[index]
-        }
-        guard firstLength > 0, secondLength > 0 else { return 0 }
-        return Double(dotProduct / (firstLength.squareRoot() * secondLength.squareRoot()))
     }
 }

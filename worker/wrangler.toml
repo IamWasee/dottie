@@ -44,19 +44,13 @@ namespace_id = "1001"
 simple = { limit = 300, period = 60 }
 
 [vars]
-GEMINI_LIVE_MODEL = "gemini-3.8-live"
 GEMINI_CHAT_MODEL = "gemini-3.8-flash"
 # Used when the voice model hands off a hard question (send_to_higher_model).
 # Point it at a Pro model if your API tier allows it.
 GEMINI_HIGHER_MODEL = "gemini-3.8-flash"
-GEMINI_TTS_MODEL = "gemini-3.8-flash-lite-tts"
-GEMINI_TTS_VOICE = "Kore"
-# Hold-to-dictate: hears the recording and returns cleaned-up text in one call.
-GEMINI_DICTATION_MODEL = "gemini-3.5-flash-lite"
 # Tried in order when a model is busy ("high demand") or over its limit.
 # Each model has its own free-tier limit, so this also stretches the quota.
 GEMINI_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash,gemini-3.7-flash,gemini-3.5-flash-lite"
-GEMINI_TTS_FALLBACK_MODELS = "gemini-3.8-flash-tts"
 # Groq models (only with GROQ_API_KEY), best first. Each has its own free
 # limit (about 30 requests and 8,000 tokens a minute).
 GROQ_TEXT_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b"

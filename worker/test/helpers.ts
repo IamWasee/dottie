@@ -6,14 +6,9 @@ import type { Env } from "../src/index";
 export function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     GEMINI_API_KEY: "test-gemini-key",
-    GEMINI_LIVE_MODEL: "live-model",
     GEMINI_CHAT_MODEL: "chat-model",
     GEMINI_HIGHER_MODEL: "higher-model",
-    GEMINI_TTS_MODEL: "tts-model",
-    GEMINI_TTS_VOICE: "Kore",
-    GEMINI_DICTATION_MODEL: "dictation-model",
     GEMINI_FALLBACK_MODELS: "backup-one,backup-two",
-    GEMINI_TTS_FALLBACK_MODELS: "tts-backup",
     PHONE_RELAY: (env as unknown as Env).PHONE_RELAY,
     ...overrides,
   };

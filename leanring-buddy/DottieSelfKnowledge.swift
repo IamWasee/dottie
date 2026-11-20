@@ -470,8 +470,8 @@ extension DottieSelfKnowledge {
             Feature(
                 id: "do",
                 title: "Doing things for you",
-                keywords: ["click", "do it", "for me", "open", "job", "task", "automate", "game", "play", "stop", "escape", "browser", "tabs"],
-                summary: "Ask me to do it (\"open youtube and search lofi\"): I click, type and scroll step by step and tell you how it went. Jobs line up in order, and wait while your screen is locked. I can play games too. Press Escape or the stop button in the notch to stop me. A job that worked is saved as an instant replay, so next time I redo it straight away.",
+                keywords: ["click", "do it", "for me", "open", "job", "task", "automate", "stop", "escape", "browser", "tabs"],
+                summary: "Ask me to do it (\"open youtube and search lofi\"): I click, type and scroll step by step and tell you how it went. Jobs line up in order, and wait while your screen is locked. Press Escape or the stop button in the notch to stop me. A job that worked is saved as an instant replay, so next time I redo it straight away.",
                 whereToFind: "Any app, by voice. The tips I learn from jobs are in Settings → Using your Mac.",
                 place: .settings("Using your Mac")
             ),

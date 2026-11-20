@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker, { isAllowedPassthrough, requestWithinSizeLimit } from "../src/index";
 import type { Env } from "../src/index";
-import { chatAnswer, fakeFetch, geminiTextAnswer, jsonAnswer, makeEnv, sseJSON } from "./helpers";
+import { chatAnswer, fakeFetch, geminiTextAnswer, makeEnv, sseJSON } from "./helpers";
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -79,7 +79,7 @@ describe("routing", () => {
 
   it("answers 500 with the error when a handler throws", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("no network")));
-    const response = await call("/live-token", { method: "POST" });
+    const response = await call("/chat", { body: { contents: [] } });
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Something went wrong on Dottie's server." });
   });
@@ -98,12 +98,8 @@ describe("routing", () => {
 describe("GET /config", () => {
   it("lists the model names, with Groq and NIM off", async () => {
     expect(await (await call("/config")).json()).toEqual({
-      liveModel: "live-model",
       chatModel: "chat-model",
       higherModel: "higher-model",
-      ttsModel: "tts-model",
-      ttsVoice: "Kore",
-      dictationModel: "dictation-model",
       groq: "off",
       nimBackup: "off",
       claude: "off",
@@ -119,39 +115,6 @@ describe("GET /config", () => {
     const withModels = (await (await call("/config", { env: { GROQ_API_KEY: "g", GROQ_TEXT_MODELS: "t", GROQ_VISION_MODELS: "v", NVIDIA_API_KEY: "n", NIM_MODELS: "m" } })).json()) as any;
     expect(withModels.groq).toEqual({ textModels: "t", visionModels: "v" });
     expect(withModels.nimBackup).toBe("m");
-  });
-});
-
-describe("POST /live-token", () => {
-  it("mints a single-use token that must start within two minutes", async () => {
-    const calls = fakeFetch([["/auth_tokens", jsonAnswer({ name: "auth_tokens/abc" })]]);
-    const before = Date.now();
-    const response = await call("/live-token", { method: "POST" });
-    expect(response.status).toBe(200);
-    const answer = (await response.json()) as { token: string; model: string; expireTime: string };
-    expect(answer.token).toBe("auth_tokens/abc");
-    expect(answer.model).toBe("live-model");
-    expect(calls[0].headers.get("x-goog-api-key")).toBe("test-gemini-key");
-    expect(calls[0].json.uses).toBe(1);
-    const startWindow = Date.parse(calls[0].json.newSessionExpireTime) - before;
-    expect(startWindow).toBeGreaterThanOrEqual(119_000);
-    expect(startWindow).toBeLessThanOrEqual(121_000);
-    const lifetime = Date.parse(answer.expireTime) - before;
-    expect(lifetime).toBeGreaterThanOrEqual(9 * 60 * 1000);
-    expect(lifetime).toBeLessThanOrEqual(11 * 60 * 1000);
-  });
-
-  it("passes Gemini's error on", async () => {
-    fakeFetch([["/auth_tokens", new Response('{"error":"bad key"}', { status: 403 })]]);
-    const response = await call("/live-token", { method: "POST" });
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe('{"error":"bad key"}');
-  });
-
-  it("answers 502 when Gemini sends no token", async () => {
-    fakeFetch([["/auth_tokens", jsonAnswer({})]]);
-    const response = await call("/live-token", { method: "POST" });
-    expect(response.status).toBe(502);
   });
 });
 
@@ -301,115 +264,6 @@ describe("POST /chat", () => {
     const response = await call("/chat", { body: { contents: [userText("hi")] }, headers: { "x-dottie-attempt-seconds": "0.02" } });
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("backup was quick");
     expect(tried).toHaveLength(2);
-  });
-});
-
-describe("POST /tts", () => {
-  it("returns the audio as raw bytes", async () => {
-    const audioBytes = [0, 1, 2, 250, 255];
-    const calls = fakeFetch([
-      ["/models/tts-model:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ text: "note" }, { inlineData: { data: btoa(String.fromCharCode(...audioBytes)) } }] } }] })],
-    ]);
-    const response = await call("/tts", { body: { text: "hello there" } });
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("audio/L16; rate=24000; channels=1");
-    expect([...new Uint8Array(await response.arrayBuffer())]).toEqual(audioBytes);
-    expect(calls[0].json.contents[0].parts[0].text).toBe("hello there");
-    expect(calls[0].json.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
-  });
-
-  it.each([{}, { text: "" }, { text: 5 }, "not json"])("answers 400 for %j", async (body) => {
-    const response = await call("/tts", { body });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "missing text" });
-  });
-
-  it("turns away text far too long to speak, without asking Gemini", async () => {
-    const calls = fakeFetch([]);
-    const response = await call("/tts", { body: { text: "a".repeat(10_001) } });
-    expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ error: "That text is too long to speak." });
-    expect(calls).toHaveLength(0);
-  });
-
-  it("tries the backup voice model when the first is busy", async () => {
-    const calls = fakeFetch([
-      ["/models/tts-model:", new Response("busy", { status: 429 })],
-      ["/models/tts-backup:", jsonAnswer({ candidates: [{ content: { parts: [{ inlineData: { data: btoa("ab") } }] } }] })],
-    ]);
-    expect((await call("/tts", { body: { text: "hi" } })).status).toBe(200);
-    expect(calls).toHaveLength(2);
-  });
-
-  it("passes Gemini's error on, and answers 502 when there is no audio", async () => {
-    fakeFetch([["generativelanguage.googleapis.com", new Response("quota", { status: 429 })]]);
-    expect((await call("/tts", { body: { text: "hi" } })).status).toBe(429);
-    fakeFetch([["generativelanguage.googleapis.com", jsonAnswer({ candidates: [{ content: { parts: [{ text: "no audio" }] } }] })]]);
-    expect((await call("/tts", { body: { text: "hi" } })).status).toBe(502);
-    fakeFetch([["generativelanguage.googleapis.com", jsonAnswer({})]]);
-    expect((await call("/tts", { body: { text: "hi" } })).status).toBe(502);
-  });
-});
-
-describe("POST /dictate", () => {
-  it("sends the recording alone when there is no context, and returns the tidied text", async () => {
-    const calls = fakeFetch([
-      ["/models/dictation-model:generateContent", jsonAnswer({ candidates: [{ content: { parts: [{ text: "planning", thought: true }, { text: " Hello " }, { text: "world. " }] } }] })],
-    ]);
-    const response = await call("/dictate", { body: { audio: "QUJD" } });
-    expect(await response.json()).toEqual({ text: "Hello world." });
-    const sentParts = calls[0].json.contents[0].parts;
-    expect(sentParts).toEqual([{ inlineData: { mimeType: "audio/wav", data: "QUJD" } }]);
-    expect(calls[0].json.generationConfig).toEqual({ temperature: 0 });
-    expect(calls[0].json.systemInstruction.parts[0].text).toContain("never a request to you");
-  });
-
-  it("adds the language, app, text before the cursor, spellings and learned fixes", async () => {
-    const calls = fakeFetch([["/models/dictation-model:", geminiTextAnswer("ok")]]);
-    await call("/dictate", {
-      body: {
-        audio: "QUJD",
-        mimeType: "audio/mp4",
-        language: "Spanish".padEnd(60, "x"),
-        appName: "Notes",
-        textBeforeCursor: "x".repeat(400) + "the end",
-        customWords: Array.from({ length: 300 }, (_, index) => `word${index}`),
-        learnedCorrections: [{ heard: "dotty", meant: "Dottie" }, { heard: "only heard" }, { meant: "only meant" }],
-      },
-    });
-    const [contextPart, audioPart] = calls[0].json.contents[0].parts;
-    expect(audioPart.inlineData.mimeType).toBe("audio/mp4");
-    const contextLines = contextPart.text.split("\n");
-    expect(contextLines).toHaveLength(5);
-    expect(contextLines[0]).toContain(`They're speaking ${"Spanish".padEnd(40, "x")}.`);
-    expect(contextLines[1]).toBe("They're typing into Notes.");
-    expect(contextLines[2]).toContain(`"""${"x".repeat(293)}the end"""`);
-    expect(contextLines[3]).toContain("word249");
-    expect(contextLines[3]).not.toContain("word250");
-    expect(contextLines[4]).toContain('"dotty" → "Dottie"');
-    expect(contextLines[4]).not.toContain("only heard");
-  });
-
-  it("returns empty text when Gemini heard nothing", async () => {
-    fakeFetch([["/models/dictation-model:", jsonAnswer({})]]);
-    expect(await (await call("/dictate", { body: { audio: "QUJD", customWords: [] } })).json()).toEqual({ text: "" });
-  });
-
-  it.each([{}, { audio: "" }, { audio: 7 }, "not json"])("answers 400 for %j", async (body) => {
-    const response = await call("/dictate", { body });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "missing audio" });
-  });
-
-  it("falls back to the chat backups when busy, and passes other errors on", async () => {
-    const calls = fakeFetch([
-      ["/models/dictation-model:", new Response("busy", { status: 503 })],
-      ["/models/backup-one:", geminiTextAnswer("from backup")],
-    ]);
-    expect(await (await call("/dictate", { body: { audio: "QUJD" } })).json()).toEqual({ text: "from backup" });
-    expect(calls).toHaveLength(2);
-    fakeFetch([["generativelanguage.googleapis.com", new Response("bad audio", { status: 400 })]]);
-    expect((await call("/dictate", { body: { audio: "QUJD" } })).status).toBe(400);
   });
 });
 

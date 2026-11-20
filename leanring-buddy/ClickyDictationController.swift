@@ -2,13 +2,13 @@
 //  ClickyDictationController.swift
 //  leanring-buddy
 //
-//  Hold-to-dictate into any app. Dottie keeps one free key, so the Worker's
-//  /dictate route has Gemini hear the recording and clean it up in a single
-//  call, and the result is typed into the focused field.
+//  Hold-to-dictate into any app, on the Mac with no AI service: Apple's
+//  speech recognizer hears it, the user's learned fixes are applied, and
+//  the result is typed into the focused field.
 //
 //  Flow: hold right Option → remember which field has focus and record →
-//  let go → send the WAV to /dictate → paste the text into that field, or
-//  copy it to the clipboard when the field can't take it.
+//  let go → take the recognizer's final words → paste them into that
+//  field, or copy them to the clipboard when the field can't take it.
 //
 
 import AppKit
@@ -17,6 +17,7 @@ import Carbon.HIToolbox
 import AVFoundation
 import Combine
 import Foundation
+import Speech
 
 /// The field the user was in when they started dictating.
 struct DictationFocusContext {
@@ -190,8 +191,8 @@ final class ClickyDictationController: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var audioPowerLevel: CGFloat = 0
-    /// What Gemini Live has heard so far while recording (a preview; the
-    /// typed text comes from /dictate).
+    /// What Apple's on-Mac recognizer has heard so far while recording;
+    /// its final version is what gets typed.
     @Published private(set) var liveText = ""
 
     /// Called with what happened and the text, once dictation finishes.
@@ -238,7 +239,7 @@ final class ClickyDictationController: ObservableObject {
             liveTranscriber.sendAudio(pcm16Chunk)
         }
         liveTranscriber.onPartialText = { [weak self] partialText in
-            guard let self, self.state == .recording else { return }
+            guard let self, self.state == .recording, DictationLiveTranscriber.isEnabled else { return }
             self.liveText = partialText
         }
     }
@@ -247,8 +248,8 @@ final class ClickyDictationController: ObservableObject {
 
     func beginDictation() {
         guard Self.isEnabled, state == .idle else { return }
-        guard ClickyWorkerConfiguration.isWorkerConfigured else {
-            onError?("Dottie isn't connected to its server yet. Add the server address in Settings → Connection.")
+        guard SFSpeechRecognizer.authorizationStatus() != .denied, SFSpeechRecognizer.authorizationStatus() != .restricted else {
+            onError?("Dottie needs Speech Recognition to dictate. Turn it on in System Settings → Privacy & Security → Speech Recognition.")
             return
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
@@ -267,45 +268,48 @@ final class ClickyDictationController: ObservableObject {
         }
         recordingStartedAt = Date()
         liveText = ""
-        if DictationLiveTranscriber.isEnabled {
-            liveTranscriber.start()
-        }
+        // Dictation is Apple's speech recognizer on the Mac; the notch
+        // preview is the same recognizer's partial text.
+        liveTranscriber.start()
         state = .recording
     }
 
     func finishDictation() {
         guard state == .recording else { return }
         let recordedPCMData = audioRecorder.stop()
-        liveTranscriber.stop()
         audioPowerLevel = 0
 
         let recordingSeconds = Date().timeIntervalSince(recordingStartedAt ?? Date())
         guard recordingSeconds >= Self.minimumRecordingSeconds, !recordedPCMData.isEmpty else {
+            liveTranscriber.stop()
             state = .idle
             return
         }
 
         state = .transcribing
         let capturedFocusContext = focusContext
-        let wavData = BuddyWAVFileBuilder.buildWAVData(fromPCM16MonoAudio: recordedPCMData, sampleRate: DictationAudioRecorder.sampleRate)
 
         transcriptionTask = Task { [weak self] in
-            do {
-                let dictatedText = try await Self.transcribe(wavData: wavData, focusContext: capturedFocusContext)
-                guard let self, !Task.isCancelled else { return }
-                self.state = .idle
-                guard !dictatedText.isEmpty else { return }
-                let outcome = DictationInsertion.deliver(dictatedText, into: capturedFocusContext)
-                if outcome == .inserted, let capturedFocusContext {
-                    self.correctionLearner.watch(insertedText: dictatedText, in: capturedFocusContext)
+            guard let self else { return }
+            let heardText = await self.liveTranscriber.finishAndWaitForFinalText(timeoutSeconds: 2)
+            guard !Task.isCancelled else { return }
+            self.state = .idle
+            let dictatedText = DictationText.applyingCorrections(
+                to: heardText.trimmingCharacters(in: .whitespacesAndNewlines),
+                corrections: DictationDictionary.shared.learnedCorrections.map { (heard: $0.original, meant: $0.corrected) }
+            )
+            guard !dictatedText.isEmpty else {
+                if SFSpeechRecognizer.authorizationStatus() != .authorized {
+                    self.onError?("Dottie needs Speech Recognition to dictate. Allow it when macOS asks, or in System Settings → Privacy & Security → Speech Recognition.")
                 }
-                ClickyAnalytics.trackDictation(outcome: outcome == .inserted ? "inserted" : "clipboard", recordingSeconds: recordingSeconds)
-                self.onFinished?(outcome, dictatedText)
-            } catch {
-                guard let self, !Task.isCancelled else { return }
-                self.state = .idle
-                self.onError?("Dictation didn't go through: \(error.localizedDescription)")
+                return
             }
+            let outcome = DictationInsertion.deliver(dictatedText, into: capturedFocusContext)
+            if outcome == .inserted, let capturedFocusContext {
+                self.correctionLearner.watch(insertedText: dictatedText, in: capturedFocusContext)
+            }
+            ClickyAnalytics.trackDictation(outcome: outcome == .inserted ? "inserted" : "clipboard", recordingSeconds: recordingSeconds)
+            self.onFinished?(outcome, dictatedText)
         }
     }
 
@@ -321,47 +325,6 @@ final class ClickyDictationController: ObservableObject {
         audioPowerLevel = 0
         state = .idle
     }
-
-    // MARK: - Transcription
-
-    private static func transcribe(wavData: Data, focusContext: DictationFocusContext?) async throws -> String {
-        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/dictate"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 45
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-
-        var requestBody: [String: Any] = [
-            "audio": wavData.base64EncodedString(),
-            "mimeType": "audio/wav",
-            "customWords": customWords,
-            // Older Workers ignore this; the corrected words are in customWords too.
-            "learnedCorrections": DictationDictionary.shared.learnedCorrections.prefix(100).map {
-                ["heard": $0.original, "meant": $0.corrected]
-            }
-        ]
-        if let pinnedLanguage = DictationLanguageCatalog.pinnedLanguage {
-            requestBody["language"] = pinnedLanguage.englishName
-        }
-        if let focusContext {
-            requestBody["appName"] = focusContext.appName
-            if !focusContext.textBeforeCursor.isEmpty {
-                requestBody["textBeforeCursor"] = focusContext.textBeforeCursor
-            }
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-
-        let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw NSError(domain: "ClickyDictation", code: statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "the worker answered \(statusCode)"
-            ])
-        }
-        let responseObject = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
-        return (responseObject?["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
 
 /// Puts dictated text where the user was typing. Pastes with a temporary
 /// clipboard swap (the most reliable way across native, web and Electron
@@ -439,5 +402,25 @@ enum DictationInsertion {
         keyUpEvent?.flags = .maskCommand
         keyDownEvent?.post(tap: .cghidEventTap)
         keyUpEvent?.post(tap: .cghidEventTap)
+    }
+}
+
+/// Fixes applied to what the recognizer heard. Foundation only, so it's
+/// unit tested.
+enum DictationText {
+    /// Each learned fix ("Wasi" → "Waseem") swapped in where the whole word
+    /// or phrase was heard, whatever its case.
+    static func applyingCorrections(to heardText: String, corrections: [(heard: String, meant: String)]) -> String {
+        var correctedText = heardText
+        for correction in corrections where !correction.heard.isEmpty {
+            let escapedHeard = NSRegularExpression.escapedPattern(for: correction.heard)
+            guard let expression = try? NSRegularExpression(pattern: "(?i)(?<![\\p{L}\\p{N}])\(escapedHeard)(?![\\p{L}\\p{N}])") else { continue }
+            let fullRange = NSRange(correctedText.startIndex..., in: correctedText)
+            correctedText = expression.stringByReplacingMatches(
+                in: correctedText, range: fullRange,
+                withTemplate: NSRegularExpression.escapedTemplate(for: correction.meant)
+            )
+        }
+        return correctedText
     }
 }

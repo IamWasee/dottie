@@ -106,7 +106,7 @@ final class GeminiLiveVoiceClient {
     /// The model handed a multi-step job on the screen to the task runner
     /// (do_task_on_screen). Returns a short status; the result is spoken
     /// in a later turn when the job finishes.
-    var onStartScreenTask: (@MainActor (_ task: String, _ isGame: Bool, _ referenceImageNames: [String], _ restart: Bool) -> String)?
+    var onStartScreenTask: (@MainActor (_ task: String, _ referenceImageNames: [String], _ restart: Bool) -> String)?
     /// The user asked to stop the running screen task (stop_screen_task).
     /// scope: "all" (stop and clear the list), "current" (skip to the next
     /// job) or "list" (what's running and waiting).
@@ -136,9 +136,7 @@ final class GeminiLiveVoiceClient {
     /// Recent (user, model) exchanges, appended to the system instruction of
     /// each new session so memory survives reconnects and relaunches.
     var recentConversationHistory: [(userTranscript: String, modelTranscript: String)] = []
-    /// The voice the user picked (e.g. "Kore", "Puck", or a styled one like
-    /// "Butler", which maps to a prebuilt Gemini voice plus a speaking
-    /// style; see DottieVoicePreview.voices). Persisted by the panel.
+    /// The voice name saved by older versions; unused since Live mode went.
     var voiceName: String = UserDefaults.standard.string(forKey: "selectedGeminiLiveVoice") ?? "Kore" {
         didSet {
             if voiceName != oldValue { startFreshSessionSoon() }
@@ -578,7 +576,7 @@ final class GeminiLiveVoiceClient {
             "generationConfig": [
                 "responseModalities": ["AUDIO"],
                 "speechConfig": [
-                    "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": DottieVoicePreview.geminiVoiceName(for: voiceName)]]
+                    "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": voiceName]]
                 ]
             ],
             "systemInstruction": ["parts": [["text": composeSystemInstruction()]]],
@@ -625,11 +623,6 @@ final class GeminiLiveVoiceClient {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, MMMM d yyyy, h:mm a"
         var baseSystemInstruction = self.baseSystemInstruction
-        // A styled voice (Butler) says how to speak; read at setup, so a
-        // voice change reaches the next session via startFreshSessionSoon.
-        if let speakingStyle = DottieVoicePreview.speakingStyle(for: voiceName) {
-            baseSystemInstruction += "\n\n" + speakingStyle
-        }
         baseSystemInstruction += "\n\nright now it's \(dateFormatter.string(from: Date())) (\(TimeZone.current.identifier))."
         if let replayShortcutsLine = DottieReplayStore.shared.voiceShortcutsPromptLine {
             baseSystemInstruction += "\n\n" + replayShortcutsLine
@@ -910,17 +903,13 @@ final class GeminiLiveVoiceClient {
     /// Multi-step jobs on the screen, done by DottieScreenTaskRunner.
     private static let doTaskOnScreenFunctionDeclaration: [String: Any] = [
         "name": "do_task_on_screen",
-        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there, or playing a video game for the user (set game). Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Also for a goal that sounds like one click but needs more to be done, like 'sign in with this account' (done when signed in, not when the account is clicked). Pass the whole goal, every step; it works out the steps itself and asks the user only if it must. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it, and when no connected app (apps_and_tools) can do it instead: a connected GitHub, Notion, Gmail and the like answer far faster and more surely than clicking. After calling, just say you're on it in a few words.",
+        "description": "Do a job on the user's screen that takes several steps, all in one go. If a job is already running, this one waits in line and starts when it finishes: opening apps, going to sites, searching, clicking through pages, typing, scrolling, and reading what's there. Example: 'open opera, search kaggle, go to my competitions, open the RSNA knee one and tell me my rank'. Also for a goal that sounds like one click but needs more to be done, like 'sign in with this account' (done when signed in, not when the account is clicked). Pass the whole goal, every step; it works out the steps itself and asks the user only if it must. Dottie's cursor does it step by step and you'll get the result in a later message to tell the user. Only when the user asks you to do it, and when no connected app (apps_and_tools) can do it instead: a connected GitHub, Notion, Gmail and the like answer far faster and more surely than clicking. After calling, just say you're on it in a few words.",
         "parameters": [
             "type": "OBJECT",
             "properties": [
                 "task": [
                     "type": "STRING",
                     "description": "The whole job in the user's words, every step in order, plus details from the conversation (names, apps, what to report back)."
-                ],
-                "game": [
-                    "type": "BOOLEAN",
-                    "description": "True when the job is playing or doing something inside a video game (walking somewhere, picking up or using an item, fighting, building), or mapping a game while the user plays it ('map this game for me'), so it runs in quick game mode with movement keys and camera control."
                 ],
                 "reference_images": [
                     "type": "ARRAY",
@@ -1463,11 +1452,10 @@ final class GeminiLiveVoiceClient {
                                  response: ["error": "couldn't start that right now."])
             return
         }
-        let isGame = (functionArguments["game"] as? Bool) ?? ((functionArguments["game"] as? NSNumber)?.boolValue ?? false)
         let referenceImageNames = (functionArguments["reference_images"] as? [Any])?.compactMap { $0 as? String } ?? []
         let restart = (functionArguments["restart"] as? Bool) ?? ((functionArguments["restart"] as? NSNumber)?.boolValue ?? false)
         sendFunctionResponse(functionCallID: functionCallID, functionName: "do_task_on_screen",
-                             response: ["result": onStartScreenTask(taskText, isGame, referenceImageNames, restart)])
+                             response: ["result": onStartScreenTask(taskText, referenceImageNames, restart)])
     }
 
     private func handleStartClickyTaskCall(functionCallID: String, functionArguments: [String: Any]) {
