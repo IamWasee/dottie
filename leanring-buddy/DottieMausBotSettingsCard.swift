@@ -44,7 +44,7 @@ struct DottieMausBotSettingsCard: View {
 
                 if let pausedUntil = mausBot.claudePausedUntil {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(mausBot.claudePauseReason ?? "Claude is paused"). Helpers use the free Gemini backup until \(pausedUntil.formatted(date: .omitted, time: .shortened)).")
+                        Text("\(mausBot.claudePauseReason ?? "Claude is paused"). Helpers use GLM until \(pausedUntil.formatted(date: .omitted, time: .shortened)).")
                             .font(.system(size: 11))
                             .foregroundColor(DS.Colors.warningText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -119,12 +119,12 @@ struct DottieMausBotSettingsCard: View {
 
     private var hintText: String {
         if mausBot.preference == .geminiOnly {
-            return "Helpers run on Gemini's free tier."
+            return "Helpers run on GLM."
         }
         if mausBot.claudeState == .notSignedIn {
             return "Sign in opens your browser. Click Allow there once, and Dottie picks it up by itself. " + DottieClaudeSignInPanel.pickAccountTip
         }
-        return "Helpers use your Claude plan through MausBot, a free app Dottie installs for you. Nothing extra to pay. If your Claude limit runs out, helpers switch to the free Gemini backup by themselves and try Claude again later."
+        return "Helpers use your Claude plan through MausBot, a free app Dottie installs for you. Nothing extra to pay. If your Claude limit runs out, helpers switch to GLM by themselves and try Claude again later."
     }
 
     private func statusRow(title: String, text: String, isGood: Bool) -> some View {
