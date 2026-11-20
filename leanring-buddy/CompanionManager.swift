@@ -193,6 +193,9 @@ final class CompanionManager: ObservableObject {
     /// calls are in this frame's coordinate space.
     private var currentLiveTurnScreenFrame: CompanionCompositeScreenFrame?
     private var currentLiveTurnScreenFrameCapturedAt: Date?
+    /// The screenshots the talker's request for this turn was given, so a
+    /// click or mark Claude asks for lands on the screen it looked at.
+    var currentRequestScreenCaptures: [CompanionScreenCapture] = []
 
     /// Circle to ask: the cursor trail while the talk shortcut is held.
     let screenAnnotationManager = ScreenAnnotationManager()
@@ -1177,7 +1180,9 @@ final class CompanionManager: ObservableObject {
         switch screenAction {
         case .click(let normalizedX, let normalizedY, let label, let clickCount, let isRightClick):
             guard let target = await refinedScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label) else {
-                return "couldn't tell where that is on screen."
+                // No screenshot came with this turn, so there's no spot to
+                // click; a screen job looks at the screen itself.
+                return "no screenshot came with this turn, so call do_task_on_screen with the click instead."
             }
             // Fly there first so the user sees what's about to be clicked.
             livePointingRefinementTask?.cancel()
@@ -2346,7 +2351,7 @@ final class CompanionManager: ObservableObject {
     ) async -> (point: CGPoint, elementFrame: CGRect?, displayFrame: CGRect, frameWidthInPoints: CGFloat)? {
         guard let currentLiveTurnScreenFrame,
               let resolvedPoint = currentLiveTurnScreenFrame.resolveNormalizedPoint(normalizedX: normalizedX, normalizedY: normalizedY) else {
-            return nil
+            return await requestScreenLocation(normalizedX: normalizedX, normalizedY: normalizedY, label: label)
         }
         let roughScreenLocation = Self.globalScreenLocation(
             forScreenshotPixel: resolvedPoint.pointInScreenshotPixels,
@@ -2366,6 +2371,42 @@ final class CompanionManager: ObservableObject {
         let frameWidthInPoints = displayFrame.width * CGFloat(currentLiveTurnScreenFrame.compositeWidthInPixels)
             / CGFloat(max(1, resolvedPoint.screenCapture.screenshotWidthInPixels))
         return (finalPoint, refinedFrame, displayFrame, frameWidthInPoints)
+    }
+
+    /// The same place on the screenshot this turn's request was given (the
+    /// talker sends one image per display, the cursor's display first in
+    /// the model's eyes), as 0-1000 of that image. Without this, a click or
+    /// mark from Claude had no screen to land on.
+    private func requestScreenLocation(
+        normalizedX: Double,
+        normalizedY: Double,
+        label: String?
+    ) async -> (point: CGPoint, elementFrame: CGRect?, displayFrame: CGRect, frameWidthInPoints: CGFloat)? {
+        guard let screenCapture = currentRequestScreenCaptures.first(where: { $0.isCursorScreen }) ?? currentRequestScreenCaptures.first else {
+            return nil
+        }
+        let screenshotPixel = Self.screenshotPixel(forNormalizedX: normalizedX, normalizedY: normalizedY, in: screenCapture)
+        let roughScreenLocation = Self.globalScreenLocation(forScreenshotPixel: screenshotPixel, in: screenCapture)
+        let displayFrame = screenCapture.displayFrame
+        let refinedFrame = await PointingRefiner.refineFrame(
+            elementLabel: label,
+            userQuestion: lastTranscript ?? "",
+            roughPoint: roughScreenLocation,
+            displayFrame: displayFrame,
+            referenceImageJPEG: savedPictureJPEG(named: label)
+        ).flatMap { displayFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: $0.midX, y: $0.midY)) ? $0 : nil }
+        let finalPoint = refinedFrame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? roughScreenLocation
+        return (finalPoint, refinedFrame, displayFrame, displayFrame.width)
+    }
+
+    /// 0-1000 across a screenshot → that screenshot's pixels.
+    static func screenshotPixel(forNormalizedX normalizedX: Double, normalizedY: Double, in screenCapture: CompanionScreenCapture) -> CGPoint {
+        let clampedX = min(max(normalizedX, 0), 1000)
+        let clampedY = min(max(normalizedY, 0), 1000)
+        return CGPoint(
+            x: clampedX / 1000 * Double(screenCapture.screenshotWidthInPixels),
+            y: clampedY / 1000 * Double(screenCapture.screenshotHeightInPixels)
+        )
     }
 
     // MARK: - Shared Helpers

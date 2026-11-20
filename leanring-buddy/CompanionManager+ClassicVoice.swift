@@ -192,6 +192,7 @@ extension CompanionManager {
                         screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
                         labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
                     }
+                    currentRequestScreenCaptures = screenCaptures
                     let promptForModel = turnAnnotation == nil
                         ? transcript
                         : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
