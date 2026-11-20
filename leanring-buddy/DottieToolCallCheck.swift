@@ -12,6 +12,7 @@
 
 import Foundation
 
+@MainActor
 enum DottieToolCallCheck {
 
     struct ToolCall {
