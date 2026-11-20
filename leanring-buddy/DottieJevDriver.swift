@@ -63,6 +63,15 @@ enum DottieJevDriverPlan {
             }
         }
 
+        /// Moves that load a page or an app, which take longer to draw.
+        var opensSomethingNew: Bool {
+            switch self {
+            case .openSite, .searchWeb, .openApp, .goBack, .pressReturn: return true
+            case .typeText(_, let pressesReturn): return pressesReturn
+            case .click, .scrollDown, .scrollUp, .finished, .noneFits: return false
+            }
+        }
+
         /// The same move on the same screen is the same move, wherever OCR
         /// put the label's middle this time.
         var signature: String {
@@ -133,7 +142,7 @@ enum DottieJevDriverPlan {
         for match in matches(of: quotePattern, in: taskText) {
             pieces.append(match)
         }
-        let leadPattern = "(?i)\\b(?:search(?: for| up)?|look up|type|write|enter|called|named|titled|say)\\s+(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
+        let leadPattern = "(?i)\\b(?:search(?:ing|ed|es)?(?: for| up)?|look(?:ing)? up|typ(?:e|ing)|writ(?:e|ing)|enter(?:ing)?|called|named|titled|say(?:ing)?)\\s+(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
         for match in matches(of: leadPattern, in: taskText) {
             let piece = match.trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”"))
             if !piece.isEmpty { pieces.append(piece) }
@@ -158,6 +167,39 @@ enum DottieJevDriverPlan {
         "notion": "notion.so", "canva": "canva.com", "figma": "figma.com", "outlook": "outlook.live.com",
         "whatsapp": "web.whatsapp.com", "discord": "discord.com", "ebay": "ebay.com", "roblox": "roblox.com"
     ]
+
+    /// Sites whose search results open straight from an address, so
+    /// "search mr beast on youtube" is one move instead of finding the
+    /// search box, clicking it and typing.
+    static let searchAddressTemplates: [String: String] = [
+        "youtube.com": "youtube.com/results?search_query=",
+        "google.com": "google.com/search?q=",
+        "amazon.com": "amazon.com/s?k=",
+        "wikipedia.org": "en.wikipedia.org/w/index.php?search=",
+        "reddit.com": "reddit.com/search/?q=",
+        "github.com": "github.com/search?q=",
+        "ebay.com": "ebay.com/sch/i.html?_nkw=",
+        "x.com": "x.com/search?q=",
+        "tiktok.com": "tiktok.com/search?q=",
+        "twitch.tv": "twitch.tv/search?term=",
+        "pinterest.com": "pinterest.com/search/pins/?q=",
+        "kaggle.com": "kaggle.com/search?q=",
+        "netflix.com": "netflix.com/search?q="
+    ]
+
+    /// The search results page on each named site that has one, for each
+    /// thing the request says to search for.
+    static func searchResultAddresses(siteAddresses: [String], textPieces: [String]) -> [String] {
+        var addresses: [String] = []
+        for siteAddress in siteAddresses {
+            guard let template = searchAddressTemplates[siteAddress.lowercased()] else { continue }
+            for textPiece in textPieces.prefix(2) {
+                let encodedPiece = textPiece.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? textPiece
+                addresses.append(template + encodedPiece)
+            }
+        }
+        return addresses
+    }
 
     /// Web addresses the request names: typed ones ("kaggle.com/competitions")
     /// and sites said by name ("open youtube"), longest names first so
@@ -251,6 +293,7 @@ enum DottieJevDriverPlan {
             moves.append(.typeText(textPiece, pressesReturn: true))
             moves.append(.typeText(textPiece, pressesReturn: false))
         }
+        moves.append(contentsOf: searchResultAddresses(siteAddresses: siteAddresses, textPieces: textPieces).map { Move.openSite(address: $0) })
         moves.append(contentsOf: siteAddresses.map { Move.openSite(address: $0) })
         moves.append(contentsOf: appNames.map { Move.openApp(name: $0) })
         moves.append(contentsOf: textPieces.prefix(2).map { Move.searchWeb($0) })
@@ -465,11 +508,28 @@ enum DottieJevDriver {
                 movesSoFar.append(move.summary)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
-                // Let the app draw what the move opened before looking again.
-                try? await Task.sleep(nanoseconds: 700_000_000)
+                // Let the app draw what the move opened before looking again:
+                // a page still loading looked like "nothing changed" and the
+                // move was struck off.
+                await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
             }
         }
         return handOver("Jev used its step budget.")
+    }
+
+    /// Waits until two looks a moment apart show the same screen (the page
+    /// or app has finished drawing), or the time is up.
+    private static func waitForScreenToSettle(maximumSeconds: Double) async {
+        let startedAt = Date()
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        var lastThumbnail: [UInt8]?
+        while Date().timeIntervalSince(startedAt) < maximumSeconds, !Task.isCancelled {
+            guard let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320) else { return }
+            let lookThumbnail = thumbnail(of: look.image)
+            if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) { return }
+            lastThumbnail = lookThumbnail
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
     }
 
     private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, actions: Actions) async {

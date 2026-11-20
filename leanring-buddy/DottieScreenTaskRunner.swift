@@ -277,7 +277,11 @@ final class DottieScreenTaskRunner {
         // Guess first: most apps are laid out the way everyone knows, so
         // the steps are tried by name (menus, shortcuts, controls) before
         // any screenshot goes to a model. A miss hands over to the loop.
-        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short {
+        // A job on a named website goes straight to Jev: the guess works
+        // through Accessibility, which web pages mostly don't fill in, so
+        // it only cost a model call before Jev started.
+        let namesAWebsite = !DottieJevDriverPlan.siteAddresses(from: taskText).isEmpty
+        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short, !namesAWebsite {
             let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: lessonsText) { [weak self] progressLine in
                 self?.onProgress?(0, progressLine)
             }

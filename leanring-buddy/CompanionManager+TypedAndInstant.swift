@@ -265,9 +265,20 @@ extension CompanionManager {
         if Task.isCancelled { return }
 
         notchPresenter.updateLiveCaption(line)
-        speakWithSystemVoice(line)
-        let wordCount = line.split(separator: " ").count
-        try? await Task.sleep(nanoseconds: UInt64(max(1.5, Double(wordCount) * 0.38) * 1_000_000_000))
+        // The same voice as every answer: Kokoro, or the Mac's voice only
+        // while Kokoro is still loading.
+        let speakingStartedAt = Date()
+        try? await speakClassicAnswer(line)
+        while isAnySpeechPlaying, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        // A line Kokoro skipped (nothing speakable) still gets a moment on
+        // screen before the next step.
+        let minimumSeconds = 1.0
+        let remainingSeconds = minimumSeconds - Date().timeIntervalSince(speakingStartedAt)
+        if remainingSeconds > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remainingSeconds * 1_000_000_000))
+        }
         voiceState = .idle
     }
 
