@@ -175,4 +175,15 @@ struct SpeedCheckTests {
 
         #expect(median < 500, "20 screen comparisons took \(median) ms")
     }
+
+    @Test func pickingTheOnMacVoiceForAThousandAnswersStaysQuick() {
+        let median = medianMilliseconds {
+            for answerNumber in 0..<1_000 {
+                _ = DottieKokoroVoices.voice(named: answerNumber.isMultiple(of: 2) ? " jarvis " : "unknown")
+                _ = DottieKokoroVoices.speakableText("  Here is answer \(answerNumber).  ")
+            }
+        }
+
+        #expect(median < 200, "1,000 voice picks took \(median) ms")
+    }
 }

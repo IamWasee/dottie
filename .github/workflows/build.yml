@@ -65,7 +65,8 @@ jobs:
         # the warnings so new ones can't slip in unseen. The full text is in
         # the uploaded build log.
         run: |
-          grep -E "\.swift:[0-9]+:[0-9]+: warning: " build.log | sort -u > compiler-warnings.txt || true
+          # Warnings inside Swift packages (SourcePackages/checkouts) aren't Dottie's code.
+          grep -E "\.swift:[0-9]+:[0-9]+: warning: " build.log | grep -v "/SourcePackages/checkouts/" | sort -u > compiler-warnings.txt || true
           warning_count="$(wc -l < compiler-warnings.txt | tr -d ' ')"
           echo "Most common warnings:"
           sed -E 's/^.*: warning: //' compiler-warnings.txt | sort | uniq -c | sort -rn | head -15

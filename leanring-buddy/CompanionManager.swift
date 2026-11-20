@@ -352,6 +352,10 @@ final class CompanionManager: ObservableObject {
         DottieSelfKnowledge.companionManager = self
         loadScreenJobsCutOffByQuit()
         DottieBrowser.startTrackingBrowserUse()
+        // Classic mode speaks with Kokoro: load it now so the first answer isn't slow.
+        if voiceMode == .classic {
+            DottieKokoroSpeaker.shared.prepare()
+        }
         refreshAllPermissions()
         DottieLog.notice("🔑 Dottie start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -2768,7 +2772,7 @@ final class CompanionManager: ObservableObject {
         case .live:
             return liveVoiceClient.isModelAudioPlaying
         case .classic:
-            return geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
+            return DottieKokoroSpeaker.shared.isPlaying || geminiTTSClient.isPlaying || systemSpeechSynthesizer.isSpeaking
         }
     }
 
@@ -2777,6 +2781,7 @@ final class CompanionManager: ObservableObject {
         if voiceMode == .classic {
             geminiTTSClient.stopPlayback()
         }
+        DottieKokoroSpeaker.shared.stop()
         systemSpeechSynthesizer.stopSpeaking()
     }
 

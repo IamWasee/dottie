@@ -236,13 +236,23 @@ extension CompanionManager {
 
                 // Keep the spinner until audio actually starts playing.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // Kokoro on the Mac first (no AI service), then Gemini's
+                    // voice, then macOS's own.
                     do {
-                        try await geminiTTSClient.speakText(spokenText)
+                        try await DottieKokoroSpeaker.shared.speak(spokenText)
                         voiceState = .responding
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        DottieLog.warning("⚠️ Gemini TTS error, falling back to system voice: \(error)")
-                        speakWithSystemVoice(spokenText)
+                        DottieLog.warning("⚠️ Kokoro couldn't speak, trying Gemini's voice: \(error.localizedDescription)")
+                        do {
+                            try await geminiTTSClient.speakText(spokenText)
+                            voiceState = .responding
+                        } catch {
+                            ClickyAnalytics.trackTTSError(error: error.localizedDescription)
+                            DottieLog.warning("⚠️ Gemini TTS error, falling back to system voice: \(error)")
+                            speakWithSystemVoice(spokenText)
+                        }
                     }
                 }
             } catch is CancellationError {

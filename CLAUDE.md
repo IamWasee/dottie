@@ -290,6 +290,8 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieClipboardTools.swift` | ~44 | copy_to_clipboard: voice Dottie puts text (a command, code, an address, a draft) on the user's clipboard, so they can paste it anywhere. Before this she had no way to and told the user she couldn't. |
 | `DottieToolCallCheck.swift` | ~130 | Checks a tool call the way Dottie would take it, without doing it: is the tool real, are its arguments the right shape for its declaration, and would the tool's own checker take it (a drawing's steps, for one). |
 | `DottieQuickMacAction.swift` | ~120 | quick_mac_action: the bigger models (voice Dottie, screen jobs) hand an everyday Mac action ("open Spotify", "move this window left", "volume 30") to the instant lane and Needle, the on-Mac model, instead of doing it by looking at screenshots. Done in well under a second with no AI service; when neither knows it, the model is told to do it its own way. |
+| `DottieKokoroSpeaker.swift` | ~120 | Dottie speaking on the Mac with Kokoro (82M, Apache-2.0) through FluidAudio's Core ML build, so her spoken answers need no AI service. The models download from Hugging Face the first time she speaks (then load in about two seconds); until then, and if anything fails, the caller falls back to the old voice. Used by classic mode and the voice preview in Settings → Voice. |
+| `DottieKokoroVoices.swift` | ~60 | Dottie's on-Mac voices: the five Kokoro voices celly kept (Jarvis, Butler, Heart, Bella, Emma), each a Kokoro voice pack and a speaking speed, and which one is picked. Foundation only, so it can be unit tested. |
 
 ## Build & Run
 
