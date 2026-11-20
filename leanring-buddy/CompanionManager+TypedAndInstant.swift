@@ -74,6 +74,13 @@ extension CompanionManager {
                     // The finished-answer card is shown by the pipelines
                     // themselves; an idle with no answer (e.g. a tap with
                     // nothing said) just folds the notch back up.
+                    // Classic mode goes responding → idle in one go, and this
+                    // sink runs a moment later, so "speaking" can land after
+                    // the finished card and never leave. Turn it into the
+                    // finished card, which dismisses itself.
+                    if self.notchPresenter.surface == .speaking {
+                        self.notchPresenter.showFinishedResponse(self.notchPresenter.liveCaptionText)
+                    }
                     if self.notchPresenter.surface == .listening || self.notchPresenter.surface == .thinking {
                         if !self.isLiveTurnInFlight && self.currentResponseTask == nil {
                             self.notchPresenter.collapse()

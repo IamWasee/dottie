@@ -2848,7 +2848,7 @@ final class CompanionManager: ObservableObject {
 
     private func speakConnectionErrorFallback() {
         let utterance = ClickyWorkerConfiguration.isWorkerConfigured
-            ? "Gemini's swamped right now. Give it a second and try me again."
+            ? "I couldn't reach my brain just now. Give it a second and try me again."
             : "I'm not connected yet. Open Settings, add the server address under Connection, and try again."
         speakWithSystemVoice(utterance)
     }
