@@ -204,9 +204,15 @@ enum DottieJevDriverPlan {
     /// Buttons that spend, send or destroy are only pressed when the user's
     /// own words asked for that.
     static func isRiskyLabel(_ label: String, forTask taskText: String) -> Bool {
-        let riskyWords = ["buy", "pay", "purchase", "checkout", "order", "delete", "remove", "send", "post", "publish", "transfer", "unsubscribe", "erase", "sign out", "log out"]
+        isRiskyLabel(label, forComparableTask: " " + comparableWords(taskText) + " ")
+    }
+
+    private static let riskyWords = ["buy", "pay", "purchase", "checkout", "order", "delete", "remove", "send", "post", "publish", "transfer", "unsubscribe", "erase", "sign out", "log out"]
+
+    /// The same check with the request already made comparable, so a screen
+    /// with hundreds of texts doesn't redo the request for each one.
+    private static func isRiskyLabel(_ label: String, forComparableTask comparableTask: String) -> Bool {
         let comparableLabel = " " + comparableWords(label) + " "
-        let comparableTask = " " + comparableWords(taskText) + " "
         return riskyWords.contains { riskyWord in
             comparableLabel.contains(" \(riskyWord)") && !comparableTask.contains(" \(riskyWord)")
         }
@@ -218,12 +224,13 @@ enum DottieJevDriverPlan {
     /// each once, top to bottom.
     static func clickableTexts(from screenTexts: [ScreenText], taskText: String) -> [ScreenText] {
         var seenTexts = Set<String>()
+        let comparableTask = " " + comparableWords(taskText) + " "
         let usefulTexts = screenTexts.filter { screenText in
             let trimmedText = screenText.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let comparableText = comparableWords(trimmedText)
             guard (2...60).contains(trimmedText.count),
                   trimmedText.rangeOfCharacter(from: .letters) != nil,
-                  !isRiskyLabel(trimmedText, forTask: taskText),
+                  !isRiskyLabel(trimmedText, forComparableTask: comparableTask),
                   seenTexts.insert(comparableText).inserted else { return false }
             return true
         }
