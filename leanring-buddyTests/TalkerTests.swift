@@ -45,6 +45,8 @@ struct TalkerTests {
         let requestPrompt = DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "")
         #expect(requestPrompt.contains("do_task_on_screen"))
         #expect(requestPrompt.contains("never tell them to do it themselves"))
+        #expect(requestPrompt.contains("answer only what they asked"))
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("answer only what they asked"))
     }
 
     @Test func aSentenceThatOnlyMentionsRequestsIsStillTalk() {
