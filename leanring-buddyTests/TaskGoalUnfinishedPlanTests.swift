@@ -81,3 +81,33 @@ struct TaskGoalUnfinishedPlanTests {
         #expect(Date().timeIntervalSince(startedAt) < 2.0)
     }
 }
+
+/// Long planned jobs get more looks: 30 cut "spread these 115 tasks over
+/// the free days" off long before it could be done.
+@MainActor
+struct ScreenJobStepLimitTests {
+    @Test func aQuickJobKeepsThirtySteps() {
+        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: false, isLongJob: false) == 30)
+    }
+
+    @Test func aLongJobGetsMoreSteps() {
+        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: false, isLongJob: true) == DottieScreenTaskRunner.maximumLongJobSteps)
+        #expect(DottieScreenTaskRunner.maximumLongJobSteps > DottieScreenTaskRunner.maximumSteps)
+    }
+
+    @Test func gamesKeepTheirOwnLimitEitherWay() {
+        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: true, isLongJob: false) == DottieScreenTaskRunner.maximumGameSteps)
+        #expect(DottieScreenTaskRunner.stepLimit(isGameMode: true, isLongJob: true) == DottieScreenTaskRunner.maximumGameSteps)
+    }
+
+    /// The loop runs up to the biggest limit and stops at the current one,
+    /// so a job that becomes long mid-way gets the longer limit.
+    @Test func theLoopReachesEveryLimit() {
+        let loopEnd = max(DottieScreenTaskRunner.maximumGameSteps, DottieScreenTaskRunner.maximumLongJobSteps)
+        for isGameMode in [false, true] {
+            for isLongJob in [false, true] {
+                #expect(DottieScreenTaskRunner.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob) <= loopEnd)
+            }
+        }
+    }
+}

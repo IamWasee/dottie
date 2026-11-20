@@ -49,8 +49,18 @@ final class DottieScreenTaskRunner {
     }
 
     static let maximumSteps = 30
+    /// A planned job with many parts ("spread these 115 tasks over the
+    /// free days") needs far more than 30 looks; 30 cut those off.
+    static let maximumLongJobSteps = 120
     /// Games take many small moves.
     static let maximumGameSteps = 150
+
+    /// How many looks a job gets. A job can turn long after it starts
+    /// (the model plans it), so this is asked again on every step.
+    static func stepLimit(isGameMode: Bool, isLongJob: Bool) -> Int {
+        if isGameMode { return maximumGameSteps }
+        return isLongJob ? maximumLongJobSteps : maximumSteps
+    }
     /// Fast and on the free tier; the Worker falls back to other Flash
     /// models when it's busy.
     private static let taskModel = "gemini-3.6-flash"
@@ -340,9 +350,11 @@ final class DottieScreenTaskRunner {
             return await DottieModelPicker.isSimpleScreenJob(taskText) ? .tiny : .normal
         }
 
-        let stepLimit = isGameMode ? Self.maximumGameSteps : Self.maximumSteps
-        for stepNumber in 1...stepLimit {
+        var stepLimit = Self.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob)
+        for stepNumber in 1...max(Self.maximumGameSteps, Self.maximumLongJobSteps) {
             if Task.isCancelled { return .stopped }
+            stepLimit = Self.stepLimit(isGameMode: isGameMode, isLongJob: isLongJob)
+            if stepNumber > stepLimit { break }
 
             // Before looking: if the last click opened something in an app
             // behind this one, bring it forward so the screenshot shows it.
@@ -955,6 +967,12 @@ final class DottieScreenTaskRunner {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             return didOpen ? "opened \(appName); it's in front now" : "couldn't find an app called \(appName)"
 
+        case DottieQuickMacAction.functionName:
+            onProgress?(stepNumber, "doing it on the Mac: \(text("action") ?? "a quick action")")
+            let quickActionResult = await DottieQuickMacAction.perform(arguments: arguments)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            return quickActionResult
+
         case "open_url":
             return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
@@ -1493,7 +1511,7 @@ final class DottieScreenTaskRunner {
         ]
     }
 
-    private static var functionDeclarations: [[String: Any]] {
+    static var functionDeclarations: [[String: Any]] {
         let boxProperty: [String: Any] = [
             "type": "array",
             "items": ["type": "integer"],
@@ -1504,6 +1522,11 @@ final class DottieScreenTaskRunner {
                 "name": "open_app",
                 "description": "Open a Mac app by name, or bring it to the front if it's already running.",
                 "parameters": ["type": "object", "properties": ["name": ["type": "string", "description": "The app's name, like 'Opera GX', 'Safari', 'Notes'."]], "required": ["name"]]
+            ],
+            [
+                "name": DottieQuickMacAction.functionName,
+                "description": DottieQuickMacAction.toolDescription,
+                "parameters": ["type": "object", "properties": ["action": ["type": "string", "description": "The action in a few plain words: \"open Spotify\", \"move this window to the left\", \"volume 30\"."]], "required": ["action"]]
             ],
             [
                 "name": "open_url",

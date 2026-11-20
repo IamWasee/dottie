@@ -40,7 +40,10 @@ enum GeminiLiveToolCatalog {
         // JSON, and asks that didn't say "draw" never found the tool.
         "explain_on_screen", "draw_on_screen", "clear_drawings", "write_notes", "read_closely",
         // Co-op mid-game needs to be instant.
-        "game_command"
+        "game_command",
+        // Opening apps, windows, music and volume done on the Mac by the
+        // instant lane and Needle, mid-answer, with no screenshot.
+        "quick_mac_action"
     ]
 
     /// One line for the voice prompt naming what the hidden tools cover, so

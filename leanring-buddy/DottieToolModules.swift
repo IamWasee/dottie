@@ -24,5 +24,6 @@ enum DottieToolModules {
         DottieAwayModeTools.self, DottieWatchAndLearnTools.self, DottieWorkRouteTools.self, DottieCodeEditorTools.self,
         DottieFormDetailsTools.self,
         DottieNotesTools.self, DottieReadCloselyTools.self, DottieClipboardTools.self,
+        DottieQuickMacActionTools.self,
     ]
 }

@@ -287,6 +287,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `CompanionV
 | `DottieNamedPlaceFinder.swift` | ~160 | Finds the folders and files a helper's task names ("in the 'bull and shit' folder, open 'invoice cleanup.demo.xlsx'") before the helper starts, so it gets the real paths and access to the folder instead of searching the whole Mac step by step (each step is a full model round trip) and being refused outside its own folders. Foundation only, so the matching can be unit tested. |
 | `DottieClipboardTools.swift` | ~44 | copy_to_clipboard: voice Dottie puts text (a command, code, an address, a draft) on the user's clipboard, so they can paste it anywhere. Before this she had no way to and told the user she couldn't. |
 | `DottieToolCallCheck.swift` | ~130 | Checks a tool call the way Dottie would take it, without doing it: is the tool real, are its arguments the right shape for its declaration, and would the tool's own checker take it (a drawing's steps, for one). |
+| `DottieQuickMacAction.swift` | ~120 | quick_mac_action: the bigger models (voice Dottie, screen jobs) hand an everyday Mac action ("open Spotify", "move this window left", "volume 30") to the instant lane and Needle, the on-Mac model, instead of doing it by looking at screenshots. Done in well under a second with no AI service; when neither knows it, the model is told to do it its own way. |
 
 ## Build & Run
 
