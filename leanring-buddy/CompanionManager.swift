@@ -1078,7 +1078,7 @@ final class CompanionManager: ObservableObject {
                 return self.screenTaskQueueSummary()
             default:
                 let didStopTV = self.smartHome.tvTaskRunner.stop()
-                return self.stopScreenTask() || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
+                return self.stopScreenTask(reason: .askedToStop) || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
             }
         }
 
@@ -1929,18 +1929,23 @@ final class CompanionManager: ObservableObject {
     /// Stops the running job and drops every waiting one. Returns true if
     /// anything was running or waiting.
     @discardableResult
-    func stopScreenTask() -> Bool {
+    func stopScreenTask(reason: ScreenJobStopReason = .stopButton) -> Bool {
         let hadQueuedTasks = !queuedScreenTasks.isEmpty
         for queuedTask in queuedScreenTasks {
             noteStoppedJob("the waiting on-screen job \"\(queuedTask.text)\"")
         }
         queuedScreenTasks.removeAll()
         let stoppedTaskText = currentScreenTaskText
+        let lastStepText = notchPresenter.screenTaskStepText
         guard screenTaskRunner.stop() else { return hadQueuedTasks }
         currentScreenTaskText = nil
         noteStoppedJob("the on-screen job \"\(stoppedTaskText ?? "you started")\"")
-        DottieLog.notice("🧭 Screen task stopped")
+        DottieLog.notice("🧭 Screen task stopped (\(public: reason.rawValue)) at: \(lastStepText)")
+        // A job never just disappears: in round 2 of 1.0.80 a Notes job
+        // stopped after 24 steps and the user heard nothing about it.
+        let stoppedSummary = ScreenJobStopReason.summary(taskText: stoppedTaskText, lastStepText: lastStepText, reason: reason)
         notchPresenter.endScreenTask()
+        notchPresenter.showAgentUpdate(title: stoppedSummary.title, text: stoppedSummary.text)
         clearDetectedElementLocation()
         scheduleTransientHideIfNeeded()
         return true
@@ -2136,7 +2141,7 @@ final class CompanionManager: ObservableObject {
         modeName: String,
         scriptedNextStep: (@MainActor (Int) async -> DottieGuide.Step?)? = nil
     ) -> String {
-        stopScreenTask()
+        stopScreenTask(reason: .guideStarted)
         let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
         currentGuideGoal = goal
         DottieLog.notice("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")
