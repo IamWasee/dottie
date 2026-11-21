@@ -1196,18 +1196,50 @@ final class DottieScreenTaskRunner {
     }
 
     /// Brings a running app forward, else launches it by name.
+    /// Opens (or brings to the front) an app by name. Always through
+    /// NSWorkspace.openApplication, also for a running app: since macOS 14
+    /// NSRunningApplication.activate from an app that isn't in front (Dottie
+    /// almost never is) often does nothing and returns false, which is why
+    /// "open Notes" failed with Notes already running in round 2 of 1.0.80.
     static func openApplication(named appName: String) async -> Bool {
-        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "")
-        if let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
-            $0.activationPolicy == .regular && ($0.localizedName?.lowercased() == wantedName)
-        }) {
-            runningApplication.unhide()
-            return runningApplication.activate(options: [.activateAllWindows])
+        let wantedName = comparableApplicationName(appName)
+        let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
+            $0.activationPolicy == .regular && comparableApplicationName($0.localizedName ?? "") == wantedName
+        })
+        let applicationURL = runningApplication?.bundleURL
+            ?? applicationURL(named: appName)
+            ?? DottieInstalledApps.shared.installedApp(matchingSpokenName: appName)?.url
+        if let applicationURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            do {
+                _ = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                return true
+            } catch {
+                DottieLog.warning("⚠️ Couldn't open \(appName) through Launch Services: \(error.localizedDescription)")
+            }
+        } else {
+            DottieLog.warning("⚠️ No installed app is called \(appName)")
         }
-        guard let applicationURL = applicationURL(named: appName) else { return false }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        return (try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)) != nil
+        guard let runningApplication else { return false }
+        runningApplication.unhide()
+        return runningApplication.activate(options: [.activateAllWindows])
+    }
+
+    /// An app name the way it's compared: lowercased, without ".app" or
+    /// spaces around it.
+    nonisolated static func comparableApplicationName(_ appName: String) -> String {
+        appName.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The best of `candidateNames` (app names without ".app") for an asked
+    /// name: an exact match first, else the first that starts with it
+    /// ("opera" finds "Opera GX"). nil when none fits.
+    nonisolated static func bestApplicationName(for appName: String, among candidateNames: [String]) -> String? {
+        let wantedName = comparableApplicationName(appName)
+        guard !wantedName.isEmpty else { return nil }
+        if let exactName = candidateNames.first(where: { comparableApplicationName($0) == wantedName }) { return exactName }
+        return candidateNames.first { comparableApplicationName($0).hasPrefix(wantedName) }
     }
 
     static func open(_ url: URL, inApplicationNamed appName: String) async -> Bool {
@@ -1220,7 +1252,6 @@ final class DottieScreenTaskRunner {
     /// Finds an installed app by name in the usual folders ("opera" finds
     /// Opera GX.app too).
     private static func applicationURL(named appName: String) -> URL? {
-        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespaces)
         let searchFolders = [
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/Applications/Utilities"),
@@ -1228,16 +1259,18 @@ final class DottieScreenTaskRunner {
             URL(fileURLWithPath: "/System/Applications/Utilities"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
         ]
-        var prefixMatch: URL?
+        var appURLsByName: [String: URL] = [:]
+        var appNamesInOrder: [String] = []
         for folder in searchFolders {
             guard let folderItems = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
             for itemURL in folderItems where itemURL.pathExtension == "app" {
-                let itemName = itemURL.deletingPathExtension().lastPathComponent.lowercased()
-                if itemName == wantedName { return itemURL }
-                if prefixMatch == nil && itemName.hasPrefix(wantedName) { prefixMatch = itemURL }
+                let itemName = itemURL.deletingPathExtension().lastPathComponent
+                guard appURLsByName[itemName] == nil else { continue }
+                appURLsByName[itemName] = itemURL
+                appNamesInOrder.append(itemName)
             }
         }
-        return prefixMatch
+        return bestApplicationName(for: appName, among: appNamesInOrder).flatMap { appURLsByName[$0] }
     }
 
     // MARK: - New tabs and windows
