@@ -192,6 +192,7 @@ extension CompanionManager {
                         screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
                         labeledImages = labeledScreenImages(from: screenCaptures, annotation: turnAnnotation)
                     }
+                    currentRequestScreenCaptures = screenCaptures
                     let promptForModel = turnAnnotation == nil
                         ? transcript
                         : "\(transcript)\n\n(\(ScreenAnnotation.modelContextText))"
@@ -271,7 +272,7 @@ extension CompanionManager {
     /// Kokoro on the Mac (no AI service), then macOS's own voice. While
     /// Kokoro is still downloading or loading, the Mac's voice answers
     /// right away instead of leaving silence.
-    private func speakClassicAnswer(_ spokenText: String) async throws {
+    func speakClassicAnswer(_ spokenText: String) async throws {
         guard DottieKokoroSpeaker.shared.isReady else {
             DottieLog.notice("🗣️ Kokoro isn't loaded yet, using the system voice")
             DottieKokoroSpeaker.shared.prepare()

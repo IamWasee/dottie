@@ -279,4 +279,63 @@ struct JevDriverTests {
         #expect(finished)
         #expect(movesSoFar == ["opened youtube.com", "clicked Search", "typed \"cats\" and pressed Return"])
     }
+
+    // MARK: Searching a site in one move
+
+    @Test func searchingUpAndLookingUpAreReadAsWordsToType() {
+        #expect(Plan.textPieces(from: "open youtube, searching up mr beast and clicking on the first video") == ["mr beast"])
+        #expect(Plan.textPieces(from: "go to amazon looking up usb c cables") == ["usb c cables"])
+        #expect(Plan.textPieces(from: "searched for lofi beats then play one").first == "lofi beats")
+    }
+
+    @Test func aNamedSiteWithASearchPageGetsItsResultsAddress() {
+        #expect(Plan.searchResultAddresses(siteAddresses: ["youtube.com"], textPieces: ["mr beast"]) == ["youtube.com/results?search_query=mr%20beast"])
+        #expect(Plan.searchResultAddresses(siteAddresses: ["google.com"], textPieces: ["cats"]) == ["google.com/search?q=cats"])
+    }
+
+    @Test func sitesWithoutASearchPageOrNothingToSearchGetNone() {
+        #expect(Plan.searchResultAddresses(siteAddresses: ["mail.google.com"], textPieces: ["invoice"]).isEmpty)
+        #expect(Plan.searchResultAddresses(siteAddresses: ["youtube.com"], textPieces: []).isEmpty)
+    }
+
+    @Test func searchWordsCantBreakTheAddress() {
+        let address = Plan.searchResultAddresses(siteAddresses: ["youtube.com"], textPieces: ["tom & jerry #1"]).first ?? ""
+        #expect(!address.contains("&") && !address.contains("#"))
+        #expect(URL(string: "https://" + address) != nil)
+    }
+
+    @Test func theResultsPageIsOfferedBeforeTheBareSite() throws {
+        let options = Plan.options(screenTexts: [], textPieces: ["mr beast"], siteAddresses: ["youtube.com"], appNames: [], alreadyTriedSignatures: [])
+        let moves = options.map(\.move)
+        let resultsIndex = try #require(moves.firstIndex(of: .openSite(address: "youtube.com/results?search_query=mr%20beast")))
+        let siteIndex = try #require(moves.firstIndex(of: .openSite(address: "youtube.com")))
+        #expect(resultsIndex < siteIndex)
+    }
+
+    @Test func movesThatLoadAPageWaitLongerToSettle() {
+        #expect(Plan.Move.openSite(address: "youtube.com").opensSomethingNew)
+        #expect(Plan.Move.typeText("cats", pressesReturn: true).opensSomethingNew)
+        #expect(!Plan.Move.typeText("cats", pressesReturn: false).opensSomethingNew)
+        #expect(!Plan.Move.scrollDown.opensSomethingNew)
+    }
+
+    @Test func mrBeastOnYoutubeTakesTwoMoves() throws {
+        // Open the results page, then click the first video's title.
+        let taskText = "open youtube, search up mr beast and click on the first video"
+        let firstStep = Plan.options(
+            screenTexts: [],
+            textPieces: Plan.textPieces(from: taskText),
+            siteAddresses: Plan.siteAddresses(from: taskText),
+            appNames: [], alreadyTriedSignatures: []
+        )
+        #expect(firstStep.map(\.move).contains(.openSite(address: "youtube.com/results?search_query=mr%20beast")))
+        let secondStep = Plan.options(
+            screenTexts: Plan.clickableTexts(from: [
+                Plan.ScreenText(text: "MrBeast", centerX: 300, centerY: 200),
+                Plan.ScreenText(text: "I Survived 100 Days In A Circle", centerX: 520, centerY: 260)
+            ], taskText: taskText),
+            textPieces: [], siteAddresses: [], appNames: [], alreadyTriedSignatures: []
+        )
+        #expect(secondStep.map(\.move).contains(.click(label: "I Survived 100 Days In A Circle", centerX: 520, centerY: 260)))
+    }
 }

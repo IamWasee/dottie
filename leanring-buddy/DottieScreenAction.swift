@@ -53,12 +53,12 @@ enum DottieScreenAction {
     private static var clickOnScreenDeclaration: [String: Any] {
         [
             "name": "click_on_screen",
-            "description": "Click something on the user's screen for them, like a button, link, tab or menu item in the most recent screen frame. Your cursor flies there first, then clicks." + onlyWhenAskedNote,
+            "description": "Click one thing on the user's screen for them, like a button, link, tab or menu item in the screenshot of the screen their cursor is on. Your cursor flies there first, then clicks. For a job of several steps use do_task_on_screen instead." + onlyWhenAskedNote,
             "parameters": [
                 "type": "OBJECT",
                 "properties": [
-                    "x": ["type": "INTEGER", "description": "Horizontal position of the element's center, 0 (left edge of the frame) to 1000 (right edge)."],
-                    "y": ["type": "INTEGER", "description": "Vertical position of the element's center, 0 (top edge of the frame) to 1000 (bottom edge)."],
+                    "x": ["type": "INTEGER", "description": "Horizontal position of the element's center, 0 (left edge of the screenshot) to 1000 (right edge)."],
+                    "y": ["type": "INTEGER", "description": "Vertical position of the element's center, 0 (top edge of the screenshot) to 1000 (bottom edge)."],
                     "label": ["type": "STRING", "description": "The element's visible text or name exactly as on screen (like 'Sign in'), else a 1-3 word name."],
                     "double_click": ["type": "BOOLEAN", "description": "True to double-click."],
                     "right_click": ["type": "BOOLEAN", "description": "True to right-click."]
