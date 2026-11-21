@@ -40,7 +40,7 @@ enum DottieQuickMacAction {
     /// not one quick action.
     static let longestActionWordCount = 12
 
-    static let toolDescription = "Do one everyday Mac action instantly on the Mac itself, with no screenshots: open or quit an app, open a folder or file by its name ("open my Downloads folder", "open my resume"), move or fill a window, play/pause/skip music, set the volume, search Google or YouTube, press a named shortcut (\"new tab\", \"minimize\", \"command shift T\"), add a reminder or calendar event. Say it in a few plain words, like \"open Spotify\" or \"move this window left\". Use it in the middle of a bigger job whenever a step is one of these; if it answers that it couldn't, do that step your usual way."
+    static let toolDescription = "Do one everyday Mac action instantly on the Mac itself, with no screenshots: open or quit an app, open a folder or file by its name (\"open my Downloads folder\", \"open my resume\"), move or fill a window, play/pause/skip music, set the volume, search Google or YouTube, press a named shortcut (\"new tab\", \"minimize\", \"command shift T\"), add a reminder or calendar event. Say it in a few plain words, like \"open Spotify\" or \"move this window left\". Use it in the middle of a bigger job whenever a step is one of these; if it answers that it couldn't, do that step your usual way."
 
     static var parameters: [String: Any] {
         [
