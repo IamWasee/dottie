@@ -259,18 +259,24 @@ enum DottieJevDriverPlan {
     /// Buttons that spend, send or destroy are only pressed when the user's
     /// own words asked for that.
     static func isRiskyLabel(_ label: String, forTask taskText: String) -> Bool {
-        isRiskyLabel(label, forComparableTask: " " + comparableWords(taskText) + " ")
+        let riskyNeedlesForThisTask = riskyNeedlesNotAskedFor(byComparableTask: " " + comparableWords(taskText) + " ")
+        return isRiskyComparableLabel(" " + comparableWords(label) + " ", riskyNeedles: riskyNeedlesForThisTask)
     }
 
     private static let riskyWords = ["buy", "pay", "purchase", "checkout", "order", "delete", "remove", "send", "post", "publish", "transfer", "unsubscribe", "erase", "sign out", "log out"]
 
-    /// The same check with the request already made comparable, so a screen
-    /// with hundreds of texts doesn't redo the request for each one.
-    private static func isRiskyLabel(_ label: String, forComparableTask comparableTask: String) -> Bool {
-        let comparableLabel = " " + comparableWords(label) + " "
-        return riskyWords.contains { riskyWord in
-            comparableLabel.contains(" \(riskyWord)") && !comparableTask.contains(" \(riskyWord)")
-        }
+    /// Each risky word as it's looked for inside a comparable label
+    /// (" buy"), made once instead of for every text on every screen.
+    private static let riskyNeedles = riskyWords.map { " " + $0 }
+
+    /// The risky words the request itself doesn't name, worked out once per
+    /// step, so a screen with hundreds of texts doesn't redo it for each one.
+    private static func riskyNeedlesNotAskedFor(byComparableTask comparableTask: String) -> [String] {
+        riskyNeedles.filter { !comparableTask.contains($0) }
+    }
+
+    private static func isRiskyComparableLabel(_ paddedComparableLabel: String, riskyNeedles: [String]) -> Bool {
+        riskyNeedles.contains { paddedComparableLabel.contains($0) }
     }
 
     // MARK: Options
@@ -279,13 +285,15 @@ enum DottieJevDriverPlan {
     /// each once, top to bottom.
     static func clickableTexts(from screenTexts: [ScreenText], taskText: String) -> [ScreenText] {
         var seenTexts = Set<String>()
-        let comparableTask = " " + comparableWords(taskText) + " "
+        let riskyNeedlesForThisTask = riskyNeedlesNotAskedFor(byComparableTask: " " + comparableWords(taskText) + " ")
         let usefulTexts = screenTexts.filter { screenText in
             let trimmedText = screenText.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let comparableText = comparableWords(trimmedText)
+            // The cheap checks first, so long or letterless texts never get
+            // made comparable at all.
             guard (2...60).contains(trimmedText.count),
-                  trimmedText.rangeOfCharacter(from: .letters) != nil,
-                  !isRiskyLabel(trimmedText, forComparableTask: comparableTask),
+                  trimmedText.rangeOfCharacter(from: .letters) != nil else { return false }
+            let comparableText = comparableWords(trimmedText)
+            guard !isRiskyComparableLabel(" " + comparableText + " ", riskyNeedles: riskyNeedlesForThisTask),
                   seenTexts.insert(comparableText).inserted else { return false }
             return true
         }
@@ -318,8 +326,9 @@ enum DottieJevDriverPlan {
         moves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .goBack, .finished, .noneFits])
         var seenSignatures = Set<String>()
         let freshMoves = moves.filter { move in
-            guard !alreadyTriedSignatures.contains(move.signature) else { return false }
-            return seenSignatures.insert(move.signature).inserted
+            let moveSignature = move.signature
+            guard !alreadyTriedSignatures.contains(moveSignature) else { return false }
+            return seenSignatures.insert(moveSignature).inserted
         }
         return freshMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
     }
@@ -409,10 +418,23 @@ enum DottieJevDriverPlan {
     // MARK: Helpers
 
     static func comparableWords(_ text: String) -> String {
-        text.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+        // One pass over the letters (this runs for every text on every
+        // screen): runs of letters and digits joined by single spaces.
+        var comparableScalars = String.UnicodeScalarView()
+        var isBetweenWords = false
+        let lettersAndDigits = CharacterSet.alphanumerics
+        for scalar in text.lowercased().unicodeScalars {
+            if lettersAndDigits.contains(scalar) {
+                if isBetweenWords && !comparableScalars.isEmpty {
+                    comparableScalars.append(" ")
+                }
+                isBetweenWords = false
+                comparableScalars.append(scalar)
+            } else {
+                isBetweenWords = true
+            }
+        }
+        return String(comparableScalars)
     }
 
     private static func matches(of pattern: String, in text: String) -> [String] {

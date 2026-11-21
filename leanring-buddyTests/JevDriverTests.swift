@@ -156,6 +156,30 @@ struct JevDriverTests {
         #expect(body["assets"] == nil)
     }
 
+    /// Texts are compared as lowercased words joined by single spaces,
+    /// whatever punctuation or spacing sat between them.
+    @Test func comparableWordsKeepOnlyLettersAndDigits() {
+        #expect(Plan.comparableWords("  Sign-In, NOW!! ") == "sign in now")
+        #expect(Plan.comparableWords("Item #42 (new)") == "item 42 new")
+        #expect(Plan.comparableWords("Café  Über") == "café über")
+        #expect(Plan.comparableWords("...") == "")
+        #expect(Plan.comparableWords("") == "")
+    }
+
+    /// The same text on screen twice (different case or punctuation) is
+    /// offered once, and long or letterless texts not at all.
+    @Test func clickableTextsSkipRepeatsLongTextsAndLetterlessOnes() {
+        let screenTexts = [
+            Plan.ScreenText(text: "Sign in", centerX: 10, centerY: 10),
+            Plan.ScreenText(text: "SIGN-IN", centerX: 20, centerY: 20),
+            Plan.ScreenText(text: "12:30", centerX: 30, centerY: 30),
+            Plan.ScreenText(text: String(repeating: "a", count: 61), centerX: 40, centerY: 40),
+            Plan.ScreenText(text: "Buy now", centerX: 50, centerY: 50)
+        ]
+        let clickable = Plan.clickableTexts(from: screenTexts, taskText: "sign in to my account").map(\.text)
+        #expect(clickable == ["Sign in"])
+    }
+
     /// The old asset name "screen" sat inside every "Click … on the screen"
     /// option, so Jev got dozens of copies of the picture and answered 400.
     @Test func jobRequestNamesTheScreenshotOnceEvenWithManyClickOptions() throws {
