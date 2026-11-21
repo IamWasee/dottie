@@ -338,4 +338,46 @@ struct JevDriverTests {
         )
         #expect(secondStep.map(\.move).contains(.click(label: "I Survived 100 Days In A Circle", centerX: 520, centerY: 260)))
     }
+
+    // MARK: A site that's already open
+
+    @Test func theSiteInFrontCountsAsOpenWithOrWithoutWww() {
+        #expect(Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "www.youtube.com"))
+        #expect(Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "youtube.com"))
+        #expect(Plan.isSiteAlreadyOpen("https://www.youtube.com/feed", frontSiteHost: "m.youtube.com"))
+    }
+
+    @Test func anotherSiteOrNoBrowserIsNotOpen() {
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "google.com"))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "notyoutube.com"))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: nil))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: ""))
+    }
+
+    @Test func clickingTheSearchButtonOnYoutubeDoesntReopenYoutube() {
+        let taskText = "click the search button on youtube"
+        let options = Plan.options(
+            screenTexts: [Plan.ScreenText(text: "Search", centerX: 500, centerY: 80)],
+            textPieces: Plan.textPieces(from: taskText),
+            siteAddresses: Plan.siteAddresses(from: taskText),
+            appNames: [], alreadyTriedSignatures: [],
+            frontSiteHost: "www.youtube.com"
+        )
+        let moves = options.map(\.move)
+        #expect(Plan.textPieces(from: taskText).isEmpty)
+        #expect(!moves.contains(.openSite(address: "youtube.com")))
+        #expect(moves.contains(.click(label: "Search", centerX: 500, centerY: 80)))
+    }
+
+    @Test func aSiteNotYetOpenIsStillOffered() {
+        let options = Plan.options(screenTexts: [], textPieces: [], siteAddresses: ["youtube.com"], appNames: [], alreadyTriedSignatures: [], frontSiteHost: "google.com")
+        #expect(options.map(\.move).contains(.openSite(address: "youtube.com")))
+    }
+
+    @Test func searchingTheOpenSiteStillUsesItsResultsPage() {
+        let options = Plan.options(screenTexts: [], textPieces: ["mr beast"], siteAddresses: ["youtube.com"], appNames: [], alreadyTriedSignatures: [], frontSiteHost: "www.youtube.com")
+        let moves = options.map(\.move)
+        #expect(moves.contains(.openSite(address: "youtube.com/results?search_query=mr%20beast")))
+        #expect(!moves.contains(.openSite(address: "youtube.com")))
+    }
 }

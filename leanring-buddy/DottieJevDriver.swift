@@ -142,7 +142,7 @@ enum DottieJevDriverPlan {
         for match in matches(of: quotePattern, in: taskText) {
             pieces.append(match)
         }
-        let leadPattern = "(?i)\\b(?:search(?:ing|ed|es)?(?: for| up)?|look(?:ing)? up|typ(?:e|ing)|writ(?:e|ing)|enter(?:ing)?|called|named|titled|say(?:ing)?)\\s+(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
+        let leadPattern = "(?i)\\b(?:search(?:ing|ed|es)?(?: for| up)?|look(?:ing)? up|typ(?:e|ing)|writ(?:e|ing)|enter(?:ing)?|called|named|titled|say(?:ing)?)\\s+(?!(?:button|bar|box|field|icon|results?|tab|page|engine|history|filters?|settings)\\b)(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
         for match in matches(of: leadPattern, in: taskText) {
             let piece = match.trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”"))
             if !piece.isEmpty { pieces.append(piece) }
@@ -199,6 +199,19 @@ enum DottieJevDriverPlan {
             }
         }
         return addresses
+    }
+
+    /// Whether the browser in front is already on this site
+    /// ("www.youtube.com" is on "youtube.com").
+    static func isSiteAlreadyOpen(_ siteAddress: String, frontSiteHost: String?) -> Bool {
+        guard let frontSiteHost = frontSiteHost?.lowercased(), !frontSiteHost.isEmpty else { return false }
+        let siteHost = siteAddress.lowercased()
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .split(separator: "/").first.map(String.init) ?? ""
+        guard !siteHost.isEmpty else { return false }
+        let bareSiteHost = siteHost.hasPrefix("www.") ? String(siteHost.dropFirst(4)) : siteHost
+        return frontSiteHost == bareSiteHost || frontSiteHost.hasSuffix("." + bareSiteHost)
     }
 
     /// Web addresses the request names: typed ones ("kaggle.com/competitions")
@@ -286,7 +299,8 @@ enum DottieJevDriverPlan {
         textPieces: [String],
         siteAddresses: [String],
         appNames: [String],
-        alreadyTriedSignatures: Set<String>
+        alreadyTriedSignatures: Set<String>,
+        frontSiteHost: String? = nil
     ) -> [Option] {
         var moves: [Move] = []
         for textPiece in textPieces {
@@ -294,7 +308,10 @@ enum DottieJevDriverPlan {
             moves.append(.typeText(textPiece, pressesReturn: false))
         }
         moves.append(contentsOf: searchResultAddresses(siteAddresses: siteAddresses, textPieces: textPieces).map { Move.openSite(address: $0) })
-        moves.append(contentsOf: siteAddresses.map { Move.openSite(address: $0) })
+        // A site the browser in front already shows isn't offered again:
+        // "click the search button" on YouTube reopened YouTube instead.
+        let sitesToOffer = siteAddresses.filter { !isSiteAlreadyOpen($0, frontSiteHost: frontSiteHost) }
+        moves.append(contentsOf: sitesToOffer.map { Move.openSite(address: $0) })
         moves.append(contentsOf: appNames.map { Move.openApp(name: $0) })
         moves.append(contentsOf: textPieces.prefix(2).map { Move.searchWeb($0) })
         moves.append(contentsOf: screenTexts.map { Move.click(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
@@ -481,7 +498,8 @@ enum DottieJevDriver {
                 textPieces: textPieces,
                 siteAddresses: siteAddresses,
                 appNames: appNames,
-                alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? []
+                alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? [],
+                frontSiteHost: DottieReplayContext.current().siteHost
             )
             let requestBody = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options)
             guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
