@@ -465,6 +465,10 @@ enum DottieJevDriver {
         var previousScreenThumbnail: [UInt8]?
         var lastMoveSignature: String?
         var movesWithoutChange = 0
+        // App memory: the click this job made last, waiting to see which
+        // page it opened, and the labels clicked so far (never twice from memory).
+        var clickWaitingForResult: (bundleIdentifier: String, pageKey: String, label: String, centerX: Double, centerY: Double)?
+        var labelsClickedFromMemory = Set<String>()
 
         func handOver(_ reason: String) -> Outcome {
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
@@ -492,7 +496,44 @@ enum DottieJevDriver {
             }
             let screenKey = triedSignaturesByScreen.keys.first { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? screenThumbnail
 
-            let screenTexts = DottieJevDriverPlan.clickableTexts(from: await readTexts(on: screen.image), taskText: taskText)
+            let allScreenTexts = await readTexts(on: screen.image)
+            let appMemory = DottieAppMemory.shared
+            let frontPageIdentity = appMemory.frontPageIdentity()
+            if let clickWaitingForResult, let frontPageIdentity,
+               frontPageIdentity.key != clickWaitingForResult.pageKey {
+                appMemory.noteClick(bundleIdentifier: clickWaitingForResult.bundleIdentifier, fromPageKey: clickWaitingForResult.pageKey,
+                                    centerX: clickWaitingForResult.centerX, centerY: clickWaitingForResult.centerY,
+                                    label: clickWaitingForResult.label, toPageKey: frontPageIdentity.key, toPageTitle: frontPageIdentity.title)
+            }
+            clickWaitingForResult = nil
+            appMemory.notePageFromScreenJob(elements: allScreenTexts.map {
+                DottieAppPage.Element(label: $0.text, centerX: $0.centerX, centerY: $0.centerY)
+            })
+            let screenTexts = DottieJevDriverPlan.clickableTexts(from: allScreenTexts, taskText: taskText)
+
+            // Something clicked here before led where this task is going:
+            // click it now (where it sits on this screen) without asking Jev.
+            if let knownPage = appMemory.knownFrontPage(),
+               let rememberedClick = DottieAppMemoryPlan.rememberedClick(
+                   on: knownPage, forTask: taskText,
+                   visibleLabels: allScreenTexts.map(\.text), alreadyClickedLabels: labelsClickedFromMemory
+               ),
+               let visibleText = allScreenTexts.first(where: {
+                   DottieAppMemoryPlan.comparableWords($0.text) == DottieAppMemoryPlan.comparableWords(rememberedClick.label)
+               }) {
+                let move = DottieJevDriverPlan.Move.click(label: visibleText.text, centerX: visibleText.centerX, centerY: visibleText.centerY)
+                labelsClickedFromMemory.insert(DottieAppMemoryPlan.comparableWords(rememberedClick.label))
+                DottieLog.notice("🎯 App memory clicked a remembered button without asking Jev")
+                await perform(move, screen: screen, stepNumber: stepNumber, actions: actions)
+                movesSoFar.append(move.summary)
+                previousScreenThumbnail = screenKey
+                lastMoveSignature = move.signature
+                if let frontPageIdentity {
+                    clickWaitingForResult = (frontPageIdentity.bundleIdentifier, frontPageIdentity.key, visibleText.text, visibleText.centerX, visibleText.centerY)
+                }
+                await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
+                continue
+            }
             let options = DottieJevDriverPlan.options(
                 screenTexts: screenTexts,
                 textPieces: textPieces,
@@ -526,6 +567,9 @@ enum DottieJevDriver {
                 movesSoFar.append(move.summary)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
+                if case .click(let label, let centerX, let centerY) = move, let frontPageIdentity {
+                    clickWaitingForResult = (frontPageIdentity.bundleIdentifier, frontPageIdentity.key, label, centerX, centerY)
+                }
                 // Let the app draw what the move opened before looking again:
                 // a page still loading looked like "nothing changed" and the
                 // move was struck off.
