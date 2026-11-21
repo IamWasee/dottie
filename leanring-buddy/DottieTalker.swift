@@ -274,6 +274,9 @@ enum DottieTalker {
         personalityLine: String
     ) async -> DottieTalkDecision {
         let requestBody = DottieTalkerProtocol.talkerRequestBody(transcript: transcript, exchanges: exchanges, personalityLine: personalityLine)
+        // Every model call from here until the next turn counts toward this ask.
+        let askNumber = DottieAskCounter.startNewAsk()
+        DottieLog.notice("💬 Ask \(public: askNumber) started")
         do {
             let answer = try await post(requestBody, timeoutSeconds: 12)
             let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer.text)
@@ -333,6 +336,9 @@ enum DottieTalker {
         let (responseData, response) = try await URLSession.shared.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard statusCode == 200 else { throw TalkerError.workerAnswered(statusCode) }
+        if let answerUsage = DottieAskUsage.fromServerSentEvents(String(decoding: responseData, as: UTF8.self)) {
+            DottieAskUsageLog.note(answerUsage, area: .voice)
+        }
         return DottieTalkerProtocol.brainAnswer(fromServerSentEvents: responseData)
     }
 }

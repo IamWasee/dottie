@@ -37,8 +37,22 @@ final class DottieUsage: ObservableObject {
         var seconds = 0.0
     }
 
+    /// One provider's answers in a day ("claude", "glm", "groq", "jev").
+    struct ProviderTotals: Codable, Equatable {
+        var answers = 0
+        var inputTokens = 0
+        var outputTokens = 0
+        var seconds = 0.0
+        /// Dollars for the answers whose price was known.
+        var dollars = 0.0
+        /// Answers the Worker had no price for, so `dollars` leaves them out.
+        var answersWithoutPrice = 0
+    }
+
     struct DayTotals: Codable, Equatable {
         var areas: [String: AreaTotals] = [:]
+        /// Optional so days saved before per-provider totals still load.
+        var providers: [String: ProviderTotals]? = nil
         var voiceAnswerStartSecondsTotal = 0.0
         var voiceAnswerStartCount = 0
     }
@@ -96,6 +110,64 @@ final class DottieUsage: ObservableObject {
         Task { @MainActor in
             DottieUsage.shared.record(area: area, inputTokens: inputTokens, outputTokens: answerTokens + thinkingTokens)
         }
+    }
+
+    /// One model answer's provider, tokens, time and cost (DottieAskUsage).
+    func recordProviderAnswer(_ usage: DottieAskUsage) {
+        let todayKey = Self.dayKey(for: Date())
+        var today = days[todayKey] ?? DayTotals()
+        var providers = today.providers ?? [:]
+        providers[usage.provider] = Self.adding(usage, to: providers[usage.provider] ?? ProviderTotals())
+        today.providers = providers
+        days[todayKey] = today
+        scheduleSave()
+    }
+
+    nonisolated static func adding(_ usage: DottieAskUsage, to providerTotals: ProviderTotals) -> ProviderTotals {
+        var updatedTotals = providerTotals
+        updatedTotals.answers += 1
+        updatedTotals.inputTokens += usage.inputTokens
+        updatedTotals.outputTokens += usage.outputTokens
+        updatedTotals.seconds += usage.seconds
+        if let estimatedDollars = usage.estimatedDollars {
+            updatedTotals.dollars += estimatedDollars
+        } else {
+            updatedTotals.answersWithoutPrice += 1
+        }
+        return updatedTotals
+    }
+
+    /// Each provider's totals over the last few days.
+    func providerTotals(forDaysBack numberOfDays: Int) -> [String: ProviderTotals] {
+        var combinedProviders: [String: ProviderTotals] = [:]
+        for dayOffset in 0..<max(numberOfDays, 1) {
+            guard let date = Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date()),
+                  let day = days[Self.dayKey(for: date)] else { continue }
+            for (providerName, dayProviderTotals) in day.providers ?? [:] {
+                combinedProviders[providerName] = Self.combined(combinedProviders[providerName] ?? ProviderTotals(), dayProviderTotals)
+            }
+        }
+        return combinedProviders
+    }
+
+    nonisolated static func combined(_ first: ProviderTotals, _ second: ProviderTotals) -> ProviderTotals {
+        ProviderTotals(
+            answers: first.answers + second.answers,
+            inputTokens: first.inputTokens + second.inputTokens,
+            outputTokens: first.outputTokens + second.outputTokens,
+            seconds: first.seconds + second.seconds,
+            dollars: first.dollars + second.dollars,
+            answersWithoutPrice: first.answersWithoutPrice + second.answersWithoutPrice
+        )
+    }
+
+    /// "$0.0123 · 42 answers", with how many had no price.
+    nonisolated static func providerDetailText(_ providerTotals: ProviderTotals) -> String {
+        var detail = "\(DottieAskUsage.dollarsText(providerTotals.dollars)) · \(providerTotals.answers) answer\(providerTotals.answers == 1 ? "" : "s")"
+        if providerTotals.answersWithoutPrice > 0 {
+            detail += " (\(providerTotals.answersWithoutPrice) without a price)"
+        }
+        return detail
     }
 
     /// Time from releasing the talk shortcut to Dottie's first spoken word.
@@ -212,6 +284,28 @@ struct HomeUsageSettings: View {
                 if let areaTotals = totals.areas[area] {
                     row(area: area, areaTotals: areaTotals)
                 }
+            }
+            let providerTotals = usage.providerTotals(forDaysBack: showsWeek ? 7 : 1)
+            if !providerTotals.isEmpty {
+                Text("By model provider")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DS.Colors.textPrimary)
+                    .padding(.top, 4)
+                ForEach(providerTotals.keys.sorted(), id: \.self) { providerName in
+                    HStack {
+                        Text(providerName.capitalized)
+                            .font(.system(size: 12))
+                            .foregroundColor(DS.Colors.textPrimary)
+                        Spacer()
+                        Text(DottieUsage.providerDetailText(providerTotals[providerName] ?? DottieUsage.ProviderTotals()))
+                            .font(.system(size: 12).monospacedDigit())
+                            .foregroundColor(DS.Colors.textSecondary)
+                    }
+                }
+                Text("Estimated from the tokens each model reported and the prices set on the Worker. Models without a price set count as answers only.")
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let averageVoiceAnswerStartSeconds = totals.averageVoiceAnswerStartSeconds {
                 HStack {

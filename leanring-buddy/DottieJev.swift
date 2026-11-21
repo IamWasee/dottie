@@ -192,7 +192,9 @@ enum DottieJev {
                 pausedUntil = Date().addingTimeInterval(pauseAfterFailureSeconds)
                 return nil
             }
-            DottieLog.notice("🎯 Jev answered in \(String(format: "%.2f", Date().timeIntervalSince(startedAt))) s")
+            let answerSeconds = Date().timeIntervalSince(startedAt)
+            DottieLog.notice("🎯 Jev answered in \(String(format: "%.2f", answerSeconds)) s")
+            DottieAskUsageLog.note(.jevAnswer(seconds: answerSeconds), area: .screenTasks)
             return answerData
         } catch {
             DottieLog.warning("⚠️ Jev didn't answer: \(error.localizedDescription)")
