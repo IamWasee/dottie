@@ -162,6 +162,75 @@ enum DottieNamedPlaceFinder {
         return nil
     }
 
+    /// The folder name in an "open …" target that says folder: "bull and
+    /// shit folder", "folder bull and shit", "the folder called bull and
+    /// shit". nil when it doesn't say folder.
+    static func spokenFolderName(fromOpenTarget openTarget: String) -> String? {
+        let lowercasedTarget = openTarget.lowercased().trimmingCharacters(in: .whitespaces)
+        let patterns = [
+            #"^(?:my |the )?(.+?) folder$"#,
+            #"^(?:my |the )?folder (?:called |named )?(.+)$"#
+        ]
+        for pattern in patterns {
+            guard let regularExpression = try? NSRegularExpression(pattern: pattern),
+                  let match = regularExpression.firstMatch(in: lowercasedTarget, range: NSRange(lowercasedTarget.startIndex..., in: lowercasedTarget)),
+                  let nameRange = Range(match.range(at: 1), in: lowercasedTarget) else { continue }
+            let folderName = lowercasedTarget[nameRange].trimmingCharacters(in: .whitespaces)
+            if !folderName.isEmpty { return folderName }
+        }
+        return nil
+    }
+
+    /// The real folder name a spoken one means, allowing for speech
+    /// recognition mishearing a word or two ("bowl and shit" → "bull and
+    /// shit"): same first letter and a few letters different at most. Only
+    /// one clear best match counts.
+    static func closestFolderName(to spokenName: String, among realNames: [String]) -> String? {
+        let spokenKey = folderKey(spokenName)
+        guard spokenKey.count >= 3 else { return nil }
+        if let exactName = realNames.first(where: { folderKey($0) == spokenKey }) { return exactName }
+        let allowedDistance = max(1, spokenKey.count / 5)
+        var bestName: String?
+        var bestDistance = Int.max
+        var bestIsTied = false
+        for realName in realNames {
+            let realKey = folderKey(realName)
+            guard realKey.first == spokenKey.first, abs(realKey.count - spokenKey.count) <= allowedDistance else { continue }
+            let distance = editDistance(spokenKey, realKey)
+            guard distance <= allowedDistance else { continue }
+            if distance < bestDistance {
+                bestName = realName
+                bestDistance = distance
+                bestIsTied = false
+            } else if distance == bestDistance {
+                bestIsTied = true
+            }
+        }
+        return bestIsTied ? nil : bestName
+    }
+
+    /// Letters added, removed or changed to turn one word into the other.
+    static func editDistance(_ first: String, _ second: String) -> Int {
+        let firstCharacters = Array(first)
+        let secondCharacters = Array(second)
+        guard !firstCharacters.isEmpty else { return secondCharacters.count }
+        guard !secondCharacters.isEmpty else { return firstCharacters.count }
+        var previousRow = Array(0...secondCharacters.count)
+        for firstIndex in 1...firstCharacters.count {
+            var currentRow = [firstIndex] + Array(repeating: 0, count: secondCharacters.count)
+            for secondIndex in 1...secondCharacters.count {
+                let substitutionCost = firstCharacters[firstIndex - 1] == secondCharacters[secondIndex - 1] ? 0 : 1
+                currentRow[secondIndex] = min(
+                    previousRow[secondIndex] + 1,
+                    currentRow[secondIndex - 1] + 1,
+                    previousRow[secondIndex - 1] + substitutionCost
+                )
+            }
+            previousRow = currentRow
+        }
+        return previousRow[secondCharacters.count]
+    }
+
     /// A folder name with only its letters and digits, lowercased, so
     /// "Dottie test sandbox" said out loud finds "Dottie-test-sandbox".
     static func folderKey(_ name: String) -> String {

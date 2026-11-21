@@ -377,8 +377,32 @@ export function salvagedToolUseFailure(errorText: string, chatRequest: Record<st
   }
   const error = (parsed as { error?: { code?: unknown; failed_generation?: unknown } } | null)?.error;
   if (error?.code !== "tool_use_failed" || typeof error.failed_generation !== "string") return undefined;
-  const text = error.failed_generation.trim();
+  const text = unwrappedToolCallText(error.failed_generation.trim());
   return text.length > 0 ? text : undefined;
+}
+
+/**
+ * gpt-oss sometimes wraps its words in a made-up call, like
+ * {"name":"assistant","arguments":"REQUEST"} or the unquoted
+ * {"name": "assistant<|channel|>final", "arguments": REQUEST.}. Those words
+ * are the answer; celly saw the raw JSON read out as Dottie's reply.
+ */
+export function unwrappedToolCallText(text: string): string {
+  if (!text.startsWith("{") || !text.includes('"arguments"')) return text;
+  const match = /"arguments"\s*:\s*("?)([\s\S]*?)\1\s*}\s*$/.exec(text);
+  if (!match) return text;
+  let argumentsText = match[2].trim();
+  // Arguments that are themselves an object: keep their first string value.
+  if (argumentsText.startsWith("{")) {
+    try {
+      const values = Object.values(JSON.parse(argumentsText) as Record<string, unknown>);
+      const firstString = values.find((value) => typeof value === "string");
+      if (typeof firstString === "string") argumentsText = firstString;
+    } catch {
+      return text;
+    }
+  }
+  return argumentsText.replace(/\\"/g, '"').trim();
 }
 
 // MARK: - Gemini → chat

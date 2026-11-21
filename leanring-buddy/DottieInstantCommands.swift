@@ -245,8 +245,34 @@ enum DottieInstantCommands {
         if let knownPlace = DottieKnownPlaces.shared.place(matchingSpokenName: spokenTarget) {
             return .openPlace(url: URL(fileURLWithPath: knownPlace.path), placeName: knownPlace.displayName)
         }
+        // "open my bull and shit folder": a folder in the home folder,
+        // Desktop, Documents or Downloads, even when a word was misheard.
+        if let spokenFolderName = DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: spokenTarget),
+           let folderURL = homeFolder(matchingSpokenName: spokenFolderName) {
+            return .openPlace(url: folderURL, placeName: folderURL.lastPathComponent)
+        }
         // Not known yet: whatever opens next is what these words meant.
         DottieKnownPlaces.shared.noteUnrecognizedOpenRequest(spokenTarget: spokenTarget)
+        return nil
+    }
+
+    /// One level inside the folders people keep things in; only folders.
+    private static func homeFolder(matchingSpokenName spokenFolderName: String) -> URL? {
+        let fileManager = FileManager.default
+        let homeFolderURL = fileManager.homeDirectoryForCurrentUser
+        let searchFolderURLs = [homeFolderURL] + ["Desktop", "Documents", "Downloads"].map { homeFolderURL.appendingPathComponent($0, isDirectory: true) }
+        for searchFolderURL in searchFolderURLs {
+            let folderNames = ((try? fileManager.contentsOfDirectory(atPath: searchFolderURL.path)) ?? []).filter { entryName in
+                var isDirectory: ObjCBool = false
+                return !entryName.hasPrefix(".")
+                    && !entryName.hasSuffix(".app")
+                    && fileManager.fileExists(atPath: searchFolderURL.appendingPathComponent(entryName).path, isDirectory: &isDirectory)
+                    && isDirectory.boolValue
+            }
+            if let matchedName = DottieNamedPlaceFinder.closestFolderName(to: spokenFolderName, among: folderNames) {
+                return searchFolderURL.appendingPathComponent(matchedName, isDirectory: true)
+            }
+        }
         return nil
     }
 

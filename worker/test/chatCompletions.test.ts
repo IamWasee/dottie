@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   salvagedToolUseFailure,
+  unwrappedToolCallText,
   answerWithProvider,
   canAnswer,
   estimatedTokens,
@@ -769,6 +770,11 @@ describe("salvagedToolUseFailure", () => {
     expect(salvagedToolUseFailure(failure("REQUEST"), { tools: [] })).toBe("REQUEST");
   });
 
+  it("takes the words out of a made-up call around them", () => {
+    expect(salvagedToolUseFailure(failure('{"name":"assistant","arguments":"REQUEST"}'), {})).toBe("REQUEST");
+    expect(salvagedToolUseFailure(failure('{"name": "assistant<|channel|>final", "arguments": REQUEST.}'), {})).toBe("REQUEST.");
+  });
+
   it("leaves real tool requests, other errors and junk alone", () => {
     expect(salvagedToolUseFailure(failure("hi"), { tools: [{ type: "function" }] })).toBeUndefined();
     expect(salvagedToolUseFailure(failure("hi", "invalid_request_error"), {})).toBeUndefined();
@@ -776,5 +782,22 @@ describe("salvagedToolUseFailure", () => {
     expect(salvagedToolUseFailure(failure("   "), {})).toBeUndefined();
     expect(salvagedToolUseFailure("not json", {})).toBeUndefined();
     expect(salvagedToolUseFailure("null", {})).toBeUndefined();
+  });
+});
+
+describe("unwrappedToolCallText", () => {
+  it("unwraps quoted, unquoted and object arguments", () => {
+    expect(unwrappedToolCallText('{"name":"assistant","arguments":"REQUEST SCREEN"}')).toBe("REQUEST SCREEN");
+    expect(unwrappedToolCallText('{"name": "x", "arguments": hi there.}')).toBe("hi there.");
+    expect(unwrappedToolCallText('{"name":"assistant","arguments":{"text":"sure thing"}}')).toBe("sure thing");
+    expect(unwrappedToolCallText('{"name":"a","arguments":"say \\"hi\\""}')).toBe('say "hi"');
+  });
+
+  it("leaves plain words and other JSON alone", () => {
+    expect(unwrappedToolCallText("hi there")).toBe("hi there");
+    expect(unwrappedToolCallText('{"answer":"hi"}')).toBe('{"answer":"hi"}');
+    expect(unwrappedToolCallText('{"name":"a","arguments":{not json}}')).toBe('{"name":"a","arguments":{not json}}');
+    expect(unwrappedToolCallText('{"name":"a","arguments": "unterminated')).toBe('{"name":"a","arguments": "unterminated');
+    expect(unwrappedToolCallText('{"name":"a","arguments":{"count":3}}')).toBe("{\"count\":3}");
   });
 });
