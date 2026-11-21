@@ -40,7 +40,7 @@ enum DottieFixText {
         }
     }
 
-    private static let model = "gemini-3.5-flash-lite"
+    private static let model = DottieModelPicker.quickModelName
     private static let maximumTextLength = 12_000
     private static var isRunning = false
 
@@ -97,7 +97,7 @@ enum DottieFixText {
             notchPresenter?.collapse()
         }
         guard let rewrittenText, !rewrittenText.isEmpty else {
-            return finish("Couldn't reach Gemini just now. Try again in a moment.", fromShortcut: fromShortcut)
+            return finish("Couldn't reach the AI model just now. Try again in a moment.", fromShortcut: fromShortcut)
         }
         if rewrittenText == originalText {
             DottieEveryday.shared.tell(title: "Already good", text: "Nothing to change in that text.")

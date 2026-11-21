@@ -282,7 +282,7 @@ enum DottieAwayModeTools: DottieToolModule {
 struct HomeWorkingAloneSettings: View {
     @ObservedObject private var awayMode = DottieAwayMode.shared
     @ObservedObject private var keepAwake = DottieKeepAwake.shared
-    @AppStorage(DottieScreenJobClaudeBrain.isEnabledDefaultsKey) private var screenJobsUseClaude = true
+    @AppStorage(DottieScreenJobClaudeBrain.isEnabledDefaultsKey) private var screenJobsUseClaude = false
     @AppStorage(DottieScreenJobGuesser.isEnabledDefaultsKey) private var screenJobsGuessFirst = true
     @AppStorage(DottieWorkRoutes.helpersCanUseHomeFoldersDefaultsKey) private var helpersCanUseHomeFolders = true
     @AppStorage(DottieMacActions.alwaysAllowsScriptsDefaultsKey) private var alwaysAllowsScripts = false
@@ -307,7 +307,7 @@ struct HomeWorkingAloneSettings: View {
             Toggle("Screen jobs think with Claude Sonnet", isOn: $screenJobsUseClaude)
                 .toggleStyle(.switch)
                 .pointerCursor()
-            hint("Uses your Claude plan through MausBot, with Gemini taking over when Claude is busy or slow.")
+            hint("Off by default. Uses your Claude plan through MausBot; each step can wait up to 20 s for it, then GLM takes over.")
             Toggle("Guess the steps first, look only when a guess misses", isOn: $screenJobsGuessFirst)
                 .toggleStyle(.switch)
                 .pointerCursor()

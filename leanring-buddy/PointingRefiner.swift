@@ -37,7 +37,7 @@ enum PointingRefiner {
     static let refinementTimeoutSeconds: TimeInterval = 5
     /// The quickest model that still finds boxes well: about 1-1.5s on a
     /// Mac runner, against 2.5-8s for gemini-3.6-flash (Oct 2026).
-    static let visionModel = "gemini-3.5-flash-lite"
+    static let visionModel = DottieModelPicker.quickModelName
     /// Text recognition normally takes well under a second.
     static let textSearchTimeoutSeconds: TimeInterval = 1.2
 

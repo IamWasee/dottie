@@ -25,9 +25,9 @@ final class DottieUsage: ObservableObject {
         case screenTasks = "Screen tasks and games"
         case pointing = "Pointing and teaching"
         case memory = "Memory"
-        case geminiHelpers = "Helpers on Gemini"
+        case geminiHelpers = "Helpers on GLM"
         case claudeHelpers = "Helpers on Claude"
-        case otherGemini = "Other Gemini calls"
+        case otherGemini = "Other model calls"
     }
 
     struct AreaTotals: Codable, Equatable {
@@ -224,7 +224,7 @@ struct HomeUsageSettings: View {
                         .foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            Text("Tokens Gemini reported for each area. Claude helpers are counted in turns, since MausBot doesn't report tokens.")
+            Text("Tokens the models reported for each area. Claude helpers are counted in turns, since MausBot doesn't report tokens.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

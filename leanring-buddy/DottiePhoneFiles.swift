@@ -26,7 +26,7 @@ final class DottiePhoneFiles {
     var uploadToDriveOnScreen: ((URL) -> String)?
     var sendText: ((String) async -> Void)?
 
-    private static let model = "gemini-3.5-flash-lite"
+    private static let model = DottieModelPicker.quickModelName
 
     /// Handles a text if it's about files. Returns false when it isn't, so
     /// the Phone helper takes it.

@@ -37,7 +37,7 @@ extension CompanionManager {
     /// relay, so the user always hears something.
     /// Answered the box and text probes in about 2s when the default models
     /// stalled (checked on a Mac runner, Oct 2026).
-    nonisolated private static let quickBackupModel = "gemini-3.5-flash"
+    nonisolated private static let quickBackupModel = DottieModelPicker.normalModelName
 
     /// Runs primary; if it hasn't answered after backupAfterSeconds, starts
     /// backup too and returns whichever answers first.

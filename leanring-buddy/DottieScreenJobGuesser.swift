@@ -56,7 +56,7 @@ final class DottieScreenJobGuesser {
     private static let waitForControlSeconds: Double = 2
     /// How long an app or link gets to open before the next step.
     private static let waitAfterOpeningSeconds: Double = 1.5
-    private static let geminiPlanModel = "gemini-3.6-flash"
+    private static let geminiPlanModel = DottieModelPicker.normalModelName
 
     private let plannerBot = DottieClaudeBot(
         helperName: "Dottie Planner",

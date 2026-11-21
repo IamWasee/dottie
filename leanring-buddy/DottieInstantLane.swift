@@ -215,6 +215,9 @@ final class DottieInstantLane {
         case saveNamedShortcut(name: String, commandTexts: [String])
         /// Dottie's own tools, worked out by Needle (a reminder, an event).
         case toolSteps([DottieLearnedShortcut.Step])
+        /// "Watch me for 30 seconds", "create a smart replay of me doing
+        /// this", "done": started on the Mac so it always really starts.
+        case learningPhrase(DottieLearningPhrase)
     }
 
     enum Outcome {
@@ -263,6 +266,13 @@ final class DottieInstantLane {
         let normalizedRequest = DottieInstantText.normalized(requestText)
         guard !normalizedRequest.isEmpty else { return nil }
 
+        if let learningPhrase = DottieLearningPhrase.phrase(
+            in: normalizedRequest,
+            isWatching: DottieWatchAndLearn.shared.isWatching,
+            isRecordingReplay: DottieSmartReplayRecorder.shared.isRecording
+        ) {
+            return .learningPhrase(learningPhrase)
+        }
         if let namedShortcutRequest = namedShortcutRequest(in: requestText),
            let namedShortcutCommands = DottieInstantCommands.parseAllWithWords(namedShortcutRequest.task) {
             return .saveNamedShortcut(name: namedShortcutRequest.name, commandTexts: namedShortcutCommands.map(\.words))
@@ -301,7 +311,9 @@ final class DottieInstantLane {
         // Keyboard shortcuts by name, keys said out loud, and teaching one.
         "minimize", "minimise", "hide", "new", "reopen", "reload", "refresh", "undo", "redo", "save", "select",
         "copy", "paste", "cut", "print", "zoom", "reset", "actual", "enter", "leave", "toggle", "full", "spotlight",
-        "mission", "emoji", "lock", "press", "hit", "remember"
+        "mission", "emoji", "lock", "press", "hit", "remember",
+        // Teaching Dottie by showing her (DottieLearningPhrase).
+        "watch", "observe", "create", "record", "done", "finished"
     ]
 
     /// Window moves can start with the app's name ("terminal on the left").
@@ -358,6 +370,11 @@ final class DottieInstantLane {
                 isNamedByUser: true
             )
             return .done("Saved: say “\(shortcutName)” any time. " + doneText)
+
+        case .learningPhrase(let learningPhrase):
+            guard let runSavedToolStep else { return .askGemini }
+            let toolResult = await runSavedToolStep(learningPhrase.toolName, learningPhrase.toolArguments)
+            return .done(learningPhrase.doneText(forToolResult: toolResult))
 
         case .toolSteps(let toolSteps):
             guard let runSavedToolStep else { return .askGemini }
@@ -683,7 +700,7 @@ struct HomeInstantLaneSettings: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
-            Text("“Open Spotify”, “quit Slack”, “Terminal on the left”, “Chrome on my other screen”, “maximize Safari”, “next song”, “volume up”, “google …”. Your words are heard on your Mac, and Dottie does these before Gemini answers.")
+            Text("“Open Spotify”, “quit Slack”, “Terminal on the left”, “Chrome on my other screen”, “maximize Safari”, “next song”, “volume up”, “google …”. Your words are heard on your Mac, and Dottie does these before any AI model is asked.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -698,7 +715,7 @@ struct HomeInstantLaneSettings: View {
                     .toggleStyle(.switch)
                     .disabled(!areInstantCommandsEnabled)
             }
-            Text("A small model that runs on your Mac (Cactus Needle, no internet, about a tenth of a second) catches other ways of saying these, like “pop Safari open”, “kill Zoom” or “stop the song”, plus “remind me tomorrow at 7 pm to …” and “put lunch with Sam on my calendar Friday at noon”. It only acts when your words back it up; anything else goes to Gemini. When Gemini can't be reached, it still does these on the Mac.")
+            Text("A small model that runs on your Mac (Cactus Needle, no internet, about a tenth of a second) catches other ways of saying these, like “pop Safari open”, “kill Zoom” or “stop the song”, plus “remind me tomorrow at 7 pm to …” and “put lunch with Sam on my calendar Friday at noon”. It only acts when your words back it up; anything else goes to the AI models. When they can't be reached, it still does these on the Mac.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -35,7 +35,7 @@ enum DottieSpeedTools: DottieToolModule {
             ),
             DottieTool(
                 name: "self_check",
-                description: "Tests everything Dottie needs (permissions, server, Gemini, voice, microphone, screen, helpers, phone) and returns what's wrong. Use when something seems broken (no sound, can't see the screen, slow answers), then tell the user the gist in a sentence or two.",
+                description: "Tests everything Dottie needs (permissions, server, AI models, voice, microphone, screen, helpers, phone) and returns what's wrong. Use when something seems broken (no sound, can't see the screen, slow answers), then tell the user the gist in a sentence or two.",
                 audiences: [.voice],
                 run: { _ in await DottieSelfCheck.shared.run() }
             )

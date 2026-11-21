@@ -121,7 +121,7 @@ final class DottieEpisodicMemory: ObservableObject {
     static let shared = DottieEpisodicMemory()
 
     /// The cheapest quick model the app already uses.
-    static let summarizingModel = "gemini-3.5-flash-lite"
+    static let summarizingModel = DottieModelPicker.quickModelName
     static let maximumEpisodes = 3000
     /// Quiet time after the last exchange before a conversation is saved.
     private static let conversationIdleSeconds: TimeInterval = 150

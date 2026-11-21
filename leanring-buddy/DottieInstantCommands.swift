@@ -480,8 +480,20 @@ enum DottieInstantCommands {
             guard DottieScreenActionPerformer.canPostEvents else {
                 return .failed("I need Accessibility permission to press \(keyCombination). Turn it on in Settings, then ask again.")
             }
+            await handKeyboardBackToTheFrontApp()
             return DottieScreenActionPerformer.press(keyCombination: keyCombination) ? .done(doneText) : .failed("I couldn't press \(keyCombination).")
         }
+    }
+
+    /// The type-to-ask box is a non-activating panel that holds keyboard
+    /// focus while the user types, so a shortcut pressed right after Return
+    /// ("minimize" → cmd+M) went to Dottie's own box and did nothing while
+    /// Dottie said it was done (round 1079). Letting go of the focus first
+    /// sends it to the app the user is working in.
+    private static func handKeyboardBackToTheFrontApp() async {
+        guard !NSRunningApplication.current.isActive, let dottieKeyWindow = NSApp.keyWindow else { return }
+        dottieKeyWindow.resignKey()
+        try? await Task.sleep(nanoseconds: 120_000_000)
     }
 
     private static func openApp(appURL: URL, appName: String) async -> DottieInstantCommandResult {

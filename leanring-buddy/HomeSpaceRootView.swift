@@ -911,7 +911,7 @@ private struct HomeSettingsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            settingsHint("Built into this copy of Dottie. It holds the Gemini key, so the app never sees it.")
+            settingsHint("Built into this copy of Dottie. It holds the AI keys, so the app never sees them.")
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Server address")

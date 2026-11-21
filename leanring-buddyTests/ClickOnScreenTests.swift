@@ -83,4 +83,11 @@ struct ClickOnScreenTests {
     @Test func aClickWithoutASpotIsRefused() {
         #expect(DottieScreenAction(functionName: "click_on_screen", arguments: ["label": "Sign in"]) == nil)
     }
+
+    @MainActor @Test func aClickThatChangedNothingIsNotReportedAsDone() {
+        let result = CompanionManager.clickChangedNothingResult(label: "Search")
+        #expect(result.contains("NOT done"))
+        #expect(result.contains("do_task_on_screen"))
+        #expect(result.contains("Search"))
+    }
 }

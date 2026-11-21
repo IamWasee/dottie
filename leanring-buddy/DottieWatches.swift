@@ -87,7 +87,7 @@ final class DottieWatches {
     private static let modelCheckMinimumSeconds: TimeInterval = 20
     /// Across every watch, so several never add up to a burst of calls.
     private static let modelCallSpacingSeconds: TimeInterval = 8
-    private static let model = "gemini-3.5-flash-lite"
+    private static let model = DottieModelPicker.quickModelName
     private static let inProgressDownloadExtensions: Set<String> = ["crdownload", "download", "part", "partial", "opdownload"]
 
     private var watches: [Watch] = []

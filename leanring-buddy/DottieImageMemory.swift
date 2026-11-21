@@ -31,7 +31,7 @@ final class DottieImageMemory: ObservableObject {
     private static let maximumItems = 200
     /// Big enough to show detail, small enough to send along every step.
     private static let maximumImageDimension: CGFloat = 1024
-    private static let describingModel = "gemini-3.5-flash-lite"
+    private static let describingModel = DottieModelPicker.quickModelName
 
     let folderURL: URL
     private var indexURL: URL { folderURL.appendingPathComponent("index.json") }

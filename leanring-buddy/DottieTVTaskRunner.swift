@@ -36,7 +36,7 @@ final class DottieTVTaskRunner {
     private var runTask: Task<Void, Never>?
     var onProgress: ((String) -> Void)?
 
-    private static let model = "gemini-3.5-flash-lite"
+    private static let model = DottieModelPicker.quickModelName
     private static let maximumSteps = 30
 
     func start(task: String, controls: Controls, completion: @escaping (Outcome) -> Void) {
@@ -87,7 +87,7 @@ final class DottieTVTaskRunner {
                 failures = 0
             } catch {
                 failures += 1
-                if failures >= 3 { return .failed("Gemini stopped answering (\(error.localizedDescription)).") }
+                if failures >= 3 { return .failed("The AI model stopped answering (\(error.localizedDescription)).") }
                 contents.removeLast()
                 pendingResponses = (userParts.filter { $0["functionResponse"] != nil })
                 try? await Task.sleep(nanoseconds: UInt64(failures) * 3_000_000_000)
@@ -97,7 +97,7 @@ final class DottieTVTaskRunner {
             contents.append(["role": "model", "parts": modelParts])
 
             let functionCalls = modelParts.compactMap { $0["functionCall"] as? [String: Any] }
-            guard !functionCalls.isEmpty else { return .failed("Gemini didn't give a next step.") }
+            guard !functionCalls.isEmpty else { return .failed("The AI model didn't give a next step.") }
             for functionCall in functionCalls {
                 let name = functionCall["name"] as? String ?? ""
                 let arguments = functionCall["args"] as? [String: Any] ?? [:]
