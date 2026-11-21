@@ -1546,7 +1546,7 @@ final class DottieScreenTaskRunner {
             firstParts.insert(contentsOf: referenceImageParts, at: 0)
             requestContents[0]["parts"] = firstParts
         }
-        var requestBody: [String: Any] = [
+        let requestBody: [String: Any] = [
             // The Worker's picture route: GLM first, then its backups
             // (paidProviders in worker/src/index.ts). No Gemini.
             "provider": "screen",
