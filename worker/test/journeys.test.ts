@@ -97,6 +97,32 @@ describe("a chat turn", () => {
   });
 });
 
+describe("a spoken request and its screen job, with usage", () => {
+  it("says which model answered each ask and what it cost, with wrangler.toml's screen-step limit", async () => {
+    const env = deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", ZAI_API_KEY: "test-zai-key", GROQ_API_KEY: "test-groq-key" });
+    expect(env.SCREEN_STEP_ATTEMPT_SECONDS).toBe("8");
+    const callWorker = appCaller(env);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    fakeFetch([
+      ["api.groq.com", chatAnswer({ role: "assistant", content: "REQUEST" })],
+      ["api.anthropic.com", jsonAnswer({ type: "message", role: "assistant", content: [{ type: "text", text: "on it" }], stop_reason: "end_turn", usage: { input_tokens: 2000, output_tokens: 20 } })],
+      ["api.z.ai", chatAnswer({ role: "assistant", content: "click Notes" })],
+    ]);
+
+    const talk = await sseJSON(await callWorker("/chat", { body: { provider: "talk", contents: [userText("open notes")] } }));
+    expect(talk.dottieUsage).toMatchObject({ provider: "groq", estimatedDollars: null });
+
+    const request = await sseJSON(await callWorker("/chat", { body: { provider: "request", contents: [userText("open notes")] } }));
+    expect(request.dottieUsage).toMatchObject({ provider: "claude", model: "claude-haiku-5-5", inputTokens: 2000, outputTokens: 20 });
+    expect(request.dottieUsage.estimatedDollars).toBeGreaterThan(0);
+
+    const screenStep = await sseJSON(await callWorker("/chat", {
+      body: { provider: "screen", contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } }, { text: "next?" }] }] },
+    }));
+    expect(screenStep.dottieUsage).toMatchObject({ provider: "glm", model: "glm-5.3-flash" });
+  });
+});
+
 describe("a screen job and a helper on the paid models", () => {
   it("sends screen steps and a helper's turn to GLM, and never asks Claude, Groq or Gemini", async () => {
     const callWorker = appCaller(deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", ZAI_API_KEY: "test-zai-key", GROQ_API_KEY: "test-groq-key" }));

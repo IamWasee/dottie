@@ -280,14 +280,85 @@ export function fittedForProvider(
   return fittedBody;
 }
 
+// MARK: - Usage and cost per answer
+
+type AnswerUsageMetadata = { promptTokenCount?: number; candidatesTokenCount?: number };
+
+/**
+ * Dollars per million tokens (input/output) for the models Dottie uses.
+ * Claude Haiku 5.5's are Anthropic's list prices. GLM, Groq and NIM aren't
+ * listed here because their prices weren't checked: set them in
+ * MODEL_PRICES ("model=input/output,…") from the providers' consoles, and
+ * until then their answers say the cost is unknown instead of $0.
+ */
+export const DEFAULT_MODEL_PRICES = "claude-haiku-5-5=0.10/0.50";
+
+export interface ModelPrice {
+  inputDollarsPerMillion: number;
+  outputDollarsPerMillion: number;
+}
+
+/** "model=in/out,…" read into prices; the defaults, with the setting on top. */
+export function modelPrices(pricesSetting?: string): Record<string, ModelPrice> {
+  const prices: Record<string, ModelPrice> = {};
+  for (const setting of [DEFAULT_MODEL_PRICES, pricesSetting ?? ""]) {
+    for (const entry of setting.split(",")) {
+      const match = entry.trim().match(/^([^=\s]+)\s*=\s*([0-9.]+)\s*\/\s*([0-9.]+)$/);
+      if (!match) continue;
+      const inputDollarsPerMillion = Number.parseFloat(match[2]);
+      const outputDollarsPerMillion = Number.parseFloat(match[3]);
+      if (!Number.isFinite(inputDollarsPerMillion) || !Number.isFinite(outputDollarsPerMillion)) continue;
+      prices[match[1].toLowerCase()] = { inputDollarsPerMillion, outputDollarsPerMillion };
+    }
+  }
+  return prices;
+}
+
+/** One answer's usage, sent to the app as `dottieUsage` and logged. */
+export interface AnswerUsage {
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  seconds: number;
+  /** Estimated cost; null when the model has no price set. */
+  estimatedDollars: number | null;
+}
+
+export function answerUsage(
+  providerName: string,
+  model: string,
+  usageMetadata: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined,
+  milliseconds: number,
+  pricesSetting?: string
+): AnswerUsage {
+  const inputTokens = usageMetadata?.promptTokenCount ?? 0;
+  const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
+  const price = modelPrices(pricesSetting)[model.toLowerCase()];
+  const estimatedDollars = price
+    ? Math.round(((inputTokens * price.inputDollarsPerMillion + outputTokens * price.outputDollarsPerMillion) / 1_000_000) * 1e8) / 1e8
+    : null;
+  return { provider: providerName, model, inputTokens, outputTokens, seconds: Math.round(milliseconds / 10) / 100, estimatedDollars };
+}
+
+/** Settings for one ask that aren't part of the body. */
+export interface AnswerOptions {
+  /** MODEL_PRICES, for the cost in each answer's usage. */
+  pricesSetting?: string;
+}
+
 /**
  * Asks the provider's models in turn. Returns a Gemini-shaped response (one
- * SSE event when `streaming`), or undefined when every model failed.
+ * SSE event when `streaming`), or undefined when every model failed. Each
+ * answer carries `dottieUsage` (provider, model, tokens, seconds, cost) and
+ * is logged as one "[usage]" line, so every ask's model and cost can be
+ * followed in the app's log and the Worker's.
  */
 export async function answerWithProvider(
   provider: ChatProvider,
   geminiBody: Record<string, unknown>,
-  streaming: boolean
+  streaming: boolean,
+  options: AnswerOptions = {}
 ): Promise<Response | undefined> {
   const models = imageCount(geminiBody) > 0 ? provider.visionModels : provider.textModels;
   // Groq's models write boxes in pixels, left first; Gemini's box_2d is
@@ -304,6 +375,7 @@ export async function answerWithProvider(
     : { authorization: `Bearer ${provider.apiKey}`, "content-type": "application/json", accept: "application/json" };
   for (const model of models) {
     for (const extras of [provider.extrasForModel(model), {}]) {
+      const startedAt = Date.now();
       let response: Response;
       try {
         response = await fetch(provider.apiURL, {
@@ -324,6 +396,9 @@ export async function answerWithProvider(
         let geminiResponse = toGeminiResponse(chatResponse, `${provider.name}/${model}`);
         if (!geminiResponse) break;
         if (boxConversion) geminiResponse = boxConversion.responseForGemini(geminiResponse);
+        const usage = answerUsage(provider.name, model, geminiResponse.usageMetadata as AnswerUsageMetadata | undefined, Date.now() - startedAt, options.pricesSetting);
+        console.log(`[usage] ${JSON.stringify(usage)}`);
+        geminiResponse = { ...geminiResponse, dottieUsage: usage };
         const payload = JSON.stringify(geminiResponse);
         return streaming
           ? new Response(`data: ${payload}\r\n\r\n`, {

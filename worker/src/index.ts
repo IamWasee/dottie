@@ -57,6 +57,10 @@ export interface Env {
   HELPER_PROVIDER_ORDER?: string;
   GROQ_TALK_MODELS?: string;
   REQUEST_PROVIDER_ORDER?: string;
+  /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
+  SCREEN_STEP_ATTEMPT_SECONDS?: string;
+  /** "model=input/output,…" dollars per million tokens, on top of DEFAULT_MODEL_PRICES; for the cost in each answer's usage. */
+  MODEL_PRICES?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -300,8 +304,29 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
   }
 
-  const answer = await answerWithAnyProvider(env, requestBody, true, "/chat");
+  // A screen step: the app waits about 20 s in all, so each model gets a
+  // short try and the next provider still answers in time. In round 2 of
+  // 1.0.80 GLM held steps for its whole 45 s try, the app gave up at 20 s
+  // and Claude, next in line, never got the step.
+  const attemptLimitMilliseconds = wantedRole === "screen" ? screenStepAttemptMilliseconds(env.SCREEN_STEP_ATTEMPT_SECONDS) : undefined;
+  const answer = await answerWithAnyProvider(env, requestBody, true, "/chat", attemptLimitMilliseconds);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
+}
+
+/** How long one model may take on a screen step, by default 8 s. */
+export const DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS = 8;
+
+/** SCREEN_STEP_ATTEMPT_SECONDS in milliseconds; the default when unset or not a number from 1 to 60. */
+export function screenStepAttemptMilliseconds(setting: string | undefined): number {
+  const seconds = Number.parseFloat(setting ?? "");
+  const usableSeconds = Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? seconds : DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS;
+  return Math.round(usableSeconds * 1000);
+}
+
+/** The provider with its tries cut to at most the limit; unchanged without one. */
+export function withAttemptLimit(provider: ChatProvider, attemptLimitMilliseconds: number | undefined): ChatProvider {
+  if (attemptLimitMilliseconds === undefined || provider.attemptTimeoutMilliseconds <= attemptLimitMilliseconds) return provider;
+  return { ...provider, attemptTimeoutMilliseconds: attemptLimitMilliseconds };
 }
 
 /** What a caller hears when every model is busy, down or has no key. */
@@ -316,21 +341,23 @@ async function answerWithAnyProvider(
   env: Env,
   geminiBody: Record<string, unknown>,
   streaming: boolean,
-  routeName: string
+  routeName: string,
+  attemptLimitMilliseconds?: number
 ): Promise<Response | undefined> {
-  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName);
+  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName, undefined, attemptLimitMilliseconds);
   if (paidResponse) return paidResponse;
   const backups: ChatProvider[] = [];
   const groq = groqFromEnv(env);
   if (groq) backups.push(groq);
   if (env.NVIDIA_API_KEY) backups.push(nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS));
-  for (const backup of backups) {
+  for (const unlimitedBackup of backups) {
+    const backup = withAttemptLimit(unlimitedBackup, attemptLimitMilliseconds);
     const fittedBody = fittedForProvider(backup, geminiBody, routeName === "/chat");
     if (!canAnswer(backup, fittedBody)) {
       console.warn(`[${routeName}] too big for ${backup.name}`);
       continue;
     }
-    const backupResponse = await answerWithProvider(backup, fittedBody, streaming);
+    const backupResponse = await answerWithProvider(backup, fittedBody, streaming, { pricesSetting: env.MODEL_PRICES });
     if (backupResponse) return backupResponse;
     console.warn(`[${routeName}] ${backup.name} couldn't answer`);
   }
@@ -374,16 +401,18 @@ async function answerWithPaidProviders(
   geminiBody: Record<string, unknown>,
   streaming: boolean,
   routeName: string,
-  forcedOrder?: string
+  forcedOrder?: string,
+  attemptLimitMilliseconds?: number
 ): Promise<Response | undefined> {
-  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
+  for (const unlimitedProvider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
+    const provider = withAttemptLimit(unlimitedProvider, attemptLimitMilliseconds);
     // Screen jobs send a screenshot every step: only the newest ones go.
     const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
     if (!canAnswer(provider, fittedBody)) {
       console.warn(`[${routeName}] too big for ${provider.name}`);
       continue;
     }
-    const response = await answerWithProvider(provider, fittedBody, streaming);
+    const response = await answerWithProvider(provider, fittedBody, streaming, { pricesSetting: env.MODEL_PRICES });
     if (response) return response;
     console.warn(`[${routeName}] ${provider.name} couldn't answer`);
   }
@@ -403,7 +432,7 @@ async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promi
   const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
   const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
   if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
-  const groqResponse = await answerWithProvider(groq, requestBody, true);
+  const groqResponse = await answerWithProvider(groq, requestBody, true, { pricesSetting: env.MODEL_PRICES });
   return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);
 }
 

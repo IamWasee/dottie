@@ -43,6 +43,11 @@ name = "REQUEST_RATE_LIMITER"
 namespace_id = "1001"
 simple = { limit = 300, period = 60 }
 
+# Workers Logs: keeps each answer's "[usage]" line (provider, model,
+# tokens, seconds, estimated $) in the dashboard, not only in wrangler tail.
+[observability]
+enabled = true
+
 [vars]
 # Groq models (only with GROQ_API_KEY), best first. Each has its own free
 # limit (about 30 requests and 8,000 tokens a minute).
@@ -59,3 +64,10 @@ GROQ_MAX_REQUEST_TOKENS = "7000"
 INSTALL_DAILY_LIMITS = "voice=300,chat=3000,speech=1000,dictation=1000,helpers=3000,search=1000,newInstalls=200"
 # NVIDIA NIM backups (only with NVIDIA_API_KEY), best first.
 NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"
+# Seconds one model may take on a screen-job step before the next provider
+# answers. The app waits about 20 s, so two tries must fit in it.
+SCREEN_STEP_ATTEMPT_SECONDS = "8"
+# Dollars per million tokens, input/output, for each answer's estimated
+# cost ("model=in/out,..."). Claude Haiku 5.5 is built in; add GLM, Groq
+# and NIM from their consoles. Models without a price show the cost as unknown.
+MODEL_PRICES = ""
