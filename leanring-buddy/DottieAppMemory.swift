@@ -15,6 +15,7 @@
 
 import AppKit
 import ApplicationServices
+import Carbon
 import CryptoKit
 import Foundation
 import Vision
