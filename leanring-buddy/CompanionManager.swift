@@ -1501,6 +1501,8 @@ final class CompanionManager: ObservableObject {
         var missedSteps = 0
         // Text already written, so a new label doesn't land on top of one.
         var occupiedTextRects = DottieTeaching.textRects(of: drawingOverlayManager.figures)
+        // Lines already drawn, so a label doesn't land on one either.
+        var occupiedStrokeSegments = DottieTeaching.strokeSegments(of: drawingOverlayManager.figures)
         for plannedStep in plan.steps {
             if Task.isCancelled { break }
             var step = plannedStep
@@ -1559,10 +1561,14 @@ final class CompanionManager: ObservableObject {
                 teachingNarrationTask = narration
             }
             if var drawn = DottieTeaching.draw(step, in: space) {
-                if step.kind == .text {
-                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
+                // Text and the labels of curves, arrows and shapes keep off
+                // earlier text and lines, not only text steps.
+                if DottieTeaching.movesLabelsClearOfLines(step.kind) {
+                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects,
+                                                             occupiedStrokeSegments: occupiedStrokeSegments, boardRect: space.boardRect)
                 }
                 occupiedTextRects += DottieTeaching.textRects(of: drawn.figures)
+                occupiedStrokeSegments += DottieTeaching.strokeSegments(of: drawn.figures)
                 let leadInSeconds = 0.4
                 penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
                                           caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)

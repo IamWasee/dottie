@@ -18,30 +18,31 @@ struct TeachingJourneyTests {
     private let laptopScreen = CGRect(x: 0, y: 0, width: 1440, height: 875)
 
     /// Draws a plan the way CompanionManager.runTeaching does: on its
-    /// board, text steps moved clear of earlier text.
-    private func drawAll(_ plan: DottieTeaching.Plan, on board: CGRect?) -> (figures: [DottieFigure], missedSteps: Int) {
+    /// board, labels moved clear of earlier text and lines.
+    private func drawAll(_ plan: DottieTeaching.Plan, on board: CGRect?) -> (figures: [DottieFigure], missedSteps: Int, movableLabels: [CGRect]) {
         let space = DottieTeaching.Space(boardRect: board, anchorFrames: [:], screenPoint: { normalizedX, normalizedY in
             CGPoint(x: normalizedX / 1000 * 1440, y: 875 - normalizedY / 1000 * 875)
         })
         var figures: [DottieFigure] = []
         var occupiedTextRects: [CGRect] = []
+        var occupiedStrokeSegments: [(start: CGPoint, end: CGPoint)] = []
+        var movableLabels: [CGRect] = []
         var missedSteps = 0
         for step in plan.steps {
             guard var drawn = DottieTeaching.draw(step, in: space) else {
                 missedSteps += 1
                 continue
             }
-            if step.kind == .text {
-                drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
+            if DottieTeaching.movesLabelsClearOfLines(step.kind) {
+                drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects,
+                                                         occupiedStrokeSegments: occupiedStrokeSegments, boardRect: board)
+                movableLabels += DottieTeaching.textRects(of: drawn.figures)
             }
-            for figure in drawn.figures {
-                if case .text = figure.shape {
-                    occupiedTextRects.append(figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2))
-                }
-            }
+            occupiedTextRects += DottieTeaching.textRects(of: drawn.figures)
+            occupiedStrokeSegments += DottieTeaching.strokeSegments(of: drawn.figures)
             figures += drawn.figures
         }
-        return (figures, missedSteps)
+        return (figures, missedSteps, movableLabels)
     }
 
     private func textRects(_ figures: [DottieFigure]) -> [CGRect] {
@@ -86,6 +87,23 @@ struct TeachingJourneyTests {
                 #expect(!labels[firstIndex].intersects(labels[secondIndex]), "labels \(firstIndex) and \(secondIndex) overlap")
             }
         }
+        // celly's screenshots: words ran off the board's edge and sat on
+        // the curves. Every word is on the board, and no label is on a line.
+        for figure in result.figures {
+            guard case .text = figure.shape, let board else { continue }
+            #expect(board.contains(figure.bounds.insetBy(dx: 0, dy: figure.bounds.height * 0.2)), "text ran off the board")
+        }
+        let lines = DottieTeaching.strokeSegments(of: result.figures)
+        for label in result.movableLabels {
+            #expect(!lines.contains { DottieTeaching.segment(from: $0.start, to: $0.end, crosses: label) }, "a label sits on a line")
+        }
+        // Written as given, not in capitals.
+        let writtenTexts = result.figures.compactMap { figure -> String? in
+            if case .text(let text, _, _) = figure.shape { return text }
+            return nil
+        }
+        #expect(writtenTexts.contains("Demand shifts left"))
+        #expect(!writtenTexts.contains("DEMAND SHIFTS LEFT"))
     }
 
     @Test func aConceptPlotIsRefusedBeforeAnythingIsDrawnAndTheFixedPlanDraws() {

@@ -389,11 +389,22 @@ final class DottieDrawingOverlayManager: ObservableObject {
     /// Resizes the board that's up: the board and everything drawn on it
     /// move and scale to the new rect; marks elsewhere on the screen stay.
     func refitBoardFigures(from oldBoard: CGRect, to newBoard: CGRect) {
-        let boardArea = oldBoard.insetBy(dx: -40, dy: -40)
         figures = figures.map { figure in
-            let figureCenter = CGPoint(x: figure.bounds.midX, y: figure.bounds.midY)
-            return boardArea.contains(figureCenter) ? figure.refitted(from: oldBoard, to: newBoard) : figure
+            Self.belongsToBoard(figure, oldBoard) ? figure.refitted(from: oldBoard, to: newBoard) : figure
         }
+    }
+
+    /// Whether a figure moves with the board. Its middle on the board is
+    /// enough, and so is most of a stroke's points being on it: a long
+    /// arrow or curve drawn on the board can have its middle off it, and
+    /// was left behind on the screen when the board moved.
+    static func belongsToBoard(_ figure: DottieFigure, _ boardRect: CGRect) -> Bool {
+        let boardArea = boardRect.insetBy(dx: -40, dy: -40)
+        let figureCenter = CGPoint(x: figure.bounds.midX, y: figure.bounds.midY)
+        if boardArea.contains(figureCenter) { return true }
+        guard case .stroke(let points, _, _, _, _, _) = figure.shape, !points.isEmpty else { return false }
+        let pointsOnBoard = points.filter { boardArea.contains($0) }.count
+        return pointsOnBoard * 2 > points.count
     }
 
     /// Where the grip sits for a board: inside its top-left corner.

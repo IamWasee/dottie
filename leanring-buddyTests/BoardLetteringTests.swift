@@ -2,8 +2,8 @@
 //  BoardLetteringTests.swift
 //  leanring-buddyTests
 //
-//  Unit tests for the Cognito-style board: words in capitals, math and
-//  color markings left exactly as written, the plain light pen by default,
+//  Unit tests for the Cognito-style board: words, math and color markings
+//  written exactly as given (no capitals), the plain light pen by default,
 //  and curves drawn at a steady, readable pace.
 //
 
@@ -14,39 +14,37 @@ import Testing
 @MainActor
 struct BoardLetteringTests {
 
-    @Test func wordsAreWrittenInCapitals() {
-        #expect(DottieTeaching.boardLettering("Demand shifts left") == "DEMAND SHIFTS LEFT")
-        #expect(DottieTeaching.boardLettering("Supply") == "SUPPLY")
-    }
-
-    @Test func mathAndNumbersStayExactlyAsWritten() {
-        for mathText in ["x² + 1", "p = ¼x²", "5 cm", "40°", "y = 2x", "H₂O", "θ", "a/b", "f(x)"] {
-            #expect(DottieTeaching.boardLettering(mathText) == mathText, "\(mathText) must not change")
+    /// Capitals read as shouting in celly's screenshots, so board words are
+    /// written exactly as the model sent them.
+    @Test func boardWordsAreWrittenAsGivenNotInCapitals() {
+        for writtenText in ["Equilibrium", "Demand shifts left", "x² + 1", "{red:key part}", "**bold** words"] {
+            guard let plan = DottieTeaching.Plan(arguments: ["steps": [["kind": "text", "points": ["100,100"], "text": writtenText]]]) else {
+                Issue.record("the plan should parse")
+                return
+            }
+            let space = DottieTeaching.Space(boardRect: CGRect(x: 0, y: 0, width: 600, height: 600), anchorFrames: [:], screenPoint: { _, _ in nil })
+            guard case .text(let drawnText, _, _) = DottieTeaching.draw(plan.steps[0], in: space)?.figures.first?.shape else {
+                Issue.record("a text step writes text")
+                return
+            }
+            #expect(drawnText == DottieMathText.pretty(writtenText))
         }
     }
 
-    @Test func singleLettersAndMarkingsStayAsWritten() {
-        #expect(DottieTeaching.boardLettering("x") == "x")
-        #expect(DottieTeaching.boardLettering("A") == "A")
-        #expect(DottieTeaching.boardLettering("x y") == "x y")
-        #expect(DottieTeaching.boardLettering("{red:key part}") == "{red:key part}")
-        #expect(DottieTeaching.boardLettering("**bold** words") == "**bold** words")
-        #expect(DottieTeaching.boardLettering("") == "")
-    }
-
-    @Test func aTextStepIsDrawnInCapitalsWithTheLightPen() {
-        guard let plan = DottieTeaching.Plan(arguments: ["steps": [["kind": "text", "points": ["100,100"], "text": "Equilibrium"]]]) else {
-            Issue.record("the plan should parse")
-            return
-        }
+    @Test func aTextStepIsDrawnWithTheLightPen() {
+        let plan = DottieTeaching.Plan(arguments: ["steps": [["kind": "text", "points": ["100,100"], "text": "Equilibrium"]]])!
         let space = DottieTeaching.Space(boardRect: CGRect(x: 0, y: 0, width: 600, height: 600), anchorFrames: [:], screenPoint: { _, _ in nil })
-        let drawn = DottieTeaching.draw(plan.steps[0], in: space)
-        guard case .text(let writtenText, _, _) = drawn?.figures.first?.shape else {
-            Issue.record("a text step writes text")
-            return
+        #expect(DottieTeaching.draw(plan.steps[0], in: space)?.figures.first?.ink == .white)
+    }
+
+    @Test func aLabelOfACurveIsWrittenAsGiven() {
+        let plan = DottieTeaching.Plan(arguments: ["steps": [["kind": "curve", "points": ["100,800", "500,400", "900,200"], "text": "Demand"]]])!
+        let space = DottieTeaching.Space(boardRect: CGRect(x: 0, y: 0, width: 600, height: 600), anchorFrames: [:], screenPoint: { _, _ in nil })
+        let texts = DottieTeaching.draw(plan.steps[0], in: space)?.figures.compactMap { figure -> String? in
+            if case .text(let text, _, _) = figure.shape { return text }
+            return nil
         }
-        #expect(writtenText == "EQUILIBRIUM")
-        #expect(drawn?.figures.first?.ink == .white)
+        #expect(texts == ["Demand"])
     }
 
     @Test func aColorGivenForMeaningIsKept() {
