@@ -156,6 +156,16 @@ struct JevDriverTests {
         #expect(body["assets"] == nil)
     }
 
+    /// The old asset name "screen" sat inside every "Click … on the screen"
+    /// option, so Jev got dozens of copies of the picture and answered 400.
+    @Test func jobRequestNamesTheScreenshotOnceEvenWithManyClickOptions() throws {
+        let screenTexts = (1...40).map { Plan.ScreenText(text: "Screen item \($0)", centerX: Double(10 * $0), centerY: 300) }
+        let options = Plan.options(screenTexts: screenTexts, textPieces: ["screen recording"], siteAddresses: ["youtube.com"], appNames: ["Safari"], alreadyTriedSignatures: [])
+        let body = Plan.requestBody(goal: "take a screenshot of the screen", movesSoFar: ["clicked Screen item 1"], knownHowTo: "Use the screen menu.", options: options)
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+        #expect(text.components(separatedBy: DottieJevProtocol.screenshotAssetName).count - 1 == 1)
+    }
+
     @Test func freshJobSaysNothingWasDoneAndKeepsHowToShort() throws {
         let body = Plan.requestBody(goal: "x", movesSoFar: [], knownHowTo: String(repeating: "a", count: 5000), options: [])
         let state = try #require(body["state"] as? String)

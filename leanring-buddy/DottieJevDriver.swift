@@ -328,7 +328,7 @@ enum DottieJevDriverPlan {
     /// one choice question and "is it done?" as a yes/no beside it. The
     /// screenshot asset is added by DottieJev.answer(to:screenImage:).
     static func requestBody(goal: String, movesSoFar: [String], knownHowTo: String, options: [Option]) -> [String: Any] {
-        var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\nThe screenshot shows their screen right now."
+        var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\n\(DottieJevProtocol.screenshotReferenceLine) (their screen right now)."
         if movesSoFar.isEmpty {
             state += "\nNothing has been done yet."
         } else {
