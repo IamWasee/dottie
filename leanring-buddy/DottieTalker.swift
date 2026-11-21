@@ -99,7 +99,14 @@ enum DottieTalkerProtocol {
     /// Reads the talker's answer. An empty answer counts as a request, so a
     /// turn is never dropped.
     static func decision(fromTalkerAnswer answerText: String) -> DottieTalkDecision {
-        let trimmedAnswer = answerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Groq's gpt-oss sometimes wraps its answer in a made-up tool call
+        // ({"name":"assistant","arguments":"REQUEST"}), and in round 1079 that
+        // JSON was shown and read aloud as Dottie's reply on celly's Mac.
+        let trimmedAnswer = unwrappedToolCallText(answerText.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Model markup that leaked through is never something to say.
+        if looksLikeModelMarkup(trimmedAnswer) {
+            return .request(needsScreen: trimmedAnswer.uppercased().contains(screenWord))
+        }
         let firstWord = trimmedAnswer.split(whereSeparator: { $0.isWhitespace || $0.isPunctuation }).first.map(String.init) ?? ""
         if trimmedAnswer.isEmpty || firstWord.uppercased() == requestWord {
             return .request(needsScreen: trimmedAnswer.uppercased().contains(screenWord))
@@ -111,6 +118,25 @@ enum DottieTalkerProtocol {
             return .request(needsScreen: true)
         }
         return .say(trimmedAnswer)
+    }
+
+    /// The words inside a made-up call like {"name":"assistant","arguments":"REQUEST"}
+    /// (quoted or not); any other text comes back as it was.
+    static func unwrappedToolCallText(_ answerText: String) -> String {
+        guard answerText.hasPrefix("{"), answerText.contains("\"arguments\"") else { return answerText }
+        let pattern = #""arguments"\s*:\s*("?)([\s\S]*?)\1\s*\}\s*$"#
+        guard let regularExpression = try? NSRegularExpression(pattern: pattern),
+              let match = regularExpression.firstMatch(in: answerText, range: NSRange(answerText.startIndex..., in: answerText)),
+              let argumentsRange = Range(match.range(at: 2), in: answerText) else { return answerText }
+        let argumentsText = answerText[argumentsRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        return argumentsText.isEmpty ? answerText : argumentsText
+    }
+
+    /// JSON or chat-template tokens (<|channel|>) instead of words.
+    static func looksLikeModelMarkup(_ answerText: String) -> Bool {
+        answerText.contains("<|") || answerText.contains("|>")
+            || (answerText.hasPrefix("{") && answerText.hasSuffix("}"))
+            || (answerText.hasPrefix("[") && answerText.hasSuffix("]"))
     }
 
     /// The talker only knows how to chat, so "i can't draw on your screen"

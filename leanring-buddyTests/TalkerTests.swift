@@ -12,6 +12,22 @@ import Testing
 @testable import Dottie
 
 struct TalkerTests {
+    @Test func aMadeUpToolCallAroundRequestIsARequest() {
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: #"{"name":"assistant","arguments":"REQUEST"}"#) == .request(needsScreen: false))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: #"{"name": "assistant<|channel|>final", "arguments": REQUEST.}"#) == .request(needsScreen: false))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: #"{"name":"assistant","arguments":"REQUEST SCREEN"}"#) == .request(needsScreen: true))
+    }
+
+    @Test func wordsInsideAMadeUpCallAreSaidPlainly() {
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: #"{"name":"assistant","arguments":"hi! how can i help?"}"#) == .say("hi! how can i help?"))
+    }
+
+    @Test func leakedMarkupIsNeverSpoken() {
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "<|channel|>final hello") == .request(needsScreen: false))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: #"{"answer": 3}"#) == .request(needsScreen: false))
+        #expect(DottieTalkerProtocol.unwrappedToolCallText("just words") == "just words")
+    }
+
     private let exchanges: [(userTranscript: String, assistantResponse: String)] = (1...6).map { number in
         (userTranscript: "question \(number)", assistantResponse: "answer \(number)")
     }

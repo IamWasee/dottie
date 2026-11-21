@@ -56,7 +56,7 @@ final class DottieCustomPersonalities: ObservableObject {
 
     nonisolated private static let defaultsKey = "dottieCustomPersonalities"
     nonisolated private static let activeDefaultsKey = "dottieActiveCustomPersonality"
-    private static let writerModel = "gemini-3.5-flash-lite"
+    private static let writerModel = DottieModelPicker.quickModelName
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
@@ -329,7 +329,7 @@ private struct DottiePersonalityEditor: View {
             if let written {
                 draft.writtenStyle = written
             } else {
-                writeError = "Couldn't reach Gemini just now. Try again in a moment, or write it yourself."
+                writeError = "Couldn't reach the AI model just now. Try again in a moment, or write it yourself."
             }
         }
     }

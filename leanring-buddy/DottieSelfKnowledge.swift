@@ -150,7 +150,7 @@ enum DottieSelfKnowledge: DottieToolModule {
         mausBot.switchClaudeAccount()
         show(.settings("Helpers: Claude via MausBot"))
         let previousAccountText = previousEmail.map { " (was \($0))" } ?? ""
-        return "signing Claude out\(previousAccountText) and starting a new sign-in. Settings → Helpers is open: tell them in one line to click Open in a private window there and pick the account. helpers use the free Gemini backup until it's done."
+        return "signing Claude out\(previousAccountText) and starting a new sign-in. Settings → Helpers is open: tell them in one line to click Open in a private window there and pick the account. helpers use GLM until it's done."
     }
 }
 
@@ -194,7 +194,7 @@ extension DottieSelfKnowledge {
          ["permission", "access", "privacy", "allow"]),
         SettingsSection("Updates", "Check for updates automatically", "Updates: check for a new version and install it right here.",
          ["update", "version", "upgrade"]),
-        SettingsSection("Helpers: Claude via MausBot", "Run helpers on", "Helpers: whether helpers run on your Claude plan through MausBot, with Gemini as the backup.",
+        SettingsSection("Helpers: Claude via MausBot", "Run helpers on", "Helpers: whether helpers run on your Claude plan through MausBot, with GLM as the backup.",
          ["mausbot", "claude", "helper engine", "engine", "backup", "helpers settings"]),
         SettingsSection("Check everything", "Check everything", "Check everything: one button that tests every part I need and says what's wrong.",
          ["self check", "check", "test", "diagnose", "health"]),
@@ -214,7 +214,7 @@ extension DottieSelfKnowledge {
          ["dictate", "language", "languages", "words", "spelling"]),
         SettingsSection("Using your Mac", "Let Dots click and type without asking", "Using your Mac: whether Dots ask before they click and type, and the tips I learned.",
          ["computer use", "driver", "tips", "clicking", "use my mac"]),
-        SettingsSection("Connection", "Server", "Connection: the server that talks to Gemini for me.",
+        SettingsSection("Connection", "Server", "Connection: the server that talks to the AI models for me.",
          ["server", "worker", "secret", "internet"]),
         SettingsSection("History", "saved exchanges", "History: clear our saved conversation.",
          ["clear history", "clear conversation", "clear chat"])
@@ -493,7 +493,7 @@ extension DottieSelfKnowledge {
                 id: "helpers",
                 title: "Helpers (Dots)",
                 keywords: ["helper", "helpers", "dot", "dots", "agent", "background", "research", "website", "build", "code", "routine", "routines", "delegate", "team"],
-                summary: "Helpers (Dots) work on their own in a folder on your Mac with a shell, files and the web: research, documents, code, whole websites. Ask me out loud or give one a task in Home → Dots. They tell you in the notch when they're done. They run on your Claude plan through MausBot when it's set up, with Gemini as the backup. Routines run tasks on a schedule, and a team splits a big job between several helpers.",
+                summary: "Helpers (Dots) work on their own in a folder on your Mac with a shell, files and the web: research, documents, code, whole websites. Ask me out loud or give one a task in Home → Dots. They tell you in the notch when they're done. They run on your Claude plan through MausBot when it's set up, with GLM as the backup. Routines run tasks on a schedule, and a team splits a big job between several helpers.",
                 whereToFind: "Home → Dots. Which engine they run on: Settings → Helpers: Claude via MausBot.",
                 place: Place(section: .clickys),
                 steps: [
@@ -656,7 +656,7 @@ extension DottieSelfKnowledge {
                 id: "mausbot",
                 title: "Helpers on your Claude plan",
                 keywords: ["mausbot", "claude", "claude code", "engine", "backup", "gemini backup", "sign in", "limit", "paused", "account", "claude account", "switch account"],
-                summary: "Helpers can run on your Claude plan through MausBot, a free app I install for you in the background, at no extra cost. If Claude hits its limit or isn't signed in, they switch to the free Gemini backup by themselves and try Claude again later. Or pick Gemini only. It shows which Claude account they use, and Use a different account switches it.",
+                summary: "Helpers can run on your Claude plan through MausBot, a free app I install for you in the background, at no extra cost. If Claude hits its limit or isn't signed in, they switch to GLM by themselves and try Claude again later. Or pick GLM only. It shows which Claude account they use, and Use a different account switches it.",
                 whereToFind: "Settings → Helpers: Claude via MausBot.",
                 place: .settings("Helpers: Claude via MausBot"),
                 steps: [
@@ -681,7 +681,7 @@ extension DottieSelfKnowledge {
                         isNeeded: { DottieMausBot.shared.claudePausedUntil != nil }
                     )
                 ],
-                doneLine: "That's it. Helpers use Claude when they can and Gemini when they can't."
+                doneLine: "That's it. Helpers use Claude when they can and GLM when they can't."
             )
         ]
         return features
@@ -752,7 +752,7 @@ extension DottieSelfKnowledge {
                 id: "selfcheck",
                 title: "Check everything",
                 keywords: ["self check", "check everything", "check", "test", "broken", "not working", "diagnose", "slow", "no sound"],
-                summary: "One button tests every part I need (permissions, the server, Gemini, my voice, the microphone, the screen, helpers, the phone) and says what's wrong, with a fix button where there is one. Or ask me to check myself.",
+                summary: "One button tests every part I need (permissions, the server, the AI models, my voice, the microphone, the screen, helpers, the phone) and says what's wrong, with a fix button where there is one. Or ask me to check myself.",
                 whereToFind: "Settings → Check everything, or by voice.",
                 place: .settings("Check everything"),
                 steps: [WalkStep(target: .text(["Check everything"]), say: "Click Check everything. It takes a few seconds.", wait: .click)]
@@ -925,7 +925,7 @@ extension DottieSelfKnowledge {
                 id: "connection",
                 title: "My server",
                 keywords: ["server", "connection", "worker", "secret", "not working", "offline"],
-                summary: "The server that talks to Gemini for me (it holds the key, so the app never sees it).",
+                summary: "The server that talks to the AI models for me (it holds the keys, so the app never sees them).",
                 whereToFind: "Settings → Connection.",
                 place: .settings("Connection"),
                 steps: [WalkStep(target: .text(["Server", "Server address"]), say: "This is my server.", wait: .none)]
@@ -1113,18 +1113,18 @@ extension DottieSelfKnowledge {
     private static func helperEngineDescription() -> String {
         let mausBot = DottieMausBot.shared
         guard mausBot.preference == .claudeWithBackup else {
-            return "Helper engine: Gemini only (free tier)."
+            return "Helper engine: GLM only."
         }
-        var description = "Helper engine: Claude through MausBot, Gemini as backup. MausBot: \(mausBot.mausBotStatusLine). Claude: \(mausBot.claudeStatusLine)."
+        var description = "Helper engine: Claude through MausBot, GLM as backup. MausBot: \(mausBot.mausBotStatusLine). Claude: \(mausBot.claudeStatusLine)."
         if mausBot.isDesktopAppHoldingWorkspace {
-            description += " The MausBot app is open; its workspace refuses Dottie's changes, so helpers use Gemini until it's quit."
+            description += " The MausBot app is open; its workspace refuses Dottie's changes, so helpers use GLM until it's quit."
         }
         if mausBot.isInstallingDesktopApp {
             description += " Dottie is installing the MausBot app in the background right now (\(mausBot.busyText ?? "downloading"))."
         }
         if let pausedUntil = mausBot.claudePausedUntil {
             let reason = mausBot.claudePauseReason ?? "Claude is paused"
-            description += " \(reason): helpers use Gemini until \(pausedUntil.formatted(date: .omitted, time: .shortened))."
+            description += " \(reason): helpers use GLM until \(pausedUntil.formatted(date: .omitted, time: .shortened))."
         }
         return description
     }
@@ -1184,7 +1184,7 @@ extension DottieSelfKnowledge {
             description += " Waiting for permission to use the Mac: " + waitingNames.joined(separator: ", ") + "."
         }
         let isReady = await areHelpersReady()
-        description += isReady ? " Ready to run." : " Their Gemini tools are still downloading (one time, about 70 MB)."
+        description += isReady ? " Ready to run." : " Their helper tools are still downloading (one time, about 70 MB)."
         return description
     }
 
@@ -1260,7 +1260,7 @@ extension DottieSelfKnowledge {
             lines.append("Likely problems, most likely first:")
             lines += shownProblems.prefix(6).map { "- \($0.text) Fix: \($0.fix)" }
         }
-        lines.append("If answers fail now and then, Gemini's free tier is probably busy for a moment: try again in a few seconds.")
+        lines.append("If answers fail now and then, the AI models are probably busy for a moment: try again in a few seconds.")
         lines.append("say the most likely problem plainly in a sentence and offer the fix.")
         return lines.joined(separator: "\n")
     }
@@ -1284,7 +1284,7 @@ extension DottieSelfKnowledge {
         }
         switch item.id {
         case "worker", "gemini", "live":
-            fix = "Settings → Connection for the server; if Gemini is busy, try again in a few seconds."
+            fix = "Settings → Connection for the server; if the models are busy, try again in a few seconds."
             keywords += ["voice", "talk", "answer", "answers", "slow", "server", "working", "respond"]
         case "mic":
             keywords += ["hear", "voice", "talk", "sound", "microphone"]
@@ -1364,21 +1364,21 @@ extension DottieSelfKnowledge {
         if mausBot.preference == .claudeWithBackup {
             if mausBot.isDesktopAppHoldingWorkspace {
                 problems.append(Problem(
-                    text: "The MausBot app is open, and its workspace doesn't take changes from me, so helpers use the free Gemini backup.",
+                    text: "The MausBot app is open, and its workspace doesn't take changes from me, so helpers use GLM.",
                     fix: "Quit the MausBot app; I run MausBot myself when a helper needs it.",
                     keywords: ["helper", "helpers", "dots", "claude", "mausbot", "answering", "responding"],
                     isMajor: false
                 ))
             } else if let pausedUntil = mausBot.claudePausedUntil {
                 problems.append(Problem(
-                    text: "\(mausBot.claudePauseReason ?? "Claude is paused"), so helpers use the free Gemini backup until \(pausedUntil.formatted(date: .omitted, time: .shortened)).",
+                    text: "\(mausBot.claudePauseReason ?? "Claude is paused"), so helpers use GLM until \(pausedUntil.formatted(date: .omitted, time: .shortened)).",
                     fix: "Settings → Helpers: Claude via MausBot → Try Claude now (about_me guide 'mausbot').",
                     keywords: ["helper", "helpers", "dots", "claude", "mausbot", "slow", "gemini", "limit"],
                     isMajor: false
                 ))
             } else if mausBot.claudeState == .notSignedIn {
                 problems.append(Problem(
-                    text: "Claude isn't signed in, so helpers use the free Gemini backup.",
+                    text: "Claude isn't signed in, so helpers use GLM.",
                     fix: "Settings → Helpers: Claude via MausBot → Sign in to Claude (about_me guide 'mausbot').",
                     keywords: ["helper", "helpers", "dots", "claude", "mausbot", "sign"],
                     isMajor: false
@@ -1386,8 +1386,8 @@ extension DottieSelfKnowledge {
             } else if mausBot.hasLookedForMausBot && !mausBot.isSetUp {
                 problems.append(Problem(
                     text: mausBot.isInstallingDesktopApp
-                        ? "I'm installing the MausBot app in the background. Until it's ready, helpers run on Gemini's free tier instead of your Claude plan."
-                        : "MausBot isn't set up, so helpers run on Gemini's free tier instead of your Claude plan.",
+                        ? "I'm installing the MausBot app in the background. Until it's ready, helpers run on GLM instead of your Claude plan."
+                        : "MausBot isn't set up, so helpers run on GLM instead of your Claude plan.",
                     fix: "Settings → Helpers: Claude via MausBot → Set up (about_me guide 'mausbot').",
                     keywords: ["helper", "helpers", "dots", "claude", "mausbot"],
                     isMajor: false

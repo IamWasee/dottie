@@ -34,7 +34,7 @@ struct HomeSelfCheckSettings: View {
             ForEach(selfCheck.items) { item in
                 row(item)
             }
-            Text("Takes a few seconds. It listens to your microphone for one second and sends Gemini one tiny message.")
+            Text("Takes a few seconds. It listens to your microphone for one second and sends the AI models one tiny message.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

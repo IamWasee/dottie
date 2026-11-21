@@ -156,6 +156,40 @@ struct JevDriverTests {
         #expect(body["assets"] == nil)
     }
 
+    /// Texts are compared as lowercased words joined by single spaces,
+    /// whatever punctuation or spacing sat between them.
+    @Test func comparableWordsKeepOnlyLettersAndDigits() {
+        #expect(Plan.comparableWords("  Sign-In, NOW!! ") == "sign in now")
+        #expect(Plan.comparableWords("Item #42 (new)") == "item 42 new")
+        #expect(Plan.comparableWords("Café  Über") == "café über")
+        #expect(Plan.comparableWords("...") == "")
+        #expect(Plan.comparableWords("") == "")
+    }
+
+    /// The same text on screen twice (different case or punctuation) is
+    /// offered once, and long or letterless texts not at all.
+    @Test func clickableTextsSkipRepeatsLongTextsAndLetterlessOnes() {
+        let screenTexts = [
+            Plan.ScreenText(text: "Sign in", centerX: 10, centerY: 10),
+            Plan.ScreenText(text: "SIGN-IN", centerX: 20, centerY: 20),
+            Plan.ScreenText(text: "12:30", centerX: 30, centerY: 30),
+            Plan.ScreenText(text: String(repeating: "a", count: 61), centerX: 40, centerY: 40),
+            Plan.ScreenText(text: "Buy now", centerX: 50, centerY: 50)
+        ]
+        let clickable = Plan.clickableTexts(from: screenTexts, taskText: "sign in to my account").map(\.text)
+        #expect(clickable == ["Sign in"])
+    }
+
+    /// The old asset name "screen" sat inside every "Click … on the screen"
+    /// option, so Jev got dozens of copies of the picture and answered 400.
+    @Test func jobRequestNamesTheScreenshotOnceEvenWithManyClickOptions() throws {
+        let screenTexts = (1...40).map { Plan.ScreenText(text: "Screen item \($0)", centerX: Double(10 * $0), centerY: 300) }
+        let options = Plan.options(screenTexts: screenTexts, textPieces: ["screen recording"], siteAddresses: ["youtube.com"], appNames: ["Safari"], alreadyTriedSignatures: [])
+        let body = Plan.requestBody(goal: "take a screenshot of the screen", movesSoFar: ["clicked Screen item 1"], knownHowTo: "Use the screen menu.", options: options)
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+        #expect(text.components(separatedBy: DottieJevProtocol.screenshotAssetName).count - 1 == 1)
+    }
+
     @Test func freshJobSaysNothingWasDoneAndKeepsHowToShort() throws {
         let body = Plan.requestBody(goal: "x", movesSoFar: [], knownHowTo: String(repeating: "a", count: 5000), options: [])
         let state = try #require(body["state"] as? String)
@@ -337,5 +371,47 @@ struct JevDriverTests {
             textPieces: [], siteAddresses: [], appNames: [], alreadyTriedSignatures: []
         )
         #expect(secondStep.map(\.move).contains(.click(label: "I Survived 100 Days In A Circle", centerX: 520, centerY: 260)))
+    }
+
+    // MARK: A site that's already open
+
+    @Test func theSiteInFrontCountsAsOpenWithOrWithoutWww() {
+        #expect(Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "www.youtube.com"))
+        #expect(Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "youtube.com"))
+        #expect(Plan.isSiteAlreadyOpen("https://www.youtube.com/feed", frontSiteHost: "m.youtube.com"))
+    }
+
+    @Test func anotherSiteOrNoBrowserIsNotOpen() {
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "google.com"))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: "notyoutube.com"))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: nil))
+        #expect(!Plan.isSiteAlreadyOpen("youtube.com", frontSiteHost: ""))
+    }
+
+    @Test func clickingTheSearchButtonOnYoutubeDoesntReopenYoutube() {
+        let taskText = "click the search button on youtube"
+        let options = Plan.options(
+            screenTexts: [Plan.ScreenText(text: "Search", centerX: 500, centerY: 80)],
+            textPieces: Plan.textPieces(from: taskText),
+            siteAddresses: Plan.siteAddresses(from: taskText),
+            appNames: [], alreadyTriedSignatures: [],
+            frontSiteHost: "www.youtube.com"
+        )
+        let moves = options.map(\.move)
+        #expect(Plan.textPieces(from: taskText).isEmpty)
+        #expect(!moves.contains(.openSite(address: "youtube.com")))
+        #expect(moves.contains(.click(label: "Search", centerX: 500, centerY: 80)))
+    }
+
+    @Test func aSiteNotYetOpenIsStillOffered() {
+        let options = Plan.options(screenTexts: [], textPieces: [], siteAddresses: ["youtube.com"], appNames: [], alreadyTriedSignatures: [], frontSiteHost: "google.com")
+        #expect(options.map(\.move).contains(.openSite(address: "youtube.com")))
+    }
+
+    @Test func searchingTheOpenSiteStillUsesItsResultsPage() {
+        let options = Plan.options(screenTexts: [], textPieces: ["mr beast"], siteAddresses: ["youtube.com"], appNames: [], alreadyTriedSignatures: [], frontSiteHost: "www.youtube.com")
+        let moves = options.map(\.move)
+        #expect(moves.contains(.openSite(address: "youtube.com/results?search_query=mr%20beast")))
+        #expect(!moves.contains(.openSite(address: "youtube.com")))
     }
 }

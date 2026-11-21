@@ -822,7 +822,7 @@ final class DottieSmartHome: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let body: [String: Any] = [
-            "model": "gemini-3.5-flash-lite",
+            "model": DottieModelPicker.quickModelName,
             "contents": [["role": "user", "parts": [
                 ["inlineData": ["mimeType": "image/jpeg", "data": jpegData.base64EncodedString()]],
                 ["text": question + " Answer in one or two short sentences."]

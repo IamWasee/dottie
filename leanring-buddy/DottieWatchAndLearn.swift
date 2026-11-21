@@ -152,7 +152,7 @@ final class DottieWatchAndLearn: ObservableObject {
         let frontmostAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
         guard let howTo = await understand(frames: watchedFrames, actionLines: actionLines, appNameHint: frontmostAppName) else {
             statusLine = ""
-            return "couldn't work out what the user was doing (Claude and Gemini didn't answer). say so and offer to watch again."
+            return "couldn't work out what the user was doing (the AI models didn't answer). say so and offer to watch again."
         }
         var savedHowTo = howTo
         savedHowTo.skillName = saveAsSkill(howTo)
@@ -219,7 +219,7 @@ final class DottieWatchAndLearn: ObservableObject {
         request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
-        let model = "gemini-3.6-flash"
+        let model = DottieModelPicker.normalModelName
         let requestBody: [String: Any] = [
             "model": model,
             "systemInstruction": ["parts": [["text": Self.watcherInstructions]]],

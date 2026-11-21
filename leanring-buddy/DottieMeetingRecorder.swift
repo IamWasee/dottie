@@ -41,8 +41,8 @@ final class DottieMeetingRecorder: ObservableObject {
         return applicationSupportURL.appendingPathComponent("Dottie/Meetings", isDirectory: true)
     }()
 
-    private static let transcriptionModel = "gemini-3.5-flash-lite"
-    private static let summaryModel = "gemini-3.6-flash"
+    private static let transcriptionModel = DottieModelPicker.quickModelName
+    private static let summaryModel = DottieModelPicker.normalModelName
     private static let chunkSeconds: TimeInterval = 45
     private static let maximumDuration: TimeInterval = 3 * 3600
     /// Below this loudness a chunk is silence and isn't sent.

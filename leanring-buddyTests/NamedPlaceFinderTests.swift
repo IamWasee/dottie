@@ -93,3 +93,32 @@ struct GeminiHelperToolDietTests {
         #expect(GeminiCLIAgentRuntime.repeatsBuiltInTools(serverName: "notion") == false)
     }
 }
+
+/// "open my bowl and shit folder" opens ~/bull and shit on the Mac, with no model.
+struct SpokenFolderOpeningTests {
+    @Test func readsTheFolderNameFromAnOpenAsk() {
+        #expect(DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: "bowl and shit folder") == "bowl and shit")
+        #expect(DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: "folder bowl and shit") == "bowl and shit")
+        #expect(DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: "the folder called invoices") == "invoices")
+        #expect(DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: "spotify") == nil)
+    }
+
+    @Test func aMisheardWordStillFindsTheFolder() {
+        let realNames = ["bull and shit", "Documents", "Dottie-test-sandbox", "Music"]
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "bowl and shit", among: realNames) == "bull and shit")
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "dottie test sandbox", among: realNames) == "Dottie-test-sandbox")
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "documents", among: realNames) == "Documents")
+    }
+
+    @Test func farOffOrTiedNamesAreNotGuessed() {
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "taxes", among: ["Music", "Movies"]) == nil)
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "cat", among: ["cab", "car"]) == nil)
+        #expect(DottieNamedPlaceFinder.closestFolderName(to: "ab", among: ["ab"]) == nil)
+    }
+
+    @Test func editDistanceCountsChangedLetters() {
+        #expect(DottieNamedPlaceFinder.editDistance("bowlandshit", "bullandshit") == 2)
+        #expect(DottieNamedPlaceFinder.editDistance("", "abc") == 3)
+        #expect(DottieNamedPlaceFinder.editDistance("same", "same") == 0)
+    }
+}

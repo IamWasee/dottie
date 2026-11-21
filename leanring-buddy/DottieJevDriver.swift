@@ -142,7 +142,7 @@ enum DottieJevDriverPlan {
         for match in matches(of: quotePattern, in: taskText) {
             pieces.append(match)
         }
-        let leadPattern = "(?i)\\b(?:search(?:ing|ed|es)?(?: for| up)?|look(?:ing)? up|typ(?:e|ing)|writ(?:e|ing)|enter(?:ing)?|called|named|titled|say(?:ing)?)\\s+(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
+        let leadPattern = "(?i)\\b(?:search(?:ing|ed|es)?(?: for| up)?|look(?:ing)? up|typ(?:e|ing)|writ(?:e|ing)|enter(?:ing)?|called|named|titled|say(?:ing)?)\\s+(?!(?:button|bar|box|field|icon|results?|tab|page|engine|history|filters?|settings)\\b)(.+?)(?=\\s+(?:on|in|into|and then|and|then|to|at|from|using)\\s|[,.!?]|$)"
         for match in matches(of: leadPattern, in: taskText) {
             let piece = match.trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”"))
             if !piece.isEmpty { pieces.append(piece) }
@@ -201,6 +201,19 @@ enum DottieJevDriverPlan {
         return addresses
     }
 
+    /// Whether the browser in front is already on this site
+    /// ("www.youtube.com" is on "youtube.com").
+    static func isSiteAlreadyOpen(_ siteAddress: String, frontSiteHost: String?) -> Bool {
+        guard let frontSiteHost = frontSiteHost?.lowercased(), !frontSiteHost.isEmpty else { return false }
+        let siteHost = siteAddress.lowercased()
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .split(separator: "/").first.map(String.init) ?? ""
+        guard !siteHost.isEmpty else { return false }
+        let bareSiteHost = siteHost.hasPrefix("www.") ? String(siteHost.dropFirst(4)) : siteHost
+        return frontSiteHost == bareSiteHost || frontSiteHost.hasSuffix("." + bareSiteHost)
+    }
+
     /// Web addresses the request names: typed ones ("kaggle.com/competitions")
     /// and sites said by name ("open youtube"), longest names first so
     /// "google docs" isn't read as "google".
@@ -246,18 +259,24 @@ enum DottieJevDriverPlan {
     /// Buttons that spend, send or destroy are only pressed when the user's
     /// own words asked for that.
     static func isRiskyLabel(_ label: String, forTask taskText: String) -> Bool {
-        isRiskyLabel(label, forComparableTask: " " + comparableWords(taskText) + " ")
+        let riskyNeedlesForThisTask = riskyNeedlesNotAskedFor(byComparableTask: " " + comparableWords(taskText) + " ")
+        return isRiskyComparableLabel(" " + comparableWords(label) + " ", riskyNeedles: riskyNeedlesForThisTask)
     }
 
     private static let riskyWords = ["buy", "pay", "purchase", "checkout", "order", "delete", "remove", "send", "post", "publish", "transfer", "unsubscribe", "erase", "sign out", "log out"]
 
-    /// The same check with the request already made comparable, so a screen
-    /// with hundreds of texts doesn't redo the request for each one.
-    private static func isRiskyLabel(_ label: String, forComparableTask comparableTask: String) -> Bool {
-        let comparableLabel = " " + comparableWords(label) + " "
-        return riskyWords.contains { riskyWord in
-            comparableLabel.contains(" \(riskyWord)") && !comparableTask.contains(" \(riskyWord)")
-        }
+    /// Each risky word as it's looked for inside a comparable label
+    /// (" buy"), made once instead of for every text on every screen.
+    private static let riskyNeedles = riskyWords.map { " " + $0 }
+
+    /// The risky words the request itself doesn't name, worked out once per
+    /// step, so a screen with hundreds of texts doesn't redo it for each one.
+    private static func riskyNeedlesNotAskedFor(byComparableTask comparableTask: String) -> [String] {
+        riskyNeedles.filter { !comparableTask.contains($0) }
+    }
+
+    private static func isRiskyComparableLabel(_ paddedComparableLabel: String, riskyNeedles: [String]) -> Bool {
+        riskyNeedles.contains { paddedComparableLabel.contains($0) }
     }
 
     // MARK: Options
@@ -266,13 +285,15 @@ enum DottieJevDriverPlan {
     /// each once, top to bottom.
     static func clickableTexts(from screenTexts: [ScreenText], taskText: String) -> [ScreenText] {
         var seenTexts = Set<String>()
-        let comparableTask = " " + comparableWords(taskText) + " "
+        let riskyNeedlesForThisTask = riskyNeedlesNotAskedFor(byComparableTask: " " + comparableWords(taskText) + " ")
         let usefulTexts = screenTexts.filter { screenText in
             let trimmedText = screenText.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let comparableText = comparableWords(trimmedText)
+            // The cheap checks first, so long or letterless texts never get
+            // made comparable at all.
             guard (2...60).contains(trimmedText.count),
-                  trimmedText.rangeOfCharacter(from: .letters) != nil,
-                  !isRiskyLabel(trimmedText, forComparableTask: comparableTask),
+                  trimmedText.rangeOfCharacter(from: .letters) != nil else { return false }
+            let comparableText = comparableWords(trimmedText)
+            guard !isRiskyComparableLabel(" " + comparableText + " ", riskyNeedles: riskyNeedlesForThisTask),
                   seenTexts.insert(comparableText).inserted else { return false }
             return true
         }
@@ -286,7 +307,8 @@ enum DottieJevDriverPlan {
         textPieces: [String],
         siteAddresses: [String],
         appNames: [String],
-        alreadyTriedSignatures: Set<String>
+        alreadyTriedSignatures: Set<String>,
+        frontSiteHost: String? = nil
     ) -> [Option] {
         var moves: [Move] = []
         for textPiece in textPieces {
@@ -294,15 +316,19 @@ enum DottieJevDriverPlan {
             moves.append(.typeText(textPiece, pressesReturn: false))
         }
         moves.append(contentsOf: searchResultAddresses(siteAddresses: siteAddresses, textPieces: textPieces).map { Move.openSite(address: $0) })
-        moves.append(contentsOf: siteAddresses.map { Move.openSite(address: $0) })
+        // A site the browser in front already shows isn't offered again:
+        // "click the search button" on YouTube reopened YouTube instead.
+        let sitesToOffer = siteAddresses.filter { !isSiteAlreadyOpen($0, frontSiteHost: frontSiteHost) }
+        moves.append(contentsOf: sitesToOffer.map { Move.openSite(address: $0) })
         moves.append(contentsOf: appNames.map { Move.openApp(name: $0) })
         moves.append(contentsOf: textPieces.prefix(2).map { Move.searchWeb($0) })
         moves.append(contentsOf: screenTexts.map { Move.click(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
         moves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .goBack, .finished, .noneFits])
         var seenSignatures = Set<String>()
         let freshMoves = moves.filter { move in
-            guard !alreadyTriedSignatures.contains(move.signature) else { return false }
-            return seenSignatures.insert(move.signature).inserted
+            let moveSignature = move.signature
+            guard !alreadyTriedSignatures.contains(moveSignature) else { return false }
+            return seenSignatures.insert(moveSignature).inserted
         }
         return freshMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
     }
@@ -311,7 +337,7 @@ enum DottieJevDriverPlan {
     /// one choice question and "is it done?" as a yes/no beside it. The
     /// screenshot asset is added by DottieJev.answer(to:screenImage:).
     static func requestBody(goal: String, movesSoFar: [String], knownHowTo: String, options: [Option]) -> [String: Any] {
-        var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\nThe screenshot shows their screen right now."
+        var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\n\(DottieJevProtocol.screenshotReferenceLine) (their screen right now)."
         if movesSoFar.isEmpty {
             state += "\nNothing has been done yet."
         } else {
@@ -392,10 +418,23 @@ enum DottieJevDriverPlan {
     // MARK: Helpers
 
     static func comparableWords(_ text: String) -> String {
-        text.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+        // One pass over the letters (this runs for every text on every
+        // screen): runs of letters and digits joined by single spaces.
+        var comparableScalars = String.UnicodeScalarView()
+        var isBetweenWords = false
+        let lettersAndDigits = CharacterSet.alphanumerics
+        for scalar in text.lowercased().unicodeScalars {
+            if lettersAndDigits.contains(scalar) {
+                if isBetweenWords && !comparableScalars.isEmpty {
+                    comparableScalars.append(" ")
+                }
+                isBetweenWords = false
+                comparableScalars.append(scalar)
+            } else {
+                isBetweenWords = true
+            }
+        }
+        return String(comparableScalars)
     }
 
     private static func matches(of pattern: String, in text: String) -> [String] {
@@ -448,6 +487,10 @@ enum DottieJevDriver {
         var previousScreenThumbnail: [UInt8]?
         var lastMoveSignature: String?
         var movesWithoutChange = 0
+        // App memory: the click this job made last, waiting to see which
+        // page it opened, and the labels clicked so far (never twice from memory).
+        var clickWaitingForResult: (bundleIdentifier: String, pageKey: String, label: String, centerX: Double, centerY: Double)?
+        var labelsClickedFromMemory = Set<String>()
 
         func handOver(_ reason: String) -> Outcome {
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
@@ -475,13 +518,51 @@ enum DottieJevDriver {
             }
             let screenKey = triedSignaturesByScreen.keys.first { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? screenThumbnail
 
-            let screenTexts = DottieJevDriverPlan.clickableTexts(from: await readTexts(on: screen.image), taskText: taskText)
+            let allScreenTexts = await readTexts(on: screen.image)
+            let appMemory = DottieAppMemory.shared
+            let frontPageIdentity = appMemory.frontPageIdentity()
+            if let clickWaitingForResult, let frontPageIdentity,
+               frontPageIdentity.key != clickWaitingForResult.pageKey {
+                appMemory.noteClick(bundleIdentifier: clickWaitingForResult.bundleIdentifier, fromPageKey: clickWaitingForResult.pageKey,
+                                    centerX: clickWaitingForResult.centerX, centerY: clickWaitingForResult.centerY,
+                                    label: clickWaitingForResult.label, toPageKey: frontPageIdentity.key, toPageTitle: frontPageIdentity.title)
+            }
+            clickWaitingForResult = nil
+            appMemory.notePageFromScreenJob(elements: allScreenTexts.map {
+                DottieAppPage.Element(label: $0.text, centerX: $0.centerX, centerY: $0.centerY)
+            })
+            let screenTexts = DottieJevDriverPlan.clickableTexts(from: allScreenTexts, taskText: taskText)
+
+            // Something clicked here before led where this task is going:
+            // click it now (where it sits on this screen) without asking Jev.
+            if let knownPage = appMemory.knownFrontPage(),
+               let rememberedClick = DottieAppMemoryPlan.rememberedClick(
+                   on: knownPage, forTask: taskText,
+                   visibleLabels: allScreenTexts.map(\.text), alreadyClickedLabels: labelsClickedFromMemory
+               ),
+               let visibleText = allScreenTexts.first(where: {
+                   DottieAppMemoryPlan.comparableWords($0.text) == DottieAppMemoryPlan.comparableWords(rememberedClick.label)
+               }) {
+                let move = DottieJevDriverPlan.Move.click(label: visibleText.text, centerX: visibleText.centerX, centerY: visibleText.centerY)
+                labelsClickedFromMemory.insert(DottieAppMemoryPlan.comparableWords(rememberedClick.label))
+                DottieLog.notice("🎯 App memory clicked a remembered button without asking Jev")
+                await perform(move, screen: screen, stepNumber: stepNumber, actions: actions)
+                movesSoFar.append(move.summary)
+                previousScreenThumbnail = screenKey
+                lastMoveSignature = move.signature
+                if let frontPageIdentity {
+                    clickWaitingForResult = (frontPageIdentity.bundleIdentifier, frontPageIdentity.key, visibleText.text, visibleText.centerX, visibleText.centerY)
+                }
+                await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
+                continue
+            }
             let options = DottieJevDriverPlan.options(
                 screenTexts: screenTexts,
                 textPieces: textPieces,
                 siteAddresses: siteAddresses,
                 appNames: appNames,
-                alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? []
+                alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? [],
+                frontSiteHost: DottieReplayContext.current().siteHost
             )
             let requestBody = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options)
             guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
@@ -508,6 +589,9 @@ enum DottieJevDriver {
                 movesSoFar.append(move.summary)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
+                if case .click(let label, let centerX, let centerY) = move, let frontPageIdentity {
+                    clickWaitingForResult = (frontPageIdentity.bundleIdentifier, frontPageIdentity.key, label, centerX, centerY)
+                }
                 // Let the app draw what the move opened before looking again:
                 // a page still loading looked like "nothing changed" and the
                 // move was struck off.

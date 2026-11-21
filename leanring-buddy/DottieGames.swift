@@ -39,7 +39,7 @@ final class DottieGames {
     }
 
     private(set) var current: Game?
-    private static let fastModel = "gemini-3.5-flash-lite"
+    private static let fastModel = DottieModelPicker.quickModelName
     private var drawingPad: DottieDrawingPadWindowController?
 
     private init() {}

@@ -132,7 +132,7 @@ private struct HomeMeetingLiveHelpCard: View {
                     Text("Suggest answers during the meeting")
                         .font(.system(size: 13))
                         .foregroundColor(DS.Colors.textPrimary)
-                    Text("When someone asks you something, a short answer shows in the notch, never out loud. Press \u{2318}\u{21E7}Return or \u{201C}help me\u{201D} on the notch to ask any time. Uses Apple's speech recognition on your Mac and Groq (Gemini if Groq isn't set up).")
+                    Text("When someone asks you something, a short answer shows in the notch, never out loud. Press \u{2318}\u{21E7}Return or \u{201C}help me\u{201D} on the notch to ask any time. Uses Apple's speech recognition on your Mac and Groq (GLM if Groq isn't set up).")
                         .font(.system(size: 11))
                         .foregroundColor(DS.Colors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)

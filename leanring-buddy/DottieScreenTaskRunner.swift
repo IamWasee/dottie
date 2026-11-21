@@ -60,10 +60,12 @@ final class DottieScreenTaskRunner {
     }
     /// Fast and on the free tier; the Worker falls back to other Flash
     /// models when it's busy.
-    private static let taskModel = "gemini-3.6-flash"
+    private static let taskModel = DottieModelPicker.normalModelName
     /// Older screenshots are dropped from the conversation to keep requests
     /// small; the action log still says what happened.
-    static let keptScreenshotCount = 2
+    /// One: each extra picture slows the step model (GLM) down more than
+    /// the older view helps; the action log says what changed.
+    static let keptScreenshotCount = 1
     private static let maximumScreenshotDimension = 1440
     /// The longest one step's answer may take before it's asked again on
     /// another model.
@@ -418,8 +420,8 @@ final class DottieScreenTaskRunner {
                     let statusCode = (error as NSError).code
                     let wasBusy = [429, 500, 503, 504].contains(statusCode) || (error as? URLError)?.code == .timedOut
                     return .failed(reason: wasBusy
-                        ? "Gemini's too busy to keep going right now."
-                        : "Gemini stopped giving me steps (\(statusCode == -2 ? "empty answer" : "error \(statusCode)")), so I stopped.")
+                        ? "The step model is too busy to keep going right now."
+                        : "The step model stopped giving me steps (\(statusCode == -2 ? "empty answer" : "error \(statusCode)")), so I stopped.")
                 }
                 // Try the same step again with the same conversation, a
                 // little later each time so a per-minute limit can reset.
@@ -885,7 +887,7 @@ final class DottieScreenTaskRunner {
 
     /// A tiny grayscale copy of the screen, to tell whether an action
     /// changed anything.
-    private static func fingerprint(of image: CGImage) -> [UInt8] {
+    static func fingerprint(of image: CGImage) -> [UInt8] {
         let width = 64, height = 40
         var pixels = [UInt8](repeating: 0, count: width * height)
         pixels.withUnsafeMutableBytes { buffer in
@@ -1498,9 +1500,10 @@ final class DottieScreenTaskRunner {
                 return claudeParts
             }
             if Task.isCancelled { throw CancellationError() }
-            // Claude would be missing this step from now on, so Gemini,
-            // which reads the whole conversation, does the rest of the job.
-            DottieLog.warning("⚠️ Screen task: Claude didn't answer, Gemini carries on")
+            // Claude would be missing this step from now on, so the
+            // Worker's step model, which reads the whole conversation, does
+            // the rest of the job.
+            DottieLog.warning("⚠️ Screen task: Claude didn't answer, the step model carries on")
             usesClaudeForThisJob = false
         }
         do {
@@ -1543,29 +1546,23 @@ final class DottieScreenTaskRunner {
             firstParts.insert(contentsOf: referenceImageParts, at: 0)
             requestContents[0]["parts"] = firstParts
         }
-        var requestBody: [String: Any] = [
-            // Groq first (much faster), with the newest screenshot and recent
-            // steps; the Worker uses Gemini when Groq can't take the step.
-            "provider": "groq",
+        let requestBody: [String: Any] = [
+            // The Worker's picture route: GLM first, then its backups
+            // (paidProviders in worker/src/index.ts). No Gemini.
+            "provider": "screen",
             "model": requestModel,
             "systemInstruction": ["parts": [["text": Self.systemInstruction]]],
             "contents": requestContents,
             "tools": [["functionDeclarations": Self.functionDeclarations]],
             "toolConfig": ["functionCallingConfig": ["mode": "ANY"]]
         ]
-        // A step is a quick look-and-act decision; the plan and done check
-        // carry the long thinking. Only the full Flash models take a
-        // thinking level (Teaching sets it the same way).
-        if requestModel.contains("flash") && !requestModel.contains("lite") {
-            requestBody["generationConfig"] = ["thinkingConfig": ["thinkingLevel": "low"]]
-        }
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (responseData, response) = try await DottieModelPicker.shared.data(for: request, model: requestModel, totalSeconds: Self.stepAnswerDeadlineSeconds)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard statusCode == 200 else {
             throw NSError(domain: "DottieScreenTaskRunner", code: statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "Gemini returned \(statusCode): \(String(decoding: responseData.prefix(300), as: UTF8.self))"
+                NSLocalizedDescriptionKey: "The step model returned \(statusCode): \(String(decoding: responseData.prefix(300), as: UTF8.self))"
             ])
         }
 

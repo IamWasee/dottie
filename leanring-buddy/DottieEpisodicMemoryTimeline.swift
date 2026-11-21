@@ -239,7 +239,7 @@ struct DottieScreenMemorySettings: View {
                     .foregroundColor(DS.Colors.textPrimary)
             }
             .toggleStyle(.switch)
-            Text("Every few minutes while you're using the Mac, Dottie notes the app, the window, the web address and a little of the window's text. The text is read on this Mac and no screenshot is kept. Every half hour or so the notes are turned into timeline moments, and only those short notes go to Gemini. Password boxes, private browser windows and the apps below are always skipped. A small green light shows in the notch while it's on.")
+            Text("Every few minutes while you're using the Mac, Dottie notes the app, the window, the web address and a little of the window's text. The text is read on this Mac and no screenshot is kept. Every half hour or so the notes are turned into timeline moments, and only those short notes go to an AI model (through Dottie's server). Password boxes, private browser windows and the apps below are always skipped. A small green light shows in the notch while it's on.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

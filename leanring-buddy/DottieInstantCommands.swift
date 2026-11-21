@@ -245,8 +245,34 @@ enum DottieInstantCommands {
         if let knownPlace = DottieKnownPlaces.shared.place(matchingSpokenName: spokenTarget) {
             return .openPlace(url: URL(fileURLWithPath: knownPlace.path), placeName: knownPlace.displayName)
         }
+        // "open my bull and shit folder": a folder in the home folder,
+        // Desktop, Documents or Downloads, even when a word was misheard.
+        if let spokenFolderName = DottieNamedPlaceFinder.spokenFolderName(fromOpenTarget: spokenTarget),
+           let folderURL = homeFolder(matchingSpokenName: spokenFolderName) {
+            return .openPlace(url: folderURL, placeName: folderURL.lastPathComponent)
+        }
         // Not known yet: whatever opens next is what these words meant.
         DottieKnownPlaces.shared.noteUnrecognizedOpenRequest(spokenTarget: spokenTarget)
+        return nil
+    }
+
+    /// One level inside the folders people keep things in; only folders.
+    private static func homeFolder(matchingSpokenName spokenFolderName: String) -> URL? {
+        let fileManager = FileManager.default
+        let homeFolderURL = fileManager.homeDirectoryForCurrentUser
+        let searchFolderURLs = [homeFolderURL] + ["Desktop", "Documents", "Downloads"].map { homeFolderURL.appendingPathComponent($0, isDirectory: true) }
+        for searchFolderURL in searchFolderURLs {
+            let folderNames = ((try? fileManager.contentsOfDirectory(atPath: searchFolderURL.path)) ?? []).filter { entryName in
+                var isDirectory: ObjCBool = false
+                return !entryName.hasPrefix(".")
+                    && !entryName.hasSuffix(".app")
+                    && fileManager.fileExists(atPath: searchFolderURL.appendingPathComponent(entryName).path, isDirectory: &isDirectory)
+                    && isDirectory.boolValue
+            }
+            if let matchedName = DottieNamedPlaceFinder.closestFolderName(to: spokenFolderName, among: folderNames) {
+                return searchFolderURL.appendingPathComponent(matchedName, isDirectory: true)
+            }
+        }
         return nil
     }
 
@@ -480,8 +506,20 @@ enum DottieInstantCommands {
             guard DottieScreenActionPerformer.canPostEvents else {
                 return .failed("I need Accessibility permission to press \(keyCombination). Turn it on in Settings, then ask again.")
             }
+            await handKeyboardBackToTheFrontApp()
             return DottieScreenActionPerformer.press(keyCombination: keyCombination) ? .done(doneText) : .failed("I couldn't press \(keyCombination).")
         }
+    }
+
+    /// The type-to-ask box is a non-activating panel that holds keyboard
+    /// focus while the user types, so a shortcut pressed right after Return
+    /// ("minimize" → cmd+M) went to Dottie's own box and did nothing while
+    /// Dottie said it was done (round 1079). Letting go of the focus first
+    /// sends it to the app the user is working in.
+    private static func handKeyboardBackToTheFrontApp() async {
+        guard !NSRunningApplication.current.isActive, let dottieKeyWindow = NSApp.keyWindow else { return }
+        dottieKeyWindow.resignKey()
+        try? await Task.sleep(nanoseconds: 120_000_000)
     }
 
     private static func openApp(appURL: URL, appName: String) async -> DottieInstantCommandResult {

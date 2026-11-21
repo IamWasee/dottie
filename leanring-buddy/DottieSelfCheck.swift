@@ -78,7 +78,7 @@ final class DottieSelfCheck: ObservableObject {
         add(checkTelegram())
         add(checkOnDeviceModel())
         add(await checkNeedle())
-        add(Item(id: "models", title: "Gemini models", level: .off, detail: DottieModelPicker.shared.summary()))
+        add(Item(id: "models", title: "AI models", level: .off, detail: DottieModelPicker.shared.summary()))
         return summary
     }
 
@@ -231,14 +231,14 @@ final class DottieSelfCheck: ObservableObject {
             let answer = GeminiServerSentEvents.text(from: responseData).trimmingCharacters(in: .whitespacesAndNewlines)
             guard statusCode == 200, !answer.isEmpty else {
                 let isBusy = [429, 503].contains(statusCode)
-                return Item(id: "gemini", title: "Gemini", level: isBusy ? .warning : .problem,
+                return Item(id: "gemini", title: "AI models", level: isBusy ? .warning : .problem,
                             detail: isBusy ? "Busy or over the free limit right now (\(statusCode)). It usually clears in a minute." : "No answer (error \(statusCode)).",
                             fix: .checkAgain, fixLabel: "Try again")
             }
-            return Item(id: "gemini", title: "Gemini", level: seconds < 4 ? .good : .warning,
-                        detail: String(format: "Answered in %.1fs", seconds) + (seconds < 4 ? "." : ". That's slow; Gemini may be busy."))
+            return Item(id: "gemini", title: "AI models", level: seconds < 4 ? .good : .warning,
+                        detail: String(format: "Answered in %.1fs", seconds) + (seconds < 4 ? "." : ". That's slow; the models may be busy."))
         } catch {
-            return Item(id: "gemini", title: "Gemini", level: .problem, detail: "No answer: \(error.localizedDescription)",
+            return Item(id: "gemini", title: "AI models", level: .problem, detail: "No answer: \(error.localizedDescription)",
                         fix: .checkAgain, fixLabel: "Try again")
         }
     }

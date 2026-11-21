@@ -205,6 +205,25 @@ struct SpeedCheckTests {
         #expect(median < 200, "20 Jev steps took \(median) ms to build")
     }
 
+    /// Every screen-job step checks the app memory before asking Jev; a
+    /// full page (40 clicks, 400 texts on screen) must cost next to nothing.
+    @Test func checkingTheAppMemoryEveryStepStaysQuick() {
+        let clicks = (0..<DottieAppMemoryPlan.maximumClicksPerPage).map {
+            DottieAppPage.Click(label: "Button number \($0)", centerX: 10, centerY: Double($0), resultPageKey: "page \($0)",
+                                resultPageTitle: "Page", timesSeen: $0, lastSeen: Date())
+        }
+        let memoryPage = DottieAppPage(key: "home", title: "Home", elements: [], clicks: clicks, lastSeen: Date(), screenshotFileName: nil)
+        let visibleLabels = (0..<400).map { "Button number \($0)" }
+        let median = medianMilliseconds {
+            for _ in 0..<100 {
+                _ = DottieAppMemoryPlan.rememberedClick(on: memoryPage, forTask: "open button number 7 please",
+                                                        visibleLabels: visibleLabels, alreadyClickedLabels: [])
+            }
+        }
+
+        #expect(median < 200, "100 app memory checks took \(median) ms")
+    }
+
     @Test func movingTheBoardAndNotesAThousandTimesStaysQuick() {
         let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let median = medianMilliseconds {

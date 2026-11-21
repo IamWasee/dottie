@@ -83,7 +83,7 @@ final class DottieMeetingLiveHelp: ObservableObject {
     private static let maximumAsksPerMinute = 8
     private static let minimumSecondsBetweenAsks: TimeInterval = 2.5
     /// Gemini answers when Groq isn't set up or is busy.
-    private static let geminiBackupModel = "gemini-3.5-flash-lite"
+    private static let geminiBackupModel = DottieModelPicker.quickModelName
     private static let askTimeoutSeconds: TimeInterval = 20
     /// Return, for ⌘⇧Return.
     private static let helpShortcutKeyCode: UInt16 = 36

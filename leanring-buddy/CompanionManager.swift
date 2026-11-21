@@ -1167,6 +1167,12 @@ final class CompanionManager: ObservableObject {
 
     /// Carries out a click, typing, keys, scroll, page or drawing the user
     /// asked voice Dottie for, and says what happened for Live to relay.
+    /// What the model hears when a click left the screen as it was: not
+    /// done, so it must not say so.
+    nonisolated static func clickChangedNothingResult(label: String?) -> String {
+        "clicked where \(label ?? "it") seemed to be, but nothing on screen changed, so it probably missed. it is NOT done: don't say it worked. call do_task_on_screen now with the user's request so it gets done properly."
+    }
+
     func performScreenAction(_ screenAction: DottieScreenAction) async -> String {
         let needsEventPermission: Bool
         switch screenAction {
@@ -1189,7 +1195,22 @@ final class CompanionManager: ObservableObject {
             detectedElementScreenLocation = target.point
             detectedElementDisplayFrame = target.displayFrame
             try? await Task.sleep(nanoseconds: 1_100_000_000)
+            let screenBeforeClick = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320)
             DottieScreenActionPerformer.click(at: target.point, clickCount: clickCount, isRightClick: isRightClick)
+            // A click that changed nothing on screen most likely missed. In
+            // round 1079 "click the search button" landed beside the button
+            // and Dottie still said it was done.
+            if let screenBeforeClick {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                if let screenAfterClick = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320),
+                   DottieScreenTaskRunner.isSameScreen(
+                       DottieScreenTaskRunner.fingerprint(of: screenBeforeClick.image),
+                       DottieScreenTaskRunner.fingerprint(of: screenAfterClick.image)
+                   ) {
+                    DottieLog.warning("⚠️ click_on_screen: nothing changed after the click, so it probably missed")
+                    return Self.clickChangedNothingResult(label: label)
+                }
+            }
             // "sign in with this account": the click only starts the goal,
             // so a screen job finishes it (DottieTaskGoal).
             let userRequest = currentLiveTurnTypedText ?? lastTranscript ?? ""
@@ -2503,7 +2524,7 @@ final class CompanionManager: ObservableObject {
                 self.speakConnectionErrorFallback()
                 return
             }
-            self.speakWithSystemVoice("Gemini isn't answering, but I did that on the Mac. " + doneText)
+            self.speakWithSystemVoice("The AI models aren't answering, but I did that on the Mac. " + doneText)
             self.finishInstantLaneTurn(userText: trimmedRequestText, doneText: doneText, inputKind: inputKind)
         }
     }

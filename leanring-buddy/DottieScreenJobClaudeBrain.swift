@@ -33,10 +33,13 @@ import Foundation
 final class DottieScreenJobClaudeBrain {
     static let shared = DottieScreenJobClaudeBrain()
 
-    nonisolated static let isEnabledDefaultsKey = "dottieScreenJobsUseClaude"
-    /// On unless the user turned it off.
+    /// A new key, so the old on-by-default setting doesn't carry over.
+    nonisolated static let isEnabledDefaultsKey = "dottieScreenJobsUseClaudeSonnet"
+    /// Off unless the user turns it on: round 1079 testing saw Sonnet through
+    /// MausBot never answer, and every screen job waited its full 20 s
+    /// before GLM took over. Jev and GLM drive screen jobs (celly's plan).
     static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: isEnabledDefaultsKey) as? Bool ?? true
+        UserDefaults.standard.object(forKey: isEnabledDefaultsKey) as? Bool ?? false
     }
 
     /// Sonnet looking at a screenshot usually answers in 4-15 s. Round 1

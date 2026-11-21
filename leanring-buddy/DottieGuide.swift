@@ -99,7 +99,7 @@ final class DottieGuide {
         case timedOut
     }
 
-    private static let guideModel = "gemini-3.6-flash"
+    private static let guideModel = DottieModelPicker.normalModelName
     private static let maximumRounds = 15
     private static let maximumTourRounds = 6
     private static let maximumTourBeats = 12
@@ -231,7 +231,7 @@ final class DottieGuide {
                 howToText: howToText
             ) else {
                 if Task.isCancelled { return nil }
-                return "Claude and Gemini are both too busy to guide right now. Try me again in a sec."
+                return "The AI models are too busy to guide right now. Try me again in a sec."
             }
             if Task.isCancelled { return nil }
 
@@ -459,7 +459,7 @@ final class DottieGuide {
             guard let beats = await requestSteps(goal: goal, mode: .tour, history: history, remainingRounds: beatsLeft, screen: screen),
                   !beats.isEmpty else {
                 if Task.isCancelled { return nil }
-                return round == 1 ? "Claude and Gemini are both too busy for a tour right now. Try me again in a sec." : nil
+                return round == 1 ? "The AI models are too busy for a tour right now. Try me again in a sec." : nil
             }
             var didReveal = false
             for beat in beats {

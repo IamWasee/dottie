@@ -2,8 +2,9 @@
 //  DottieModelPicker.swift
 //  leanring-buddy
 //
-//  Picks the quickest Gemini model that's good enough for each request,
-//  and steers around models that are busy or slow right now.
+//  Names how big a /chat request is (quick, normal or careful) and keeps
+//  track of how quickly the Worker answers each size. The Worker picks the
+//  real model itself (GLM, Claude, Groq; no Gemini) and ignores the name.
 //
 //  Every request to the Worker's /chat names a model. The Worker already
 //  falls back to other models when the named one is busy, but each miss
@@ -27,13 +28,18 @@ final class DottieModelPicker: @unchecked Sendable {
         case tiny, normal, hard
     }
 
-    /// Best first. "higher" is the Worker's alias for its bigger model, so
-    /// a Worker pointed at a stronger model keeps using it.
+    /// The size names sent as "model" on /chat. The Worker drops the field
+    /// and chooses the provider itself, so these only label the request in
+    /// Dottie's own timing notes.
+    static let quickModelName = "quick"
+    static let normalModelName = "normal"
+    static let carefulModelName = "careful"
+
     static func candidates(for tier: Tier) -> [String] {
         switch tier {
-        case .tiny: return ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
-        case .normal: return ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash"]
-        case .hard: return ["higher", "gemini-3.7-flash", "gemini-3.6-flash"]
+        case .tiny: return [quickModelName]
+        case .normal: return [normalModelName]
+        case .hard: return [carefulModelName]
         }
     }
 
@@ -76,15 +82,15 @@ final class DottieModelPicker: @unchecked Sendable {
 
     /// A model is "slow" for its size when one answer takes longer than this.
     private static func slowSeconds(for model: String) -> Double {
-        if model.contains("lite") { return 8 }
-        if candidates(for: .hard).first == model { return 35 }
+        if model == quickModelName { return 8 }
+        if model == carefulModelName { return 35 }
         return 18
     }
 
     // MARK: - Learning
 
-    /// Notes how a request went. `answeredBy` is the modelVersion Gemini
-    /// reported, which shows when the Worker had to use another model.
+    /// Notes how a request went. `answeredBy` (the answer's modelVersion) is
+    /// kept for callers but no longer changes anything: the Worker picks.
     func record(model: String, seconds: Double, statusCode: Int, answeredBy: String? = nil) {
         let now = Date()
         lock.lock()
@@ -97,21 +103,9 @@ final class DottieModelPicker: @unchecked Sendable {
         } else if statusCode == 200 {
             health.answeredCount += 1
             health.averageSeconds = health.averageSeconds.map { $0 * 0.6 + seconds * 0.4 } ?? seconds
-            // Groq answering says nothing about Gemini: quick asks go to it
-            // first on purpose.
-            let wasReplaced = answeredBy.map { !$0.isEmpty && !$0.hasPrefix(model) && !$0.hasPrefix("groq/") && model != "higher" } ?? false
-            if wasReplaced, let answeredBy {
-                // The Worker fell back: the named model was busy, the one
-                // that answered is fine.
-                health.busyCount += 1
-                health.skipUntil = now.addingTimeInterval(Self.coolDownSeconds)
-                health.lastProblem = "busy (another model answered)"
-                let answeringName = Self.candidates(for: .normal).first { answeredBy.hasPrefix($0) }
-                    ?? Self.candidates(for: .tiny).first { answeredBy.hasPrefix($0) }
-                if let answeringName, answeringName != model {
-                    healthByModel[answeringName, default: Health()].skipUntil = nil
-                }
-            } else if seconds > Self.slowSeconds(for: model) {
+            // The Worker chooses the answering model itself, so another
+            // model answering is normal and says nothing about busyness.
+            if seconds > Self.slowSeconds(for: model) {
                 health.skipUntil = now.addingTimeInterval(Self.coolDownSeconds)
                 health.lastProblem = "slow (\(Int(seconds))s)"
             } else {
@@ -158,7 +152,7 @@ final class DottieModelPicker: @unchecked Sendable {
         }
     }
 
-    /// The "modelVersion" Gemini puts in its answer, if any.
+    /// The "modelVersion" in the Worker's answer, if any.
     static func answeringModel(in responseData: Data) -> String? {
         answeringModel(inText: String(decoding: responseData.prefix(4096), as: UTF8.self))
             ?? answeringModel(inText: String(decoding: responseData.suffix(4096), as: UTF8.self))

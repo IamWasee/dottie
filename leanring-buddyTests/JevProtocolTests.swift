@@ -19,9 +19,9 @@ struct JevProtocolTests {
     @Test func boxRequestCarriesThePictureTheTargetAndTheAsk() {
         let body = DottieJevProtocol.boxRequestBody(target: "the first email", userContext: "open my newest mail", imageJPEGBase64: "abc")
         let assets = body["assets"] as? [String: [String: String]]
-        #expect(assets?["screen"]?["type"] == "image")
-        #expect(assets?["screen"]?["format"] == "jpeg")
-        #expect(assets?["screen"]?["data_base64"] == "abc")
+        #expect(assets?[DottieJevProtocol.screenshotAssetName]?["type"] == "image")
+        #expect(assets?[DottieJevProtocol.screenshotAssetName]?["format"] == "jpeg")
+        #expect(assets?[DottieJevProtocol.screenshotAssetName]?["data_base64"] == "abc")
         let question = (body["questions"] as? [String: [String: String]])?["target"]
         #expect(question?["type"] == "box")
         #expect(question?["instructions"]?.contains("the first email") == true)
@@ -31,7 +31,7 @@ struct JevProtocolTests {
 
     @Test func boxRequestWithoutContextStillHasAState() {
         let body = DottieJevProtocol.boxRequestBody(target: "Send", userContext: nil, imageJPEGBase64: "abc")
-        #expect((body["state"] as? String) == "A screenshot of a Mac screen.")
+        #expect((body["state"] as? String) == "A screenshot of a Mac screen. \(DottieJevProtocol.screenshotReferenceLine)")
     }
 
     @Test func statementRequestIsAYesNoQuestion() {
@@ -40,6 +40,26 @@ struct JevProtocolTests {
         #expect(question?["type"] == "noul")
         #expect(question?["instructions"]?.contains("the inbox is empty") == true)
         #expect(JSONSerialization.isValidJSONObject(body))
+    }
+
+    /// Jev puts a copy of the picture wherever the asset's name appears in
+    /// the request's text, so each request must name it exactly once.
+    @Test func boxAndStatementRequestsNameTheScreenshotExactlyOnce() throws {
+        let boxBody = DottieJevProtocol.boxRequestBody(target: "the screen's Search button", userContext: "click search on the screen", imageJPEGBase64: "abc")
+        let statementBody = DottieJevProtocol.statementRequestBody(statement: "the screenshot shows results on screen", imageJPEGBase64: "abc")
+        for body in [boxBody, statementBody] {
+            var bodyWithoutAssets = body
+            bodyWithoutAssets["assets"] = nil
+            let text = String(decoding: try JSONSerialization.data(withJSONObject: bodyWithoutAssets), as: UTF8.self)
+            #expect(text.components(separatedBy: DottieJevProtocol.screenshotAssetName).count - 1 == 1)
+        }
+    }
+
+    @Test func screenshotAssetNameIsNotAnEverydayWord() {
+        for everydayWord in ["screen", "screenshot", "image", "picture", "click"] {
+            #expect(!everydayWord.contains(DottieJevProtocol.screenshotAssetName))
+        }
+        #expect(DottieJevProtocol.screenshotAssetName.count > 12)
     }
 
     @Test func readsANestedBoxAndTurnsItInto0To1000() throws {

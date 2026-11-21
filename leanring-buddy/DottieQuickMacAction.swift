@@ -21,11 +21,13 @@ enum DottieQuickMacActionPlanKind: Equatable {
     case replayPhrase
     /// Saves a shortcut under the user's name for it: only the user asks for that.
     case saveNamedShortcut
+    /// Starts or stops watching the user ("watch me", "done"): only the user asks for that.
+    case learningPhrase
 
     var mayRunFromAModel: Bool {
         switch self {
         case .instantCommands, .learnedShortcut, .toolSteps: return true
-        case .replayPhrase, .saveNamedShortcut: return false
+        case .replayPhrase, .saveNamedShortcut, .learningPhrase: return false
         }
     }
 }
@@ -57,6 +59,7 @@ enum DottieQuickMacAction {
         case .toolSteps: return .toolSteps
         case .replayPhrase: return .replayPhrase
         case .saveNamedShortcut: return .saveNamedShortcut
+        case .learningPhrase: return .learningPhrase
         }
     }
 

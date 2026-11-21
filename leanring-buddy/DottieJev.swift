@@ -33,7 +33,16 @@ struct DottieJevBox: Equatable {
 enum DottieJevProtocol {
     static let boxQuestionName = "target"
     static let statementQuestionName = "statement"
-    static let screenshotAssetName = "screen"
+    /// The screenshot's asset reference. Jev swaps every place this string
+    /// appears in the state, instructions or criteria (even inside a word)
+    /// for another copy of the image, so it must be a string no request
+    /// text contains by accident. It used to be "screen": every "screenshot",
+    /// "screen" and each "Click … on the screen" option added a copy, and a
+    /// screen job's 40-odd options overflowed Jev's limits, so every job's
+    /// first move came back 400.
+    static let screenshotAssetName = "dottie-screenshot-asset-7f3a9c"
+    /// The one place a request names its screenshot.
+    static let screenshotReferenceLine = "The screenshot: \(screenshotAssetName)"
     /// Jev takes pictures whose sides are 280-1568 pixels.
     static let maximumImageSide = 1568
     static let minimumImageSide = 280
@@ -41,7 +50,7 @@ enum DottieJevProtocol {
     static let minimumBoxConfidence = 0.5
 
     static func boxRequestBody(target: String, userContext: String?, imageJPEGBase64: String) -> [String: Any] {
-        var state = "A screenshot of a Mac screen."
+        var state = "A screenshot of a Mac screen. \(screenshotReferenceLine)"
         if let userContext, !userContext.isEmpty {
             state += " The user asked: \(userContext)"
         }
@@ -57,7 +66,7 @@ enum DottieJevProtocol {
 
     static func statementRequestBody(statement: String, imageJPEGBase64: String) -> [String: Any] {
         [
-            "state": "A screenshot of a Mac screen, taken just now.",
+            "state": "A screenshot of a Mac screen, taken just now. \(screenshotReferenceLine)",
             "assets": [screenshotAssetName: ["type": "image", "format": "jpeg", "data_base64": imageJPEGBase64]],
             "questions": [statementQuestionName: [
                 "type": "noul",
@@ -178,7 +187,8 @@ enum DottieJev {
             let (answerData, response) = try await URLSession.shared.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
-                DottieLog.warning("⚠️ Jev answered \(statusCode); leaving it alone for a while")
+                let errorDetail = String(decoding: answerData.prefix(300), as: UTF8.self)
+                DottieLog.warning("⚠️ Jev answered \(statusCode) (\(errorDetail)); leaving it alone for a while")
                 pausedUntil = Date().addingTimeInterval(pauseAfterFailureSeconds)
                 return nil
             }

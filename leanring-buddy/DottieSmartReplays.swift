@@ -187,7 +187,7 @@ final class DottieSmartReplayRecorder {
     private var typedTextBuffer = ""
     private var didTypeIntoPasswordField = false
     private var lastPlaceLine: String?
-    private static let describingModel = "gemini-3.6-flash"
+    private static let describingModel = DottieModelPicker.normalModelName
     private static let maximumActionLines = 200
 
     func start(kind: DottieSmartReplay.Kind) -> Bool {
