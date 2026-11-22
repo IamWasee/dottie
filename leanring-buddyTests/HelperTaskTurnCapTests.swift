@@ -28,9 +28,11 @@ struct HelperTaskTurnCapTests {
         var cap = DottieHelperTaskTurnCap()
         cap.noteTaskStarted(agentID: helperID)
         for _ in 0..<20 { _ = cap.allowFollowUp(agentID: helperID) }
-        #expect(!cap.allowFollowUp(agentID: helperID))
+        let allowedAtTheLimit = cap.allowFollowUp(agentID: helperID)
+        #expect(!allowedAtTheLimit)
         cap.noteTaskStarted(agentID: helperID)
-        #expect(cap.allowFollowUp(agentID: helperID))
+        let allowedAfterTheUserWrote = cap.allowFollowUp(agentID: helperID)
+        #expect(allowedAfterTheUserWrote)
         #expect(cap.turnsByAgentID[helperID] == 2)
     }
 
@@ -40,8 +42,10 @@ struct HelperTaskTurnCapTests {
         cap.noteTaskStarted(agentID: helperID)
         for _ in 0..<20 { _ = cap.allowFollowUp(agentID: helperID) }
         cap.noteTaskStarted(agentID: otherHelperID)
-        #expect(cap.allowFollowUp(agentID: otherHelperID))
-        #expect(!cap.allowFollowUp(agentID: helperID))
+        let otherHelperAllowed = cap.allowFollowUp(agentID: otherHelperID)
+        let firstHelperAllowed = cap.allowFollowUp(agentID: helperID)
+        #expect(otherHelperAllowed)
+        #expect(!firstHelperAllowed)
     }
 
     @Test func aHelperNeverGivenATaskStillHasALimit() {
