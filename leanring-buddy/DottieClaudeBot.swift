@@ -3,8 +3,8 @@
 //  leanring-buddy
 //
 //  One of Dottie's own Claude bots in MausBot, running on the user's Claude
-//  plan: screen jobs ("Dottie Screen Jobs"), step guessing ("Dottie
-//  Planner") and watch-and-learn ("Dottie Watcher"). Each keeps its bot id
+//  plan: screen jobs ("Dottie Screen Jobs", off unless turned on) and
+//  watch-and-learn ("Dottie Watcher"). Each keeps its bot id
 //  in UserDefaults, is made or updated with `team apply` only when its
 //  instructions change, and answers one message at a time with a time
 //  limit. Callers fall back to Gemini when `send` returns nil (MausBot not
@@ -31,6 +31,8 @@ final class DottieClaudeBot {
 
     private let mausBotRuntime = DottieMausBotRuntime()
     private var skippedUntil: Date?
+    /// Turns in a row that ran out of time (a stop by the user doesn't count).
+    private var timeoutsInARow = 0
 
     init(helperName: String, title: String, instructions: String, folderName: String, agentID: UUID, modelKeyword: String = "sonnet", effort: String = "low") {
         self.helperName = helperName
@@ -106,6 +108,7 @@ final class DottieClaudeBot {
         let timeoutTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            replyCollector.timedOut = true
             runtime.stopTurn(agentID: stoppedAgentID)
         }
         let startedAt = Date()
@@ -126,9 +129,18 @@ final class DottieClaudeBot {
 
         switch outcome {
         case .finished(let succeeded, _) where succeeded && !replyCollector.text.isEmpty:
+            timeoutsInARow = 0
             return replyCollector.text
         case .stopped:
-            DottieLog.warning("⚠️ \(helperName): Claude took over \(Int(timeoutSeconds)) s")
+            guard replyCollector.timedOut else { return nil }
+            // Each of these turns loads about 55k cached tokens on the
+            // user's Claude plan and gives nothing back. Timeouts used to
+            // be retried on the very next job; now Claude is left alone for
+            // a while, longer each time it runs out of time again.
+            timeoutsInARow += 1
+            let skipSeconds = Self.skipSeconds(afterTimeoutsInARow: timeoutsInARow)
+            skippedUntil = Date().addingTimeInterval(skipSeconds)
+            DottieLog.warning("⚠️ \(helperName): Claude took over \(public: Int(timeoutSeconds)) s; not asked again for \(public: Int(skipSeconds / 60)) min")
             return nil
         default:
             DottieLog.warning("⚠️ \(helperName): Claude's turn didn't give an answer: \(Self.whyTurnFailed(outcome, replyWasEmpty: replyCollector.text.isEmpty))")
@@ -167,6 +179,13 @@ final class DottieClaudeBot {
         }
     }
 
+    /// How long Claude is left alone after timing out this many turns in a
+    /// row: 10 minutes, doubling each time, at most 2 hours.
+    nonisolated static func skipSeconds(afterTimeoutsInARow timeoutCount: Int) -> TimeInterval {
+        let doublings = min(max(timeoutCount, 1) - 1, 4)
+        return min(600 * pow(2, Double(doublings)), 7200)
+    }
+
     private func skipForAWhile() {
         skippedUntil = Date().addingTimeInterval(120)
     }
@@ -184,4 +203,6 @@ final class DottieClaudeBot {
 @MainActor
 final class DottieStreamedReplyCollector {
     var text = ""
+    /// The turn was stopped because it ran out of time.
+    var timedOut = false
 }

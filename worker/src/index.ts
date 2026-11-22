@@ -57,6 +57,7 @@ export interface Env {
   HELPER_PROVIDER_ORDER?: string;
   GROQ_TALK_MODELS?: string;
   REQUEST_PROVIDER_ORDER?: string;
+  PLAN_PROVIDER_ORDER?: string;
   /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
   SCREEN_STEP_ATTEMPT_SECONDS?: string;
   /** How many of a screen step's newest screenshots go to the model (1-5, default 2). */
@@ -314,9 +315,15 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   // A screen step needs the screen as it is now, not the last five: every
   // older screenshot made GLM read up to five full-size pictures a step.
   const routedBody = wantedRole === "screen" ? keepingNewestScreenshots(requestBody, screenStepScreenshotCount(env.SCREEN_STEP_SCREENSHOTS)) : requestBody;
-  const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds);
+  // A screen job's plan in words: GLM first (celly's call), Claude only
+  // when GLM can't; it used to go to Claude Haiku like any other text.
+  const forcedOrder = wantedRole === "plan" ? env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER : undefined;
+  const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
 }
+
+/** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
+export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
 
 /** How many of a screen step's screenshots are sent on, by default 2. */
 export const DEFAULT_SCREEN_STEP_SCREENSHOTS = 2;
@@ -386,9 +393,10 @@ async function answerWithAnyProvider(
   geminiBody: Record<string, unknown>,
   streaming: boolean,
   routeName: string,
-  attemptLimitMilliseconds?: number
+  attemptLimitMilliseconds?: number,
+  forcedOrder?: string
 ): Promise<Response | undefined> {
-  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName, undefined, attemptLimitMilliseconds);
+  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName, forcedOrder, attemptLimitMilliseconds);
   if (paidResponse) return paidResponse;
   const backups: ChatProvider[] = [];
   const groq = groqFromEnv(env);

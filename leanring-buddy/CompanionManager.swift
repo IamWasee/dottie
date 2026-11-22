@@ -2069,7 +2069,7 @@ final class CompanionManager: ObservableObject {
                 startNextQueuedScreenTask()
                 return
             }
-            resultText = "it couldn't be finished: \(reason)"
+            resultText = DottieScreenJobResultLine.failurePrefix + reason
         case .stopped:
             scheduleTransientHideIfNeeded()
             return
@@ -2125,21 +2125,30 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Dottie says how the job went, as a turn of its own, so it reads like
-    /// her answer and lands in the conversation history.
+    /// Dottie says how the job went: the job's own answer, said as it is
+    /// (DottieScreenJobResultLine), with no model call. It lands in the
+    /// conversation history and in Home as her line alone.
     func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
-        let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
-        var instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
-            + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
-        // The user typed this line for the end of every run of a smart
-        // replay, so it's said exactly, in place of the usual result.
-        if let closingMessage {
-            instructionText = "the smart replay you were running is finished. say exactly this, word for word, and nothing else: \"\(closingMessage)\". don't start the job again." + nextLine
-        }
+        let spokenLine = DottieScreenJobResultLine.spokenLine(resultText: resultText, waitingCount: waitingCount, closingMessage: closingMessage)
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
-        sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
+        conversationHistory.append((
+            userTranscript: DottieScreenJobResultLine.historyUserLine(taskText: taskText),
+            assistantResponse: spokenLine
+        ))
+        if conversationHistory.count > Self.rememberedExchangeCount {
+            conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
+        }
+        conversationStore.append(userText: "", clickyText: spokenLine, inputKind: .typed)
+        notchPresenter.updateLiveCaption(spokenLine)
+        notchPresenter.showFinishedResponse(spokenLine)
+        DottieLog.notice("🧭 Said the screen job's result without a model call")
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.speakClassicAnswer(spokenLine)
+            self.scheduleTransientHideIfNeeded()
+        }
     }
 
     // MARK: - Guides (teaching the app on screen)

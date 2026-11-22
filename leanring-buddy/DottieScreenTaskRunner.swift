@@ -200,7 +200,6 @@ final class DottieScreenTaskRunner {
         guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
         DottieScreenJobClaudeBrain.shared.stop()
-        DottieScreenJobGuesser.shared.stop()
         runTask.cancel()
         self.runTask = nil
         currentTaskText = nil

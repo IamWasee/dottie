@@ -49,7 +49,6 @@ final class DottieScreenJobGuesser {
         case notTried
     }
 
-    private static let claudeTimeoutSeconds: Double = 8
     /// How long a step waits for its menu item or button to show up (apps
     /// and pages can take a moment), looking again every tenth of a second
     /// and going the moment it's there.
@@ -57,18 +56,8 @@ final class DottieScreenJobGuesser {
     /// How long an app or link gets to open before the next step.
     private static let waitAfterOpeningSeconds: Double = 1.5
     private static let geminiPlanModel = DottieModelPicker.normalModelName
-
-    private let plannerBot = DottieClaudeBot(
-        helperName: "Dottie Planner",
-        title: "Guesses the steps of a Mac job from how the app is laid out",
-        instructions: DottieScreenJobGuesser.plannerInstructions,
-        folderName: "Planner",
-        agentID: UUID(uuidString: "7D1C3B5A-2E4F-4A6B-9C8D-0E1F2A3B4C5D") ?? UUID()
-    )
-
-    func stop() {
-        plannerBot.stop()
-    }
+    /// The Worker's route for a plan in words: GLM first, Claude as backup.
+    static let planProviderName = "plan"
 
     /// Guesses the steps and does the ones it can without looking.
     func guessAndRun(taskText: String, knownHowTo: String, onProgress: @escaping @MainActor (String) -> Void) async -> Outcome {
@@ -139,20 +128,12 @@ final class DottieScreenJobGuesser {
 
     // MARK: - Asking for the plan
 
-    /// Groq first: a plan in words comes back from it in a second or two,
-    /// while the Claude planner often took the full wait and sent nothing
-    /// (25 s of the user watching "working out the steps"). Claude, with a
-    /// short wait, only when Groq and Gemini gave no plan.
+    /// The plan comes from the Worker alone, GLM first (`"provider":
+    /// "plan"`). A Claude planner bot used to be asked when that failed:
+    /// another 8 s of "working out the steps" and a MausBot turn that loads
+    /// about 55k cached tokens, for a guess the screenshot steps make anyway.
     private func askForPlan(_ question: String) async -> [String: Any]? {
-        if let plan = await askGeminiForPlan(question) {
-            return plan
-        }
-        if plannerBot.isWorthTrying,
-           let replyText = await plannerBot.send(question, newConversation: true, timeoutSeconds: Self.claudeTimeoutSeconds),
-           let plan = DottieClaudeBot.jsonObject(in: replyText) {
-            return plan
-        }
-        return nil
+        await askGeminiForPlan(question)
     }
 
     private func askGeminiForPlan(_ question: String) async -> [String: Any]? {
@@ -162,9 +143,8 @@ final class DottieScreenJobGuesser {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
         let requestBody: [String: Any] = [
-            // Words only, so Groq can answer first (much faster); the
-            // Worker uses Gemini when it can't.
-            "provider": "groq",
+            // Words only: the Worker asks GLM first, then Claude.
+            "provider": DottieScreenJobGuesser.planProviderName,
             "model": Self.geminiPlanModel,
             "systemInstruction": ["parts": [["text": Self.plannerInstructions]]],
             "contents": [["role": "user", "parts": [["text": question]]]],

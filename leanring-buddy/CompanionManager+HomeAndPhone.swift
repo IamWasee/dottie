@@ -54,7 +54,7 @@ extension CompanionManager {
             let resultText: String
             switch outcome {
             case .finished(let answer): resultText = answer
-            case .failed(let reason): resultText = "it couldn't be finished: \(reason)"
+            case .failed(let reason): resultText = DottieScreenJobResultLine.failurePrefix + reason
             case .stopped: return
             }
             DottieLog.notice("📺 TV task result: \(resultText)")
