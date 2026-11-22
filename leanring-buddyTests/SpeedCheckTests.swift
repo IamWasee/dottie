@@ -291,4 +291,19 @@ struct SpeedCheckTests {
         }
         #expect(median < 50, "app memory's summary took \(median) ms")
     }
+
+    @Test func jobMemoryHintsAndHeldMouseOptionsStayQuick() {
+        var memory = DottieJobMemory(totalRounds: 5)
+        for round in 1...4 {
+            for move in 1...25 { memory.noteMove("clicked button \(move) of round \(round)") }
+            memory.finishRound()
+        }
+        let manyTexts = (0..<400).map { DottieJevDriverPlan.ScreenText(text: "Item \($0)", centerX: 100, centerY: Double($0)) }
+        let median = medianMilliseconds {
+            _ = memory.stateText()
+            _ = DottieScreenJobHintPlan.isGuidance("no, use the search bar at the top, it's faster")
+            _ = DottieJevDriverPlan.optionsWhileHoldingMouse(heldLabel: "Item 3", screenTexts: manyTexts, screenControls: [], alreadyTriedSignatures: [])
+        }
+        #expect(median < 50, "job memory, hints and held-mouse options took \(median) ms")
+    }
 }

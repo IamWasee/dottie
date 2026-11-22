@@ -50,6 +50,9 @@ enum DottieJevDriverPlan {
         case rightClick(label: String, centerX: Double, centerY: Double)
         case drag(fromLabel: String, fromX: Double, fromY: Double, toLabel: String, toX: Double, toY: Double)
         case typeText(String, pressesReturn: Bool)
+        /// Click a text box, then type into it: one move, so the typing
+        /// never lands nowhere because the box wasn't selected.
+        case typeIntoField(fieldLabel: String, centerX: Double, centerY: Double, text: String, pressesReturn: Bool)
         case pressReturn
         case pressKeys(keys: String, meaning: String)
         case scrollDown
@@ -66,6 +69,15 @@ enum DottieJevDriverPlan {
         /// Read what app memory knows about the app in front (pages,
         /// controls, the user's flows), only when Jev asks for it.
         case recallAppMemory
+        /// Press the mouse button down on something and keep holding it
+        /// (a long press, the start of a drag, a slider); a later move lets go.
+        case holdMouseDown(label: String, centerX: Double, centerY: Double)
+        /// Let go of the held button where it was pressed.
+        case releaseMouseHere
+        /// Move there with the button still held, then let go (a drop).
+        case releaseMouseOn(label: String, centerX: Double, centerY: Double)
+        /// One round of a job that repeats the same task is done: the next starts.
+        case finishedRound
         case finished
         case noneFits
 
@@ -83,6 +95,10 @@ enum DottieJevDriverPlan {
             case .scrollRight: return "Scroll or swipe right"
             case .quickMacAction(let text): return "Do it straight on the Mac without the screen: \"\(text)\""
             case .recallAppMemory: return "Look up what Dottie remembers about this app first (its buttons, where they are, and how the user did this before)"
+            case .typeIntoField(let fieldLabel, _, _, let text, let pressesReturn):
+                return pressesReturn
+                    ? "Click the text box \"\(fieldLabel)\", type \"\(text)\", then press Return"
+                    : "Click the text box \"\(fieldLabel)\" and type \"\(text)\""
             case .typeText(let text, let pressesReturn):
                 return pressesReturn
                     ? "Type \"\(text)\" into the text box that's selected now, then press Return"
@@ -94,6 +110,10 @@ enum DottieJevDriverPlan {
             case .openSite(let address): return "Open the website \(address)"
             case .searchWeb(let text): return "Search the web for \"\(text)\""
             case .openApp(let name): return "Open the app \(name)"
+            case .holdMouseDown(let label, _, _): return "Press and hold the mouse button down on \"\(label)\" (don't let go yet)"
+            case .releaseMouseHere: return "Let go of the mouse button where it's held"
+            case .releaseMouseOn(let label, _, _): return "Move what's held onto \"\(label)\" and let go of the mouse button there"
+            case .finishedRound: return "This round of the task is done: start the next round"
             case .finished: return "Nothing left to do: the goal is already done on this screen"
             case .noneFits: return "None of these moves helps with the goal"
             }
@@ -104,7 +124,9 @@ enum DottieJevDriverPlan {
             switch self {
             case .openSite, .searchWeb, .openApp, .goBack, .pressReturn, .doubleClick, .pressKeys, .quickMacAction: return true
             case .typeText(_, let pressesReturn): return pressesReturn
-            case .click, .clickControl, .clickUnlabeled, .rightClick, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory, .finished, .noneFits: return false
+            case .typeIntoField(_, _, _, _, let pressesReturn): return pressesReturn
+            case .click, .clickControl, .clickUnlabeled, .rightClick, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory,
+                 .holdMouseDown, .releaseMouseHere, .releaseMouseOn, .finishedRound, .finished, .noneFits: return false
             }
         }
 
@@ -118,6 +140,8 @@ enum DottieJevDriverPlan {
             case .doubleClick(let label, _, _): return "doubleclick:\(label.lowercased())"
             case .rightClick(let label, _, _): return "rightclick:\(label.lowercased())"
             case .drag(let fromLabel, _, _, let toLabel, _, _): return "drag:\(fromLabel.lowercased())>\(toLabel.lowercased())"
+            case .holdMouseDown(let label, _, _): return "hold:\(label.lowercased())"
+            case .releaseMouseOn(let label, _, _): return "release:\(label.lowercased())"
             default: return description.lowercased()
             }
         }
@@ -137,6 +161,8 @@ enum DottieJevDriverPlan {
             case .quickMacAction(let text): return "did \"\(text)\" on the Mac"
             case .recallAppMemory: return "looked up what Dottie remembers about this app"
             case .typeText(let text, let pressesReturn): return pressesReturn ? "typed \"\(text)\" and pressed Return" : "typed \"\(text)\""
+            case .typeIntoField(let fieldLabel, _, _, let text, let pressesReturn):
+                return pressesReturn ? "typed \"\(text)\" into \(fieldLabel) and pressed Return" : "typed \"\(text)\" into \(fieldLabel)"
             case .pressReturn: return "pressed Return"
             case .scrollDown: return "scrolled down"
             case .scrollUp: return "scrolled up"
@@ -144,6 +170,10 @@ enum DottieJevDriverPlan {
             case .openSite(let address): return "opened \(address)"
             case .searchWeb(let text): return "searched the web for \(text)"
             case .openApp(let name): return "opened \(name)"
+            case .holdMouseDown(let label, _, _): return "pressed and held the mouse on \(label)"
+            case .releaseMouseHere: return "let go of the mouse"
+            case .releaseMouseOn(let label, _, _): return "moved what was held onto \(label) and let go"
+            case .finishedRound: return "finished this round"
             case .finished: return "finished"
             case .noneFits: return "stopped"
             }
@@ -164,6 +194,8 @@ enum DottieJevDriverPlan {
 
     enum Decision: Equatable {
         case act(Move)
+        /// One round of a repeated job is done; the job goes on.
+        case roundDone
         case finished
         case unsure
     }
@@ -176,6 +208,9 @@ enum DottieJevDriverPlan {
     static let maximumOptions = 250
     static let maximumControlOptions = 50
     static let maximumDoubleAndRightClickTargets = 8
+    /// Text boxes that get "click it and type" options, and pieces per box.
+    static let maximumTypingFields = 4
+    static let maximumPiecesPerField = 3
     /// Jev saying the goal is done this surely ends the job.
     static let doneProbabilityToFinish = 0.8
     /// Below both of these Jev is guessing among many; the step model goes on.
@@ -183,6 +218,12 @@ enum DottieJevDriverPlan {
     static let minimumTopProbability = 0.2
     /// The Jev lane's own step budget before the step model takes over.
     static let maximumSteps = 25
+    /// A job that repeats gets the budget once per round, up to this.
+    static let maximumStepsForRepeatedJobs = 100
+
+    static func stepBudget(rounds: Int) -> Int {
+        min(maximumSteps * max(rounds, 1), maximumStepsForRepeatedJobs)
+    }
     /// This many moves in a row that change nothing hand over.
     static let maximumMovesWithoutChange = 3
 
@@ -366,9 +407,13 @@ enum DottieJevDriverPlan {
         frontSiteHost: String? = nil,
         screenControls: [ScreenControl] = [],
         taskText: String = "",
-        offersAppMemory: Bool = false
+        offersAppMemory: Bool = false,
+        offersNextRound: Bool = false,
+        extraLeadingMoves: [Move] = []
     ) -> [Option] {
-        var leadingMoves: [Move] = offersAppMemory ? [.recallAppMemory] : []
+        // Moves the user's own hint names (keys to press) come first.
+        var leadingMoves: [Move] = extraLeadingMoves
+        if offersAppMemory { leadingMoves.append(.recallAppMemory) }
         for textPiece in textPieces {
             leadingMoves.append(.typeText(textPiece, pressesReturn: true))
             leadingMoves.append(.typeText(textPiece, pressesReturn: false))
@@ -384,6 +429,7 @@ enum DottieJevDriverPlan {
         if !trimmedTaskText.isEmpty, trimmedTaskText.count <= 120 {
             leadingMoves.append(.quickMacAction(trimmedTaskText))
         }
+        leadingMoves.append(contentsOf: typeIntoFieldMoves(screenControls: screenControls, textPieces: textPieces))
         leadingMoves.append(contentsOf: controlsWorthOffering(screenControls, screenTexts: screenTexts, taskText: taskText).map {
             Move.clickControl(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
         })
@@ -396,9 +442,11 @@ enum DottieJevDriverPlan {
         if let dragMove = dragMove(taskText: taskText, screenTexts: screenTexts) {
             trailingMoves.append(dragMove)
         }
+        trailingMoves.append(contentsOf: holdMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: taskText))
         trailingMoves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .goBack])
         trailingMoves.append(contentsOf: everydayKeys.map { Move.pressKeys(keys: $0.keys, meaning: $0.meaning) })
-        trailingMoves.append(contentsOf: [.finished, .noneFits])
+        // A repeated job isn't finished while rounds are left: the round is.
+        trailingMoves.append(contentsOf: offersNextRound ? [.finishedRound, .noneFits] : [.finished, .noneFits])
 
         // Screen texts fill what's left of Jev's option limit.
         let screenTextBudget = max(0, maximumOptions - leadingMoves.count - trailingMoves.count)
@@ -411,6 +459,66 @@ enum DottieJevDriverPlan {
             return seenSignatures.insert(moveSignature).inserted
         }
         return freshMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
+    }
+
+    /// Requests that need the button held: long presses, drags, sliders.
+    static func asksToHoldOrDrag(_ taskText: String) -> Bool {
+        let paddedTask = " " + comparableWords(taskText) + " "
+        return [" hold ", " long press ", " press and hold ", " drag ", " slide ", " slider ", " draw ", " select from "].contains { paddedTask.contains($0) }
+    }
+
+    static let maximumHoldTargets = 20
+
+    /// "Press and hold" on the texts the request talks about and on
+    /// sliders, and on the screen's texts when the request asks to hold or
+    /// drag, so a drag can be done in steps (hold, look, let go).
+    static func holdMoves(screenTexts: [ScreenText], screenControls: [ScreenControl], taskText: String) -> [Move] {
+        var moves: [Move] = screenControls.filter { $0.kind == "slider" }.prefix(4).map {
+            Move.holdMouseDown(label: $0.label, centerX: $0.centerX, centerY: $0.centerY)
+        }
+        let targets = asksToHoldOrDrag(taskText)
+            ? Array(screenTexts.prefix(maximumHoldTargets))
+            : doubleAndRightClickTargets(screenTexts: screenTexts, taskText: taskText)
+        moves.append(contentsOf: targets.map { Move.holdMouseDown(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
+        return moves
+    }
+
+    /// The moves while the mouse button is held down: let go where it is,
+    /// or carry what's held onto a text or control and let go there.
+    /// Nothing else is offered until the button is let go.
+    static func optionsWhileHoldingMouse(heldLabel: String, screenTexts: [ScreenText], screenControls: [ScreenControl], alreadyTriedSignatures: Set<String>) -> [Option] {
+        var moves: [Move] = [.releaseMouseHere]
+        let comparableHeldLabel = comparableWords(heldLabel)
+        let dropTargets = screenControls.map { (label: $0.label, centerX: $0.centerX, centerY: $0.centerY) }
+            + screenTexts.map { (label: $0.text, centerX: $0.centerX, centerY: $0.centerY) }
+        for dropTarget in dropTargets where comparableWords(dropTarget.label) != comparableHeldLabel {
+            moves.append(.releaseMouseOn(label: dropTarget.label, centerX: dropTarget.centerX, centerY: dropTarget.centerY))
+        }
+        var seenSignatures = Set<String>()
+        let freshMoves = moves.filter { move in
+            let moveSignature = move.signature
+            guard move == .releaseMouseHere || !alreadyTriedSignatures.contains(moveSignature) else { return false }
+            return seenSignatures.insert(moveSignature).inserted
+        }
+        // "None fits" always stays, inside Jev's option limit.
+        let offeredMoves = Array(freshMoves.prefix(maximumOptions - 1)) + [.noneFits]
+        return offeredMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
+    }
+
+    /// "Click this text box and type this" for the screen's text boxes
+    /// (top to bottom) and the first pieces of text, with and without Return.
+    static func typeIntoFieldMoves(screenControls: [ScreenControl], textPieces: [String]) -> [Move] {
+        let textBoxes = screenControls.filter { $0.kind == "text box" }
+            .sorted { ($0.centerY, $0.centerX) < ($1.centerY, $1.centerX) }
+            .prefix(maximumTypingFields)
+        var moves: [Move] = []
+        for textBox in textBoxes {
+            for textPiece in textPieces.prefix(maximumPiecesPerField) {
+                moves.append(.typeIntoField(fieldLabel: textBox.label, centerX: textBox.centerX, centerY: textBox.centerY, text: textPiece, pressesReturn: true))
+                moves.append(.typeIntoField(fieldLabel: textBox.label, centerX: textBox.centerX, centerY: textBox.centerY, text: textPiece, pressesReturn: false))
+            }
+        }
+        return moves
     }
 
     /// Keys people press all day, each with what it does, so Jev can pick a
@@ -543,12 +651,29 @@ enum DottieJevDriverPlan {
     /// Jev's request: the goal and what's been done as state, the moves as
     /// one choice question and "is it done?" as a yes/no beside it. The
     /// screenshot asset is added by DottieJev.answer(to:screenImage:).
-    static func requestBody(goal: String, movesSoFar: [String], knownHowTo: String, options: [Option]) -> [String: Any] {
+    static func requestBody(
+        goal: String,
+        movesSoFar: [String],
+        knownHowTo: String,
+        options: [Option],
+        jobMemory: DottieJobMemory? = nil,
+        hintsText: String = "",
+        isHoldingMouse: Bool = false
+    ) -> [String: Any] {
         var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\n\(DottieJevProtocol.screenshotReferenceLine) (their screen right now)."
-        if movesSoFar.isEmpty {
+        if let jobMemory {
+            state += "\n" + jobMemory.stateText()
+        } else if movesSoFar.isEmpty {
             state += "\nNothing has been done yet."
         } else {
-            state += "\nDone so far, in order: " + movesSoFar.suffix(12).joined(separator: "; ") + "."
+            state += "\nDone so far, in order: " + DottieJobMemory.compactList(movesSoFar) + "."
+        }
+        if isHoldingMouse {
+            state += "\nThe mouse button is held down right now: let go of it (where it is, or on the place the held thing should go)."
+        }
+        let trimmedHints = hintsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHints.isEmpty {
+            state += "\n" + trimmedHints
         }
         let trimmedHowTo = knownHowTo.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHowTo.isEmpty {
@@ -568,7 +693,9 @@ enum DottieJevDriverPlan {
                 ],
                 doneQuestionName: [
                     "type": "noul",
-                    "instructions": "Is the user's request fully done on this screen already?"
+                    "instructions": jobMemory.map { $0.hasRoundsLeft } == true
+                        ? "Is round \(jobMemory?.currentRound ?? 1) of the task finished on this screen?"
+                        : "Is the user's request fully done on this screen already?"
                 ]
             ]
         ]
@@ -589,8 +716,22 @@ enum DottieJevDriverPlan {
         return Answer(move: chosenOption.move, probability: probability, confidence: confidence, doneProbability: doneProbability)
     }
 
-    static func decision(for answer: Answer) -> Decision {
-        if let doneProbability = answer.doneProbability, doneProbability >= doneProbabilityToFinish { return .finished }
+    /// `hasRoundsLeft`: a repeated job with rounds still to do, where
+    /// "done" ends the round, not the job (only once the round made a move:
+    /// a new round starts on a screen that looks finished).
+    /// `heldMouseAt`: where the held button was pressed (0-1000), if held.
+    static func decision(for answer: Answer, hasRoundsLeft: Bool = false, roundHasMoves: Bool = false, heldMouseAt: (centerX: Double, centerY: Double)? = nil) -> Decision {
+        if hasRoundsLeft {
+            if answer.move == .finishedRound { return roundHasMoves ? .roundDone : .unsure }
+            if roundHasMoves, let doneProbability = answer.doneProbability, doneProbability >= doneProbabilityToFinish { return .roundDone }
+            if answer.move == .finished { return .unsure }
+        }
+        if case .releaseMouseOn(_, let releaseX, let releaseY) = answer.move, let heldMouseAt,
+           DottieMouseHoldPlan.releaseMovesTheHeldThing(heldX: heldMouseAt.centerX, heldY: heldMouseAt.centerY, releaseX: releaseX, releaseY: releaseY),
+           answer.probability < minimumProbabilityForHardToUndoMoves {
+            return .unsure
+        }
+        if !hasRoundsLeft, let doneProbability = answer.doneProbability, doneProbability >= doneProbabilityToFinish { return .finished }
         if answer.move == .finished {
             // Jev picking "done" while its own yes/no says no is a guess.
             if let doneProbability = answer.doneProbability, doneProbability < 0.5 { return .unsure }
@@ -609,7 +750,7 @@ enum DottieJevDriverPlan {
 
     static func movesNeedingClearPick(_ move: Move) -> Bool {
         switch move {
-        case .drag, .rightClick, .quickMacAction: return true
+        case .drag, .rightClick, .quickMacAction, .holdMouseDown: return true
         case .pressKeys(let keys, _): return ["cmd+q", "cmd+w"].contains(keys)
         default: return false
         }
@@ -703,7 +844,14 @@ enum DottieJevDriver {
         var knownHowTo = givenHowTo
         // App memory is read only when Jev asks, once per job.
         var hasRecalledAppMemory = false
-        let textPieces = DottieJevDriverPlan.textPieces(from: taskText)
+        let requestTextPieces = DottieJevDriverPlan.textPieces(from: taskText)
+        var textPieces = requestTextPieces
+        // The text a job needs typed, written once in the background while
+        // Jev starts (DottieJevTextPieces); picked up as soon as it's ready.
+        var textPieceWriter: Task<[String], Never>?
+        if DottieJevTextPieces.jobNeedsTyping(taskText) {
+            textPieceWriter = Task { await DottieJevTextPieces.write(forTask: taskText) }
+        }
         let siteAddresses = DottieJevDriverPlan.siteAddresses(from: taskText)
         let appNames = appNamesNamed(in: taskText)
         var movesSoFar: [String] = []
@@ -715,14 +863,29 @@ enum DottieJevDriver {
         // page it opened, and the labels clicked so far (never twice from memory).
         var clickWaitingForResult: (bundleIdentifier: String, pageKey: String, label: String, centerX: Double, centerY: Double)?
         var labelsClickedFromMemory = Set<String>()
+        // Every move, and which round of a repeated job this is.
+        var jobMemory = DottieJobMemory(taskText: taskText)
+        // The button Jev pressed and hasn't let go of yet (0-1000).
+        var heldMouse: (label: String, centerX: Double, centerY: Double)?
+        // Keys the user's hints name, offered first.
+        var hintKeyMoves: [DottieJevDriverPlan.Move] = []
+        // However this ends (finished, handed over, stopped), a held button is let go.
+        defer { DottieMouseHold.releaseNow(reason: "the Jev part of the job ended") }
 
         func handOver(_ reason: String) -> Outcome {
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
             DottieLog.notice("🎯 Jev handed the screen job over after \(movesSoFar.count) moves (\(reason)); \(aloneReport)")
-            return .handedOver(note: DottieJevDriverPlan.handOverNote(movesSoFar: movesSoFar, reason: reason))
+            var note = DottieJevDriverPlan.handOverNote(movesSoFar: movesSoFar, reason: reason)
+            if jobMemory.isRepeatedJob { note += "\n" + jobMemory.stateText() }
+            return .handedOver(note: note)
         }
 
-        for stepNumber in 1...DottieJevDriverPlan.maximumSteps {
+        func noteDone(_ move: DottieJevDriverPlan.Move) {
+            movesSoFar.append(move.summary)
+            jobMemory.noteMove(move.summary)
+        }
+
+        for stepNumber in 1...DottieJevDriverPlan.stepBudget(rounds: jobMemory.totalRounds) {
             if Task.isCancelled { return .handedOver(note: "") }
             guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: DottieJevProtocol.maximumImageSide) else {
                 return movesSoFar.isEmpty ? .notTried : handOver("The screen couldn't be read.")
@@ -730,8 +893,25 @@ enum DottieJevDriver {
             let screenThumbnail = thumbnail(of: screen.image)
             // Exploring: a move that left the screen as it was is struck
             // off for that screen, so Jev's next best pick gets its turn.
-            if let previousScreenThumbnail, let lastMoveSignature,
-               DottieJevDriverPlan.isSameScreen(previousScreenThumbnail, screenThumbnail) {
+            let lastMoveChangedNothing = previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? false
+            if lastMoveSignature != nil {
+                // The user's hints learn whether the move they led to did anything.
+                DottieScreenJobHints.shared.noteMove(changedScreen: !lastMoveChangedNothing)
+            }
+            // A hint from the user is a new way to try: what was struck off
+            // and the moves that changed nothing start over.
+            let newHints = DottieScreenJobHints.shared.takeNew()
+            if !newHints.isEmpty {
+                triedSignaturesByScreen = [:]
+                movesWithoutChange = 0
+                for newHint in newHints {
+                    textPieces = DottieJevTextPieces.merged(DottieJevDriverPlan.textPieces(from: newHint.text), textPieces)
+                    if let hintKeys = DottieScreenJobHintPlan.keyCombination(in: newHint.text) {
+                        hintKeyMoves.insert(.pressKeys(keys: hintKeys, meaning: "the user said to"), at: 0)
+                    }
+                }
+                actions.progress(stepNumber, "trying your way")
+            } else if let previousScreenThumbnail, let lastMoveSignature, lastMoveChangedNothing {
                 triedSignaturesByScreen[previousScreenThumbnail, default: []].insert(lastMoveSignature)
                 movesWithoutChange += 1
                 if movesWithoutChange >= DottieJevDriverPlan.maximumMovesWithoutChange {
@@ -759,10 +939,18 @@ enum DottieJevDriver {
                 DottieAppPage.Control(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
             })
             let screenTexts = DottieJevDriverPlan.clickableTexts(from: allScreenTexts, taskText: taskText)
+            // Wait for the written text once a text box is on screen or
+            // after the first move (pages whose boxes Accessibility doesn't
+            // name); on the first screen there's usually nothing to type into.
+            if let pendingWriter = textPieceWriter,
+               stepNumber >= 2 || screenControls.contains(where: { $0.kind == "text box" }) || DottieScreenActionPerformer.isTextFieldFocused {
+                textPieces = DottieJevTextPieces.merged(requestTextPieces, await pendingWriter.value)
+                textPieceWriter = nil
+            }
 
             // Something clicked here before led where this task is going:
             // click it now (where it sits on this screen) without asking Jev.
-            if let knownPage = appMemory.knownFrontPage(),
+            if heldMouse == nil, let knownPage = appMemory.knownFrontPage(),
                let rememberedClick = DottieAppMemoryPlan.rememberedClick(
                    on: knownPage, forTask: taskText,
                    visibleLabels: allScreenTexts.map(\.text), alreadyClickedLabels: labelsClickedFromMemory
@@ -774,7 +962,7 @@ enum DottieJevDriver {
                 labelsClickedFromMemory.insert(DottieAppMemoryPlan.comparableWords(rememberedClick.label))
                 DottieLog.notice("🎯 App memory clicked a remembered button without asking Jev")
                 await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
-                movesSoFar.append(move.summary)
+                noteDone(move)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
                 if let frontPageIdentity {
@@ -783,25 +971,52 @@ enum DottieJevDriver {
                 await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
                 continue
             }
-            let options = DottieJevDriverPlan.options(
+            let alreadyTriedSignatures = triedSignaturesByScreen[screenKey] ?? []
+            let options = heldMouse.map { heldMouse in
+                DottieJevDriverPlan.optionsWhileHoldingMouse(heldLabel: heldMouse.label, screenTexts: screenTexts,
+                                                             screenControls: screenControls, alreadyTriedSignatures: alreadyTriedSignatures)
+            } ?? DottieJevDriverPlan.options(
                 screenTexts: screenTexts,
                 textPieces: textPieces,
                 siteAddresses: siteAddresses,
                 appNames: appNames,
-                alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? [],
+                alreadyTriedSignatures: alreadyTriedSignatures,
                 frontSiteHost: DottieReplayContext.current().siteHost,
                 screenControls: screenControls,
                 taskText: taskText,
-                offersAppMemory: !hasRecalledAppMemory && appMemory.hasMemoryOfFrontApp()
+                offersAppMemory: !hasRecalledAppMemory && appMemory.hasMemoryOfFrontApp(),
+                offersNextRound: jobMemory.hasRoundsLeft && !jobMemory.movesThisRound.isEmpty,
+                extraLeadingMoves: hintKeyMoves
             )
-            let requestBody = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options)
+            let requestBody = DottieJevDriverPlan.requestBody(
+                goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options,
+                jobMemory: jobMemory, hintsText: DottieScreenJobHints.shared.stateText, isHoldingMouse: heldMouse != nil
+            )
             guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
                   let answer = DottieJevDriverPlan.answer(fromAnswer: answerData, options: options) else {
                 return movesSoFar.isEmpty ? .notTried : handOver("Jev didn't answer.")
             }
             if Task.isCancelled { return .handedOver(note: "") }
 
-            switch DottieJevDriverPlan.decision(for: answer) {
+            let decision = DottieJevDriverPlan.decision(
+                for: answer, hasRoundsLeft: jobMemory.hasRoundsLeft, roundHasMoves: !jobMemory.movesThisRound.isEmpty,
+                heldMouseAt: heldMouse.map { (centerX: $0.centerX, centerY: $0.centerY) }
+            )
+            switch decision {
+            case .roundDone:
+                // The next round starts like a fresh job on whatever screen
+                // this one left: nothing is struck off from the last round.
+                DottieMouseHold.releaseNow(reason: "a round ended")
+                heldMouse = nil
+                jobMemory.finishRound()
+                triedSignaturesByScreen = [:]
+                movesWithoutChange = 0
+                labelsClickedFromMemory = []
+                previousScreenThumbnail = nil
+                lastMoveSignature = nil
+                movesSoFar.append("finished round \(jobMemory.currentRound - 1) of \(jobMemory.totalRounds)")
+                DottieLog.notice("🎯 Jev finished round \(jobMemory.currentRound - 1) of \(jobMemory.totalRounds)")
+                actions.progress(stepNumber, "round \(jobMemory.currentRound) of \(jobMemory.totalRounds)")
             case .finished:
                 if DottieJevDriverPlan.asksForInformation(taskText) {
                     return handOver("The screen should now show what the user asked about: read it and finish with the answer.")
@@ -816,7 +1031,7 @@ enum DottieJevDriver {
                 actions.progress(stepNumber, "remembering how this app works")
                 let rememberedText = await appMemory.recall(forTask: taskText, readsPageClosely: true)
                 if !rememberedText.isEmpty { knownHowTo += "\n" + rememberedText }
-                movesSoFar.append(DottieJevDriverPlan.Move.recallAppMemory.summary)
+                noteDone(.recallAppMemory)
                 // Nothing on screen changed on purpose: not a move to strike off.
                 previousScreenThumbnail = nil
                 lastMoveSignature = nil
@@ -825,7 +1040,12 @@ enum DottieJevDriver {
                     return handOver("A password box is selected.")
                 }
                 await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
-                movesSoFar.append(move.summary)
+                switch move {
+                case .holdMouseDown(let label, let centerX, let centerY): heldMouse = DottieMouseHold.isHolding ? (label, centerX, centerY) : nil
+                case .releaseMouseHere, .releaseMouseOn: heldMouse = nil
+                default: break
+                }
+                noteDone(move)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
                 if case .click(let label, let centerX, let centerY) = move, let frontPageIdentity {
@@ -893,8 +1113,27 @@ enum DottieJevDriver {
         case .quickMacAction(let text):
             actions.progress(stepNumber, "doing it on the Mac")
             _ = await DottieQuickMacAction.perform(arguments: ["action": text])
-        case .recallAppMemory:
+        case .recallAppMemory, .finishedRound:
             break
+        case .holdMouseDown(let label, let centerX, let centerY):
+            actions.progress(stepNumber, "holding the mouse on \(label)")
+            await DottieMouseHold.press(at: snappedPoint(centerX: centerX, centerY: centerY))
+        case .releaseMouseHere:
+            actions.progress(stepNumber, "letting go of the mouse")
+            await DottieMouseHold.release(at: nil)
+        case .releaseMouseOn(let label, let centerX, let centerY):
+            actions.progress(stepNumber, "letting go on \(label)")
+            await DottieMouseHold.release(at: screen.globalPoint(normalizedX: centerX, normalizedY: centerY))
+        case .typeIntoField(let fieldLabel, let centerX, let centerY, let text, let pressesReturn):
+            await actions.click(screen.globalPoint(normalizedX: centerX, normalizedY: centerY), fieldLabel, 1, false, screen, stepNumber)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if DottieScreenActionPerformer.isFocusedFieldSecure { return }
+            actions.progress(stepNumber, "typing \"\(text.prefix(40))\"")
+            await DottieScreenActionPerformer.type(text)
+            if pressesReturn {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                DottieScreenActionPerformer.press(keyCombination: "enter")
+            }
         case .typeText(let text, let pressesReturn):
             actions.progress(stepNumber, "typing \"\(text.prefix(40))\"")
             await DottieScreenActionPerformer.type(text)

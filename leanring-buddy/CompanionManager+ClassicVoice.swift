@@ -150,6 +150,10 @@ extension CompanionManager {
         inputKind: ConversationEntry.InputKind = .voice,
         checksInstantLane: Bool = true
     ) {
+        // Guidance for the screen job that's running goes to it, not to a new turn.
+        if passHintToRunningScreenJobIfGiven(transcript, inputKind: inputKind) {
+            return
+        }
         // Typed turns were already checked in sendTypedMessage.
         if inputKind == .voice && DottieAdminMode.shared.handleSecretPhraseIfSaid(transcript, companionManager: self) {
             voiceState = .idle

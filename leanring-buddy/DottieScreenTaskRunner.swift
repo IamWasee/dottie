@@ -149,6 +149,9 @@ final class DottieScreenTaskRunner {
 
     var isRunning: Bool { runTask != nil }
 
+    /// A job this long gets a short memory of its own steps with each look.
+    static let stepsBeforeJobMemoryNote = 8
+
     /// What the notch shows while a step's answer is slow.
     nonisolated static func slowStepNotice(secondsWaited: Int) -> String {
         "thinking… \(max(0, secondsWaited)) s"
@@ -161,6 +164,8 @@ final class DottieScreenTaskRunner {
     ) {
         stop()
         currentTaskText = taskText
+        DottieScreenJobHints.shared.reset()
+        DottieScreenJobHints.shared.jobIsRunning = true
         jobModel = nil
         jobTier = .normal
         lastReplayReport = nil
@@ -185,7 +190,13 @@ final class DottieScreenTaskRunner {
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
+            DottieMouseHold.releaseNow(reason: "the job ended")
             guard !Task.isCancelled else { return }
+            DottieScreenJobHints.shared.jobIsRunning = false
+            if case .finished = outcome {
+                DottieScreenJobHints.shared.keepWorkingHintsAsLessons(taskText: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName)
+            }
+            DottieScreenJobHints.shared.reset()
             self.runTask = nil
             self.currentTaskText = nil
             completion(outcome)
@@ -200,6 +211,9 @@ final class DottieScreenTaskRunner {
         guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
         DottieScreenJobClaudeBrain.shared.stop()
+        DottieMouseHold.releaseNow(reason: "the job stopped")
+        DottieScreenJobHints.shared.reset()
+        DottieScreenJobHints.shared.jobIsRunning = false
         runTask.cancel()
         self.runTask = nil
         currentTaskText = nil
@@ -222,6 +236,9 @@ final class DottieScreenTaskRunner {
         var didActSinceLastLook = false
         var recentActionSignatures: [String] = []
         var actionLog: [String] = []
+        // Every action and tool call, and which round of a repeated job this is.
+        var jobMemory = DottieJobMemory(taskText: taskText)
+        var earlyFinishRejectionCount = 0
         let lessonSelection = DottieScreenLessons.shared.select(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
         var lessonsText = lessonSelection.promptText
         // A form job gets the user's saved details up front, so it fills
@@ -354,6 +371,20 @@ final class DottieScreenTaskRunner {
                 screenNote += "\n" + windowChangeNote
             }
             let screenFingerprint = Self.fingerprint(of: screen.image)
+            if didActSinceLastLook {
+                let lastActionChangedNothing = previousScreenFingerprint.map { Self.isSameScreen($0, screenFingerprint) } ?? false
+                DottieScreenJobHints.shared.noteMove(changedScreen: !lastActionChangedNothing)
+            }
+            // The user's hints, and a short memory of what this job did
+            // (always for a repeated job, and once a job gets long).
+            _ = DottieScreenJobHints.shared.takeNew()
+            let hintsText = DottieScreenJobHints.shared.stateText
+            if !hintsText.isEmpty {
+                screenNote += "\n" + hintsText
+            }
+            if jobMemory.isRepeatedJob || stepNumber > Self.stepsBeforeJobMemoryNote {
+                screenNote += "\n" + jobMemory.stateText()
+            }
             if didActSinceLastLook,
                let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
                 screenNote += "\nThe screen looks exactly the same as before your last action, so it probably didn't work (or it was already done). Don't repeat it: look at what's really on screen and try a different way, like pressing return, clicking a different spot or result, closing a popup, scrolling, or waiting."
@@ -469,6 +500,21 @@ final class DottieScreenTaskRunner {
                     continue
                 }
 
+                // One round of a repeated job is done: the next one starts
+                // fresh, so doing the same clicks again isn't "repeating".
+                if functionName == "round_done" {
+                    if jobMemory.finishRound() {
+                        recentActionSignatures = []
+                        onProgress?(stepNumber, "round \(jobMemory.currentRound) of \(jobMemory.totalRounds)")
+                        respond("round \(jobMemory.currentRound - 1) done. Now round \(jobMemory.currentRound) of \(jobMemory.totalRounds): do the same steps as round 1 for the next one.")
+                    } else {
+                        respond(jobMemory.isRepeatedJob && jobMemory.hasRoundsLeft
+                            ? "not yet: this round hasn't done anything. Do this round's steps first."
+                            : "there's no next round: this job isn't repeated or this is its last round. Call finish when it's done.")
+                    }
+                    continue
+                }
+
                 if functionName == "ask_user" {
                     guard let reply = await askUser(arguments, stepNumber: stepNumber) else {
                         if Task.isCancelled { return .stopped }
@@ -485,6 +531,12 @@ final class DottieScreenTaskRunner {
                 if functionName == "finish" {
                     let answer = (arguments["answer"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     let didSucceed = (arguments["succeeded"] as? Bool) ?? true
+                    // A repeated job isn't finished after its first round.
+                    if didSucceed, jobMemory.hasRoundsLeft, earlyFinishRejectionCount < jobMemory.totalRounds {
+                        earlyFinishRejectionCount += 1
+                        respond("not finished: this is round \(jobMemory.currentRound) of \(jobMemory.totalRounds). If this round is done, call round_done, then do the next round the same way.")
+                        continue
+                    }
                     // Don't finish early: a long job is done only when its
                     // "done when" shows on a fresh screen.
                     if didSucceed, isLongJob, finishRejectionCount < Self.maximumFinishRejections,
@@ -519,6 +571,7 @@ final class DottieScreenTaskRunner {
                 recentActionSignatures.append(actionSignature)
                 if recentActionSignatures.count > 6 { recentActionSignatures.removeFirst() }
                 actionLog.append(actionSignature)
+                jobMemory.noteMove(actionSignature)
                 let result: String
                 // Clicking the same thing over and over (a link that opens a
                 // new tab each time) piles up tabs, so the third click in a
@@ -1528,6 +1581,11 @@ final class DottieScreenTaskRunner {
                     "kind": ["type": "string", "enum": ["missing_info", "password", "code", "confirm", "do_it_yourself"], "description": "password or code when they'll tell you one (it stays hidden from you); do_it_yourself when they have to do something on the Mac (Touch ID, type it themselves); confirm for okay to go ahead."],
                     "field": ["type": "string", "description": "missing_info only, when it's one of the user's own details for a form: its name, like full_name, email, phone, street_address, city, state, postcode, country, date_of_birth, company or job_title. Empty for anything else, and never for passwords, card, bank or ID numbers."]
                 ], "required": ["question", "kind"]]
+            ],
+            [
+                "name": "round_done",
+                "description": "Only for a task the user wants done several times (\"do this 3 times\"): say one round is done, so the next round starts. It doesn't touch the screen.",
+                "parameters": ["type": "object", "properties": [:]]
             ],
             [
                 "name": "finish",
