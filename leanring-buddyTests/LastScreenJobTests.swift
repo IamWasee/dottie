@@ -24,12 +24,12 @@ struct LastScreenJobTests {
         )
     }
 
-    @Test func theTalkerHearsTheJobAndHandsQuestionsOn() {
+    @Test func theTalkerHandsQuestionsAboutTheJobToClaude() {
         let line = celsJob.talkerLine(now: celsJobEnd.addingTimeInterval(60))
         #expect(line.contains("move the first three tasks"))
         #expect(line.contains("only the first move") || line.contains("Only the first move"))
-        #expect(line.contains("REQUEST SCREEN"))
-        #expect(line.contains("why"))
+        #expect(line.contains("goes to claude"))
+        #expect(line.contains("hand_to_claude"))
     }
 
     @Test func theRequestBrainGetsEveryMoveAndIsToldNotToGuess() {
@@ -91,9 +91,6 @@ struct LastScreenJobTests {
         #expect(!DottieLastScreenJob.finishShouldCarryOn(answer: "Didn't finish, I need you to sign in first."))
     }
 
-    @Test func theTalkerIsToldNeverToGuessWhatItDid() {
-        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").contains("never guess what you did or why"))
-    }
 
     @Test func theTalkersBodyCarriesTheJobLineOnlyWhenThereIsOne() throws {
         let plainBody = DottieTalkerProtocol.talkerRequestBody(transcript: "why?", exchanges: [], personalityLine: "")
@@ -127,8 +124,9 @@ struct LastScreenJobTests {
                                          resultText: "it couldn't be finished: the second task wouldn't drop on Monday",
                                          succeeded: false, moveSummaries: memory.allMoves, endedAt: celsJobEnd)
         let now = celsJobEnd.addingTimeInterval(90)
-        // The talker hands "why?" on instead of answering it.
-        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "REQUEST SCREEN") == .request(needsScreen: true))
+        // The talker hands "why?" to Claude, which has the record.
+        let handOver = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: ["needs_screen": true])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: handOver) == .request(needsScreen: true))
         let talkerBody = DottieTalkerProtocol.talkerRequestBody(transcript: "why?", exchanges: [], personalityLine: "",
                                                                 lastScreenJobLine: record.talkerLine(now: now))
         let talkerSystem = try #require(((talkerBody["systemInstruction"] as? [String: Any])?["parts"] as? [[String: Any]])?.first?["text"] as? String)

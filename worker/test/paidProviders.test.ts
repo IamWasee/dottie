@@ -389,6 +389,23 @@ describe("talking and requests", () => {
     expect(calls[0].json.reasoning_effort).toBe("low");
   });
 
+  it("gives Groq its one hand_to_claude control and hands the call back as a function call", async () => {
+    const handOver = { id: "h1", type: "function", function: { name: "hand_to_claude", arguments: '{"needs_screen":true}' } };
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ role: "assistant", content: null, tool_calls: [handOver] })]]);
+    const body = {
+      ...talkBody,
+      contents: [userText("move my tasks to monday")],
+      tools: [{ functionDeclarations: [{ name: "hand_to_claude", description: "Give this ask to Claude.", parameters: { type: "OBJECT", properties: { needs_screen: { type: "BOOLEAN" } }, required: ["needs_screen"] } }] }],
+    };
+    const response = await call("/chat", body, { GROQ_API_KEY: "g", ANTHROPIC_API_KEY: "a" });
+    const parts = (await sseJSON(response)).candidates[0].content.parts;
+    expect(parts.some((part: { functionCall?: { name: string; args: { needs_screen: boolean } } }) =>
+      part.functionCall?.name === "hand_to_claude" && part.functionCall.args.needs_screen === true)).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0].url).host).toBe("api.groq.com");
+    expect(calls[0].json.tools[0].function.name).toBe("hand_to_claude");
+  });
+
   it("follows GROQ_TALK_MODELS, trying the next when one fails", async () => {
     const calls = fakeFetch([
       ["api.groq.com", new Response("busy", { status: 503 })],

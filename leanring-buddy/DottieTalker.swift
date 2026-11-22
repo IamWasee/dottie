@@ -47,14 +47,45 @@ enum DottieTalkerProtocol {
 
     static let requestWord = "REQUEST"
     static let screenWord = "SCREEN"
+    /// The talker's one control for giving an ask to Claude.
+    static let handToClaudeToolName = "hand_to_claude"
+    static let handToClaudeDeclaration: [String: Any] = [
+        "name": handToClaudeToolName,
+        "description": "Give this ask to Claude. Call it for anything that isn't chat: doing, finding or looking something up, the user's screen, apps, files, a job Dottie ran, drawing, teaching, or anything you aren't sure of.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "needs_screen": ["type": "BOOLEAN", "description": "True when it's about what is on the user's screen."]
+            ],
+            "required": ["needs_screen"]
+        ]
+    ]
 
-    /// The talker's only rules. Short on purpose: it's read on every turn.
+    /// Groq's only tool.
+    static let talkerToolDeclarations: [[String: Any]] = [handToClaudeDeclaration]
+
+    /// What one talker answer means: hand_to_claude (or any other call,
+    /// which Groq has no business making) goes to Claude; words are read as
+    /// before (REQUEST still counts).
+    static func decision(fromTalkerAnswer answer: DottieBrainAnswer) -> DottieTalkDecision {
+        if let handOver = answer.functionCalls.first(where: { $0.name == handToClaudeToolName }) {
+            return .request(needsScreen: (handOver.arguments["needs_screen"] as? Bool) ?? true)
+        }
+        if !answer.functionCalls.isEmpty {
+            return .request(needsScreen: true)
+        }
+        return decision(fromTalkerAnswer: answer.text)
+    }
+
+    /// The talker's rules: Groq only chats. Everything else goes to Claude
+    /// through its one control, hand_to_claude, so it has to know what each
+    /// of them is for.
     static func talkerSystemPrompt(personalityLine: String) -> String {
         """
         \(personalityLine)
-        you are dottie's voice on the user's mac. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no extra details or follow-up questions, no lists or symbols.
-        if the user is only chatting (hello, how are you, jokes, opinions, a quick fact you know), answer them.
-        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. so is pointing at, drawing or explaining something on their screen, or teaching them. never say you can't do something: reply \(requestWord) instead. never guess what you did or why: questions about it are \(requestWord). add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
+        you are dottie's voice on the user's mac, and you only chat. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no lists or symbols.
+        you answer chat yourself: hello, how are you, jokes, opinions, a quick fact you know.
+        claude is the brain that does everything else: it runs jev on their screen (clicking, typing, moving, filling in), the mac tools (apps, folders, files, sites, music), the web, reminders, helpers, memory, and pointing at, drawing or explaining something on their screen or teaching them. so for anything that isn't chat, call \(handToClaudeToolName), never answer it yourself: anything done or looked up, anything about their screen, apps, files or a job dottie ran, or anything you aren't sure of. never write steps or a plan, and never say you can't do something.
         """
     }
 
@@ -95,13 +126,15 @@ enum DottieTalkerProtocol {
         let systemText = lastScreenJobLine.isEmpty
             ? talkerSystemPrompt(personalityLine: personalityLine)
             : talkerSystemPrompt(personalityLine: personalityLine) + "\n" + lastScreenJobLine
-        return [
+        let body: [String: Any] = [
             "provider": "talk",
             "systemInstruction": ["parts": [["text": systemText]]],
             "contents": historyContents(exchanges, count: talkerExchangeCount)
                 + [["role": "user", "parts": [["text": transcript]]]],
+            "tools": [["functionDeclarations": talkerToolDeclarations]],
             "generationConfig": ["maxOutputTokens": talkerAnswerTokenLimit, "temperature": 0.6]
         ]
+        return body
     }
 
     /// Reads the talker's answer. An empty answer counts as a request, so a
@@ -288,7 +321,7 @@ enum DottieTalker {
         DottieLog.notice("💬 Ask \(public: askNumber) started")
         do {
             let answer = try await post(requestBody, timeoutSeconds: 12)
-            let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer.text)
+            let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer)
             if case .request(let needsScreen) = decision {
                 DottieLog.notice("🗣️ Groq handed the turn to Claude\(needsScreen ? " with the screen" : "")")
             }
@@ -297,6 +330,7 @@ enum DottieTalker {
             DottieLog.warning("⚠️ Groq couldn't talk, handing the turn to Claude: \(error.localizedDescription)")
             return .request(needsScreen: true)
         }
+    }
     }
 
     /// Claude does the request, running tools through `runTool` for up to a

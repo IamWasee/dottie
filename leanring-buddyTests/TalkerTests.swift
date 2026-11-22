@@ -214,4 +214,48 @@ struct TalkerTests {
         let quickDescription = await MainActor.run { DottieQuickMacAction.toolDescription }
         #expect(quickDescription.contains("open a folder or file"))
     }
+
+    // MARK: - Groq's one control: talk, or hand the ask to Claude
+
+    @Test func groqHasOnlyTheHandToClaudeControl() throws {
+        let body = DottieTalkerProtocol.talkerRequestBody(transcript: "open notes", exchanges: [], personalityLine: "")
+        let tools = try #require(body["tools"] as? [[String: Any]])
+        let declarations = try #require(tools.first?["functionDeclarations"] as? [[String: Any]])
+        #expect(declarations.compactMap { $0["name"] as? String } == [DottieTalkerProtocol.handToClaudeToolName])
+        #expect(JSONSerialization.isValidJSONObject(body))
+    }
+
+    @Test func handToClaudeSendsTheAskOnWithOrWithoutTheScreen() {
+        let withScreen = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: ["needs_screen": true])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: withScreen) == .request(needsScreen: true))
+        let withoutScreen = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: ["needs_screen": false])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: withoutScreen) == .request(needsScreen: false))
+        // A call missing its argument looks at the screen, to be safe.
+        let noArgument = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: [:])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: noArgument) == .request(needsScreen: true))
+    }
+
+    @Test func anyOtherCallFromGroqStillGoesToClaude() {
+        let madeUpCall = DottieBrainAnswer(text: "", functionCalls: [(name: "open_app", arguments: ["name": "Notes"])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: madeUpCall) == .request(needsScreen: true))
+    }
+
+    @Test func groqsWordsAreStillReadAsBefore() {
+        let chat = DottieBrainAnswer(text: "doing great, you?", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: chat) == .say("doing great, you?"))
+        let oldWay = DottieBrainAnswer(text: "REQUEST SCREEN", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: oldWay) == .request(needsScreen: true))
+        let empty = DottieBrainAnswer(text: "", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: empty) == .request(needsScreen: false))
+    }
+
+    @Test func groqKnowsItOnlyChatsAndWhatClaudeIsFor() {
+        let prompt = DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "")
+        #expect(prompt.contains("you only chat"))
+        #expect(prompt.contains("claude is the brain that does everything else"))
+        #expect(prompt.contains("jev on their screen"))
+        #expect(prompt.contains("call hand_to_claude"))
+        #expect(prompt.contains("a job dottie ran"))
+    }
 }
+

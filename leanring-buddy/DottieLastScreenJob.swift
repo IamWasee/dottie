@@ -38,10 +38,10 @@ struct DottieLastScreenJob: Equatable {
     private var shortResult: String { String(resultText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maximumResultCharacters)) }
 
     /// One line for the talker, so "why?" is known to be about the job and
-    /// handed to Claude instead of answered with a guess.
+    /// handed to Claude (which has the record) instead of answered with a guess.
     func talkerLine(now: Date) -> String {
         guard isRecent(now: now) else { return "" }
-        return "the last on-screen job was \"\(shortTask)\"; it ended: \(shortResult). any question about it (why, what you did, what went wrong, do the rest) is \(DottieTalkerProtocol.requestWord) \(DottieTalkerProtocol.screenWord)."
+        return "the last on-screen job was \"\(shortTask)\"; it ended: \(shortResult). any question about it (why, what you did, what went wrong, do the rest) goes to claude: call \(DottieTalkerProtocol.handToClaudeToolName)."
     }
 
     /// The record for the request brain's prompt.

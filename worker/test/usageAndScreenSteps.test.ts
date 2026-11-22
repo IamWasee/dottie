@@ -76,13 +76,24 @@ describe("screen step tries", () => {
     expect(glm.attemptTimeoutMilliseconds).toBe(45_000);
   });
 
-  it("hands a screen step to Claude when GLM doesn't answer within the limit", async () => {
+  it("never hands a screen step to Claude by default, even when GLM is slow", async () => {
+    const abortedAfter: number[] = [];
+    stubGLMThatNeverAnswers(abortedAfter);
+    const response = await callChat(
+      { provider: "screen", contents: [screenshotTurn()] },
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1" }
+    );
+    expect(response.status).toBe(503);
+    expect(abortedAfter).toHaveLength(1);
+  });
+
+  it("hands a screen step to Claude when GLM doesn't answer within the limit and SCREEN_PROVIDER_ORDER says so", async () => {
     const abortedAfter: number[] = [];
     stubGLMThatNeverAnswers(abortedAfter);
     const startedAt = Date.now();
     const response = await callChat(
       { provider: "screen", contents: [screenshotTurn()] },
-      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1" }
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1", SCREEN_PROVIDER_ORDER: "glm,claude" }
     );
     expect(response.status).toBe(200);
     const answer = await sseJSON(response);
