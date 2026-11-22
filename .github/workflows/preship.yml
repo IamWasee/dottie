@@ -61,12 +61,16 @@ jobs:
             exit 1
           fi
           set -o pipefail
+          # One copy only: parallel clones each asked the model, wrote the
+          # same report file and hid the failing copy's reasons.
           xcodebuild test \
             -project leanring-buddy.xcodeproj \
             -scheme leanring-buddy \
             -configuration Debug \
             -destination 'platform=macOS' \
             -only-testing:leanring-buddyTests/PreShipLiveCheckTests \
+            -parallel-testing-enabled NO \
+            -resultBundlePath preship.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -89,4 +93,10 @@ jobs:
           # The test's own lines (why it failed, crashed or ran out of time).
           if [ -f preship.log ]; then
             grep -E "Test |recorded an issue|exceeded|crash|timed out" preship.log | tail -60 || true
+          fi
+          # Each failure's own words (which ask, which problem), which the
+          # plain log leaves out.
+          if [ -d preship.xcresult ]; then
+            xcrun xcresulttool get test-results summary --path preship.xcresult 2>/dev/null \
+              | python3 -c 'import json,sys; [print("FAILED:", f.get("testName"), "-", f.get("failureText")) for f in json.load(sys.stdin).get("testFailures", [])]' || true
           fi
