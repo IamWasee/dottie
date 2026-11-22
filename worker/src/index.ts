@@ -59,6 +59,8 @@ export interface Env {
   REQUEST_PROVIDER_ORDER?: string;
   /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
   SCREEN_STEP_ATTEMPT_SECONDS?: string;
+  /** How many of a screen step's newest screenshots go to the model (1-5, default 2). */
+  SCREEN_STEP_SCREENSHOTS?: string;
   /** "model=input/output,…" dollars per million tokens, on top of DEFAULT_MODEL_PRICES; for the cost in each answer's usage. */
   MODEL_PRICES?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
@@ -309,8 +311,50 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   // 1.0.80 GLM held steps for its whole 45 s try, the app gave up at 20 s
   // and Claude, next in line, never got the step.
   const attemptLimitMilliseconds = wantedRole === "screen" ? screenStepAttemptMilliseconds(env.SCREEN_STEP_ATTEMPT_SECONDS) : undefined;
-  const answer = await answerWithAnyProvider(env, requestBody, true, "/chat", attemptLimitMilliseconds);
+  // A screen step needs the screen as it is now, not the last five: every
+  // older screenshot made GLM read up to five full-size pictures a step.
+  const routedBody = wantedRole === "screen" ? keepingNewestScreenshots(requestBody, screenStepScreenshotCount(env.SCREEN_STEP_SCREENSHOTS)) : requestBody;
+  const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
+}
+
+/** How many of a screen step's screenshots are sent on, by default 2. */
+export const DEFAULT_SCREEN_STEP_SCREENSHOTS = 2;
+
+/** SCREEN_STEP_SCREENSHOTS as a count; the default when unset or not a whole number from 1 to 5. */
+export function screenStepScreenshotCount(setting: string | undefined): number {
+  const count = Number(setting ?? "");
+  return Number.isInteger(count) && count >= 1 && count <= 5 ? count : DEFAULT_SCREEN_STEP_SCREENSHOTS;
+}
+
+/**
+ * The body with only its newest screenshots left as pictures; older ones
+ * become a short note so the steps still read in order. Pictures the user
+ * shared sit before the first screenshot in the first turn and are always
+ * kept, since the job is about finding them.
+ */
+export function keepingNewestScreenshots(body: Record<string, unknown>, screenshotsToKeep: number): Record<string, unknown> {
+  type Part = { inlineData?: { mimeType?: string } } & Record<string, unknown>;
+  type Content = { parts?: Part[] } & Record<string, unknown>;
+  const contents = structuredClone((body.contents ?? []) as Content[]);
+  const isPicture = (part: Part) => (part.inlineData?.mimeType ?? "").startsWith("image/");
+  const firstTurnParts = contents[0]?.parts ?? [];
+  const firstTurnScreenshotIndex = firstTurnParts.map(isPicture).lastIndexOf(true);
+  let screenshotsLeft = screenshotsToKeep;
+  for (let contentIndex = contents.length - 1; contentIndex >= 0; contentIndex -= 1) {
+    const parts = contents[contentIndex].parts ?? [];
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      if (!isPicture(parts[partIndex])) continue;
+      const isSharedPicture = contentIndex === 0 && partIndex < firstTurnScreenshotIndex;
+      if (isSharedPicture) continue;
+      if (screenshotsLeft > 0) {
+        screenshotsLeft -= 1;
+      } else {
+        parts[partIndex] = { text: "(an earlier screenshot, left out)" };
+      }
+    }
+  }
+  return { ...body, contents };
 }
 
 /** How long one model may take on a screen step, by default 8 s. */

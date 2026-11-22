@@ -67,6 +67,8 @@ NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"
 # Seconds one model may take on a screen-job step before the next provider
 # answers. The app waits about 20 s, so two tries must fit in it.
 SCREEN_STEP_ATTEMPT_SECONDS = "8"
+# Newest screenshots sent with each screen step (older ones become a note).
+SCREEN_STEP_SCREENSHOTS = "2"
 # Dollars per million tokens, input/output, for each answer's estimated
 # cost ("model=in/out,..."). Claude Haiku 5.5 is built in; add GLM, Groq
 # and NIM from their consoles. Models without a price show the cost as unknown.

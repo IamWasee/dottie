@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { answerUsage, answerWithProvider, DEFAULT_MODEL_PRICES, groqProvider, modelPrices, zaiProvider } from "../src/chatCompletions";
-import worker, { DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS, screenStepAttemptMilliseconds, withAttemptLimit } from "../src/index";
+import worker, { DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS, DEFAULT_SCREEN_STEP_SCREENSHOTS, keepingNewestScreenshots, screenStepAttemptMilliseconds, screenStepScreenshotCount, withAttemptLimit } from "../src/index";
 import type { Env } from "../src/index";
 import { chatAnswer, fakeFetch, imagePart, jsonAnswer, makeEnv, pngBase64, sseJSON } from "./helpers";
 
@@ -192,5 +192,79 @@ describe("answer usage", () => {
     const answer = await sseJSON(response);
     expect(answer.dottieUsage.model).toBe("glm-5.3-flash");
     expect(answer.dottieUsage.estimatedDollars).toBe(5);
+  });
+});
+
+describe("screenshots sent with a screen step", () => {
+  const picture = () => imagePart(pngBase64(64, 40));
+  const stepTurns = (count: number) =>
+    Array.from({ length: count }, () => [
+      { role: "model", parts: [{ functionCall: { name: "click", args: {} } }] },
+      { role: "user", parts: [{ functionResponse: { name: "click", response: {} } }, picture()] },
+    ]).flat();
+  const pictureCount = (body: Record<string, unknown>) =>
+    JSON.stringify(body).split('"inlineData"').length - 1;
+
+  it("keeps 2 by default and takes 1 to 5 from the setting", () => {
+    expect(DEFAULT_SCREEN_STEP_SCREENSHOTS).toBe(2);
+    expect(screenStepScreenshotCount(undefined)).toBe(2);
+    expect(screenStepScreenshotCount("1")).toBe(1);
+    expect(screenStepScreenshotCount("5")).toBe(5);
+    for (const badSetting of ["", "0", "6", "2.5", "abc", "-1"]) {
+      expect(screenStepScreenshotCount(badSetting)).toBe(2);
+    }
+  });
+
+  it("keeps only the newest screenshots and leaves a note for the rest", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "open notes" }, picture()] }, ...stepTurns(4)] };
+    const kept = keepingNewestScreenshots(body, 2);
+    expect(pictureCount(kept)).toBe(2);
+    const contents = kept.contents as Array<{ parts: Array<Record<string, unknown>> }>;
+    // The newest two turns keep their pictures; the first turn's is a note now.
+    expect(contents[contents.length - 1].parts[1].inlineData).toBeDefined();
+    expect(contents[contents.length - 3].parts[1].inlineData).toBeDefined();
+    expect(contents[0].parts[1]).toEqual({ text: "(an earlier screenshot, left out)" });
+    // Everything else is untouched, and the original body is left as it was.
+    expect(contents[0].parts[0]).toEqual({ text: "open notes" });
+    expect(pictureCount(body)).toBe(5);
+  });
+
+  it("always keeps pictures the user shared before the first screenshot", () => {
+    const sharedPicture = picture();
+    const body = { contents: [{ role: "user", parts: [sharedPicture, { text: "grab the golden sword" }, picture()] }, ...stepTurns(3)] };
+    const kept = keepingNewestScreenshots(body, 1);
+    const contents = kept.contents as Array<{ parts: Array<Record<string, unknown>> }>;
+    expect(contents[0].parts[0]).toEqual(sharedPicture);
+    expect(pictureCount(kept)).toBe(2);
+  });
+
+  it("leaves a body with few enough screenshots as it was", () => {
+    const body = { contents: [screenshotTurn()] };
+    expect(keepingNewestScreenshots(body, 2)).toEqual(body);
+    expect(keepingNewestScreenshots({}, 2)).toEqual({ contents: [] });
+  });
+
+  it("sends GLM only the newest screenshots of a screen step", async () => {
+    let sentToGLM = "";
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentToGLM = String(init?.body ?? "");
+      return chatAnswer({ role: "assistant", content: "ok" });
+    });
+    const contents = [{ role: "user", parts: [{ text: "open notes" }, imagePart(pngBase64(1440, 900))] }, ...stepTurns(4)];
+    const response = await callChat({ provider: "screen", contents }, { ZAI_API_KEY: "zai" });
+    expect(response.status).toBe(200);
+    expect(sentToGLM.split("\"type\":\"image_url\"").length - 1).toBe(2);
+    expect(sentToGLM).toContain("an earlier screenshot, left out");
+  });
+
+  it("leaves other asks with pictures their screenshots", async () => {
+    let sentToGLM = "";
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentToGLM = String(init?.body ?? "");
+      return chatAnswer({ role: "assistant", content: "ok" });
+    });
+    const contents = [{ role: "user", parts: [{ text: "what changed?" }, picture()] }, ...stepTurns(3)];
+    await callChat({ contents }, { ZAI_API_KEY: "zai" });
+    expect(sentToGLM.split("\"type\":\"image_url\"").length - 1).toBe(4);
   });
 });
