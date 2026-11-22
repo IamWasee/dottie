@@ -306,4 +306,17 @@ struct SpeedCheckTests {
         }
         #expect(median < 50, "job memory, hints and held-mouse options took \(median) ms")
     }
+
+    @Test func theLastJobsRecordStaysQuick() {
+        let record = DottieLastScreenJob(taskText: String(repeating: "move the first three tasks ", count: 20),
+                                         resultText: String(repeating: "only the first one moved ", count: 40), succeeded: false,
+                                         moveSummaries: (1...200).map { "drag:task \($0)" }, endedAt: Date())
+        let now = Date()
+        let median = medianMilliseconds {
+            _ = record.talkerLine(now: now)
+            _ = record.requestPromptSection(now: now)
+            _ = DottieLastScreenJob.finishShouldCarryOn(answer: "I haven't finished this yet. Only the first move appears to have gone through")
+        }
+        #expect(median < 5, "the last job's record took \(median) ms")
+    }
 }

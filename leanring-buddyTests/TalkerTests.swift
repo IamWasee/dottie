@@ -97,7 +97,8 @@ struct TalkerTests {
     }
 
     @Test func talkerPromptStaysShort() {
-        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 900)
+        // Room for "never guess what you did or why" (a job's made-up reasons, 1.0.82).
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 1000)
         // Room for the Mac-tool-first rule (round 2 of 1.0.80); it's cached.
         #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1800)
     }

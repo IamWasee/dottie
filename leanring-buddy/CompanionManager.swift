@@ -1662,6 +1662,10 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Multi-step screen tasks
 
+    /// What the last screen job did, handed to the next turns so a "why?"
+    /// is answered from the record, not guessed (DottieLastScreenJob).
+    var lastScreenJob: DottieLastScreenJob?
+
     /// A job for the screen task runner: what to do and which saved
     /// pictures it's about.
     struct ScreenJob {
@@ -2091,6 +2095,8 @@ final class CompanionManager: ObservableObject {
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
         var jobSucceeded = false
         if case .finished = outcome { jobSucceeded = true }
+        lastScreenJob = DottieLastScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded,
+                                            moveSummaries: screenTaskRunner.lastJobMoveSummaries, endedAt: Date())
         if DottieAwayMode.shared.isAway {
             let jobTitle = "On screen: " + String(taskText.components(separatedBy: Self.awayRetryMarker)[0].prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
             let succeeded = jobSucceeded

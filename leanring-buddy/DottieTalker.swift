@@ -54,11 +54,11 @@ enum DottieTalkerProtocol {
         \(personalityLine)
         you are dottie's voice on the user's mac. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no extra details or follow-up questions, no lists or symbols.
         if the user is only chatting (hello, how are you, jokes, opinions, a quick fact you know), answer them.
-        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. so is pointing at, drawing or explaining something on their screen, or teaching them. never say you can't do something: reply \(requestWord) instead. add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
+        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. so is pointing at, drawing or explaining something on their screen, or teaching them. never say you can't do something: reply \(requestWord) instead. never guess what you did or why: questions about it are \(requestWord). add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
         """
     }
 
-    static func requestSystemPrompt(personalityLine: String, profile: String) -> String {
+    static func requestSystemPrompt(personalityLine: String, profile: String, lastScreenJobSection: String = "") -> String {
         var prompt = """
         \(personalityLine)
         you are dottie, on the user's mac, doing what they asked. your final reply is spoken aloud: answer only what they asked, in one short, casual, lowercase sentence (two only if they asked for more). no extra details, no describing things they didn't ask about, no offers or follow-up questions, no lists, markdown or symbols.
@@ -69,6 +69,9 @@ enum DottieTalkerProtocol {
         """
         if !profile.isEmpty {
             prompt += "\nwhat you know about the user:\n" + profile
+        }
+        if !lastScreenJobSection.isEmpty {
+            prompt += "\n" + lastScreenJobSection
         }
         return prompt
     }
@@ -86,11 +89,15 @@ enum DottieTalkerProtocol {
     static func talkerRequestBody(
         transcript: String,
         exchanges: [(userTranscript: String, assistantResponse: String)],
-        personalityLine: String
+        personalityLine: String,
+        lastScreenJobLine: String = ""
     ) -> [String: Any] {
-        [
+        let systemText = lastScreenJobLine.isEmpty
+            ? talkerSystemPrompt(personalityLine: personalityLine)
+            : talkerSystemPrompt(personalityLine: personalityLine) + "\n" + lastScreenJobLine
+        return [
             "provider": "talk",
-            "systemInstruction": ["parts": [["text": talkerSystemPrompt(personalityLine: personalityLine)]]],
+            "systemInstruction": ["parts": [["text": systemText]]],
             "contents": historyContents(exchanges, count: talkerExchangeCount)
                 + [["role": "user", "parts": [["text": transcript]]]],
             "generationConfig": ["maxOutputTokens": talkerAnswerTokenLimit, "temperature": 0.6]
@@ -271,9 +278,11 @@ enum DottieTalker {
     static func decide(
         transcript: String,
         exchanges: [(userTranscript: String, assistantResponse: String)],
-        personalityLine: String
+        personalityLine: String,
+        lastScreenJobLine: String = ""
     ) async -> DottieTalkDecision {
-        let requestBody = DottieTalkerProtocol.talkerRequestBody(transcript: transcript, exchanges: exchanges, personalityLine: personalityLine)
+        let requestBody = DottieTalkerProtocol.talkerRequestBody(transcript: transcript, exchanges: exchanges,
+                                                                 personalityLine: personalityLine, lastScreenJobLine: lastScreenJobLine)
         // Every model call from here until the next turn counts toward this ask.
         let askNumber = DottieAskCounter.startNewAsk()
         DottieLog.notice("💬 Ask \(public: askNumber) started")

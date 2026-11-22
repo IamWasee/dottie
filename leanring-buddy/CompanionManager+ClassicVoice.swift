@@ -179,9 +179,11 @@ extension CompanionManager {
                 // A turn where the user circled something is about the screen.
                 let turnAnnotation = inputKind == .voice ? currentTurnAnnotation : nil
                 let personalityLine = selectedPersonality.promptSection
+                let now = Date()
                 let talkDecision: DottieTalkDecision = turnAnnotation != nil
                     ? .request(needsScreen: true)
-                    : await DottieTalker.decide(transcript: transcript, exchanges: conversationHistory, personalityLine: personalityLine)
+                    : await DottieTalker.decide(transcript: transcript, exchanges: conversationHistory, personalityLine: personalityLine,
+                                              lastScreenJobLine: lastScreenJob?.talkerLine(now: now) ?? "")
 
                 guard !Task.isCancelled else { return }
 
@@ -209,7 +211,8 @@ extension CompanionManager {
                         transcript: promptForModel,
                         exchanges: conversationHistory,
                         labeledImages: labeledImages,
-                        systemPrompt: DottieTalkerProtocol.requestSystemPrompt(personalityLine: personalityLine, profile: brain.profileForPrompt),
+                        systemPrompt: DottieTalkerProtocol.requestSystemPrompt(personalityLine: personalityLine, profile: brain.profileForPrompt,
+                                                                               lastScreenJobSection: lastScreenJob?.requestPromptSection(now: now) ?? ""),
                         toolDeclarations: requestToolDeclarations,
                         runTool: { functionName, functionArguments in
                             await liveToolRunner.runTool(functionName: functionName, arguments: functionArguments)
