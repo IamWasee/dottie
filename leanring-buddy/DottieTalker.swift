@@ -318,7 +318,7 @@ enum DottieTalker {
             conversation.append(modelContent)
             var toolResults: [(name: String, response: [String: Any])] = []
             for functionCall in answer.functionCalls {
-                DottieLog.notice("🛠️ Claude used \(functionCall.name)")
+                DottieLog.notice("🛠️ Claude used \(public: functionCall.name)")
                 toolResults.append((functionCall.name, await runTool(functionCall.name, functionCall.arguments)))
             }
             conversation.append(DottieTalkerProtocol.toolResultsTurn(toolResults))

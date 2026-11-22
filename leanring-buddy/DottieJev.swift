@@ -188,12 +188,12 @@ enum DottieJev {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 let errorDetail = String(decoding: answerData.prefix(300), as: UTF8.self)
-                DottieLog.warning("⚠️ Jev answered \(statusCode) (\(errorDetail)); leaving it alone for a while")
+                DottieLog.warning("⚠️ Jev answered \(public: statusCode) (\(errorDetail)); leaving it alone for a while")
                 pausedUntil = Date().addingTimeInterval(pauseAfterFailureSeconds)
                 return nil
             }
             let answerSeconds = Date().timeIntervalSince(startedAt)
-            DottieLog.notice("🎯 Jev answered in \(String(format: "%.2f", answerSeconds)) s")
+            DottieLog.notice("🎯 Jev answered in \(public: String(format: "%.2f", answerSeconds)) s")
             DottieAskUsageLog.note(.jevAnswer(seconds: answerSeconds), area: .screenTasks)
             return answerData
         } catch {
