@@ -208,11 +208,7 @@ final class DottieScreenTaskRunner {
 
     // MARK: - The loop
 
-    /// The job being run, for tools that read memory by what the job is about.
-    private var currentTaskText = ""
-
     private func run(taskText: String) async -> Outcome {
-        currentTaskText = taskText
         guard DottieScreenActionPerformer.canPostEvents else {
             return .failed(reason: "I need Accessibility permission to click and type for you: System Settings → Privacy & Security → Accessibility.")
         }
@@ -1021,7 +1017,7 @@ final class DottieScreenTaskRunner {
 
         case "app_memory":
             onProgress?(stepNumber, "remembering how this app works")
-            let rememberedText = await DottieAppMemory.shared.recall(forTask: currentTaskText, readsPageClosely: flag("read_page_closely"))
+            let rememberedText = await DottieAppMemory.shared.recall(forTask: currentTaskText ?? "", readsPageClosely: flag("read_page_closely"))
             return rememberedText.isEmpty ? "Dottie doesn't remember anything about this app yet (or app memory is off)." : rememberedText
 
         case "zoom":
