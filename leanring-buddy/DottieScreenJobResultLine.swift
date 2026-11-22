@@ -25,8 +25,10 @@ nonisolated enum DottieScreenJobResultLine {
             line = trimmedClosingMessage
         } else {
             let trimmedResult = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedResult.lowercased().hasPrefix(failurePrefix) {
-                let reason = String(trimmedResult.dropFirst(failurePrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Trimmed, a failure with no reason loses the prefix's space.
+            let failurePrefixWithoutSpace = failurePrefix.trimmingCharacters(in: .whitespaces)
+            if trimmedResult.lowercased().hasPrefix(failurePrefixWithoutSpace) {
+                let reason = String(trimmedResult.dropFirst(failurePrefixWithoutSpace.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 line = reason.isEmpty ? "I couldn't finish that." : "I couldn't finish that: \(reason)"
             } else {
                 line = trimmedResult.isEmpty ? "Done." : trimmedResult
