@@ -117,13 +117,15 @@ enum ClickyWorkerConfiguration {
         }
     }
 
-    /// Adds the shared-secret header when one is configured, and this
-    /// install's id. Every request to the Worker goes through here so
-    /// neither is ever forgotten.
-    static func applyAuthenticationHeaders(to request: inout URLRequest) {
+    /// Adds the shared-secret header when one is configured, this install's
+    /// id, and what the request is for (DottieCostCategory, from the file
+    /// that made it). Every request to the Worker goes through here so none
+    /// of them is ever forgotten.
+    static func applyAuthenticationHeaders(to request: inout URLRequest, callerFile: String = #fileID) {
         if let appSharedSecret {
             request.setValue(appSharedSecret, forHTTPHeaderField: "x-clicky-secret")
         }
         request.setValue(installIdentifier, forHTTPHeaderField: "x-dottie-install")
+        request.setValue(DottieCostCategory.category(forCallerFile: callerFile), forHTTPHeaderField: DottieCostCategory.headerName)
     }
 }

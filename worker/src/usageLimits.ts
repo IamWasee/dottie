@@ -150,12 +150,12 @@ export class InstallUsage {
     const storage = this.state.storage;
     const pathname = new URL(request.url).pathname;
     if (request.method === "GET" && pathname === "/spend") {
-      const spentByDay = await storage.list<AnswerSpend>({ prefix: SPEND_KEY_PREFIX });
+      const spentByDay = await storage.list<DaySpend>({ prefix: SPEND_KEY_PREFIX });
       const days = [...spentByDay.entries()].map(([key, spend]) => ({ day: key.slice(SPEND_KEY_PREFIX.length), ...spend }));
       return jsonResponse({ days });
     }
 
-    const body = await request.json<{ area?: string; limit?: number; newInstallLimit?: number; day?: string } & Partial<AnswerSpend>>().catch(() => ({}) as Record<string, undefined>);
+    const body = await request.json<{ area?: string; limit?: number; newInstallLimit?: number; day?: string; category?: string } & Partial<AnswerSpend>>().catch(() => ({}) as Record<string, undefined>);
     const day = body.day ?? "";
     const limit = body.limit ?? 0;
 
@@ -172,8 +172,11 @@ export class InstallUsage {
 
     if (pathname === "/spend") {
       const spendKey = SPEND_KEY_PREFIX + day;
-      const spentSoFar = (await storage.get<AnswerSpend>(spendKey)) ?? emptySpend();
-      await storage.put(spendKey, addedSpend(spentSoFar, body));
+      const spentSoFar = (await storage.get<DaySpend>(spendKey)) ?? { ...emptySpend(), byCategory: {} };
+      const category = costCategory(body.category);
+      const byCategory = { ...(spentSoFar.byCategory ?? {}) };
+      byCategory[category] = addedSpend(byCategory[category] ?? emptySpend(), body);
+      await storage.put(spendKey, { ...addedSpend(spentSoFar, body), byCategory });
       return jsonResponse({ recorded: true });
     }
 
@@ -213,7 +216,38 @@ export interface AnswerSpend {
   outputTokens: number;
 }
 
+/** A day's spend, in all and per cost category ("voice/request", "screen_job_steps/screen", "helpers"…). */
+export interface DaySpend extends AnswerSpend {
+  byCategory?: Record<string, AnswerSpend>;
+}
+
 const SPEND_KEY_PREFIX = "spend:";
+/** The counter that adds up every install's spend. */
+const EVERYONE_COUNTER_NAME = "directory";
+/** Jev answers carry no usage; TypeSafe charges $1 per 10,000. */
+export const JEV_DOLLARS_PER_ANSWER = 0.0001;
+
+/** A cost category as sent, or "unlabeled": lowercase letters, digits and _ : + - / only, at most 80. */
+export function costCategory(sent: unknown): string {
+  if (typeof sent !== "string") return "unlabeled";
+  const cleaned = sent.toLowerCase().replace(/[^a-z0-9_:+\-/]/g, "").slice(0, 80);
+  return cleaned || "unlabeled";
+}
+
+/**
+ * What a request's cost is filed under: the app's category (its
+ * x-dottie-cost-category header, from the feature that asked) and the role
+ * it asked the Worker for ("voice/talk", "voice/request",
+ * "screen_job_steps/screen"). Helpers' Gemini CLI calls are "helpers" and
+ * Jev's answers "jev".
+ */
+export function costCategoryKey(request: Request, url: URL, role: string | undefined): string {
+  if (url.pathname.startsWith("/gemini/")) return "helpers";
+  if (url.pathname === "/jev") return "jev";
+  const category = costCategory(request.headers.get("x-dottie-cost-category") ?? undefined);
+  const cleanedRole = typeof role === "string" ? role.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 30) : "";
+  return `${category}/${cleanedRole || "default"}`;
+}
 /** Days of spend each install keeps (today included). */
 export const SPEND_DAYS_KEPT = 31;
 
@@ -273,29 +307,52 @@ export function spendInAnswer(answerText: string): AnswerSpend | undefined {
 }
 
 /**
- * Adds what an answer cost to its install's spend for the day. Run after
- * the answer has gone back (waitUntil), so it never slows an ask; a
- * counter that fails is only logged.
+ * Adds what an answer cost to its install's day and to everyone's, under
+ * its cost category, and logs one "[cost]" line. Run after the answer has
+ * gone back (waitUntil), so it never slows an ask; a counter that fails is
+ * only logged. `fixedSpend` is for answers that carry no usage (Jev).
  */
-export async function recordInstallSpend(answer: Response, request: Request, url: URL, settings: UsageLimitSettings, now = new Date()): Promise<void> {
+export async function recordInstallSpend(
+  answer: Response,
+  request: Request,
+  url: URL,
+  settings: UsageLimitSettings,
+  category = "unlabeled",
+  fixedSpend?: AnswerSpend,
+  now = new Date()
+): Promise<void> {
   if (!settings.INSTALL_USAGE || !answer.ok) return;
   try {
-    const spend = spendInAnswer(await answer.text());
+    const spend = fixedSpend ?? spendInAnswer(await answer.text());
     if (!spend) return;
-    const counter = settings.INSTALL_USAGE.get(settings.INSTALL_USAGE.idFromName(usageIdentity(request, url)));
-    await counter.fetch("https://install-usage/spend", {
-      method: "POST",
-      body: JSON.stringify({ day: now.toISOString().slice(0, 10), ...spend }),
-    });
+    console.log(`[cost] ${JSON.stringify({ category, ...spend })}`);
+    const body = JSON.stringify({ day: now.toISOString().slice(0, 10), category, ...spend });
+    const namespace = settings.INSTALL_USAGE;
+    for (const counterName of [usageIdentity(request, url), EVERYONE_COUNTER_NAME]) {
+      await namespace.get(namespace.idFromName(counterName)).fetch("https://install-usage/spend", { method: "POST", body });
+    }
   } catch (error) {
     console.warn(`[usage] couldn't record what an answer cost: ${error}`);
   }
 }
 
-/** The calling install's own spend, day by day (`GET /usage`). */
+/**
+ * Spend day by day, per cost category (`GET /usage`): the calling install's
+ * own, or with `?scope=everyone` every install's together, which only the
+ * owner's own Macs (UNLIMITED_INSTALL_IDS) may read.
+ */
 export async function installSpendResponse(request: Request, url: URL, settings: UsageLimitSettings): Promise<Response> {
   if (!settings.INSTALL_USAGE) return jsonResponse({ days: [] });
-  const counter = settings.INSTALL_USAGE.get(settings.INSTALL_USAGE.idFromName(usageIdentity(request, url)));
+  const identity = usageIdentity(request, url);
+  let counterName = identity;
+  if (url.searchParams.get("scope") === "everyone") {
+    const ownerInstallIDs = (settings.UNLIMITED_INSTALL_IDS ?? "").split(",").map((installID) => installID.trim()).filter(Boolean);
+    if (!ownerInstallIDs.some((installID) => identity === `install:${installID}`)) {
+      return jsonResponse({ error: "Only the owner's Macs can see everyone's usage." }, 403);
+    }
+    counterName = EVERYONE_COUNTER_NAME;
+  }
+  const counter = settings.INSTALL_USAGE.get(settings.INSTALL_USAGE.idFromName(counterName));
   try {
     return jsonResponse(await (await counter.fetch("https://install-usage/spend")).json());
   } catch (error) {

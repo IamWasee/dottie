@@ -77,7 +77,13 @@ enum DottieDisplayCapture {
 
         let matchingScreen = NSScreen.screens.first(where: { $0.frame == displayFrame })
         let displayID = matchingScreen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { return nil }
+        let exactDisplay = content.displays.first(where: { $0.displayID == displayID })
+        if exactDisplay == nil {
+            // Another display's picture against this display's frame puts
+            // every click in the wrong place, so say so in the log.
+            DottieLog.warning("Screenshot display not found by its number; using the first display, so clicks may land off target")
+        }
+        guard let display = exactDisplay ?? content.displays.first else { return nil }
 
         let ownBundleIdentifier = Bundle.main.bundleIdentifier
         let ownAppWindows = content.windows.filter { $0.owningApplication?.bundleIdentifier == ownBundleIdentifier }

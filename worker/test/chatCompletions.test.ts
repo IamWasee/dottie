@@ -18,6 +18,8 @@ import {
   DEFAULT_GROQ_TEXT_MODELS,
   DEFAULT_GROQ_VISION_MODELS,
   DEFAULT_NIM_MODELS,
+  THOUSAND_GRID_LEFT_FIRST,
+  zaiProvider,
 } from "../src/chatCompletions";
 import { chatAnswer, fakeFetch, imagePart, jpegBase64, jpegHeaderBytes, pngBase64, pngHeaderBytes, sseJSON } from "./helpers";
 
@@ -497,6 +499,49 @@ describe("pictureSize", () => {
     expect(pictureSize(new Uint8Array([0x89, 0x50, 0x4e, 0x47]))).toBeUndefined();
     expect(pictureSize(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0, 0, 0, 0]))).toBeUndefined();
     expect(pictureSize(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0, 0, 0, 0, 0, 0]))).toBeUndefined();
+  });
+});
+
+describe("GLM's boxes", () => {
+  const glmBody = () => ({
+    systemInstruction: { parts: [{ text: "Answer with box_2d as [ymin, xmin, ymax, xmax] from 0 to 1000." }] },
+    contents: [
+      { role: "user", parts: [{ text: "Click the Send button. Give box_2d." }, imagePart(pngBase64(1440, 900))] },
+      { role: "model", parts: [{ functionCall: { name: "click", args: { box_2d: [100, 200, 300, 400] } } }] },
+    ],
+    tools: [{ functionDeclarations: [{ name: "click", description: "Click box_2d.", parameters: { type: "OBJECT", properties: { box_2d: { type: "ARRAY" } } } }] }],
+  });
+
+  it("asks GLM for 0-1000 boxes with x first and turns earlier boxes around", () => {
+    const conversion = pixelBoxConversion(glmBody(), THOUSAND_GRID_LEFT_FIRST)!;
+    const body = conversion.bodyForProvider as any;
+    expect(body.contents[0].parts[0].text).toBe("Click the Send button. Give box_xy.");
+    expect(body.contents[1].parts[0].functionCall.args).toEqual({ box_xy: [200, 100, 400, 300] });
+    expect(body.systemInstruction.parts[0].text).toBe("Answer with box_xy as [left, top, right, bottom] from 0 to 1000.");
+    expect(body.systemInstruction.parts.at(-1).text).toContain("0-1000 grid");
+    expect(body.systemInstruction.parts.at(-1).text).not.toContain("pixels");
+  });
+
+  it("turns GLM's x-first answer back into Gemini's top-first box", () => {
+    const conversion = pixelBoxConversion(glmBody(), THOUSAND_GRID_LEFT_FIRST)!;
+    const answer = conversion.responseForGemini({
+      candidates: [{ content: { parts: [{ functionCall: { name: "click", args: { box_xy: [700, 50, 780, 90] } } }, { text: '{"box_xy": [10, 20, 30, 40]}' }] } }],
+    }) as any;
+    expect(answer.candidates[0].content.parts[0].functionCall.args).toEqual({ box_2d: [50, 700, 90, 780] });
+    expect(answer.candidates[0].content.parts[1].text).toBe('{"box_2d": [20,10,40,30]}');
+  });
+
+  it("works without a readable picture, since the grid doesn't depend on its size", () => {
+    expect(pixelBoxConversion({ contents: [{ role: "user", parts: [{ text: "give box_2d" }, imagePart("AAAAAAAA")] }] }, THOUSAND_GRID_LEFT_FIRST)).toBeDefined();
+  });
+
+  it("sends GLM the x-first boxes and gives the app top-first ones", async () => {
+    const calls = fakeFetch([["api.z.ai", chatAnswer({ content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "click", arguments: JSON.stringify({ box_xy: [700, 50, 780, 90] }) } }] })]]);
+    const response = await answerWithProvider(zaiProvider("z"), glmBody(), false);
+    expect(calls[0].bodyText).toContain("box_xy");
+    expect(calls[0].bodyText).not.toContain("box_2d");
+    const answer = (await response!.json()) as any;
+    expect(answer.candidates[0].content.parts[0].functionCall.args).toEqual({ box_2d: [50, 700, 90, 780] });
   });
 });
 

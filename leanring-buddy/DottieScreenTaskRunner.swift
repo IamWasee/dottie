@@ -962,8 +962,20 @@ final class DottieScreenTaskRunner {
             return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
         case "click":
+            let modelBoxCenter = boxCenter()
+            let snappedModelPoint = clickPoint()
             let jevClickPoint = await Self.jevClickPoint(label: text("label"), screen: screen)
-            return await performClick(at: jevClickPoint ?? clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
+            let finalClickPoint = jevClickPoint ?? snappedModelPoint
+            // Click check: where the model pointed vs. where Dottie clicks,
+            // logged and kept as a picture, so a miss shows its cause.
+            if let modelBoxCenter, let finalClickPoint {
+                let finalPointSource: DottieClickCheck.FinalPointSource = jevClickPoint != nil
+                    ? .jev
+                    : (finalClickPoint == modelBoxCenter ? .modelBox : .accessibilitySnap)
+                DottieClickCheck.record(stepNumber: stepNumber, label: text("label") ?? "it", screenshot: screen.image, displayFrame: screen.displayFrame,
+                                        modelPoint: modelBoxCenter, finalPoint: finalClickPoint, source: finalPointSource)
+            }
+            return await performClick(at: finalClickPoint, label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)

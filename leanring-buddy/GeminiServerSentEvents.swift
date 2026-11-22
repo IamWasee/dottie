@@ -74,7 +74,7 @@ enum GeminiServerSentEvents {
         let area = DottieUsage.area(forCallerFile: callerFile)
         DottieUsage.recordFromAnyThread(area: area, usageMetadata: usageMetadata)
         if let answerUsage {
-            DottieAskUsageLog.note(answerUsage, area: area)
+            DottieAskUsageLog.note(answerUsage, area: area, costCategory: DottieCostCategory.category(forCallerFile: callerFile))
         }
     }
 }

@@ -337,7 +337,7 @@ enum DottieTalker {
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard statusCode == 200 else { throw TalkerError.workerAnswered(statusCode) }
         if let answerUsage = DottieAskUsage.fromServerSentEvents(String(decoding: responseData, as: UTF8.self)) {
-            DottieAskUsageLog.note(answerUsage, area: .voice)
+            DottieAskUsageLog.note(answerUsage, area: .voice, costCategory: "voice")
         }
         return DottieTalkerProtocol.brainAnswer(fromServerSentEvents: responseData)
     }

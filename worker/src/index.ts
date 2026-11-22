@@ -172,7 +172,7 @@ import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fitt
 import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
-import { installSpendResponse, recordInstallSpend, splitPassthroughKey, usageRefusal } from "./usageLimits";
+import { type AnswerSpend, JEV_DOLLARS_PER_ANSWER, costCategoryKey, installSpendResponse, recordInstallSpend, splitPassthroughKey, usageRefusal } from "./usageLimits";
 export { PhoneRelay } from "./phoneRelay";
 export { InstallUsage } from "./usageLimits";
 
@@ -202,7 +202,7 @@ export default {
       const passthroughUsageRefusal = await usageRefusal(request, url, env);
       if (passthroughUsageRefusal) return passthroughUsageRefusal;
       try {
-        return await withSpendRecorded(await handleGeminiPassthrough(request, url, env), request, url, env, ctx);
+        return await withSpendRecorded(await handleGeminiPassthrough(request, url, env), request, url, env, ctx, costCategoryKey(request, url, undefined));
       } catch (error) {
         console.error(`[/gemini] Unhandled error:`, error);
         return jsonResponse({ error: SERVER_ERROR_MESSAGE }, 500);
@@ -267,11 +267,13 @@ export default {
       }
 
       if (url.pathname === "/chat") {
-        return await withSpendRecorded(await handleChat(request, env), request, url, env, ctx);
+        const category = costCategoryKey(request, url, await chatRole(request));
+        return await withSpendRecorded(await handleChat(request, env), request, url, env, ctx, category);
       }
 
       if (url.pathname === "/jev") {
-        return await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL);
+        const jevSpend = { asks: 1, dollars: JEV_DOLLARS_PER_ANSWER, unpricedAsks: 0, inputTokens: 0, outputTokens: 0 };
+        return await withSpendRecorded(await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL), request, url, env, ctx, costCategoryKey(request, url, undefined), jevSpend);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
@@ -282,14 +284,28 @@ export default {
   },
 };
 
+/** The role a /chat body asks for ("talk", "request", "screen", "plan"…), read from a copy so the body stays unread. */
+async function chatRole(request: Request): Promise<string | undefined> {
+  const body = await request.clone().json<{ provider?: unknown }>().catch(() => undefined);
+  return typeof body?.provider === "string" ? body.provider : undefined;
+}
+
 /**
  * Hands the answer back and adds what it cost to the install's spend for
  * the day, after the answer has gone (or right away without a context, in
  * tests).
  */
-async function withSpendRecorded(answer: Response, request: Request, url: URL, env: Env, ctx: ExecutionContext | undefined): Promise<Response> {
+async function withSpendRecorded(
+  answer: Response,
+  request: Request,
+  url: URL,
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  category: string,
+  fixedSpend?: AnswerSpend
+): Promise<Response> {
   if (!env.INSTALL_USAGE || !answer.ok) return answer;
-  const recording = recordInstallSpend(answer.clone(), request, url, env);
+  const recording = recordInstallSpend(answer.clone(), request, url, env, category, fixedSpend);
   if (ctx) ctx.waitUntil(recording);
   else await recording;
   return answer;

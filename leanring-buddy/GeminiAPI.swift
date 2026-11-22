@@ -203,7 +203,7 @@ final class GeminiAPI {
             DottieUsage.recordFromAnyThread(area: .voice, usageMetadata: lastUsageMetadata)
         }
         if let lastAnswerUsage {
-            DottieAskUsageLog.note(lastAnswerUsage, area: .voice)
+            DottieAskUsageLog.note(lastAnswerUsage, area: .voice, costCategory: "voice")
         }
         // Teaches the model picker how quick (or busy) this model is.
         DottieModelPicker.shared.record(model: requestedModel, seconds: duration, statusCode: 200, answeredBy: answeringModel)

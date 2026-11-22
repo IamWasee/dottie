@@ -194,7 +194,7 @@ enum DottieJev {
             }
             let answerSeconds = Date().timeIntervalSince(startedAt)
             DottieLog.notice("🎯 Jev answered in \(public: String(format: "%.2f", answerSeconds)) s")
-            DottieAskUsageLog.note(.jevAnswer(seconds: answerSeconds), area: .screenTasks)
+            DottieAskUsageLog.note(.jevAnswer(seconds: answerSeconds), area: .screenTasks, costCategory: "jev")
             return answerData
         } catch {
             DottieLog.warning("⚠️ Jev didn't answer: \(error.localizedDescription)")

@@ -44,6 +44,12 @@ export interface ChatProvider {
   format?: "chat" | "anthropic";
   /** Asked for boxes in pixels of the newest picture (see pixelBoxConversion). */
   usesPixelBoxes?: boolean;
+  /**
+   * Boxes in the model's own 0-1000 grid, left first ([left, top, right,
+   * bottom]), the way GLM's vision models are trained to answer. Gemini's
+   * box_2d is top first, so GLM's answers came back with x and y swapped.
+   */
+  usesThousandGridLeftFirstBoxes?: boolean;
 }
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -139,6 +145,7 @@ export function zaiProvider(apiKey: string, models?: string): ChatProvider {
     maximumImages: 5,
     maximumTokens: 100_000,
     attemptTimeoutMilliseconds: 45_000,
+    usesThousandGridLeftFirstBoxes: true,
     extrasForModel: () => ({ thinking: { type: "disabled" } }),
   };
 }
@@ -363,7 +370,11 @@ export async function answerWithProvider(
   const models = imageCount(geminiBody) > 0 ? provider.visionModels : provider.textModels;
   // Groq's models write boxes in pixels, left first; Gemini's box_2d is
   // 0-1000, top first. Groq is asked for pixels and its answer turned back.
-  const boxConversion = provider.usesPixelBoxes ? pixelBoxConversion(geminiBody) : undefined;
+  const boxConversion = provider.usesPixelBoxes
+    ? pixelBoxConversion(geminiBody)
+    : provider.usesThousandGridLeftFirstBoxes
+      ? pixelBoxConversion(geminiBody, THOUSAND_GRID_LEFT_FIRST)
+      : undefined;
   const chatRequest = toChatRequest(boxConversion ? boxConversion.bodyForProvider : geminiBody);
   if (provider.name === "groq" && typeof chatRequest.max_tokens !== "number") {
     chatRequest.max_tokens = DEFAULT_ANSWER_TOKENS;
@@ -653,20 +664,33 @@ export function toGeminiResponse(chatResponse: Record<string, unknown>, answerin
  * calls in the history, and the answer's "_px" boxes are turned back into
  * the keys and 0-1000 boxes the app asked for.
  */
-export function pixelBoxConversion(geminiBody: Record<string, unknown>):
+/** How a provider wants boxes when not in Gemini's box_2d: its key suffix and, for a fixed grid, the grid's size. */
+export interface BoxStyle {
+  keySuffix: string;
+  /** A fixed grid (GLM's 0-1000); without it, pixels of the newest picture. */
+  gridSize?: number;
+}
+
+const PIXELS_LEFT_FIRST: BoxStyle = { keySuffix: "box_px" };
+export const THOUSAND_GRID_LEFT_FIRST: BoxStyle = { keySuffix: "box_xy", gridSize: 1000 };
+
+export function pixelBoxConversion(geminiBody: Record<string, unknown>, boxStyle: BoxStyle = PIXELS_LEFT_FIRST):
   | { bodyForProvider: Record<string, unknown>; responseForGemini: (response: Record<string, unknown>) => Record<string, unknown> }
   | undefined {
   const bodyText = JSON.stringify(geminiBody);
   const mentionsBoxes = bodyText.includes("box_2d") || bodyText.includes("\"target_box\"");
   if (!mentionsBoxes) return undefined;
-  const pictureSize = newestPictureSize(geminiBody);
+  const pictureSize = boxStyle.gridSize
+    ? { width: boxStyle.gridSize, height: boxStyle.gridSize }
+    : newestPictureSize(geminiBody);
   if (!pictureSize) return undefined;
+  const suffix = boxStyle.keySuffix;
 
   const originalKeyByPixelKey = new Map<string, string>();
   const pixelKey = (key: string): string | undefined => {
     let renamed: string | undefined;
-    if (key.endsWith("box_2d")) renamed = `${key.slice(0, -"box_2d".length)}box_px`;
-    else if (key === "target_box") renamed = "target_box_px";
+    if (key.endsWith("box_2d")) renamed = `${key.slice(0, -"box_2d".length)}${suffix}`;
+    else if (key === "target_box") renamed = `target_${suffix}`;
     if (renamed) originalKeyByPixelKey.set(renamed, key);
     return renamed;
   };
@@ -736,23 +760,26 @@ export function pixelBoxConversion(geminiBody: Record<string, unknown>):
   const systemParts = (systemInstruction.parts ?? []).map((part) =>
     typeof part.text === "string" ? { ...part, text: renameInText(part.text) } : part
   );
+  const boxKeyNames = [...new Set(originalKeyByPixelKey.keys())].join(", ") || suffix;
   systemParts.push({
-    text:
-      `Boxes: ignore any 0-1000 scale described above. The newest image is ${pictureSize.width}×${pictureSize.height} pixels. ` +
-      `Give every box (${[...new Set(originalKeyByPixelKey.keys())].join(", ") || "box_px"}) in pixels of that image as [left, top, right, bottom], ` +
-      `measured on the image itself, tight around the thing.`,
+    text: boxStyle.gridSize
+      ? `Boxes: give every box (${boxKeyNames}) on a 0-${boxStyle.gridSize} grid over the newest image as [left, top, right, bottom] ` +
+        `(x first: left and right go across, top and bottom go down), tight around the thing.`
+      : `Boxes: ignore any 0-1000 scale described above. The newest image is ${pictureSize.width}×${pictureSize.height} pixels. ` +
+        `Give every box (${boxKeyNames}) in pixels of that image as [left, top, right, bottom], ` +
+        `measured on the image itself, tight around the thing.`,
   });
   bodyForProvider.systemInstruction = { ...systemInstruction, parts: systemParts };
 
   const geminiKey = (key: string): string | undefined =>
-    originalKeyByPixelKey.get(key) ?? (key.endsWith("box_px") ? `${key.slice(0, -"box_px".length)}box_2d` : undefined);
+    originalKeyByPixelKey.get(key) ?? (key.endsWith(suffix) ? `${key.slice(0, -suffix.length)}box_2d` : undefined);
 
   const responseForGemini = (response: Record<string, unknown>): Record<string, unknown> => {
     const converted = structuredClone(response);
     for (const candidate of (converted.candidates ?? []) as Array<{ content?: GeminiContent }>) {
       for (const part of candidate.content?.parts ?? []) {
         if (part.functionCall?.args) part.functionCall.args = renameKeys(part.functionCall.args, toGeminiBox, geminiKey);
-        if (typeof part.text === "string") part.text = textWithGeminiBoxes(part.text, toGeminiBox, geminiKey);
+        if (typeof part.text === "string") part.text = textWithGeminiBoxes(part.text, toGeminiBox, geminiKey, suffix);
       }
     }
     return converted;
@@ -765,11 +792,12 @@ export function pixelBoxConversion(geminiBody: Record<string, unknown>):
 export function textWithGeminiBoxes(
   text: string,
   toGeminiBox: (box: unknown) => unknown,
-  geminiKey: (key: string) => string | undefined
+  geminiKey: (key: string) => string | undefined,
+  keySuffix = "box_px"
 ): string {
   const number = String.raw`-?\d+(?:\.\d+)?`;
   const boxPattern = new RegExp(
-    String.raw`"([a-z_]*box_px)"\s*:\s*\[?\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*\]?`,
+    String.raw`"([a-z_]*${keySuffix})"\s*:\s*\[?\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*,\s*(${number})\s*\]?`,
     "g"
   );
   return text
@@ -777,7 +805,7 @@ export function textWithGeminiBoxes(
       const box = toGeminiBox([Number(left), Number(top), Number(right), Number(bottom)]);
       return `"${geminiKey(key) ?? key}": ${JSON.stringify(box)}`;
     })
-    .replace(/"([a-z_]*box_px)"/g, (_match, key: string) => `"${geminiKey(key) ?? key}"`);
+    .replace(new RegExp(`"([a-z_]*${keySuffix})"`, "g"), (_match, key: string) => `"${geminiKey(key) ?? key}"`);
 }
 
 function boxNumbers(value: unknown): [number, number, number, number] | undefined {

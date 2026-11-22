@@ -78,8 +78,10 @@ nonisolated struct DottieAskUsage: Equatable, Sendable {
     }
 
     /// The log line for this answer. Everything in it is public on purpose.
-    func logText(askNumber: Int, area: String) -> String {
-        "💵 usage ask \(askNumber) · \(area) · \(provider)/\(model) · \(inputTokens) in / \(outputTokens) out · "
+    /// `costCategory` (DottieCostCategory) says which feature it was for.
+    func logText(askNumber: Int, area: String, costCategory: String? = nil) -> String {
+        let areaText = costCategory.map { "\(area) [\($0)]" } ?? area
+        return "💵 usage ask \(askNumber) · \(areaText) · \(provider)/\(model) · \(inputTokens) in / \(outputTokens) out · "
             + String(format: "%.2f s", seconds) + " · \(dollarsText)"
     }
 }
@@ -108,8 +110,8 @@ nonisolated enum DottieAskCounter {
 
 nonisolated enum DottieAskUsageLog {
     /// Logs one answer's usage and adds it to the day's totals.
-    static func note(_ usage: DottieAskUsage, area: DottieUsage.Area) {
-        DottieLog.notice("\(public: usage.logText(askNumber: DottieAskCounter.currentAskNumber, area: area.rawValue))")
+    static func note(_ usage: DottieAskUsage, area: DottieUsage.Area, costCategory: String? = nil) {
+        DottieLog.notice("\(public: usage.logText(askNumber: DottieAskCounter.currentAskNumber, area: area.rawValue, costCategory: costCategory))")
         Task { @MainActor in
             DottieUsage.shared.recordProviderAnswer(usage)
         }

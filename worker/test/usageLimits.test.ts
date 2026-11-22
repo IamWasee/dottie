@@ -2,7 +2,7 @@ import { env as workerBindings } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/index";
-import { DEFAULT_DAILY_LIMITS, SPEND_DAYS_KEPT, dailyLimits, dayBefore, installSpendResponse, recordInstallSpend, spendInAnswer, splitPassthroughKey, usageArea, usageIdentity, usageRefusal } from "../src/usageLimits";
+import { DEFAULT_DAILY_LIMITS, JEV_DOLLARS_PER_ANSWER, SPEND_DAYS_KEPT, costCategory, costCategoryKey, dailyLimits, dayBefore, installSpendResponse, recordInstallSpend, spendInAnswer, splitPassthroughKey, usageArea, usageIdentity, usageRefusal } from "../src/usageLimits";
 import { chatAnswer, fakeFetch, jsonAnswer, makeEnv } from "./helpers";
 
 const usageBinding = (workerBindings as unknown as Env).INSTALL_USAGE;
@@ -387,5 +387,61 @@ describe("what each install spends", () => {
     const failed = await installSpendResponse(request, url, { INSTALL_USAGE: { idFromName: () => "id", get: () => ({ fetch: () => Promise.reject(new Error("down")) }) } as unknown as DurableObjectNamespace });
     expect(failed.status).toBe(503);
     expect(warnings.mock.calls.flat().join(" ")).toContain("couldn't");
+  });
+
+  it("cleans a sent cost category and files unlabeled requests together", () => {
+    expect(costCategory("Screen_Job_Steps")).toBe("screen_job_steps");
+    expect(costCategory("other:dottiefoo<script>")).toBe("other:dottiefooscript");
+    expect(costCategory("")).toBe("unlabeled");
+    expect(costCategory("!!!")).toBe("unlabeled");
+    expect(costCategory(undefined)).toBe("unlabeled");
+    expect(costCategory("x".repeat(200))).toHaveLength(80);
+  });
+
+  it("files a request under its feature and the role it asked for", () => {
+    const labeled = new Request("https://worker.test/chat", { method: "POST", headers: { "x-dottie-cost-category": "voice" } });
+    expect(costCategoryKey(labeled, new URL(labeled.url), "request")).toBe("voice/request");
+    expect(costCategoryKey(labeled, new URL(labeled.url), undefined)).toBe("voice/default");
+    expect(costCategoryKey(labeled, new URL(labeled.url), "Sc reen!")).toBe("voice/screen");
+    const unlabeled = new Request("https://worker.test/chat", { method: "POST" });
+    expect(costCategoryKey(unlabeled, new URL(unlabeled.url), "groq")).toBe("unlabeled/groq");
+    expect(costCategoryKey(labeled, new URL("https://worker.test/gemini/v1beta/models/m:generateContent"), "x")).toBe("helpers");
+    expect(costCategoryKey(labeled, new URL("https://worker.test/jev"), undefined)).toBe("jev");
+  });
+
+  it("keeps each install's spend per category, and everyone's for the owner", async () => {
+    fakeFetch([
+      ["api.groq.com", chatAnswer({ content: "ok" })],
+      ["api.typesafe.ai", jsonAnswer({ answers: { done: { probability: 0.9 } } })],
+    ]);
+    const ownerID = newInstallID();
+    const otherID = newInstallID();
+    const env = limitedEnv("chat=100", { UNLIMITED_INSTALL_IDS: ownerID, JEV_API_KEY: "jev-key" });
+    const labeledChat = (installID: string, category: string, provider: string) =>
+      fromInstall(installID, "/chat", { body: { provider, contents: [] }, env, headers: { "x-dottie-cost-category": category } });
+    expect((await labeledChat(otherID, "screen_job_steps", "screen")).status).toBe(200);
+    expect((await labeledChat(otherID, "screen_job_steps", "screen")).status).toBe(200);
+    expect((await labeledChat(otherID, "screen_job_plan", "plan")).status).toBe(200);
+    const jevAnswer = await fromInstall(otherID, "/jev", {
+      body: { state: { task: "t" }, questions: { done: { type: "noul" } } },
+      env,
+      headers: { "x-dottie-cost-category": "jev" },
+    });
+    expect(jevAnswer.status).toBe(200);
+
+    const own = (await (await fromInstall(otherID, "/usage", { env })).json()) as { days: Array<{ asks: number; byCategory: Record<string, { asks: number; dollars: number }> }> };
+    const today = own.days[own.days.length - 1];
+    expect(today.byCategory["screen_job_steps/screen"].asks).toBe(2);
+    expect(today.byCategory["screen_job_plan/plan"].asks).toBe(1);
+    expect(today.byCategory.jev).toMatchObject({ asks: 1, dollars: JEV_DOLLARS_PER_ANSWER });
+    expect(today.asks).toBe(4);
+
+    expect((await fromInstall(otherID, "/usage?scope=everyone", { env })).status).toBe(403);
+    await labeledChat(ownerID, "voice", "groq");
+    const everyone = (await (await fromInstall(ownerID, "/usage?scope=everyone", { env })).json()) as { days: Array<{ day: string; byCategory: Record<string, { asks: number }> }> };
+    // Other tests reach everyone's counter on other days too.
+    const everyoneToday = everyone.days.find((entry) => entry.day === new Date().toISOString().slice(0, 10))!;
+    expect(everyoneToday.byCategory["voice/groq"].asks).toBeGreaterThanOrEqual(1);
+    expect(everyoneToday.byCategory["screen_job_steps/screen"].asks).toBeGreaterThanOrEqual(2);
   });
 });
