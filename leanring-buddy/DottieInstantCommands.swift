@@ -437,7 +437,11 @@ enum DottieInstantCommands {
                   let match = regularExpression.firstMatch(in: normalizedRequest, range: NSRange(normalizedRequest.startIndex..., in: normalizedRequest)),
                   let queryRange = Range(match.range(at: 1), in: normalizedRequest) else { continue }
             let searchQuery = String(normalizedRequest[queryRange]).trimmingCharacters(in: .whitespaces)
+            // "search youtube for mrbeast and click on the first video" is a
+            // screen job, not a search: the whole sentence went into
+            // YouTube's search box on Wasee's Mac.
             guard !searchQuery.isEmpty, !DottieInstantText.containsMomentWord(searchQuery),
+                  !DottieInstantText.hasFollowOnInstruction(searchQuery),
                   let encodedQuery = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { continue }
             let searchAddress = searchShape.site == "youtube"
                 ? "https://www.youtube.com/results?search_query=\(encodedQuery)"
@@ -917,6 +921,29 @@ enum DottieInstantText {
     /// Words whose meaning depends on the moment ("close this", "open that
     /// file"): never learned, and never an app name.
     private static let momentWords: Set<String> = ["this", "that", "these", "those", "it", "here", "there", "them", "him", "her", "its", "it's"]
+
+    /// Words that start another step after "and" / "then": the request
+    /// asks for more than the search or the open.
+    private static let followOnActionWords: Set<String> = [
+        "click", "tap", "press", "play", "open", "watch", "pick", "choose", "select", "tell", "subscribe",
+        "like", "comment", "scroll", "show", "read", "download", "save", "go", "start", "put", "check",
+        "copy", "send", "reply", "message", "type", "add", "follow", "share"
+    ]
+    private static let followOnJoinWords: Set<String> = ["and", "then"]
+
+    /// Whether the words go on to a further step ("mrbeast and click on the
+    /// first video", "cats then play the second one"). "salt and pepper"
+    /// doesn't: "pepper" isn't an action.
+    static func hasFollowOnInstruction(_ text: String) -> Bool {
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        for (index, word) in words.enumerated() where followOnJoinWords.contains(word) {
+            var nextIndex = index + 1
+            // "and then click"
+            while nextIndex < words.count, followOnJoinWords.contains(words[nextIndex]) { nextIndex += 1 }
+            if nextIndex < words.count, followOnActionWords.contains(words[nextIndex]) { return true }
+        }
+        return false
+    }
 
     static func containsMomentWord(_ text: String) -> Bool {
         !momentWords.isDisjoint(with: text.split(separator: " ").map(String.init))

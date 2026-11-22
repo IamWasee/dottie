@@ -458,9 +458,7 @@ final class DottieScreenTaskRunner {
                 if consecutiveRequestFailures >= 3 {
                     let statusCode = (error as NSError).code
                     let wasBusy = [429, 500, 503, 504].contains(statusCode) || (error as? URLError)?.code == .timedOut
-                    return .failed(reason: wasBusy
-                        ? "The step model is too busy to keep going right now."
-                        : "The step model stopped giving me steps (\(statusCode == -2 ? "empty answer" : "error \(statusCode)")), so I stopped.")
+                    return .failed(reason: Self.stepModelFailureReason(statusCode: statusCode, wasBusy: wasBusy))
                 }
                 // Try the same step again with the same conversation, a
                 // little later each time so a per-minute limit can reset.
@@ -1126,6 +1124,17 @@ final class DottieScreenTaskRunner {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         return didOpen ? "opened \(address)" : "couldn't open \(address)"
+    }
+
+    /// What the user hears when the step model stops answering: what went
+    /// wrong and when to try again (about a minute, once the busy model and
+    /// Jev's one-minute rest are over), so a stopped job never just ends.
+    static func stepModelFailureReason(statusCode: Int, wasBusy: Bool) -> String {
+        if wasBusy {
+            return "The AI models are too busy right now, so I stopped. Wait about a minute and ask me again."
+        }
+        let whatWentWrong = statusCode == -2 ? "an empty answer" : "error \(statusCode)"
+        return "The step model stopped giving me steps (\(whatWentWrong)), so I stopped. Wait a few seconds and try again."
     }
 
     /// Opens a page in the browser tab in front, the way a person would
