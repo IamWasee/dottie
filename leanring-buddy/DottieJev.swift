@@ -139,8 +139,10 @@ enum DottieJevProtocol {
 /// Asking Jev through the Worker.
 @MainActor
 enum DottieJev {
-    /// After Jev fails (not set up, down, too slow), it's left alone this long.
-    private static let pauseAfterFailureSeconds: TimeInterval = 120
+    /// After Jev fails (not set up, down, too slow), it's left alone this
+    /// long. One minute (Wasee's call): two minutes made the next screen
+    /// job skip Jev and go straight to the slower step model.
+    static let pauseAfterFailureSeconds: TimeInterval = 60
     private static var pausedUntil = Date.distantPast
 
     /// Where `target` is on `image`, as a Jev box, or nil.

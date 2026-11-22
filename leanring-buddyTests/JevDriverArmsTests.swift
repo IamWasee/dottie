@@ -20,7 +20,8 @@ struct JevDriverArmsTests {
         let screenTexts = [Plan.ScreenText(text: "invoice.pdf", centerX: 200, centerY: 300), Plan.ScreenText(text: "Archive", centerX: 600, centerY: 300)]
         let controls = [Plan.ScreenControl(label: "Compose", kind: "button", centerX: 50, centerY: 100)]
         let moves = Plan.options(screenTexts: screenTexts, textPieces: [], siteAddresses: [], appNames: [], alreadyTriedSignatures: [],
-                                 screenControls: controls, taskText: "drag invoice.pdf onto Archive", offersAppMemory: true).map(\.move)
+                                 screenControls: controls, taskText: "drag invoice.pdf onto Archive", offersAppMemory: true,
+                                 isBrowserInFront: true).map(\.move)
         #expect(moves.contains(.clickControl(label: "Compose", kind: "button", centerX: 50, centerY: 100)))
         #expect(moves.contains(.clickUnlabeled))
         #expect(moves.contains(.doubleClick(label: "invoice.pdf", centerX: 200, centerY: 300)))
