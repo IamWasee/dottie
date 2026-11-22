@@ -1003,6 +1003,9 @@ final class ClickyRoster: ObservableObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.runDueRoutines()
+                    // Hourly at most: idle helper bots are paused so MausBot's
+                    // nightly memory run skips them (DottieMausBotIdlePause).
+                    Task { await DottieMausBotIdlePause.shared.pauseIdleBotsIfDue() }
                 }
             }
         }

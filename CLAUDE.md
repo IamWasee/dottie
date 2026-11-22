@@ -285,6 +285,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `Onboarding
 | `DottieAskUsage.swift` | ~120 | Which model answered each ask, its tokens, how long it took and what it cost. The Worker puts a `dottieUsage` object on every answer (provider, model, tokens, seconds, estimated dollars, or null when the model has no price set); Jev answers are counted here at its flat price. |
 | `ScreenJobStopReason.swift` | ~42 | Why a screen job stopped before it finished, and what the notch says about it, so a stopped job always tells the user where it got to. Foundation only, so it can be unit tested. |
 | `DottieTaskMatching.swift` | ~67 | Whether something Dottie learned before (a watched how-to, a screen job's learned plan) fits the job in front of her. Both used to match on any shared words, so "open my bull and shit folder" and a Notes job both loaded the plan "Open Finder and show the Downloads folder": they share "open", "and" and "folder". Matching now counts only the words that say what the job is about. |
+| `DottieMausBotIdlePause.swift` | ~110 | MausBot tidies every bot's memory once a night (its "memory upkeep", from 3 AM), whether the bot did anything that day or not. Six of Dottie's helpers cost about $0.11 a night that way, about $3.30 a month with Dottie idle. MausBot skips bots that are paused, so Dottie pauses each of her own bots that hasn't had a turn in the last 20 hours, and resumes it right before its next turn. |
 
 ## Build & Run
 
