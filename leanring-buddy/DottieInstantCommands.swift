@@ -171,7 +171,7 @@ enum DottieInstantCommands {
         return .pressKeys(keyCombination: keyCombination, doneText: "Pressed \(keyCombination).")
     }
 
-    private static let spokenModifierNames: [String: String] = [
+    nonisolated private static let spokenModifierNames: [String: String] = [
         "command": "cmd", "cmd": "cmd", "⌘": "cmd",
         "shift": "shift",
         "option": "option", "opt": "option", "alt": "option",
@@ -179,7 +179,7 @@ enum DottieInstantCommands {
         "fn": "fn", "function": "fn"
     ]
 
-    private static let spokenKeyNames: [String: String] = [
+    nonisolated private static let spokenKeyNames: [String: String] = [
         "escape": "escape", "esc": "escape", "enter": "enter", "return": "enter", "tab": "tab",
         "space": "space", "spacebar": "space", "delete": "delete", "backspace": "delete",
         "up": "up", "down": "down", "left": "left", "right": "right", "home": "home", "end": "end",
@@ -190,7 +190,7 @@ enum DottieInstantCommands {
 
     /// "command shift t" → "cmd+shift+t", or nil unless it's modifiers and
     /// exactly one key Dottie can press.
-    static func keyCombination(fromSpokenKeys spokenKeys: String) -> String? {
+    nonisolated static func keyCombination(fromSpokenKeys spokenKeys: String) -> String? {
         var spokenWords = spokenKeys.lowercased()
             .replacingOccurrences(of: "+", with: " ")
             .split(separator: " ")
