@@ -171,7 +171,7 @@ struct TalkerTests {
     // MARK: - Mac tools before screen jobs (round 2 of 1.0.80)
 
     @Test func requestBrainGetsTheDirectMacTools() {
-        for toolName in ["run_applescript", "open_url", "browser", "press_keys", "type_text", "apps_and_tools", "use_app_tool", "control_device", "quick_mac_action"] {
+        for toolName in ["run_applescript", "open_url", "browser", "press_keys", "apps_and_tools", "use_app_tool", "quick_mac_action"] {
             #expect(DottieTalkerProtocol.requestToolNames.contains(toolName), "\(toolName) isn't on the request list")
         }
     }
@@ -256,6 +256,41 @@ struct TalkerTests {
         #expect(prompt.contains("jev on their screen"))
         #expect(prompt.contains("call hand_to_claude"))
         #expect(prompt.contains("a job dottie ran"))
+    }
+
+    // MARK: - Fewer tokens per Claude ask (celly, 22 Nov)
+
+    @Test func claudeSeesTheScreenshotOnlyOnce() throws {
+        let picture = Data([0xFF, 0xD8, 0xFF])
+        let firstTurn = DottieTalkerProtocol.requestUserTurn(transcript: "what's this error?", labeledImages: [(data: picture, label: "screen 1")])
+        let conversation: [[String: Any]] = [
+            ["role": "user", "parts": [["text": "earlier ask"]]],
+            firstTurn,
+            ["role": "model", "parts": [["functionCall": ["name": "search_web", "args": ["query": "error"]]]]]
+        ]
+        let trimmed = DottieTalkerProtocol.withoutPictures(conversation)
+        #expect(trimmed.count == conversation.count)
+        let trimmedParts = try #require(trimmed[1]["parts"] as? [[String: Any]])
+        #expect(!trimmedParts.contains { $0["inlineData"] != nil })
+        #expect(trimmedParts.contains { ($0["text"] as? String) == DottieTalkerProtocol.leftOutPictureText })
+        #expect(trimmedParts.contains { ($0["text"] as? String)?.contains("what's this error?") == true })
+        // Turns without pictures are left exactly as they were.
+        #expect((trimmed[0]["parts"] as? [[String: Any]])?.first?["text"] as? String == "earlier ask")
+        #expect(trimmed[2]["role"] as? String == "model")
+        #expect(JSONSerialization.isValidJSONObject(trimmed))
+        // Already without pictures: nothing more is added.
+        let trimmedTwice = DottieTalkerProtocol.withoutPictures(trimmed)
+        #expect((trimmedTwice[1]["parts"] as? [[String: Any]])?.count == trimmedParts.count)
+    }
+
+    @Test func claudesToolListIsShortAndTheRestAreFound() {
+        #expect(DottieTalkerProtocol.requestToolNames.count <= 18)
+        for rarelyUsed in ["check_helper", "list_helpers", "guide_user", "remember", "recall_memory", "get_schedule", "type_text", "control_device"] {
+            #expect(!DottieTalkerProtocol.requestToolNames.contains(rarelyUsed), "\(rarelyUsed) should be found with find_tool")
+        }
+        let every: [[String: Any]] = [["name": "guide_user"], ["name": "search_web"], ["name": "get_schedule"]]
+        let declared = DottieTalkerProtocol.requestToolDeclarations(from: every, findAndUseDeclarations: [["name": "find_tool"], ["name": "use_tool"]])
+        #expect(declared.compactMap { $0["name"] as? String } == ["search_web", "find_tool", "use_tool"])
     }
 }
 

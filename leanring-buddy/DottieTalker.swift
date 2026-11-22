@@ -268,24 +268,43 @@ enum DottieTalkerProtocol {
     /// Voice Dottie's tools the request brain gets declared. The rest stay
     /// behind find_tool, so each request carries a short tool list. Pointing
     /// is a [POINT:] tag here, and there's no higher model to hand to.
+    /// Every declared tool is sent with every round, so the list is kept to
+    /// what most asks use (celly, 22 Nov: Claude costs); helpers' status,
+    /// guides, memory, the schedule, typing and smart devices are found
+    /// with find_tool when needed.
     static let requestToolNames: Set<String> = [
         "do_task_on_screen", "stop_screen_task", "answer_screen_job",
-        "start_helper", "check_helper", "list_helpers",
-        "search_web", "guide_user", "quick_mac_action",
-        "remember", "recall_memory", "get_schedule", "add_reminder",
+        "start_helper", "search_web", "quick_mac_action", "add_reminder",
         "copy_to_clipboard", "explain_on_screen", "write_notes", "click_on_screen",
         // Direct Mac tools. Without them Claude only had quick_mac_action or
         // a screen job, and in round 2 of 1.0.80 "open my folder" and "open
         // Notes" became screen jobs that looked at screenshots for minutes.
-        "run_applescript", "open_url", "browser", "press_keys", "type_text",
-        "apps_and_tools", "use_app_tool", "control_device"
+        "run_applescript", "open_url", "browser", "press_keys",
+        "apps_and_tools", "use_app_tool"
     ]
 
     /// Mac tools the request brain must try before a screen job for an
     /// everyday Mac action. The Pre-ship check holds asks to this.
     static let macToolNames: Set<String> = [
-        "quick_mac_action", "run_applescript", "open_url", "browser", "press_keys", "control_device", "use_app_tool"
+        "quick_mac_action", "run_applescript", "open_url", "browser", "press_keys", "use_app_tool"
     ]
+
+    /// What a picture is replaced with after Claude's first round.
+    static let leftOutPictureText = "(the screenshot was shown in the first round and is left out now to save tokens)"
+
+    /// The conversation with every picture swapped for a short note: Claude
+    /// sees the screen once, and each later tool round would otherwise send
+    /// the same screenshot again.
+    static func withoutPictures(_ conversation: [[String: Any]]) -> [[String: Any]] {
+        conversation.map { content in
+            guard let parts = content["parts"] as? [[String: Any]], parts.contains(where: { $0["inlineData"] != nil }) else { return content }
+            var keptParts = parts.filter { $0["inlineData"] == nil }
+            keptParts.append(["text": leftOutPictureText])
+            var changedContent = content
+            changedContent["parts"] = keptParts
+            return changedContent
+        }
+    }
 
     static func requestToolDeclarations(from everyDeclaration: [[String: Any]], findAndUseDeclarations: [[String: Any]]) -> [[String: Any]] {
         everyDeclaration.filter { declaration in
@@ -365,6 +384,10 @@ enum DottieTalker {
                 toolResults.append((functionCall.name, await runTool(functionCall.name, functionCall.arguments)))
             }
             conversation.append(DottieTalkerProtocol.toolResultsTurn(toolResults))
+            // The screenshot goes once: later rounds carry a note instead.
+            if toolRound == 0 {
+                conversation = DottieTalkerProtocol.withoutPictures(conversation)
+            }
         }
         return ""
     }
