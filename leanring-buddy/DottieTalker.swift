@@ -350,7 +350,6 @@ enum DottieTalker {
             return .request(needsScreen: true)
         }
     }
-    }
 
     /// Claude does the request, running tools through `runTool` for up to a
     /// few rounds, and returns what to say (with any [POINT:] tag).
