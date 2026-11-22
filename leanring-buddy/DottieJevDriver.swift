@@ -418,7 +418,9 @@ enum DottieJevDriverPlan {
         taskText: String = "",
         offersAppMemory: Bool = false,
         offersNextRound: Bool = false,
-        extraLeadingMoves: [Move] = []
+        extraLeadingMoves: [Move] = [],
+        isBrowserInFront: Bool = false,
+        frontAppBundleIdentifier: String? = nil
     ) -> [Option] {
         // Moves the user's own hint names (keys to press) come first.
         var leadingMoves: [Move] = extraLeadingMoves
@@ -453,7 +455,13 @@ enum DottieJevDriverPlan {
         }
         trailingMoves.append(contentsOf: holdMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: taskText))
         trailingMoves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .goBack])
-        trailingMoves.append(contentsOf: everydayKeys.map { Move.pressKeys(keys: $0.keys, meaning: $0.meaning) })
+        // Quick commands for where the user is (Mac, browser, YouTube,
+        // Finder), risky ones loudly labeled and only when asked for.
+        let quickCommands = DottieJevQuickCommands.commands(
+            forTask: taskText, isBrowserInFront: isBrowserInFront || frontSiteHost != nil,
+            frontSiteHost: frontSiteHost, frontAppBundleIdentifier: frontAppBundleIdentifier
+        )
+        trailingMoves.append(contentsOf: quickCommands.map { Move.pressKeys(keys: $0.keys, meaning: $0.labeledMeaning) })
         // A repeated job isn't finished while rounds are left: the round is.
         trailingMoves.append(contentsOf: offersNextRound ? [.finishedRound, .noneFits] : [.finished, .noneFits])
 
@@ -529,29 +537,6 @@ enum DottieJevDriverPlan {
         }
         return moves
     }
-
-    /// Keys people press all day, each with what it does, so Jev can pick a
-    /// shortcut the way a person would instead of hunting for a button.
-    static let everydayKeys: [(keys: String, meaning: String)] = [
-        ("cmd+l", "go to the browser's address bar"),
-        ("cmd+f", "find on this page"),
-        ("cmd+t", "open a new tab"),
-        ("cmd+w", "close this tab or window"),
-        ("cmd+n", "new window or new document"),
-        ("cmd+s", "save"),
-        ("cmd+a", "select everything"),
-        ("cmd+c", "copy"),
-        ("cmd+v", "paste"),
-        ("cmd+z", "undo"),
-        ("cmd+m", "minimize this window"),
-        ("cmd+q", "quit this app"),
-        ("escape", "close a menu, popup or dialog"),
-        ("tab", "go to the next field"),
-        ("space", "play or pause, or tick the selected box"),
-        ("down", "move down one item"),
-        ("up", "move up one item"),
-        ("cmd+]", "go forward a page")
-    ]
 
     /// What Accessibility calls a kind of control, in words Jev reads, or
     /// nil for kinds that aren't clicked (groups, plain text, windows).
@@ -833,7 +818,7 @@ enum DottieJevDriverPlan {
     static func movesNeedingClearPick(_ move: Move) -> Bool {
         switch move {
         case .drag, .rightClick, .quickMacAction, .holdMouseDown: return true
-        case .pressKeys(let keys, _): return ["cmd+q", "cmd+w"].contains(keys)
+        case .pressKeys(let keys, _): return DottieJevQuickCommands.isRisky(keys: keys)
         default: return false
         }
     }
@@ -1068,6 +1053,7 @@ enum DottieJevDriver {
             let alreadyTriedSignatures = (triedSignaturesByScreen[screenKey] ?? [])
                 .union(openedSignaturesThisRound).union(failedSignaturesThisRound)
             let frontSiteHost = DottieReplayContext.current().siteHost
+            let frontAppBundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             let options = heldMouse.map { heldMouse in
                 DottieJevDriverPlan.optionsWhileHoldingMouse(heldLabel: heldMouse.label, screenTexts: screenTexts,
                                                              screenControls: screenControls, alreadyTriedSignatures: alreadyTriedSignatures)
@@ -1082,7 +1068,9 @@ enum DottieJevDriver {
                 taskText: taskText,
                 offersAppMemory: !hasRecalledAppMemory && appMemory.hasMemoryOfFrontApp(),
                 offersNextRound: jobMemory.hasRoundsLeft && !jobMemory.movesThisRound.isEmpty,
-                extraLeadingMoves: hintKeyMoves
+                extraLeadingMoves: hintKeyMoves,
+                isBrowserInFront: DottieBrowser.isBrowser(bundleIdentifier: frontAppBundleIdentifier),
+                frontAppBundleIdentifier: frontAppBundleIdentifier
             )
             let requestBody = DottieJevDriverPlan.requestBody(
                 goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options,
