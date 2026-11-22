@@ -36,12 +36,15 @@ struct JobMemoryTests {
 
     @Test func aRoundOnlyEndsAfterItDidSomething() {
         var memory = DottieJobMemory(totalRounds: 3)
-        #expect(!memory.finishRound())
+        let didFinishRound1 = memory.finishRound()
+        #expect(!didFinishRound1)
         memory.noteMove("clicked Like")
-        #expect(memory.finishRound())
+        let didFinishRound2 = memory.finishRound()
+        #expect(didFinishRound2)
         #expect(memory.currentRound == 2)
         #expect(memory.movesThisRound.isEmpty)
-        #expect(!memory.finishRound())
+        let didFinishRound3 = memory.finishRound()
+        #expect(!didFinishRound3)
     }
 
     @Test func theLastRoundCantBeFinishedAsARound() {
@@ -50,7 +53,8 @@ struct JobMemoryTests {
         memory.finishRound()
         memory.noteMove("b")
         #expect(!memory.hasRoundsLeft)
-        #expect(!memory.finishRound())
+        let didFinishRound4 = memory.finishRound()
+        #expect(!didFinishRound4)
         #expect(memory.allMoves == ["a", "b"])
     }
 
@@ -180,7 +184,8 @@ struct JobMemoryTests {
                 memory.noteMove(move.summary)
                 triedSignatures.insert(move.signature)
             case .roundDone:
-                #expect(memory.finishRound())
+                let didFinishRound5 = memory.finishRound()
+                #expect(didFinishRound5)
                 roundsEnded += 1
                 // Each round starts fresh: nothing struck off from the last.
                 triedSignatures = []
