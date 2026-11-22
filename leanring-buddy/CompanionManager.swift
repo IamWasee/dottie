@@ -2005,6 +2005,20 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// "No, use the search bar, it's faster" said or typed while a screen
+    /// job runs goes to that job as a hint (DottieScreenJobHints) instead
+    /// of starting a new turn. True when it was taken.
+    func passHintToRunningScreenJobIfGiven(_ text: String, inputKind: ConversationEntry.InputKind) -> Bool {
+        guard screenTaskRunner.isRunning, !DottieScreenJobQuestions.shared.isWaitingForAnswer,
+              DottieScreenJobHintPlan.isGuidance(text) else { return false }
+        DottieScreenJobHints.shared.add(text)
+        voiceState = .idle
+        conversationStore.append(userText: text, clickyText: "Trying your way.", inputKind: inputKind)
+        notchPresenter.showScreenTaskStep("trying your way", title: screenTaskTitle)
+        NSSound(named: "Pop")?.play()
+        return true
+    }
+
     /// Stops only the running job; the next waiting one starts.
     private func skipCurrentScreenTask() -> String {
         guard screenTaskRunner.isRunning else {

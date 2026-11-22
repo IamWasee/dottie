@@ -401,6 +401,25 @@ enum DottieScreenGoalTools: DottieToolModule {
                     return "no on-screen job is waiting for an answer right now."
                 }
                 return "passed it on; the job carries on. say okay in two or three words, nothing more."
+            },
+            DottieTool(
+                name: "guide_screen_job",
+                description: "While an on-screen job is running, pass the user's tip on how to do it (\"no, use the search bar, it's faster\", \"press command K\"). The job tries their way next and keeps it if it works. Use their words.",
+                parameters: [
+                    "type": "OBJECT",
+                    "properties": [
+                        "hint": ["type": "STRING", "description": "The user's tip, in their words."]
+                    ],
+                    "required": ["hint"]
+                ],
+                audiences: [.voice]
+            ) { arguments in
+                guard let hintText = arguments.dottieString("hint") else { return "no hint given." }
+                guard DottieScreenJobHints.shared.jobIsRunning else {
+                    return "no on-screen job is running right now, so there's nothing to guide."
+                }
+                DottieScreenJobHints.shared.add(hintText)
+                return "passed it on; the job tries their way next. say okay in two or three words, nothing more."
             }
         ]
     }

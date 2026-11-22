@@ -566,7 +566,7 @@ enum DottieScreenActionPerformer {
     }
 
     /// Quartz events use a top-left origin on the primary display.
-    private static func quartzPoint(fromAppKit appKitPoint: CGPoint) -> CGPoint {
+    static func quartzPoint(fromAppKit appKitPoint: CGPoint) -> CGPoint {
         let primaryDisplayHeight = NSScreen.screens.first?.frame.maxY ?? 0
         return CGPoint(x: appKitPoint.x, y: primaryDisplayHeight - appKitPoint.y)
     }

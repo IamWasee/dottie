@@ -176,6 +176,8 @@ struct JevDriverArmsTests {
                 movesSoFar.append(move.summary)
             case .finished:
                 finished = true
+            case .roundDone:
+                Issue.record("a job done once has no rounds")
             case .unsure:
                 Issue.record("a confident pick shouldn't hand over")
             }
