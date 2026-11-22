@@ -1541,8 +1541,16 @@ final class CompanionManager: ObservableObject {
                 let name = reference.lowercased()
                 return builtInAnchorFrames[name] != nil || builtInAnchorFrames.keys.contains(where: { name.hasPrefix($0 + ".") })
             }
-            let usesAnchors = usesPlanAnchors || usesCircledArea
-            if usesPlanAnchors && anchorFrames == nil {
+            var usesAnchors = usesPlanAnchors || usesCircledArea
+            // With a board open, writing tied to something on the screen
+            // goes on the board instead (under what's already written), so
+            // the board isn't left empty while the words cover the page.
+            if usesAnchors, let boardRect, !DottieTeaching.drawsOnScreenWhileBoardIsOpen(step) {
+                step = step.replacingPoints([DottieTeaching.boardPointBelowWrittenText(boardRect: boardRect, writtenTextRects: occupiedTextRects)])
+                usesAnchors = false
+                DottieLog.notice("✏️ Text tied to the screen written on the board instead")
+            }
+            if usesPlanAnchors && usesAnchors && anchorFrames == nil {
                 notchPresenter.showScreenTaskStep("finding it on your screen", title: "drawing")
                 anchorFrames = await anchorLookup?.value ?? [:]
                 notchPresenter.endScreenTask()

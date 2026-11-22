@@ -151,6 +151,35 @@ enum DottieTeaching {
         func replacingText(_ newText: String) -> Step {
             Step(kind: kind, points: points, text: newText, ink: ink, size: size, caption: caption, say: say, range: range, style: style)
         }
+
+        /// The same step placed somewhere else.
+        func replacingPoints(_ newPoints: [String]) -> Step {
+            Step(kind: kind, points: newPoints, text: text, ink: ink, size: size, caption: caption, say: say, range: range, style: style)
+        }
+    }
+
+    /// Whether a step that names an anchor on the screen is drawn on the
+    /// screen while a board is open. Marks (a circle, an arrow, a box)
+    /// point at the real thing on the screen; written text belongs on the
+    /// board. In celly's screenshots text tied to an anchor was written
+    /// over the textbook page beside an empty board.
+    static func drawsOnScreenWhileBoardIsOpen(_ step: Step) -> Bool {
+        step.kind != .text
+    }
+
+    /// A board point ("x,y", 0-1000) at the left margin, one line below
+    /// the lowest text already on the board, or near the top when the
+    /// board has no text yet. Stays on the board.
+    static func boardPointBelowWrittenText(boardRect: CGRect, writtenTextRects: [CGRect]) -> String {
+        let leftMargin = 60
+        let boardTextRects = writtenTextRects.filter { boardRect.intersects($0) }
+        guard let lowestTextBottom = boardTextRects.map(\.minY).min(), boardRect.height > 0 else {
+            return "\(leftMargin),80"
+        }
+        // Board y runs down from the top; AppKit's runs up.
+        let gapBelowText: CGFloat = 40
+        let nextLineY = (boardRect.maxY - lowestTextBottom + gapBelowText) / boardRect.height * 1000
+        return "\(leftMargin),\(Int(min(max(nextLineY, 80), 950).rounded()))"
     }
 
     struct Plan {
@@ -460,43 +489,113 @@ enum DottieTeaching {
     /// How far written text keeps from the board's edges.
     static let boardTextPadding: CGFloat = 16
 
-    /// Text never runs off the board: a line too wide for it is written
-    /// smaller (not below 12 pt), and any line past an edge is moved back
-    /// inside. Strokes are already inside, since board positions are
-    /// clamped to 0-1000.
+    /// Text never runs off the board: a line too wide for it is wrapped
+    /// onto more lines at the same size (a single word still too wide is
+    /// written smaller, not below 12 pt), and any line past an edge is
+    /// moved back inside. Strokes are already inside, since board
+    /// positions are clamped to 0-1000.
     static func keptInsideBoard(_ drawn: DrawnStep, boardRect: CGRect) -> DrawnStep {
         let usableArea = boardRect.insetBy(dx: boardTextPadding, dy: boardTextPadding)
         guard usableArea.width > 0, usableArea.height > 0 else { return drawn }
         var keptInside = drawn
         var movedOnlyText = true
-        keptInside.figures = drawn.figures.map { figure in
+        keptInside.figures = drawn.figures.flatMap { figure -> [DottieFigure] in
             guard case .text(let text, let origin, let fontSize) = figure.shape else {
                 movedOnlyText = false
-                return figure
+                return [figure]
             }
-            var fittedFontSize = fontSize
-            let writtenWidth = DottieFigure.estimatedTextWidth(text, fontSize: fontSize)
-            if writtenWidth > usableArea.width {
-                fittedFontSize = max(12, fontSize * usableArea.width / writtenWidth)
+            let lines = wrappedLines(text, fontSize: fontSize, maxWidth: usableArea.width)
+            guard lines.count > 1 || lines.first != text || !usableArea.contains(textLineRect(text, origin: origin, fontSize: fontSize)) else {
+                return [figure]
             }
-            let fittedWidth = DottieFigure.estimatedTextWidth(text, fontSize: fittedFontSize)
-            // The origin is the middle of the text's left edge.
-            let highestOriginX = max(usableArea.maxX - fittedWidth, usableArea.minX)
-            let fittedOriginX = min(max(origin.x, usableArea.minX), highestOriginX)
-            let halfHeight = fittedFontSize * 0.6
-            let fittedOriginY = min(max(origin.y, usableArea.minY + halfHeight), usableArea.maxY - halfHeight)
-            let fittedOrigin = CGPoint(x: fittedOriginX, y: fittedOriginY)
-            guard fittedOrigin != origin || fittedFontSize != fontSize else { return figure }
-            return DottieFigure(shape: .text(text, origin: fittedOrigin, fontSize: fittedFontSize),
-                                ink: figure.ink, lineWidth: figure.lineWidth, delay: figure.delay, drawDuration: figure.drawDuration)
+            let lineHeight = fontSize * boardLineSpacing
+            // Lines go down from where the text started; a block that would
+            // run past the bottom starts higher instead.
+            let lowestFirstLineY = usableArea.minY + fontSize * 0.6 + lineHeight * CGFloat(lines.count - 1)
+            let firstLineY = min(max(origin.y, lowestFirstLineY), usableArea.maxY - fontSize * 0.6)
+            return lines.enumerated().map { lineIndex, lineText in
+                var lineFontSize = fontSize
+                let lineWidth = DottieFigure.estimatedTextWidth(lineText, fontSize: fontSize)
+                if lineWidth > usableArea.width {
+                    lineFontSize = max(12, fontSize * usableArea.width / lineWidth)
+                }
+                let fittedWidth = DottieFigure.estimatedTextWidth(lineText, fontSize: lineFontSize)
+                // The origin is the middle of the text's left edge.
+                let highestOriginX = max(usableArea.maxX - fittedWidth, usableArea.minX)
+                let lineOrigin = CGPoint(x: min(max(origin.x, usableArea.minX), highestOriginX),
+                                         y: firstLineY - lineHeight * CGFloat(lineIndex))
+                // The pen writes the lines one after another in the time the
+                // whole text had.
+                let lineDuration = figure.drawDuration / Double(lines.count)
+                return DottieFigure(shape: .text(lineText, origin: lineOrigin, fontSize: lineFontSize),
+                                    ink: figure.ink, lineWidth: figure.lineWidth,
+                                    delay: figure.delay + lineDuration * Double(lineIndex), drawDuration: lineDuration)
+            }
         }
-        // A text step's pen runs along its one line; follow it there.
-        if movedOnlyText, keptInside.figures.count == 1, case .text(let text, let origin, let fontSize) = keptInside.figures[0].shape {
-            let baselineY = origin.y - fontSize * 0.3
-            keptInside.penPath = [CGPoint(x: origin.x, y: baselineY),
-                                  CGPoint(x: origin.x + DottieFigure.estimatedTextWidth(text, fontSize: fontSize), y: baselineY)]
+        // A text step's pen runs along its lines; follow them there.
+        if movedOnlyText {
+            keptInside.penPath = keptInside.figures.flatMap { figure -> [CGPoint] in
+                guard case .text(let text, let origin, let fontSize) = figure.shape else { return [] }
+                let baselineY = origin.y - fontSize * 0.3
+                return [CGPoint(x: origin.x, y: baselineY),
+                        CGPoint(x: origin.x + DottieFigure.estimatedTextWidth(text, fontSize: fontSize), y: baselineY)]
+            }
         }
         return keptInside
+    }
+
+    /// Space from one wrapped line to the next, in font sizes.
+    static let boardLineSpacing: CGFloat = 1.3
+
+    /// The space one written line takes, trimmed like textRects.
+    private static func textLineRect(_ text: String, origin: CGPoint, fontSize: CGFloat) -> CGRect {
+        CGRect(x: origin.x, y: origin.y - fontSize * 0.6, width: DottieFigure.estimatedTextWidth(text, fontSize: fontSize), height: fontSize * 1.2)
+    }
+
+    /// Text split into lines no wider than maxWidth, breaking only at
+    /// spaces outside color markings ({red:…}) and bold (**…**), so a
+    /// marking is never cut in half. A word wider than maxWidth gets a
+    /// line of its own.
+    static func wrappedLines(_ text: String, fontSize: CGFloat, maxWidth: CGFloat) -> [String] {
+        guard DottieFigure.estimatedTextWidth(text, fontSize: fontSize) > maxWidth else { return [text] }
+        // Words, where a marking with spaces inside counts as one word.
+        var words: [String] = []
+        var currentWord = ""
+        var braceDepth = 0
+        var isInsideBold = false
+        var characterIndex = text.startIndex
+        while characterIndex < text.endIndex {
+            let character = text[characterIndex]
+            if character == "{" { braceDepth += 1 }
+            if character == "}" { braceDepth = max(braceDepth - 1, 0) }
+            if character == "*", text.index(after: characterIndex) < text.endIndex, text[text.index(after: characterIndex)] == "*" {
+                isInsideBold.toggle()
+                currentWord.append("**")
+                characterIndex = text.index(characterIndex, offsetBy: 2)
+                continue
+            }
+            if character == " ", braceDepth == 0, !isInsideBold {
+                if !currentWord.isEmpty { words.append(currentWord) }
+                currentWord = ""
+            } else {
+                currentWord.append(character)
+            }
+            characterIndex = text.index(after: characterIndex)
+        }
+        if !currentWord.isEmpty { words.append(currentWord) }
+        var lines: [String] = []
+        var currentLine = ""
+        for word in words {
+            let candidateLine = currentLine.isEmpty ? word : currentLine + " " + word
+            if currentLine.isEmpty || DottieFigure.estimatedTextWidth(candidateLine, fontSize: fontSize) <= maxWidth {
+                currentLine = candidateLine
+            } else {
+                lines.append(currentLine)
+                currentLine = word
+            }
+        }
+        if !currentLine.isEmpty { lines.append(currentLine) }
+        return lines.isEmpty ? [text] : lines
     }
 
     // MARK: - Tool declaration

@@ -284,6 +284,7 @@ App Info.plist keys: `ClickyWorkerBaseURL`, `ClickyAppSharedSecret`, `Onboarding
 | `DottieLearningPhrases.swift` | ~130 | "Watch me for 30 seconds", "create a smart replay of me doing this" and "done" / "stop watching", caught on the Mac before any model. Teaching Dottie by showing her is the main thing she's for, and in round 1079 these asks went to the talker and Claude, which answered as if it were watching without ever starting watch_and_learn or smart_replays. Foundation only, so the matching can be unit tested. |
 | `DottieAskUsage.swift` | ~120 | Which model answered each ask, its tokens, how long it took and what it cost. The Worker puts a `dottieUsage` object on every answer (provider, model, tokens, seconds, estimated dollars, or null when the model has no price set); Jev answers are counted here at its flat price. |
 | `ScreenJobStopReason.swift` | ~42 | Why a screen job stopped before it finished, and what the notch says about it, so a stopped job always tells the user where it got to. Foundation only, so it can be unit tested. |
+| `DottieTaskMatching.swift` | ~67 | Whether something Dottie learned before (a watched how-to, a screen job's learned plan) fits the job in front of her. Both used to match on any shared words, so "open my bull and shit folder" and a Notes job both loaded the plan "Open Finder and show the Downloads folder": they share "open", "and" and "folder". Matching now counts only the words that say what the job is about. |
 
 ## Build & Run
 

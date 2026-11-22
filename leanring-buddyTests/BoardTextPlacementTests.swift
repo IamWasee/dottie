@@ -42,9 +42,62 @@ struct BoardTextPlacementTests {
         #expect(textBounds.minX >= board.minX + DottieTeaching.boardTextPadding - 0.5)
     }
 
-    @Test func aLineTooWideForTheBoardIsWrittenSmaller() {
+    @Test func aLineTooWideForTheBoardWrapsOntoMoreLinesAtTheSameSize() {
         let longSentence = "The demand curve shifts to the left because buyers want less at every single price on the board"
-        let texts = textFigures(drawn(["kind": "text", "points": ["0,500"], "text": longSentence, "size": "large"], in: boardSpace()))
+        let drawnStep = drawn(["kind": "text", "points": ["0,500"], "text": longSentence, "size": "large"], in: boardSpace())
+        let texts = textFigures(drawnStep)
+        #expect(texts.count > 1)
+        #expect(texts.allSatisfy { $0.fontSize == 38 })
+        #expect(texts.map(\.text).joined(separator: " ") == longSentence)
+        for text in texts {
+            #expect(board.contains(text.bounds.insetBy(dx: 0, dy: text.bounds.height * 0.2)), "a wrapped line ran off the board")
+        }
+        // Each line sits below the one before, and none overlap.
+        for lineIndex in 1..<texts.count {
+            #expect(texts[lineIndex].origin.y < texts[lineIndex - 1].origin.y)
+            let upperRect = texts[lineIndex - 1].bounds.insetBy(dx: 0, dy: texts[lineIndex - 1].bounds.height * 0.2)
+            let lowerRect = texts[lineIndex].bounds.insetBy(dx: 0, dy: texts[lineIndex].bounds.height * 0.2)
+            #expect(!upperRect.intersects(lowerRect))
+        }
+        // The lines are written one after another, in the text's own time.
+        let figures = drawnStep?.figures ?? []
+        for lineIndex in 1..<figures.count {
+            #expect(figures[lineIndex].delay > figures[lineIndex - 1].delay)
+        }
+        // The pen follows every line.
+        #expect(drawnStep?.penPath.count == texts.count * 2)
+    }
+
+    @Test func wrappedTextAtTheBottomStartsHigherSoItStaysOnTheBoard() {
+        let longSentence = "Light bends toward the normal when it slows down entering glass from air at an angle"
+        let texts = textFigures(drawn(["kind": "text", "points": ["0,1000"], "text": longSentence], in: boardSpace()))
+        #expect(texts.count > 1)
+        for text in texts {
+            #expect(text.origin.y - text.fontSize * 0.6 >= board.minY + DottieTeaching.boardTextPadding - 0.5)
+        }
+    }
+
+    @Test func wrappingBreaksAtSpacesButNeverInsideAMarking() {
+        let markedText = "Total internal reflection happens when {red:the angle is past critical} and **light stays inside** the glass"
+        let lines = DottieTeaching.wrappedLines(markedText, fontSize: 26, maxWidth: 260)
+        #expect(lines.count > 1)
+        #expect(lines.joined(separator: " ") == markedText)
+        for line in lines {
+            #expect(line.filter { $0 == "{" }.count == line.filter { $0 == "}" }.count, "\(line) cuts a color marking")
+            #expect(line.components(separatedBy: "**").count % 2 == 1, "\(line) cuts a bold marking")
+        }
+    }
+
+    @Test func shortTextAndOneLongWordAreNotSplit() {
+        #expect(DottieTeaching.wrappedLines("Snell's law", fontSize: 26, maxWidth: 400) == ["Snell's law"])
+        let longWord = "pneumonoultramicroscopicsilicovolcanoconiosis"
+        #expect(DottieTeaching.wrappedLines(longWord, fontSize: 26, maxWidth: 200) == [longWord])
+        #expect(DottieTeaching.wrappedLines("", fontSize: 26, maxWidth: 200) == [""])
+    }
+
+    @Test func aWordTooWideForTheBoardIsWrittenSmallerOnItsOwnLine() {
+        let longWord = "pneumonoultramicroscopicsilicovolcanoconiosis"
+        let texts = textFigures(drawn(["kind": "text", "points": ["0,500"], "text": longWord, "size": "large"], in: boardSpace()))
         #expect(texts.count == 1)
         #expect(texts[0].fontSize < 38)
         #expect(texts[0].fontSize >= 12)
@@ -87,6 +140,47 @@ struct BoardTextPlacementTests {
     @Test func aTextStepsPenFollowsItsMovedLine() {
         let drawnStep = drawn(["kind": "text", "points": ["950,500"], "text": "Equilibrium point"], in: boardSpace())
         #expect(drawnStep?.penPath.allSatisfy { $0.x <= board.maxX } == true)
+    }
+
+    // MARK: Writing tied to the screen goes on an open board
+
+    @Test func onlyWrittenTextMovesToTheBoardMarksStayOnTheScreen() {
+        let plan = DottieTeaching.Plan(arguments: [
+            "anchors": [["name": "prism", "describe": "the prism diagram"]],
+            "steps": [
+                ["kind": "text", "points": ["prism.left"], "text": "White light splits"],
+                ["kind": "circle", "points": ["prism"]],
+                ["kind": "arrow", "points": ["500,500", "prism.left"]]
+            ]
+        ])!
+        #expect(!DottieTeaching.drawsOnScreenWhileBoardIsOpen(plan.steps[0]))
+        #expect(DottieTeaching.drawsOnScreenWhileBoardIsOpen(plan.steps[1]))
+        #expect(DottieTeaching.drawsOnScreenWhileBoardIsOpen(plan.steps[2]))
+    }
+
+    @Test func textMovedToAnEmptyBoardStartsNearTheTopLeft() {
+        #expect(DottieTeaching.boardPointBelowWrittenText(boardRect: board, writtenTextRects: []) == "60,80")
+        // Text elsewhere on the screen doesn't count.
+        let textOnTheScreen = CGRect(x: 0, y: 0, width: 100, height: 30)
+        #expect(DottieTeaching.boardPointBelowWrittenText(boardRect: board, writtenTextRects: [textOnTheScreen]) == "60,80")
+    }
+
+    @Test func textMovedToTheBoardGoesBelowWhatIsWritten() {
+        // A line whose bottom is 300 points below the board's top.
+        let writtenLine = CGRect(x: 850, y: board.maxY - 300, width: 200, height: 30)
+        let point = DottieTeaching.boardPointBelowWrittenText(boardRect: board, writtenTextRects: [writtenLine])
+        let expectedY = Int(((300 + 40) / board.height * 1000).rounded())
+        #expect(point == "60,\(expectedY)")
+        // A step placed there draws on the board, below the line.
+        let plan = DottieTeaching.Plan(arguments: ["steps": [["kind": "text", "points": [point], "text": "Next line"]]])!
+        let texts = textFigures(DottieTeaching.draw(plan.steps[0], in: boardSpace()))
+        #expect(texts.first.map { $0.origin.y < writtenLine.minY } == true)
+        #expect(texts.first.map { board.contains($0.origin) } == true)
+    }
+
+    @Test func aBoardFullOfTextStillPlacesTheNextLineOnIt() {
+        let lineAtTheBottom = CGRect(x: 850, y: board.minY + 2, width: 200, height: 30)
+        #expect(DottieTeaching.boardPointBelowWrittenText(boardRect: board, writtenTextRects: [lineAtTheBottom]) == "60,950")
     }
 
     // MARK: Labels keep off lines
