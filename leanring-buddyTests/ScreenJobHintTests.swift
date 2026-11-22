@@ -92,7 +92,7 @@ struct ScreenJobHintTests {
         #expect(options.first?.move == hintMove)
     }
 
-    @Test func theRunningJobsHintsAreHandedOutOnce() {
+    @MainActor @Test func theRunningJobsHintsAreHandedOutOnce() {
         let hints = DottieScreenJobHints()
         hints.add("use the search bar")
         #expect(hints.takeNew().map(\.text) == ["use the search bar"])
