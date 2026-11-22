@@ -172,12 +172,12 @@ import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fitt
 import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
-import { splitPassthroughKey, usageRefusal } from "./usageLimits";
+import { installSpendResponse, recordInstallSpend, splitPassthroughKey, usageRefusal } from "./usageLimits";
 export { PhoneRelay } from "./phoneRelay";
 export { InstallUsage } from "./usageLimits";
 
 export default {
-  async fetch(incomingRequest: Request, env: Env): Promise<Response> {
+  async fetch(incomingRequest: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(incomingRequest.url);
 
     const request = await requestWithinSizeLimit(incomingRequest, maximumBodyBytes(url));
@@ -202,7 +202,7 @@ export default {
       const passthroughUsageRefusal = await usageRefusal(request, url, env);
       if (passthroughUsageRefusal) return passthroughUsageRefusal;
       try {
-        return await handleGeminiPassthrough(request, url, env);
+        return await withSpendRecorded(await handleGeminiPassthrough(request, url, env), request, url, env, ctx);
       } catch (error) {
         console.error(`[/gemini] Unhandled error:`, error);
         return jsonResponse({ error: SERVER_ERROR_MESSAGE }, 500);
@@ -245,6 +245,11 @@ export default {
         return await handleSearch(url);
       }
 
+      // This install's own spend for the last 31 days (asks, tokens, estimated dollars).
+      if (request.method === "GET" && url.pathname === "/usage") {
+        return await installSpendResponse(request, url, env);
+      }
+
       if (request.method === "GET" && url.pathname === "/config") {
         return jsonResponse({
           groq: env.GROQ_API_KEY
@@ -262,7 +267,7 @@ export default {
       }
 
       if (url.pathname === "/chat") {
-        return await handleChat(request, env);
+        return await withSpendRecorded(await handleChat(request, env), request, url, env, ctx);
       }
 
       if (url.pathname === "/jev") {
@@ -276,6 +281,19 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+/**
+ * Hands the answer back and adds what it cost to the install's spend for
+ * the day, after the answer has gone (or right away without a context, in
+ * tests).
+ */
+async function withSpendRecorded(answer: Response, request: Request, url: URL, env: Env, ctx: ExecutionContext | undefined): Promise<Response> {
+  if (!env.INSTALL_USAGE || !answer.ok) return answer;
+  const recording = recordInstallSpend(answer.clone(), request, url, env);
+  if (ctx) ctx.waitUntil(recording);
+  else await recording;
+  return answer;
+}
 
 /**
  * Answers a chat request in Gemini's request and streaming format (the app

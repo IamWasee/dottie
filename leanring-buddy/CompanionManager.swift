@@ -2095,7 +2095,11 @@ final class CompanionManager: ObservableObject {
             let handBackText = jobSucceeded
                 ? "Dottie did the on-screen part you asked for (\(taskText.prefix(300))). Result: \(resultText)\nCarry on and finish the task."
                 : "Dottie tried the on-screen part you asked for (\(taskText.prefix(300))) and \(resultText). Try another route if there is one, otherwise finish with what you have and say what's missing."
-            _ = clickyRoster.sendOrQueueMessage(handBackText, to: requestingHelper)
+            if !clickyRoster.sendOrQueueFollowUp(handBackText, to: requestingHelper) {
+                // The helper's task took all its turns: the user hears the
+                // result instead, and can tell the helper to carry on.
+                speakScreenTaskResult(taskText: taskText, resultText: resultText)
+            }
             return
         }
         // A smart replay's closing line only follows a run that worked.

@@ -307,6 +307,29 @@ final class ClickyRoster: ObservableObject {
     /// many tasks are ahead of it (0 when it started right away).
     @discardableResult
     func sendOrQueueMessage(_ messageText: String, to agent: ClickyAgent) -> Int {
+        helperTaskTurnCap.noteTaskStarted(agentID: agent.id)
+        return sendOrQueue(messageText, to: agent)
+    }
+
+    /// Turns each helper's current task has taken (DottieHelperTaskTurnCap).
+    private var helperTaskTurnCap = DottieHelperTaskTurnCap()
+
+    /// A follow-up Dottie sends a helper by herself (a screen job's result,
+    /// an installed tool). Returns false, and notes it in the helper's chat,
+    /// when the task already took its 8 turns.
+    @discardableResult
+    func sendOrQueueFollowUp(_ messageText: String, to agent: ClickyAgent) -> Bool {
+        guard helperTaskTurnCap.allowFollowUp(agentID: agent.id) else {
+            DottieLog.notice("🛑 A helper task reached its \(public: DottieHelperTaskTurnCap.maximumTurnsPerTask)-turn limit; the follow-up waits for the user")
+            appendTranscriptItem(.status, text: DottieHelperTaskTurnCap.stoppedNote(heldBackMessage: messageText), to: agent.id)
+            return false
+        }
+        sendOrQueue(messageText, to: agent)
+        return true
+    }
+
+    @discardableResult
+    private func sendOrQueue(_ messageText: String, to agent: ClickyAgent) -> Int {
         guard isRunning(agent) else {
             sendMessage(messageText, to: agent)
             return 0
@@ -921,7 +944,7 @@ final class ClickyRoster: ObservableObject {
         appendTranscriptItem(.status, text: "Asked you to install \(requestedTool)", to: agentID)
         DottieToolInstaller.shared.handleHelperRequest(requestedTool, helperName: requestingAgent.name) { [weak self] followUpMessage in
             guard let self, let agentToMessage = self.agent(withID: agentID) else { return }
-            self.sendOrQueueMessage(followUpMessage, to: agentToMessage)
+            self.sendOrQueueFollowUp(followUpMessage, to: agentToMessage)
         }
     }
 
