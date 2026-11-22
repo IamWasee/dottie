@@ -190,6 +190,10 @@ enum DottieJevDriverPlan {
         let probability: Double
         let confidence: Double
         let doneProbability: Double?
+        /// Jev's check of the move before this one, on this screen: how
+        /// likely it worked and moved the request forward. Nil on the
+        /// first step or when Jev didn't answer the check.
+        var lastMoveWorkedProbability: Double? = nil
     }
 
     enum Decision: Equatable {
@@ -202,6 +206,11 @@ enum DottieJevDriverPlan {
 
     static let choiceQuestionName = "next_move"
     static let doneQuestionName = "done"
+    static let stepCheckQuestionName = "last_move_worked"
+    /// Jev's step check below this means the last move didn't work.
+    static let lastMoveWorkedThreshold = 0.3
+    /// This many failed step checks in a row hand the job over.
+    static let maximumFailedStepChecks = 2
     /// Jev takes up to 255 options; this many screen texts leaves room.
     static let maximumScreenTextOptions = 120
     /// Every option together stays under Jev's 255; screen texts give way first.
@@ -651,6 +660,68 @@ enum DottieJevDriverPlan {
     /// Jev's request: the goal and what's been done as state, the moves as
     /// one choice question and "is it done?" as a yes/no beside it. The
     /// screenshot asset is added by DottieJev.answer(to:screenImage:).
+    // MARK: Step checks
+
+    /// Moves that open something (a site, a search, an app). Once one has
+    /// worked it isn't offered again in the same round: on Wasee's Mac a
+    /// job opened YouTube, then a YouTube search in a new tab, clicked the
+    /// first video, then opened the same search in yet another tab,
+    /// because the open move came back as soon as the screen changed.
+    static func opensOnlyOnce(_ move: Move) -> Bool {
+        switch move {
+        case .openSite, .searchWeb, .openApp: return true
+        default: return false
+        }
+    }
+
+    /// Whether Jev's step check says the last move didn't work.
+    static func lastMoveFailed(_ answer: Answer) -> Bool {
+        guard let lastMoveWorkedProbability = answer.lastMoveWorkedProbability else { return false }
+        return lastMoveWorkedProbability < lastMoveWorkedThreshold
+    }
+
+    /// The question Jev answers about the last move, looking at the screen
+    /// it left, in the same call that picks the next move (no extra call).
+    static func stepCheckInstructions(lastMoveSummary: String) -> String {
+        "Dottie's last move was: \(lastMoveSummary). Looking at this screen, did that move work and bring the user's request closer: what it was meant to open, show or change is showing now, and nothing was opened twice or went somewhere else?"
+    }
+
+    /// A site opened while the browser in front already shows the same
+    /// site, or a page this job opened, replaces that tab instead of
+    /// opening another one. A tab the user had open on another site is
+    /// left alone.
+    static func opensInSameTab(address: String, frontSiteHost: String?, hostsOpenedByThisJob: Set<String>) -> Bool {
+        guard let frontSiteHost = frontSiteHost?.lowercased(), !frontSiteHost.isEmpty else { return false }
+        if isSiteAlreadyOpen(address, frontSiteHost: frontSiteHost) { return true }
+        let bareFrontHost = frontSiteHost.hasPrefix("www.") ? String(frontSiteHost.dropFirst(4)) : frontSiteHost
+        return hostsOpenedByThisJob.contains { openedHost in
+            let bareOpenedHost = openedHost.hasPrefix("www.") ? String(openedHost.dropFirst(4)) : openedHost
+            return bareOpenedHost == bareFrontHost
+        }
+    }
+
+    /// The Google search page for a piece of the request.
+    static func searchAddress(for text: String) -> String {
+        var searchComponents = URLComponents(string: "https://www.google.com/search")
+        searchComponents?.queryItems = [URLQueryItem(name: "q", value: text)]
+        return searchComponents?.url?.absoluteString ?? "google.com"
+    }
+
+    /// The host a move opens in the browser, if it opens a page.
+    static func openedHost(of move: Move) -> String? {
+        switch move {
+        case .openSite(let address): return host(ofAddress: address)
+        case .searchWeb(let text): return host(ofAddress: searchAddress(for: text))
+        default: return nil
+        }
+    }
+
+    /// The host an open move goes to ("youtube.com/results?…" → "youtube.com").
+    static func host(ofAddress address: String) -> String? {
+        let withScheme = address.contains("://") ? address : "https://" + address
+        return URL(string: withScheme)?.host?.lowercased()
+    }
+
     static func requestBody(
         goal: String,
         movesSoFar: [String],
@@ -658,7 +729,8 @@ enum DottieJevDriverPlan {
         options: [Option],
         jobMemory: DottieJobMemory? = nil,
         hintsText: String = "",
-        isHoldingMouse: Bool = false
+        isHoldingMouse: Bool = false,
+        lastMoveSummary: String? = nil
     ) -> [String: Any] {
         var state = "The user asked Dottie, their Mac assistant, to do this on their Mac: \(goal)\n\(DottieJevProtocol.screenshotReferenceLine) (their screen right now)."
         if let jobMemory {
@@ -683,21 +755,28 @@ enum DottieJevDriverPlan {
         for option in options {
             criteria[option.key] = option.move.description
         }
+        var questions: [String: Any] = [
+            choiceQuestionName: [
+                "type": "choice",
+                "instructions": "Pick the one next move that gets the user's request done, the way a person sitting at this Mac would do it next. If the app or site isn't open yet, open it first. Never redo a step that already worked: carry on from what this screen shows. Click a text box before typing into it. A keyboard shortcut or a named button is often quickest; pick the icon option only when the thing to click has no words or name.",
+                "criteria": criteria
+            ],
+            doneQuestionName: [
+                "type": "noul",
+                "instructions": jobMemory.map { $0.hasRoundsLeft } == true
+                    ? "Is round \(jobMemory?.currentRound ?? 1) of the task finished on this screen?"
+                    : "Is the user's request fully done on this screen already?"
+            ]
+        ]
+        if let lastMoveSummary, !lastMoveSummary.isEmpty {
+            questions[stepCheckQuestionName] = [
+                "type": "noul",
+                "instructions": stepCheckInstructions(lastMoveSummary: lastMoveSummary)
+            ]
+        }
         return [
             "state": state,
-            "questions": [
-                choiceQuestionName: [
-                    "type": "choice",
-                    "instructions": "Pick the one next move that gets the user's request done, the way a person sitting at this Mac would do it next. If the app or site isn't open yet, open it first. Click a text box before typing into it. A keyboard shortcut or a named button is often quickest; pick the icon option only when the thing to click has no words or name.",
-                    "criteria": criteria
-                ],
-                doneQuestionName: [
-                    "type": "noul",
-                    "instructions": jobMemory.map { $0.hasRoundsLeft } == true
-                        ? "Is round \(jobMemory?.currentRound ?? 1) of the task finished on this screen?"
-                        : "Is the user's request fully done on this screen already?"
-                ]
-            ]
+            "questions": questions
         ]
     }
 
@@ -713,7 +792,10 @@ enum DottieJevDriverPlan {
         let confidence = number(choiceAnswer["confidence"]) ?? 0
         let doneAnswer = answers[doneQuestionName] as? [String: Any]
         let doneProbability = number(doneAnswer?["noul"]) ?? number(doneAnswer?["probability"]) ?? number(doneAnswer?["value"])
-        return Answer(move: chosenOption.move, probability: probability, confidence: confidence, doneProbability: doneProbability)
+        let stepCheckAnswer = answers[stepCheckQuestionName] as? [String: Any]
+        let lastMoveWorkedProbability = number(stepCheckAnswer?["noul"]) ?? number(stepCheckAnswer?["probability"]) ?? number(stepCheckAnswer?["value"])
+        return Answer(move: chosenOption.move, probability: probability, confidence: confidence, doneProbability: doneProbability,
+                      lastMoveWorkedProbability: lastMoveWorkedProbability)
     }
 
     /// `hasRoundsLeft`: a repeated job with rounds still to do, where
@@ -827,7 +909,8 @@ enum DottieJevDriver {
     struct Actions {
         let progress: @MainActor (_ stepNumber: Int, _ line: String) -> Void
         let click: @MainActor (_ point: CGPoint, _ label: String, _ clickCount: Int, _ isRightClick: Bool, _ screen: DottieDisplayCapture.Screenshot, _ stepNumber: Int) async -> Void
-        let openSite: @MainActor (_ address: String, _ stepNumber: Int) async -> Void
+        /// `inSameTab`: replace the tab in front instead of opening another.
+        let openSite: @MainActor (_ address: String, _ stepNumber: Int, _ inSameTab: Bool) async -> Void
     }
 
     private static let finishedCountKey = "DottieJevDriverFinishedCount"
@@ -869,6 +952,15 @@ enum DottieJevDriver {
         var heldMouse: (label: String, centerX: Double, centerY: Double)?
         // Keys the user's hints name, offered first.
         var hintKeyMoves: [DottieJevDriverPlan.Move] = []
+        // Step checks: the last move Jev made, the open moves that worked
+        // this round (never offered again), moves Jev's check said failed
+        // (struck off for the round, whatever the screen), and the hosts
+        // this job opened (later pages there replace that tab).
+        var lastMove: DottieJevDriverPlan.Move?
+        var openedSignaturesThisRound = Set<String>()
+        var failedSignaturesThisRound = Set<String>()
+        var failedStepChecksInARow = 0
+        var hostsOpenedByThisJob = Set<String>()
         // However this ends (finished, handed over, stopped), a held button is let go.
         defer { DottieMouseHold.releaseNow(reason: "the Jev part of the job ended") }
 
@@ -961,8 +1053,10 @@ enum DottieJevDriver {
                 let move = DottieJevDriverPlan.Move.click(label: visibleText.text, centerX: visibleText.centerX, centerY: visibleText.centerY)
                 labelsClickedFromMemory.insert(DottieAppMemoryPlan.comparableWords(rememberedClick.label))
                 DottieLog.notice("🎯 App memory clicked a remembered button without asking Jev")
-                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
+                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions,
+                              frontSiteHost: nil, hostsOpenedByThisJob: hostsOpenedByThisJob)
                 noteDone(move)
+                lastMove = move
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
                 if let frontPageIdentity {
@@ -971,7 +1065,9 @@ enum DottieJevDriver {
                 await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
                 continue
             }
-            let alreadyTriedSignatures = triedSignaturesByScreen[screenKey] ?? []
+            let alreadyTriedSignatures = (triedSignaturesByScreen[screenKey] ?? [])
+                .union(openedSignaturesThisRound).union(failedSignaturesThisRound)
+            let frontSiteHost = DottieReplayContext.current().siteHost
             let options = heldMouse.map { heldMouse in
                 DottieJevDriverPlan.optionsWhileHoldingMouse(heldLabel: heldMouse.label, screenTexts: screenTexts,
                                                              screenControls: screenControls, alreadyTriedSignatures: alreadyTriedSignatures)
@@ -981,7 +1077,7 @@ enum DottieJevDriver {
                 siteAddresses: siteAddresses,
                 appNames: appNames,
                 alreadyTriedSignatures: alreadyTriedSignatures,
-                frontSiteHost: DottieReplayContext.current().siteHost,
+                frontSiteHost: frontSiteHost,
                 screenControls: screenControls,
                 taskText: taskText,
                 offersAppMemory: !hasRecalledAppMemory && appMemory.hasMemoryOfFrontApp(),
@@ -990,13 +1086,38 @@ enum DottieJevDriver {
             )
             let requestBody = DottieJevDriverPlan.requestBody(
                 goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options,
-                jobMemory: jobMemory, hintsText: DottieScreenJobHints.shared.stateText, isHoldingMouse: heldMouse != nil
+                jobMemory: jobMemory, hintsText: DottieScreenJobHints.shared.stateText, isHoldingMouse: heldMouse != nil,
+                lastMoveSummary: lastMove?.summary
             )
             guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
                   let answer = DottieJevDriverPlan.answer(fromAnswer: answerData, options: options) else {
                 return movesSoFar.isEmpty ? .notTried : handOver("Jev didn't answer.")
             }
             if Task.isCancelled { return .handedOver(note: "") }
+
+            // Jev's step check of the last move, from this same answer.
+            if let checkedMove = lastMove {
+                if DottieJevDriverPlan.lastMoveFailed(answer) {
+                    failedStepChecksInARow += 1
+                    failedSignaturesThisRound.insert(checkedMove.signature)
+                    openedSignaturesThisRound.remove(checkedMove.signature)
+                    if let lastIndex = movesSoFar.indices.last { movesSoFar[lastIndex] += " (Jev's check: it didn't work)" }
+                    DottieLog.notice("🎯 Jev's step check: the last move didn't work")
+                    if failedStepChecksInARow >= DottieJevDriverPlan.maximumFailedStepChecks {
+                        return handOver("Jev's step check said the last \(failedStepChecksInARow) moves didn't work.")
+                    }
+                    // The move Jev just picked was chosen on the same look:
+                    // ask again next step with the failed move struck off.
+                    if case .act(let pickedMove) = DottieJevDriverPlan.decision(for: answer), pickedMove.signature == checkedMove.signature {
+                        lastMove = nil
+                        previousScreenThumbnail = nil
+                        lastMoveSignature = nil
+                        continue
+                    }
+                } else {
+                    failedStepChecksInARow = 0
+                }
+            }
 
             let decision = DottieJevDriverPlan.decision(
                 for: answer, hasRoundsLeft: jobMemory.hasRoundsLeft, roundHasMoves: !jobMemory.movesThisRound.isEmpty,
@@ -1014,6 +1135,10 @@ enum DottieJevDriver {
                 labelsClickedFromMemory = []
                 previousScreenThumbnail = nil
                 lastMoveSignature = nil
+                lastMove = nil
+                openedSignaturesThisRound = []
+                failedSignaturesThisRound = []
+                failedStepChecksInARow = 0
                 movesSoFar.append("finished round \(jobMemory.currentRound - 1) of \(jobMemory.totalRounds)")
                 DottieLog.notice("🎯 Jev finished round \(jobMemory.currentRound - 1) of \(jobMemory.totalRounds)")
                 actions.progress(stepNumber, "round \(jobMemory.currentRound) of \(jobMemory.totalRounds)")
@@ -1035,11 +1160,20 @@ enum DottieJevDriver {
                 // Nothing on screen changed on purpose: not a move to strike off.
                 previousScreenThumbnail = nil
                 lastMoveSignature = nil
+                lastMove = nil
             case .act(let move):
                 if case .typeText = move, DottieScreenActionPerformer.isFocusedFieldSecure {
                     return handOver("A password box is selected.")
                 }
-                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
+                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions,
+                              frontSiteHost: frontSiteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
+                if DottieJevDriverPlan.opensOnlyOnce(move) {
+                    openedSignaturesThisRound.insert(move.signature)
+                }
+                if let openedHost = DottieJevDriverPlan.openedHost(of: move) {
+                    hostsOpenedByThisJob.insert(openedHost)
+                }
+                lastMove = move
                 switch move {
                 case .holdMouseDown(let label, let centerX, let centerY): heldMouse = DottieMouseHold.isHolding ? (label, centerX, centerY) : nil
                 case .releaseMouseHere, .releaseMouseOn: heldMouse = nil
@@ -1075,7 +1209,8 @@ enum DottieJevDriver {
         }
     }
 
-    private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions) async {
+    private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions,
+                                frontSiteHost: String?, hostsOpenedByThisJob: Set<String>) async {
         /// An OCR text's middle, moved onto the real control under it.
         func snappedPoint(centerX: Double, centerY: Double) -> CGPoint {
             let roughPoint = screen.globalPoint(normalizedX: centerX, normalizedY: centerY)
@@ -1152,11 +1287,12 @@ enum DottieJevDriver {
             actions.progress(stepNumber, "going back")
             DottieScreenActionPerformer.press(keyCombination: "cmd+[")
         case .openSite(let address):
-            await actions.openSite(address, stepNumber)
+            let inSameTab = DottieJevDriverPlan.opensInSameTab(address: address, frontSiteHost: frontSiteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
+            await actions.openSite(address, stepNumber, inSameTab)
         case .searchWeb(let text):
-            var searchComponents = URLComponents(string: "https://www.google.com/search")
-            searchComponents?.queryItems = [URLQueryItem(name: "q", value: text)]
-            await actions.openSite(searchComponents?.url?.absoluteString ?? "google.com", stepNumber)
+            let searchAddress = DottieJevDriverPlan.searchAddress(for: text)
+            let inSameTab = DottieJevDriverPlan.opensInSameTab(address: searchAddress, frontSiteHost: frontSiteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
+            await actions.openSite(searchAddress, stepNumber, inSameTab)
         case .openApp(let name):
             actions.progress(stepNumber, "opening \(name)")
             _ = await DottieScreenTaskRunner.openApplication(named: name)

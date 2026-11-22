@@ -329,8 +329,12 @@ final class DottieScreenTaskRunner {
                 click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
                     _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
                 },
-                openSite: { [weak self] address, stepNumber in
-                    _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+                openSite: { [weak self] address, stepNumber, inSameTab in
+                    if inSameTab {
+                        _ = await self?.performOpenURLInFrontTab(address: address, stepNumber: stepNumber)
+                    } else {
+                        _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+                    }
                 }
             )
             let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, actions: jevActions)
@@ -1122,6 +1126,23 @@ final class DottieScreenTaskRunner {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         return didOpen ? "opened \(address)" : "couldn't open \(address)"
+    }
+
+    /// Opens a page in the browser tab in front, the way a person would
+    /// (cmd+L, the address, Return), so a job that already opened the site
+    /// doesn't pile up tabs. Works in every browser, Opera included, since
+    /// it needs no scripting.
+    private func performOpenURLInFrontTab(address: String, stepNumber: Int) async -> String {
+        let fullAddress = address.contains("://") ? address : "https://" + address
+        onProgress?(stepNumber, "opening \(URL(string: fullAddress)?.host ?? address)")
+        guard DottieScreenActionPerformer.press(keyCombination: "cmd+l") else {
+            return await performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+        }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await DottieScreenActionPerformer.type(fullAddress)
+        _ = DottieScreenActionPerformer.press(keyCombination: "return")
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        return "opened \(fullAddress) in the same tab"
     }
 
     /// Clicks a point, showing the cursor fly there first.
