@@ -141,4 +141,46 @@ struct JevDriverArmsTests {
         let moves = Plan.options(screenTexts: [], textPieces: [], siteAddresses: [], appNames: [], alreadyTriedSignatures: [], taskText: "x", offersAppMemory: true)
         #expect(!moves.contains { $0.move.description.contains(DottieJevProtocol.screenshotAssetName) })
     }
+
+    /// A whole job through Jev's answers: look up app memory, click a named
+    /// icon, double-click a file, press a shortcut, then done. Each step's
+    /// options are built, Jev's pick read back and acted on.
+    @Test func aWholeJobUsesTheNewArmsInOrder() throws {
+        let taskText = "open the budget file in Finder"
+        let screenTexts = [Plan.ScreenText(text: "budget.xlsx", centerX: 300, centerY: 400)]
+        let controls = [Plan.ScreenControl(label: "Downloads", kind: "item", centerX: 60, centerY: 300)]
+        let wantedMoves: [Plan.Move] = [
+            .recallAppMemory,
+            .clickControl(label: "Downloads", kind: "item", centerX: 60, centerY: 300),
+            .doubleClick(label: "budget.xlsx", centerX: 300, centerY: 400),
+            .pressKeys(keys: "cmd+s", meaning: "save"),
+            .finished
+        ]
+        var movesSoFar: [String] = []
+        var hasRecalled = false
+        var finished = false
+        for wantedMove in wantedMoves {
+            let options = Plan.options(screenTexts: screenTexts, textPieces: [], siteAddresses: [], appNames: ["Finder"],
+                                       alreadyTriedSignatures: [], screenControls: controls, taskText: taskText, offersAppMemory: !hasRecalled)
+            let body = Plan.requestBody(goal: taskText, movesSoFar: movesSoFar, knownHowTo: hasRecalled ? "Downloads is in the sidebar." : "", options: options)
+            #expect(JSONSerialization.isValidJSONObject(body))
+            let key = try #require(options.first { $0.move == wantedMove }?.key)
+            let answerData = try JSONSerialization.data(withJSONObject: ["answers": [
+                Plan.choiceQuestionName: ["choice": key, "probabilities": [key: 0.8], "confidence": 0.7],
+                Plan.doneQuestionName: ["noul": wantedMove == .finished ? 0.95 : 0.05]
+            ]])
+            let parsed = try #require(Plan.answer(fromAnswer: answerData, options: options))
+            switch Plan.decision(for: parsed) {
+            case .act(let move):
+                if move == .recallAppMemory { hasRecalled = true }
+                movesSoFar.append(move.summary)
+            case .finished:
+                finished = true
+            case .unsure:
+                Issue.record("a confident pick shouldn't hand over")
+            }
+        }
+        #expect(finished)
+        #expect(movesSoFar == ["looked up what Dottie remembers about this app", "clicked the item Downloads", "double-clicked budget.xlsx", "pressed cmd+s"])
+    }
 }

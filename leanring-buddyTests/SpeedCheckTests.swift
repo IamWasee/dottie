@@ -263,4 +263,32 @@ struct SpeedCheckTests {
 
         #expect(median < 200, "1,000 talker answers took \(median) ms")
     }
+
+    /// Every Jev step builds its options from a packed screen: 300 texts,
+    /// 100 named controls, shortcuts, drags and clicks.
+    @Test func buildingJevsOptionsForAPackedScreenStaysQuick() {
+        let screenTexts = (0..<300).map { DottieJevDriverPlan.ScreenText(text: "Row \($0) report", centerX: 10, centerY: Double($0)) }
+        let screenControls = (0..<100).map { DottieJevDriverPlan.ScreenControl(label: "Tool \($0)", kind: "button", centerX: 900, centerY: Double($0)) }
+        let median = medianMilliseconds {
+            let clickable = DottieJevDriverPlan.clickableTexts(from: screenTexts, taskText: "drag row 5 report onto row 9 report")
+            let options = DottieJevDriverPlan.options(screenTexts: clickable, textPieces: ["report"], siteAddresses: ["youtube.com"], appNames: ["Safari"],
+                                                      alreadyTriedSignatures: [], screenControls: screenControls,
+                                                      taskText: "drag row 5 report onto row 9 report", offersAppMemory: true)
+            _ = DottieJevDriverPlan.requestBody(goal: "drag row 5 report onto row 9 report", movesSoFar: [], knownHowTo: "", options: options)
+        }
+        #expect(median < 50, "one packed Jev step took \(median) ms")
+    }
+
+    /// App memory's text for Jev or the step model, from a big page and 60 flows.
+    @Test func buildingAppMemorysSummaryStaysQuick() {
+        let elements = (0..<120).map { DottieAppPage.Element(label: "Item \($0)", centerX: 1, centerY: Double($0)) }
+        var page = DottieAppPage(key: "k", title: "Inbox", elements: elements, clicks: [], lastSeen: Date(), screenshotFileName: nil)
+        page.controls = (0..<120).map { DottieAppPage.Control(label: "Button \($0)", kind: "button", centerX: 2, centerY: Double($0)) }
+        let step = DottieAppFlowStep(action: .click, pageTitle: "Inbox", label: "Compose", centerX: 1, centerY: 1, resultPageTitle: "New Message")
+        let flows = (0..<60).map { _ in DottieAppFlow(startedAt: Date(), steps: Array(repeating: step, count: 40)) }
+        let median = medianMilliseconds {
+            _ = DottieAppMemoryRecallPlan.summary(appName: "Mail", page: page, flows: flows, taskText: "write a new message to Sam")
+        }
+        #expect(median < 50, "app memory's summary took \(median) ms")
+    }
 }
