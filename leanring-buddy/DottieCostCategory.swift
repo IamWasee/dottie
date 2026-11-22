@@ -39,7 +39,8 @@ nonisolated enum DottieCostCategory {
         "everyday": ["DottieFixText", "DottieWatches", "DottieFocus", "DottieFolderCleanup"],
         "games": ["DottieGames"],
         "personality": ["DottieCustomPersonality"],
-        "self_check": ["DottieSelfCheck"]
+        "self_check": ["DottieSelfCheck"],
+        "app_memory": ["DottieAppMemory", "DottieAppMemoryRecall"]
     ]
 
     private static let categoryByFileStem: [String: String] = {

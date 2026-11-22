@@ -10,7 +10,11 @@
 //  shows a page it hasn't seen (no model call, text read on the Mac), the
 //  user's own clicks, and every screen job's clicks. Screen jobs then click
 //  what worked before straight away instead of asking Jev again.
-//  Stored per app in Application Support/Dottie/AppMemory/.
+//  Stored per app in Application Support/Dottie/AppMemory/. Runs only while
+//  both the Brain ("Remember what's on my screen") and app memory are on.
+//  The user's steps are kept as flows (what came after what) in each app's
+//  flows.json; Jev and the step model read it all only when they ask
+//  (DottieAppMemoryRecall).
 //
 
 import AppKit
@@ -43,6 +47,14 @@ struct DottieAppPage: Codable, Equatable {
         var lastSeen: Date
     }
 
+    /// A button, link, field or icon the app names through Accessibility.
+    struct Control: Codable, Equatable {
+        let label: String
+        let kind: String
+        let centerX: Double
+        let centerY: Double
+    }
+
     let key: String
     var title: String
     var elements: [Element]
@@ -50,6 +62,11 @@ struct DottieAppPage: Codable, Equatable {
     var lastSeen: Date
     /// The screenshot's file name in the app's folder, when one was kept.
     var screenshotFileName: String?
+    /// Named controls (icons included), when Accessibility gave them.
+    var controls: [Control]? = nil
+    /// A smarter model's reading of the page (what each control does and
+    /// which move uses it), made once, only when asked for.
+    var smartDescription: String? = nil
 }
 
 /// What Dottie knows about one app.
@@ -181,9 +198,15 @@ final class DottieAppMemory {
     private static let pageRefreshInterval: TimeInterval = 3 * 24 * 60 * 60
     private static let checkInterval: TimeInterval = 3
 
-    /// On unless the user turned it off; everything stays on this Mac.
-    var isEnabled: Bool {
+    /// App memory's own switch: on unless the user turned it off.
+    var isSwitchedOn: Bool {
         UserDefaults.standard.object(forKey: Self.enabledDefaultsKey) as? Bool ?? true
+    }
+
+    /// Watching happens only while the Brain's "Remember what's on my
+    /// screen" is on too (celly's rule); everything stays on this Mac.
+    var isEnabled: Bool {
+        isSwitchedOn && UserDefaults.standard.bool(forKey: DottieBrain.screenJournalDefaultsKey)
     }
 
     private let folderURL: URL
@@ -195,6 +218,10 @@ final class DottieAppMemory {
     /// The user's last click: where, on which page, and when, waiting to
     /// see which page it opens.
     private var pendingUserClick: (pageKey: String, bundleIdentifier: String, centerX: Double, centerY: Double, at: Date)?
+    private var keyMonitor: Any?
+    /// The flow being recorded now, and its app.
+    private var currentFlow: (bundleIdentifier: String, flow: DottieAppFlow, lastStepAt: Date)?
+    private var flowsByBundleIdentifier: [String: [DottieAppFlow]] = [:]
 
     private init() {
         let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -212,6 +239,27 @@ final class DottieAppMemory {
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { _ in
             Task { @MainActor in DottieAppMemory.shared.noteUserClick(at: NSEvent.mouseLocation) }
         }
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            let shortcutText = DottieAppMemory.shortcutText(for: event)
+            Task { @MainActor in DottieAppMemory.shared.noteUserKey(shortcutText: shortcutText) }
+        }
+    }
+
+    /// "cmd+shift+t" for a key pressed with command, control or option,
+    /// nil for plain typing (whose letters are never kept).
+    nonisolated private static func shortcutText(for event: NSEvent) -> String? {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard !modifiers.intersection([.command, .control, .option]).isEmpty,
+              let keyCharacters = event.charactersIgnoringModifiers?.lowercased(), !keyCharacters.isEmpty else {
+            return event.keyCode == 36 ? "return" : nil
+        }
+        var parts: [String] = []
+        if modifiers.contains(.command) { parts.append("cmd") }
+        if modifiers.contains(.control) { parts.append("ctrl") }
+        if modifiers.contains(.option) { parts.append("option") }
+        if modifiers.contains(.shift) { parts.append("shift") }
+        parts.append(event.keyCode == 36 ? "return" : keyCharacters)
+        return parts.joined(separator: "+")
     }
 
     /// The front window as a page, or nil when Dottie shouldn't look.
@@ -243,7 +291,13 @@ final class DottieAppMemory {
                       centerX: pendingUserClick.centerX, centerY: pendingUserClick.centerY,
                       label: nil, toPageKey: page.key, toPageTitle: page.title)
             self.pendingUserClick = nil
+            if var recordingFlow = currentFlow, recordingFlow.bundleIdentifier == page.bundleIdentifier,
+               let lastIndex = recordingFlow.flow.steps.indices.last, recordingFlow.flow.steps[lastIndex].action == .click {
+                recordingFlow.flow.steps[lastIndex].resultPageTitle = page.title
+                currentFlow = recordingFlow
+            }
         }
+        endFlowIfQuiet()
         guard pageChanged, page.isFullView else { return }
         let knownPage = file(for: page.bundleIdentifier, appName: page.appName).pages[page.key]
         if let knownPage, Date().timeIntervalSince(knownPage.lastSeen) < Self.pageRefreshInterval { return }
@@ -251,8 +305,11 @@ final class DottieAppMemory {
         defer { isLooking = false }
         guard let screenshot = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1280) else { return }
         let elements = await Self.readElements(on: screenshot.image)
+        let controls = DottieJevDriver.readControls(onDisplay: screenshot.displayFrame).map {
+            DottieAppPage.Control(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
+        }
         notePage(bundleIdentifier: page.bundleIdentifier, appName: page.appName, key: page.key, title: page.title,
-                 elements: elements, screenshotJPEG: screenshot.jpegData)
+                 elements: elements, controls: controls, screenshotJPEG: screenshot.jpegData)
     }
 
     private func noteUserClick(at globalPoint: CGPoint) {
@@ -261,6 +318,153 @@ final class DottieAppMemory {
         let centerX = Double((globalPoint.x - display.minX) / display.width) * 1000
         let centerY = Double((display.maxY - globalPoint.y) / display.height) * 1000
         pendingUserClick = (page.key, page.bundleIdentifier, centerX, centerY, Date())
+        let knownPage = file(for: page.bundleIdentifier, appName: page.appName).pages[page.key]
+        let nearestControl = (knownPage?.controls ?? []).first {
+            abs($0.centerX - centerX) <= 25 && abs($0.centerY - centerY) <= 25
+        }
+        let nearestLabel = nearestControl?.label
+            ?? knownPage.flatMap { DottieAppMemoryPlan.element(nearestTo: centerX, centerY, in: $0.elements)?.label }
+        guard let nearestLabel else { return }
+        noteFlowStep(DottieAppFlowStep(action: .click, pageTitle: page.title, label: nearestLabel, centerX: centerX, centerY: centerY),
+                     bundleIdentifier: page.bundleIdentifier)
+    }
+
+    /// A shortcut is kept as it is; plain typing only as "typed into" the
+    /// focused field's name. Never in password boxes (frontPage checks).
+    private func noteUserKey(shortcutText: String?) {
+        guard let page = frontPage() else { return }
+        if let shortcutText {
+            noteFlowStep(DottieAppFlowStep(action: .pressKeys, pageTitle: page.title, label: shortcutText, centerX: nil, centerY: nil),
+                         bundleIdentifier: page.bundleIdentifier)
+            return
+        }
+        guard let focusedFieldName = Self.focusedFieldName() else { return }
+        noteFlowStep(DottieAppFlowStep(action: .typeInto, pageTitle: page.title, label: focusedFieldName, centerX: nil, centerY: nil),
+                     bundleIdentifier: page.bundleIdentifier)
+    }
+
+    private static func focusedFieldName() -> String? {
+        let systemElement = AXUIElementCreateSystemWide()
+        guard let focusedElement = DottieAX.element(systemElement, kAXFocusedUIElementAttribute) else { return nil }
+        for attributeName in [kAXTitleAttribute, kAXDescriptionAttribute, "AXPlaceholderValue", kAXHelpAttribute] {
+            var attributeValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(focusedElement, attributeName as CFString, &attributeValue) == .success,
+               let name = attributeValue as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return String(name.prefix(60))
+            }
+        }
+        return "the text box"
+    }
+
+    // MARK: - Flows (what the user did, step after step)
+
+    private func noteFlowStep(_ step: DottieAppFlowStep, bundleIdentifier: String) {
+        guard isEnabled else { return }
+        endFlowIfQuiet()
+        if let recordingFlow = currentFlow, recordingFlow.bundleIdentifier != bundleIdentifier {
+            endCurrentFlow()
+        }
+        let flow = currentFlow?.flow ?? DottieAppFlow(startedAt: Date(), steps: [])
+        currentFlow = (bundleIdentifier, DottieAppMemoryRecallPlan.flow(flow, adding: step), Date())
+    }
+
+    private func endFlowIfQuiet() {
+        if let recordingFlow = currentFlow,
+           Date().timeIntervalSince(recordingFlow.lastStepAt) > DottieAppMemoryRecallPlan.secondsOfQuietThatEndAFlow {
+            endCurrentFlow()
+        }
+    }
+
+    private func endCurrentFlow() {
+        guard let recordingFlow = currentFlow else { return }
+        currentFlow = nil
+        guard recordingFlow.flow.steps.count >= 2 else { return }
+        let keptFlowList = DottieAppMemoryRecallPlan.keptFlows(flows(for: recordingFlow.bundleIdentifier) + [recordingFlow.flow])
+        flowsByBundleIdentifier[recordingFlow.bundleIdentifier] = keptFlowList
+        try? FileManager.default.createDirectory(at: appFolderURL(recordingFlow.bundleIdentifier), withIntermediateDirectories: true)
+        guard let flowsData = try? JSONEncoder().encode(keptFlowList) else { return }
+        _ = DottieFileSaver.save(flowsData, to: appFolderURL(recordingFlow.bundleIdentifier).appendingPathComponent("flows.json"))
+    }
+
+    private func flows(for bundleIdentifier: String) -> [DottieAppFlow] {
+        if let loadedFlows = flowsByBundleIdentifier[bundleIdentifier] { return loadedFlows }
+        let loadedFlows = DottieFileLoader.load([DottieAppFlow].self, from: appFolderURL(bundleIdentifier).appendingPathComponent("flows.json")) ?? []
+        flowsByBundleIdentifier[bundleIdentifier] = loadedFlows
+        return loadedFlows
+    }
+
+    // MARK: - Recall (only when Jev or the step model asks)
+
+    /// Whether there's anything remembered about the app in front.
+    func hasMemoryOfFrontApp() -> Bool {
+        guard isSwitchedOn, let page = frontPage() else { return false }
+        return !file(for: page.bundleIdentifier, appName: page.appName).pages.isEmpty || !flows(for: page.bundleIdentifier).isEmpty
+    }
+
+    /// What app memory knows that helps this job, read when asked. With
+    /// `readsPageClosely`, a page never read before gets its one smart
+    /// reading first (a smarter model looks at its screenshot).
+    func recall(forTask taskText: String, readsPageClosely: Bool) async -> String {
+        guard isSwitchedOn, let page = frontPage() else { return "" }
+        if readsPageClosely { await readPageClosely(bundleIdentifier: page.bundleIdentifier, appName: page.appName, pageKey: page.key) }
+        let appFile = file(for: page.bundleIdentifier, appName: page.appName)
+        DottieLog.notice("🗂️ App memory recalled for a screen job")
+        return DottieAppMemoryRecallPlan.summary(appName: page.appName, page: appFile.pages[page.key],
+                                                 flows: flows(for: page.bundleIdentifier), taskText: taskText)
+    }
+
+    private func readPageClosely(bundleIdentifier: String, appName: String, pageKey: String) async {
+        var appFile = file(for: bundleIdentifier, appName: appName)
+        guard var page = appFile.pages[pageKey], page.smartDescription == nil else { return }
+        let screenshotData: Data
+        if let screenshotFileName = page.screenshotFileName,
+           let savedData = try? Data(contentsOf: appFolderURL(bundleIdentifier).appendingPathComponent(screenshotFileName)) {
+            screenshotData = savedData
+        } else if let screenshot = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 1280) {
+            screenshotData = screenshot.jpegData
+        } else {
+            return
+        }
+        guard let description = await Self.askSmarterModel(screenshotJPEG: screenshotData,
+                                                           prompt: DottieAppMemoryRecallPlan.pageReadingPrompt(appName: appName, pageTitle: page.title)) else { return }
+        appFile = file(for: bundleIdentifier, appName: appName)
+        page = appFile.pages[pageKey] ?? page
+        page.smartDescription = String(description.prefix(2500))
+        appFile.pages[pageKey] = page
+        save(appFile, bundleIdentifier: bundleIdentifier)
+        DottieLog.notice("🗂️ A smarter model read a page of an app for app memory")
+    }
+
+    /// One picture and a question to Claude through the Worker (the
+    /// "request" role), text back, or nil.
+    private static func askSmarterModel(screenshotJPEG: Data, prompt: String) async -> String? {
+        let requestBody: [String: Any] = [
+            "provider": "request",
+            "contents": [["role": "user", "parts": [
+                ["inlineData": ["mimeType": "image/jpeg", "data": screenshotJPEG.base64EncodedString()]],
+                ["text": prompt]
+            ]]],
+            "generationConfig": ["maxOutputTokens": 700]
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
+        var request = URLRequest(url: ClickyWorkerConfiguration.url(forRoute: "/chat"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        request.httpBody = bodyData
+        do {
+            let (answerData, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                DottieLog.warning("App memory's page reading wasn't answered")
+                return nil
+            }
+            let answerText = GeminiServerSentEvents.text(from: answerData)
+            return answerText.isEmpty ? nil : answerText
+        } catch {
+            DottieLog.warning("App memory's page reading failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: - What screen jobs use
@@ -277,13 +481,13 @@ final class DottieAppMemory {
     }
 
     /// A screen job saw this page: keeps where its text sits (full view only).
-    func notePageFromScreenJob(elements: [DottieAppPage.Element]) {
+    func notePageFromScreenJob(elements: [DottieAppPage.Element], controls: [DottieAppPage.Control] = []) {
         guard let page = frontPage(), page.isFullView else { return }
         // Seen this minute already: skip the save, a screen job looks every step.
         if let knownPage = file(for: page.bundleIdentifier, appName: page.appName).pages[page.key],
            Date().timeIntervalSince(knownPage.lastSeen) < 60 { return }
         notePage(bundleIdentifier: page.bundleIdentifier, appName: page.appName, key: page.key, title: page.title,
-                 elements: elements, screenshotJPEG: nil)
+                 elements: elements, controls: controls, screenshotJPEG: nil)
     }
 
     /// A click (the user's or a screen job's) and the page it led to.
@@ -305,12 +509,15 @@ final class DottieAppMemory {
     // MARK: - Storage
 
     private func notePage(bundleIdentifier: String, appName: String, key: String, title: String,
-                          elements: [DottieAppPage.Element], screenshotJPEG: Data?) {
+                          elements: [DottieAppPage.Element], controls: [DottieAppPage.Control], screenshotJPEG: Data?) {
         var appFile = file(for: bundleIdentifier, appName: appName)
         appFile.appName = appName
         var page = appFile.pages[key] ?? DottieAppPage(key: key, title: title, elements: [], clicks: [], lastSeen: Date(), screenshotFileName: nil)
         page.title = title
         page.elements = Array(elements.prefix(DottieAppMemoryPlan.maximumElementsPerPage))
+        if !controls.isEmpty {
+            page.controls = Array(controls.prefix(DottieAppMemoryPlan.maximumElementsPerPage))
+        }
         page.lastSeen = Date()
         if let screenshotJPEG {
             let screenshotFileName = "page-\(DottieAppMemoryPlan.stableFileStem(for: key)).jpg"

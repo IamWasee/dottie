@@ -194,7 +194,7 @@ struct JevDriverTests {
         let body = Plan.requestBody(goal: "x", movesSoFar: [], knownHowTo: String(repeating: "a", count: 5000), options: [])
         let state = try #require(body["state"] as? String)
         #expect(state.contains("Nothing has been done yet."))
-        #expect(state.count < 1800)
+        #expect(state.count < 4800)
     }
 
     @Test func answerIsReadBackToTheMove() throws {

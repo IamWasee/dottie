@@ -30,16 +30,42 @@ enum DottieJevDriverPlan {
         let centerY: Double
     }
 
+    /// A control the front app names through Accessibility (a button, a
+    /// link, a text box, an icon with a description), with its middle in
+    /// 0-1000 of the screenshot, top-left origin. Icons have no text for
+    /// OCR to read, so these are how Jev gets to click them.
+    struct ScreenControl: Equatable {
+        let label: String
+        let kind: String
+        let centerX: Double
+        let centerY: Double
+    }
+
     enum Move: Equatable {
         case click(label: String, centerX: Double, centerY: Double)
+        case clickControl(label: String, kind: String, centerX: Double, centerY: Double)
+        /// Jev circles the icon or control itself (it has no words or name).
+        case clickUnlabeled
+        case doubleClick(label: String, centerX: Double, centerY: Double)
+        case rightClick(label: String, centerX: Double, centerY: Double)
+        case drag(fromLabel: String, fromX: Double, fromY: Double, toLabel: String, toX: Double, toY: Double)
         case typeText(String, pressesReturn: Bool)
         case pressReturn
+        case pressKeys(keys: String, meaning: String)
         case scrollDown
         case scrollUp
+        case scrollLeft
+        case scrollRight
         case goBack
         case openSite(address: String)
         case searchWeb(String)
         case openApp(name: String)
+        /// The instant lane and Needle on the Mac (open an app, move a
+        /// window, volume, music), with no screen at all.
+        case quickMacAction(String)
+        /// Read what app memory knows about the app in front (pages,
+        /// controls, the user's flows), only when Jev asks for it.
+        case recallAppMemory
         case finished
         case noneFits
 
@@ -47,6 +73,16 @@ enum DottieJevDriverPlan {
         var description: String {
             switch self {
             case .click(let label, _, _): return "Click \"\(label)\" on the screen"
+            case .clickControl(let label, let kind, _, _): return "Click the \(kind) \"\(label)\""
+            case .clickUnlabeled: return "Click an icon, picture or button that has no words on it (Dottie finds the one that helps)"
+            case .doubleClick(let label, _, _): return "Double-click \"\(label)\" (opens a file, folder or item)"
+            case .rightClick(let label, _, _): return "Right-click \"\(label)\" for its menu"
+            case .drag(let fromLabel, _, _, let toLabel, _, _): return "Drag \"\(fromLabel)\" onto \"\(toLabel)\""
+            case .pressKeys(let keys, let meaning): return "Press \(keys) (\(meaning))"
+            case .scrollLeft: return "Scroll or swipe left"
+            case .scrollRight: return "Scroll or swipe right"
+            case .quickMacAction(let text): return "Do it straight on the Mac without the screen: \"\(text)\""
+            case .recallAppMemory: return "Look up what Dottie remembers about this app first (its buttons, where they are, and how the user did this before)"
             case .typeText(let text, let pressesReturn):
                 return pressesReturn
                     ? "Type \"\(text)\" into the text box that's selected now, then press Return"
@@ -66,9 +102,9 @@ enum DottieJevDriverPlan {
         /// Moves that load a page or an app, which take longer to draw.
         var opensSomethingNew: Bool {
             switch self {
-            case .openSite, .searchWeb, .openApp, .goBack, .pressReturn: return true
+            case .openSite, .searchWeb, .openApp, .goBack, .pressReturn, .doubleClick, .pressKeys, .quickMacAction: return true
             case .typeText(_, let pressesReturn): return pressesReturn
-            case .click, .scrollDown, .scrollUp, .finished, .noneFits: return false
+            case .click, .clickControl, .clickUnlabeled, .rightClick, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory, .finished, .noneFits: return false
             }
         }
 
@@ -77,6 +113,11 @@ enum DottieJevDriverPlan {
         var signature: String {
             switch self {
             case .click(let label, _, _): return "click:\(label.lowercased())"
+            // The same thing found by OCR or by Accessibility is one move.
+            case .clickControl(let label, _, _, _): return "click:\(label.lowercased())"
+            case .doubleClick(let label, _, _): return "doubleclick:\(label.lowercased())"
+            case .rightClick(let label, _, _): return "rightclick:\(label.lowercased())"
+            case .drag(let fromLabel, _, _, let toLabel, _, _): return "drag:\(fromLabel.lowercased())>\(toLabel.lowercased())"
             default: return description.lowercased()
             }
         }
@@ -85,6 +126,16 @@ enum DottieJevDriverPlan {
         var summary: String {
             switch self {
             case .click(let label, _, _): return "clicked \(label)"
+            case .clickControl(let label, let kind, _, _): return "clicked the \(kind) \(label)"
+            case .clickUnlabeled: return "clicked an icon"
+            case .doubleClick(let label, _, _): return "double-clicked \(label)"
+            case .rightClick(let label, _, _): return "right-clicked \(label)"
+            case .drag(let fromLabel, _, _, let toLabel, _, _): return "dragged \(fromLabel) onto \(toLabel)"
+            case .pressKeys(let keys, _): return "pressed \(keys)"
+            case .scrollLeft: return "scrolled left"
+            case .scrollRight: return "scrolled right"
+            case .quickMacAction(let text): return "did \"\(text)\" on the Mac"
+            case .recallAppMemory: return "looked up what Dottie remembers about this app"
             case .typeText(let text, let pressesReturn): return pressesReturn ? "typed \"\(text)\" and pressed Return" : "typed \"\(text)\""
             case .pressReturn: return "pressed Return"
             case .scrollDown: return "scrolled down"
@@ -121,6 +172,10 @@ enum DottieJevDriverPlan {
     static let doneQuestionName = "done"
     /// Jev takes up to 255 options; this many screen texts leaves room.
     static let maximumScreenTextOptions = 120
+    /// Every option together stays under Jev's 255; screen texts give way first.
+    static let maximumOptions = 250
+    static let maximumControlOptions = 50
+    static let maximumDoubleAndRightClickTargets = 8
     /// Jev saying the goal is done this surely ends the job.
     static let doneProbabilityToFinish = 0.8
     /// Below both of these Jev is guessing among many; the step model goes on.
@@ -308,22 +363,47 @@ enum DottieJevDriverPlan {
         siteAddresses: [String],
         appNames: [String],
         alreadyTriedSignatures: Set<String>,
-        frontSiteHost: String? = nil
+        frontSiteHost: String? = nil,
+        screenControls: [ScreenControl] = [],
+        taskText: String = "",
+        offersAppMemory: Bool = false
     ) -> [Option] {
-        var moves: [Move] = []
+        var leadingMoves: [Move] = offersAppMemory ? [.recallAppMemory] : []
         for textPiece in textPieces {
-            moves.append(.typeText(textPiece, pressesReturn: true))
-            moves.append(.typeText(textPiece, pressesReturn: false))
+            leadingMoves.append(.typeText(textPiece, pressesReturn: true))
+            leadingMoves.append(.typeText(textPiece, pressesReturn: false))
         }
-        moves.append(contentsOf: searchResultAddresses(siteAddresses: siteAddresses, textPieces: textPieces).map { Move.openSite(address: $0) })
+        leadingMoves.append(contentsOf: searchResultAddresses(siteAddresses: siteAddresses, textPieces: textPieces).map { Move.openSite(address: $0) })
         // A site the browser in front already shows isn't offered again:
         // "click the search button" on YouTube reopened YouTube instead.
         let sitesToOffer = siteAddresses.filter { !isSiteAlreadyOpen($0, frontSiteHost: frontSiteHost) }
-        moves.append(contentsOf: sitesToOffer.map { Move.openSite(address: $0) })
-        moves.append(contentsOf: appNames.map { Move.openApp(name: $0) })
-        moves.append(contentsOf: textPieces.prefix(2).map { Move.searchWeb($0) })
-        moves.append(contentsOf: screenTexts.map { Move.click(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
-        moves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .goBack, .finished, .noneFits])
+        leadingMoves.append(contentsOf: sitesToOffer.map { Move.openSite(address: $0) })
+        leadingMoves.append(contentsOf: appNames.map { Move.openApp(name: $0) })
+        leadingMoves.append(contentsOf: textPieces.prefix(2).map { Move.searchWeb($0) })
+        let trimmedTaskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTaskText.isEmpty, trimmedTaskText.count <= 120 {
+            leadingMoves.append(.quickMacAction(trimmedTaskText))
+        }
+        leadingMoves.append(contentsOf: controlsWorthOffering(screenControls, screenTexts: screenTexts, taskText: taskText).map {
+            Move.clickControl(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
+        })
+
+        var trailingMoves: [Move] = [.clickUnlabeled]
+        for target in doubleAndRightClickTargets(screenTexts: screenTexts, taskText: taskText) {
+            trailingMoves.append(.doubleClick(label: target.text, centerX: target.centerX, centerY: target.centerY))
+            trailingMoves.append(.rightClick(label: target.text, centerX: target.centerX, centerY: target.centerY))
+        }
+        if let dragMove = dragMove(taskText: taskText, screenTexts: screenTexts) {
+            trailingMoves.append(dragMove)
+        }
+        trailingMoves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .goBack])
+        trailingMoves.append(contentsOf: everydayKeys.map { Move.pressKeys(keys: $0.keys, meaning: $0.meaning) })
+        trailingMoves.append(contentsOf: [.finished, .noneFits])
+
+        // Screen texts fill what's left of Jev's option limit.
+        let screenTextBudget = max(0, maximumOptions - leadingMoves.count - trailingMoves.count)
+        let textClickMoves = screenTexts.prefix(screenTextBudget).map { Move.click(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) }
+        let moves = leadingMoves + textClickMoves + trailingMoves
         var seenSignatures = Set<String>()
         let freshMoves = moves.filter { move in
             let moveSignature = move.signature
@@ -331,6 +411,133 @@ enum DottieJevDriverPlan {
             return seenSignatures.insert(moveSignature).inserted
         }
         return freshMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
+    }
+
+    /// Keys people press all day, each with what it does, so Jev can pick a
+    /// shortcut the way a person would instead of hunting for a button.
+    static let everydayKeys: [(keys: String, meaning: String)] = [
+        ("cmd+l", "go to the browser's address bar"),
+        ("cmd+f", "find on this page"),
+        ("cmd+t", "open a new tab"),
+        ("cmd+w", "close this tab or window"),
+        ("cmd+n", "new window or new document"),
+        ("cmd+s", "save"),
+        ("cmd+a", "select everything"),
+        ("cmd+c", "copy"),
+        ("cmd+v", "paste"),
+        ("cmd+z", "undo"),
+        ("cmd+m", "minimize this window"),
+        ("cmd+q", "quit this app"),
+        ("escape", "close a menu, popup or dialog"),
+        ("tab", "go to the next field"),
+        ("space", "play or pause, or tick the selected box"),
+        ("down", "move down one item"),
+        ("up", "move up one item"),
+        ("cmd+]", "go forward a page")
+    ]
+
+    /// What Accessibility calls a kind of control, in words Jev reads, or
+    /// nil for kinds that aren't clicked (groups, plain text, windows).
+    static func controlKind(forRole role: String) -> String? {
+        switch role {
+        case "AXButton": return "button"
+        case "AXLink": return "link"
+        case "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox": return "text box"
+        case "AXCheckBox": return "checkbox"
+        case "AXRadioButton", "AXTab": return "tab"
+        case "AXPopUpButton", "AXMenuButton": return "menu"
+        case "AXMenuItem", "AXMenuBarItem": return "menu item"
+        case "AXImage": return "picture"
+        case "AXCell", "AXRow": return "item"
+        case "AXDisclosureTriangle": return "arrow"
+        case "AXIncrementor", "AXSlider": return "slider"
+        default: return nil
+        }
+    }
+
+    /// A control's Accessibility frame (top-left origin on the primary
+    /// display, in points) as a ScreenControl on this screenshot, or nil
+    /// when its middle is off this display or it has no size.
+    static func screenControl(label: String, role: String, accessibilityFrame: CGRect, displayFrame: CGRect, primaryDisplayHeight: CGFloat) -> ScreenControl? {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let kind = controlKind(forRole: role), !trimmedLabel.isEmpty, trimmedLabel.count <= 60,
+              accessibilityFrame.width > 0, accessibilityFrame.height > 0,
+              displayFrame.width > 0, displayFrame.height > 0 else { return nil }
+        let middleX = accessibilityFrame.midX
+        let middleYFromBottom = primaryDisplayHeight - accessibilityFrame.midY
+        guard middleX >= displayFrame.minX, middleX <= displayFrame.maxX,
+              middleYFromBottom >= displayFrame.minY, middleYFromBottom <= displayFrame.maxY else { return nil }
+        return ScreenControl(
+            label: trimmedLabel,
+            kind: kind,
+            centerX: Double((middleX - displayFrame.minX) / displayFrame.width) * 1000,
+            centerY: Double((displayFrame.maxY - middleYFromBottom) / displayFrame.height) * 1000
+        )
+    }
+
+    /// Controls Jev doesn't already get as a screen text, no risky ones
+    /// the request didn't ask for, each once, top to bottom, capped.
+    static func controlsWorthOffering(_ screenControls: [ScreenControl], screenTexts: [ScreenText], taskText: String) -> [ScreenControl] {
+        var seenLabels = Set(screenTexts.map { comparableWords($0.text) })
+        let riskyNeedlesForThisTask = riskyNeedlesNotAskedFor(byComparableTask: " " + comparableWords(taskText) + " ")
+        let freshControls = screenControls.filter { control in
+            let comparableLabel = comparableWords(control.label)
+            guard !comparableLabel.isEmpty,
+                  !isRiskyComparableLabel(" " + comparableLabel + " ", riskyNeedles: riskyNeedlesForThisTask) else { return false }
+            return seenLabels.insert(comparableLabel).inserted
+        }
+        return Array(freshControls.sorted { ($0.centerY, $0.centerX) < ($1.centerY, $1.centerX) }.prefix(maximumControlOptions))
+    }
+
+    /// Words that say what a request is about (three letters or more, not
+    /// an action word), to pick which screen texts get double and right clicks.
+    static func contentWords(of taskText: String) -> Set<String> {
+        let actionWords: Set<String> = ["open", "click", "double", "right", "drag", "move", "the", "and", "then", "into", "onto", "from", "with", "this", "that", "please", "file", "folder"]
+        return Set(comparableWords(taskText).split(separator: " ").map(String.init).filter { $0.count >= 3 && !actionWords.contains($0) })
+    }
+
+    /// Screen texts that share a word with the request, which get a
+    /// double-click and a right-click option too (offering them for every
+    /// text would push Jev past its option limit).
+    static func doubleAndRightClickTargets(screenTexts: [ScreenText], taskText: String) -> [ScreenText] {
+        let taskWords = contentWords(of: taskText)
+        guard !taskWords.isEmpty else { return [] }
+        let matchingTexts = screenTexts.filter { screenText in
+            !taskWords.isDisjoint(with: comparableWords(screenText.text).split(separator: " ").map(String.init))
+        }
+        return Array(matchingTexts.prefix(maximumDoubleAndRightClickTargets))
+    }
+
+    /// "drag the report onto the desktop" / "move invoice.pdf to Archive":
+    /// one drag between the screen texts that best match each side, or nil.
+    static func dragMove(taskText: String, screenTexts: [ScreenText]) -> Move? {
+        let dragPattern = "(?i)\\b(?:drag|move)\\s+(?:the\\s+)?(.+?)\\s+(?:onto|into|to|over)\\s+(?:the\\s+)?(.+?)(?=[,.!?]|\\s+and\\s|$)"
+        guard let expression = try? NSRegularExpression(pattern: dragPattern),
+              let match = expression.firstMatch(in: taskText, range: NSRange(taskText.startIndex..., in: taskText)),
+              match.numberOfRanges > 2,
+              let fromRange = Range(match.range(at: 1), in: taskText),
+              let toRange = Range(match.range(at: 2), in: taskText) else { return nil }
+        guard let fromText = bestMatchingText(for: String(taskText[fromRange]), in: screenTexts),
+              let toText = bestMatchingText(for: String(taskText[toRange]), in: screenTexts),
+              fromText != toText else { return nil }
+        return .drag(fromLabel: fromText.text, fromX: fromText.centerX, fromY: fromText.centerY,
+                     toLabel: toText.text, toX: toText.centerX, toY: toText.centerY)
+    }
+
+    /// The screen text sharing the most words with `phrase`, or nil.
+    private static func bestMatchingText(for phrase: String, in screenTexts: [ScreenText]) -> ScreenText? {
+        let phraseWords = Set(comparableWords(phrase).split(separator: " ").map(String.init))
+        guard !phraseWords.isEmpty else { return nil }
+        var bestText: ScreenText?
+        var bestSharedCount = 0
+        for screenText in screenTexts {
+            let sharedCount = phraseWords.intersection(comparableWords(screenText.text).split(separator: " ").map(String.init)).count
+            if sharedCount > bestSharedCount {
+                bestSharedCount = sharedCount
+                bestText = screenText
+            }
+        }
+        return bestText
     }
 
     /// Jev's request: the goal and what's been done as state, the moves as
@@ -345,7 +552,7 @@ enum DottieJevDriverPlan {
         }
         let trimmedHowTo = knownHowTo.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHowTo.isEmpty {
-            state += "\nWhat Dottie knows about this kind of job: " + String(trimmedHowTo.prefix(1500))
+            state += "\nWhat Dottie knows about this kind of job: " + String(trimmedHowTo.prefix(4500))
         }
         var criteria: [String: String] = [:]
         for option in options {
@@ -356,7 +563,7 @@ enum DottieJevDriverPlan {
             "questions": [
                 choiceQuestionName: [
                     "type": "choice",
-                    "instructions": "Pick the one next move that gets the user's request done, the way a person sitting at this Mac would do it next. If the app or site isn't open yet, open it first. Click a text box before typing into it.",
+                    "instructions": "Pick the one next move that gets the user's request done, the way a person sitting at this Mac would do it next. If the app or site isn't open yet, open it first. Click a text box before typing into it. A keyboard shortcut or a named button is often quickest; pick the icon option only when the thing to click has no words or name.",
                     "criteria": criteria
                 ],
                 doneQuestionName: [
@@ -391,7 +598,21 @@ enum DottieJevDriverPlan {
         }
         if answer.move == .noneFits { return .unsure }
         if answer.confidence < minimumConfidence && answer.probability < minimumTopProbability { return .unsure }
+        // Moves that are hard to take back need Jev to be clearly sure.
+        if movesNeedingClearPick(answer.move), answer.probability < minimumProbabilityForHardToUndoMoves { return .unsure }
         return .act(answer.move)
+    }
+
+    /// Jev's pick must be at least this likely for a move that's hard to
+    /// take back (a drag, closing or quitting, a right-click menu, a Mac action).
+    static let minimumProbabilityForHardToUndoMoves = 0.5
+
+    static func movesNeedingClearPick(_ move: Move) -> Bool {
+        switch move {
+        case .drag, .rightClick, .quickMacAction: return true
+        case .pressKeys(let keys, _): return ["cmd+q", "cmd+w"].contains(keys)
+        default: return false
+        }
     }
 
     /// The step model's note when it takes over.
@@ -464,7 +685,7 @@ enum DottieJevDriver {
     /// cursor and sites open the way the rest of the job does.
     struct Actions {
         let progress: @MainActor (_ stepNumber: Int, _ line: String) -> Void
-        let click: @MainActor (_ point: CGPoint, _ label: String, _ screen: DottieDisplayCapture.Screenshot, _ stepNumber: Int) async -> Void
+        let click: @MainActor (_ point: CGPoint, _ label: String, _ clickCount: Int, _ isRightClick: Bool, _ screen: DottieDisplayCapture.Screenshot, _ stepNumber: Int) async -> Void
         let openSite: @MainActor (_ address: String, _ stepNumber: Int) async -> Void
     }
 
@@ -478,7 +699,10 @@ enum DottieJevDriver {
         return "Jev finished \(finishedCount) of \(finishedCount + handedOverCount) screen jobs alone"
     }
 
-    static func run(taskText: String, knownHowTo: String, actions: Actions) async -> Outcome {
+    static func run(taskText: String, knownHowTo givenHowTo: String, actions: Actions) async -> Outcome {
+        var knownHowTo = givenHowTo
+        // App memory is read only when Jev asks, once per job.
+        var hasRecalledAppMemory = false
         let textPieces = DottieJevDriverPlan.textPieces(from: taskText)
         let siteAddresses = DottieJevDriverPlan.siteAddresses(from: taskText)
         let appNames = appNamesNamed(in: taskText)
@@ -528,8 +752,11 @@ enum DottieJevDriver {
                                     label: clickWaitingForResult.label, toPageKey: frontPageIdentity.key, toPageTitle: frontPageIdentity.title)
             }
             clickWaitingForResult = nil
+            let screenControls = readControls(onDisplay: screen.displayFrame)
             appMemory.notePageFromScreenJob(elements: allScreenTexts.map {
                 DottieAppPage.Element(label: $0.text, centerX: $0.centerX, centerY: $0.centerY)
+            }, controls: screenControls.map {
+                DottieAppPage.Control(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
             })
             let screenTexts = DottieJevDriverPlan.clickableTexts(from: allScreenTexts, taskText: taskText)
 
@@ -546,7 +773,7 @@ enum DottieJevDriver {
                 let move = DottieJevDriverPlan.Move.click(label: visibleText.text, centerX: visibleText.centerX, centerY: visibleText.centerY)
                 labelsClickedFromMemory.insert(DottieAppMemoryPlan.comparableWords(rememberedClick.label))
                 DottieLog.notice("🎯 App memory clicked a remembered button without asking Jev")
-                await perform(move, screen: screen, stepNumber: stepNumber, actions: actions)
+                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
                 movesSoFar.append(move.summary)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
@@ -562,7 +789,10 @@ enum DottieJevDriver {
                 siteAddresses: siteAddresses,
                 appNames: appNames,
                 alreadyTriedSignatures: triedSignaturesByScreen[screenKey] ?? [],
-                frontSiteHost: DottieReplayContext.current().siteHost
+                frontSiteHost: DottieReplayContext.current().siteHost,
+                screenControls: screenControls,
+                taskText: taskText,
+                offersAppMemory: !hasRecalledAppMemory && appMemory.hasMemoryOfFrontApp()
             )
             let requestBody = DottieJevDriverPlan.requestBody(goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options)
             guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
@@ -581,11 +811,20 @@ enum DottieJevDriver {
                 return .finished(stepCount: movesSoFar.count)
             case .unsure:
                 return movesSoFar.isEmpty ? .notTried : handOver("Jev wasn't sure what comes next.")
+            case .act(.recallAppMemory):
+                hasRecalledAppMemory = true
+                actions.progress(stepNumber, "remembering how this app works")
+                let rememberedText = await appMemory.recall(forTask: taskText, readsPageClosely: true)
+                if !rememberedText.isEmpty { knownHowTo += "\n" + rememberedText }
+                movesSoFar.append(DottieJevDriverPlan.Move.recallAppMemory.summary)
+                // Nothing on screen changed on purpose: not a move to strike off.
+                previousScreenThumbnail = nil
+                lastMoveSignature = nil
             case .act(let move):
                 if case .typeText = move, DottieScreenActionPerformer.isFocusedFieldSecure {
                     return handOver("A password box is selected.")
                 }
-                await perform(move, screen: screen, stepNumber: stepNumber, actions: actions)
+                await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions)
                 movesSoFar.append(move.summary)
                 previousScreenThumbnail = screenKey
                 lastMoveSignature = move.signature
@@ -616,12 +855,46 @@ enum DottieJevDriver {
         }
     }
 
-    private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, actions: Actions) async {
-        switch move {
-        case .click(let label, let centerX, let centerY):
+    private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions) async {
+        /// An OCR text's middle, moved onto the real control under it.
+        func snappedPoint(centerX: Double, centerY: Double) -> CGPoint {
             let roughPoint = screen.globalPoint(normalizedX: centerX, normalizedY: centerY)
             let snappedFrame = AccessibilitySnap.refinedFrame(CGRect(x: roughPoint.x - 2, y: roughPoint.y - 2, width: 4, height: 4))
-            await actions.click(CGPoint(x: snappedFrame.midX, y: snappedFrame.midY), label, screen, stepNumber)
+            return CGPoint(x: snappedFrame.midX, y: snappedFrame.midY)
+        }
+        switch move {
+        case .click(let label, let centerX, let centerY):
+            await actions.click(snappedPoint(centerX: centerX, centerY: centerY), label, 1, false, screen, stepNumber)
+        case .clickControl(let label, _, let centerX, let centerY):
+            // Accessibility gave the control's own frame: already exact.
+            await actions.click(screen.globalPoint(normalizedX: centerX, normalizedY: centerY), label, 1, false, screen, stepNumber)
+        case .clickUnlabeled:
+            actions.progress(stepNumber, "finding the icon to click")
+            let target = "the icon, picture or button to click next so that this gets done: \(taskText.prefix(200))"
+            let context = movesSoFar.isEmpty ? nil : "Done so far: " + movesSoFar.suffix(6).joined(separator: "; ")
+            guard let jevBox = await DottieJev.findPreciseBox(target: target, userContext: context, on: screen) else { return }
+            let normalizedBox = jevBox.normalizedBox
+            let middlePoint = screen.globalPoint(normalizedX: (normalizedBox.xmin + normalizedBox.xmax) / 2, normalizedY: (normalizedBox.ymin + normalizedBox.ymax) / 2)
+            await actions.click(middlePoint, "the icon", 1, false, screen, stepNumber)
+        case .doubleClick(let label, let centerX, let centerY):
+            await actions.click(snappedPoint(centerX: centerX, centerY: centerY), label, 2, false, screen, stepNumber)
+        case .rightClick(let label, let centerX, let centerY):
+            await actions.click(snappedPoint(centerX: centerX, centerY: centerY), label, 1, true, screen, stepNumber)
+        case .drag(let fromLabel, let fromX, let fromY, let toLabel, let toX, let toY):
+            actions.progress(stepNumber, "dragging \(fromLabel) onto \(toLabel)")
+            await DottieScreenActionPerformer.drag(from: snappedPoint(centerX: fromX, centerY: fromY), to: screen.globalPoint(normalizedX: toX, normalizedY: toY))
+        case .pressKeys(let keys, _):
+            actions.progress(stepNumber, "pressing \(keys)")
+            DottieScreenActionPerformer.press(keyCombination: keys)
+        case .scrollLeft, .scrollRight:
+            let direction: DottieScreenAction.ScrollDirection = move == .scrollLeft ? .left : .right
+            actions.progress(stepNumber, "scrolling \(direction.rawValue)")
+            DottieScreenActionPerformer.scroll(direction: direction, amount: 5, at: screen.globalPoint(normalizedX: 500, normalizedY: 550))
+        case .quickMacAction(let text):
+            actions.progress(stepNumber, "doing it on the Mac")
+            _ = await DottieQuickMacAction.perform(arguments: ["action": text])
+        case .recallAppMemory:
+            break
         case .typeText(let text, let pressesReturn):
             actions.progress(stepNumber, "typing \"\(text.prefix(40))\"")
             await DottieScreenActionPerformer.type(text)
@@ -670,6 +943,54 @@ enum DottieJevDriver {
             if !appNames.contains(browserName) { appNames.append(browserName) }
         }
         return Array(appNames.prefix(6))
+    }
+
+    /// Named controls in the front app's focused window (buttons, links,
+    /// text boxes, icons with a description), read through Accessibility.
+    /// Bounded, so a huge web page can't stall a step.
+    static func readControls(onDisplay displayFrame: CGRect) -> [DottieJevDriverPlan.ScreenControl] {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication,
+              frontmostApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return [] }
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        var focusedWindowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
+              let focusedWindow = DottieAccessibilityCast.element(focusedWindowValue) else { return [] }
+        let primaryDisplayHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        var controls: [DottieJevDriverPlan.ScreenControl] = []
+        var elementsToVisit: [(element: AXUIElement, depth: Int)] = [(focusedWindow, 0)]
+        var visitedCount = 0
+        let maximumElementsVisited = 800
+        let maximumDepth = 25
+        // A step never waits long for this: a big web page gives what it
+        // has in a quarter second.
+        let deadline = Date().addingTimeInterval(0.25)
+        // One Accessibility round trip per element, in this order.
+        let attributeNames = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, "AXPlaceholderValue",
+                              kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute] as CFArray
+        while let next = elementsToVisit.popLast(), visitedCount < maximumElementsVisited, controls.count < 200, Date() < deadline {
+            visitedCount += 1
+            var valuesArray: CFArray?
+            guard AXUIElementCopyMultipleAttributeValues(next.element, attributeNames, AXCopyMultipleAttributeOptions(rawValue: 0), &valuesArray) == .success,
+                  let values = valuesArray as? [AnyObject], values.count == 8 else { continue }
+            let role = values[0] as? String ?? ""
+            if DottieJevDriverPlan.controlKind(forRole: role) != nil,
+               let positionAXValue = DottieAccessibilityCast.axValue(values[5]),
+               let sizeAXValue = DottieAccessibilityCast.axValue(values[6]) {
+                var position = CGPoint.zero
+                var size = CGSize.zero
+                if AXValueGetValue(positionAXValue, .cgPoint, &position), AXValueGetValue(sizeAXValue, .cgSize, &size) {
+                    let label = values[1...4].lazy.compactMap { $0 as? String }
+                        .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+                    if let control = DottieJevDriverPlan.screenControl(label: label, role: role, accessibilityFrame: CGRect(origin: position, size: size),
+                                                                       displayFrame: displayFrame, primaryDisplayHeight: primaryDisplayHeight) {
+                        controls.append(control)
+                    }
+                }
+            }
+            guard next.depth < maximumDepth, let childElements = values[7] as? [AXUIElement] else { continue }
+            elementsToVisit.append(contentsOf: childElements.reversed().map { ($0, next.depth + 1) })
+        }
+        return controls
     }
 
     /// Every line of text on the screen, read on the Mac (no model).

@@ -208,7 +208,11 @@ final class DottieScreenTaskRunner {
 
     // MARK: - The loop
 
+    /// The job being run, for tools that read memory by what the job is about.
+    private var currentTaskText = ""
+
     private func run(taskText: String) async -> Outcome {
+        currentTaskText = taskText
         guard DottieScreenActionPerformer.canPostEvents else {
             return .failed(reason: "I need Accessibility permission to click and type for you: System Settings → Privacy & Security → Accessibility.")
         }
@@ -304,8 +308,8 @@ final class DottieScreenTaskRunner {
         if referenceImageParts.isEmpty, replayUsed == nil {
             let jevActions = DottieJevDriver.Actions(
                 progress: { [weak self] stepNumber, line in self?.onProgress?(stepNumber, line) },
-                click: { [weak self] point, label, screen, stepNumber in
-                    _ = await self?.performClick(at: point, label: label, isDoubleClick: false, isRightClick: false, screen: screen, stepNumber: stepNumber)
+                click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
+                    _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
                 },
                 openSite: { [weak self] address, stepNumber in
                     _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
@@ -1015,6 +1019,11 @@ final class DottieScreenTaskRunner {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return "waited \(Int(seconds.rounded())) seconds"
 
+        case "app_memory":
+            onProgress?(stepNumber, "remembering how this app works")
+            let rememberedText = await DottieAppMemory.shared.recall(forTask: currentTaskText, readsPageClosely: flag("read_page_closely"))
+            return rememberedText.isEmpty ? "Dottie doesn't remember anything about this app yet (or app memory is off)." : rememberedText
+
         case "zoom":
             return await performZoom(arguments: arguments, screen: screen, stepNumber: stepNumber)
 
@@ -1185,7 +1194,7 @@ final class DottieScreenTaskRunner {
     /// exactly where.
     private static func jevClickPoint(label: String?, screen: DottieDisplayCapture.Screenshot) async -> CGPoint? {
         guard let label, DottieJevProtocol.isUsefulTargetLabel(label),
-              let jevBox = await DottieJev.findBox(target: label, in: screen.image) else { return nil }
+              let jevBox = await DottieJev.findPreciseBox(target: label, on: screen) else { return nil }
         let normalizedBox = jevBox.normalizedBox
         let topLeft = screen.globalPoint(normalizedX: normalizedBox.xmin, normalizedY: normalizedBox.ymin)
         let bottomRight = screen.globalPoint(normalizedX: normalizedBox.xmax, normalizedY: normalizedBox.ymax)
@@ -1489,6 +1498,13 @@ final class DottieScreenTaskRunner {
                 "description": "Wait until the video or reel playing in the browser has played through once (reels loop, so this notices when it starts over), then carry on. Use it when the task says to watch something, play it once, or do something after a video ends.",
                 "parameters": ["type": "object", "properties": [
                     "max_seconds": ["type": "number", "description": "Give up after this long; default 600."]
+                ]]
+            ],
+            [
+                "name": "app_memory",
+                "description": "Look up what Dottie remembers about the app in front: where its buttons, icons and fields are (0-1000), what clicking them did before, and how the user did tasks there step by step. Use it when you don't know this app or page well. read_page_closely also has a smarter model explain every control on this page once (slower the first time).",
+                "parameters": ["type": "object", "properties": [
+                    "read_page_closely": ["type": "boolean"]
                 ]]
             ],
             [
