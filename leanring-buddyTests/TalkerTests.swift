@@ -98,7 +98,8 @@ struct TalkerTests {
 
     @Test func talkerPromptStaysShort() {
         #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 900)
-        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1300)
+        // Room for the Mac-tool-first rule (round 2 of 1.0.80); it's cached.
+        #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1800)
     }
 
     @Test func requestPromptAddsTheProfileOnlyWhenThereIsOne() {
@@ -164,5 +165,52 @@ struct TalkerTests {
         for toolName in DottieTalkerProtocol.requestToolNames {
             #expect(realNames.contains(toolName), "\(toolName) isn't one of voice Dottie's tools")
         }
+    }
+
+    // MARK: - Mac tools before screen jobs (round 2 of 1.0.80)
+
+    @Test func requestBrainGetsTheDirectMacTools() {
+        for toolName in ["run_applescript", "open_url", "browser", "press_keys", "type_text", "apps_and_tools", "use_app_tool", "control_device", "quick_mac_action"] {
+            #expect(DottieTalkerProtocol.requestToolNames.contains(toolName), "\(toolName) isn't on the request list")
+        }
+    }
+
+    @Test func everyMacToolIsOnTheRequestList() {
+        #expect(DottieTalkerProtocol.macToolNames.isSubset(of: DottieTalkerProtocol.requestToolNames))
+        #expect(!DottieTalkerProtocol.macToolNames.contains("do_task_on_screen"))
+        #expect(!DottieTalkerProtocol.macToolNames.contains("click_on_screen"))
+    }
+
+    @Test func requestPromptSaysMacToolFirstNeverAScreenJob() {
+        let requestPrompt = DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "")
+        #expect(requestPrompt.contains("mac tool first, never a screen job"))
+        #expect(requestPrompt.contains("quick_mac_action"))
+        #expect(requestPrompt.contains("run_applescript"))
+        #expect(requestPrompt.contains("folder"))
+        // The Mac rule comes before the screen-job rule, so it's read first.
+        let macRuleStart = requestPrompt.range(of: "mac tool first")!.lowerBound
+        let screenJobRuleStart = requestPrompt.range(of: "start right away with do_task_on_screen")!.lowerBound
+        #expect(macRuleStart < screenJobRuleStart)
+    }
+
+    @Test func requestDeclarationsCarryTheMacToolsFromTheRealCatalog() async {
+        let declaredNames = await MainActor.run {
+            Set(DottieTalkerProtocol.requestToolDeclarations(from: DottieVoiceTools.everyFunctionDeclaration, findAndUseDeclarations: []).compactMap { $0["name"] as? String })
+        }
+        #expect(DottieTalkerProtocol.macToolNames.isSubset(of: declaredNames))
+        #expect(declaredNames.contains("do_task_on_screen"))
+    }
+
+    @Test func screenJobDescriptionSendsMacActionsElsewhere() async {
+        let screenJobDescription = await MainActor.run {
+            DottieVoiceTools.everyFunctionDeclaration.first { $0["name"] as? String == "do_task_on_screen" }?["description"] as? String ?? ""
+        }
+        #expect(screenJobDescription.contains("Never for opening an app, folder or file"))
+        #expect(screenJobDescription.contains("quick_mac_action"))
+    }
+
+    @Test func quickMacActionSaysItOpensFoldersAndFiles() async {
+        let quickDescription = await MainActor.run { DottieQuickMacAction.toolDescription }
+        #expect(quickDescription.contains("open a folder or file"))
     }
 }

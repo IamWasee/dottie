@@ -3,10 +3,14 @@
 //  leanring-buddyTests
 //
 //  The pre-ship check: everyday asks for each feature go to the real model
-//  through the Worker's /chat, with Dottie's real voice prompt and the
-//  tools Live is given, and every tool call that comes back is checked the
-//  way the app would take it (DottieToolCallCheck). A refused or malformed
-//  call fails the check, and the release workflow doesn't ship.
+//  through the Worker's /chat the way a spoken request really goes now
+//  (`"provider": "request"`, the request brain's own prompt and its short
+//  tool list, DottieTalkerProtocol), and every tool call that comes back is
+//  checked the way the app would take it (DottieToolCallCheck). A refused
+//  or malformed call, or a forbidden one (a screen job for "open notes"),
+//  fails the check, and the release workflow doesn't ship. It used to send
+//  the old Live prompt and tool list, so it never saw the request brain
+//  turning Mac actions into screen jobs.
 //
 //  Runs only when DOTTIE_PRESHIP_WORKER_URL is set (the Pre-ship check
 //  workflow passes it as TEST_RUNNER_DOTTIE_PRESHIP_WORKER_URL); in normal
@@ -29,7 +33,12 @@ struct PreShipLiveCheckTests {
         let feature: String
         let words: String
         let fittingTools: Set<String>
+        /// Tools that must never answer this ask; calling one fails the check.
+        var forbiddenTools: Set<String> = []
     }
+
+    /// An everyday Mac action must never become a screen job.
+    static let macActionForbiddenTools: Set<String> = ["do_task_on_screen", "click_on_screen"]
 
     static let everydayAsks: [EverydayAsk] = [
         EverydayAsk(feature: "teaching", words: "explain how a supply and demand curve works", fittingTools: ["explain_on_screen", "write_notes"]),
@@ -43,6 +52,10 @@ struct PreShipLiveCheckTests {
         EverydayAsk(feature: "mac", words: "remind me to call mom at 5 pm", fittingTools: ["add_reminder"]),
         EverydayAsk(feature: "mac", words: "open youtube", fittingTools: ["open_url", "run_applescript", "control_device", "quick_mac_action"]),
         EverydayAsk(feature: "mac", words: "open spotify and move it to the left half", fittingTools: ["quick_mac_action", "run_applescript", "control_device", "do_task_on_screen"]),
+        EverydayAsk(feature: "mac", words: "open my downloads folder", fittingTools: DottieTalkerProtocol.macToolNames, forbiddenTools: macActionForbiddenTools),
+        EverydayAsk(feature: "mac", words: "open notes", fittingTools: DottieTalkerProtocol.macToolNames, forbiddenTools: macActionForbiddenTools),
+        EverydayAsk(feature: "mac", words: "open my bull and shit folder", fittingTools: DottieTalkerProtocol.macToolNames, forbiddenTools: macActionForbiddenTools),
+        EverydayAsk(feature: "mac", words: "pause the music", fittingTools: DottieTalkerProtocol.macToolNames, forbiddenTools: macActionForbiddenTools),
         EverydayAsk(feature: "mac", words: "copy the terminal command that lists files to my clipboard", fittingTools: ["copy_to_clipboard"]),
         EverydayAsk(feature: "search", words: "what's the weather in Dhaka right now", fittingTools: ["search_web"]),
         EverydayAsk(feature: "helpers", words: "make me a website for my coffee shop", fittingTools: ["start_helper"]),
@@ -64,8 +77,11 @@ struct PreShipLiveCheckTests {
             return
         }
         let sharedSecret = environment["DOTTIE_PRESHIP_SECRET"] ?? ""
-        let voicePrompt = CompanionManager.liveVoiceSystemPrompt(personality: .cheekyFriend)
-        let declarations = DottieVoiceTools.directFunctionDeclarations
+        let voicePrompt = DottieTalkerProtocol.requestSystemPrompt(personalityLine: DottiePersonality.cheekyFriend.promptSection, profile: "")
+        let declarations = DottieTalkerProtocol.requestToolDeclarations(
+            from: DottieVoiceTools.everyFunctionDeclaration,
+            findAndUseDeclarations: [DottieVoiceToolCatalog.findToolFunctionDeclaration, DottieVoiceToolCatalog.useToolFunctionDeclaration]
+        )
 
         var outcomes: [Outcome] = []
         for ask in Self.everydayAsks {
@@ -91,12 +107,11 @@ struct PreShipLiveCheckTests {
 
     private func check(_ ask: EverydayAsk, chatURL: URL, sharedSecret: String,
                        voicePrompt: String, declarations: [[String: Any]]) async -> Outcome {
-        let body: [String: Any] = [
-            "systemInstruction": ["parts": [["text": voicePrompt]]],
-            "contents": [["role": "user", "parts": [["text": ask.words]]]],
-            "tools": [["functionDeclarations": declarations]],
-            "generationConfig": ["maxOutputTokens": 2048]
-        ]
+        let body = DottieTalkerProtocol.requestBody(
+            systemPrompt: voicePrompt,
+            conversation: [DottieTalkerProtocol.requestUserTurn(transcript: ask.words, labeledImages: [])],
+            toolDeclarations: declarations
+        )
         var request = URLRequest(url: chatURL, timeoutInterval: 90)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -117,7 +132,7 @@ struct PreShipLiveCheckTests {
                 let toolCalls = DottieToolCallCheck.toolCalls(inStreamedAnswer: String(decoding: answerData, as: UTF8.self))
                 let problems = toolCalls.flatMap {
                     DottieToolCallCheck.problems(with: $0, everyDeclaration: DottieVoiceTools.everyFunctionDeclaration)
-                }
+                } + Self.forbiddenCallProblems(toolCalls.map(\.name), for: ask)
                 let missedFittingTool = !ask.fittingTools.isEmpty && !toolCalls.contains { ask.fittingTools.contains($0.name) }
                 return Outcome(ask: ask, toolCalls: toolCalls, problems: problems, missedFittingTool: missedFittingTool, failedToAsk: nil)
             } catch {
@@ -150,7 +165,36 @@ struct PreShipLiveCheckTests {
         try? (lines.joined(separator: "\n") + "\n").write(toFile: reportPath, atomically: true, encoding: .utf8)
     }
 
+    /// One problem per forbidden tool the model called for this ask.
+    static func forbiddenCallProblems(_ calledToolNames: [String], for ask: EverydayAsk) -> [String] {
+        calledToolNames.filter { ask.forbiddenTools.contains($0) }.map { "called \($0), which must never answer this ask" }
+    }
+
     // MARK: - The ask list itself (runs in every test run)
+
+    @Test func aScreenJobForAMacActionIsAProblem() {
+        let openNotes = EverydayAsk(feature: "mac", words: "open notes", fittingTools: ["quick_mac_action"], forbiddenTools: Self.macActionForbiddenTools)
+        #expect(Self.forbiddenCallProblems(["do_task_on_screen"], for: openNotes).count == 1)
+        #expect(Self.forbiddenCallProblems(["click_on_screen", "do_task_on_screen"], for: openNotes).count == 2)
+        #expect(Self.forbiddenCallProblems(["quick_mac_action"], for: openNotes).isEmpty)
+        #expect(Self.forbiddenCallProblems([], for: openNotes).isEmpty)
+    }
+
+    @Test func anAskWithoutForbiddenToolsTakesAnyTool() {
+        let checkEmails = EverydayAsk(feature: "screen", words: "check my emails", fittingTools: [])
+        #expect(Self.forbiddenCallProblems(["do_task_on_screen"], for: checkEmails).isEmpty)
+    }
+
+    @Test func everyMacActionAskForbidsScreenJobsAndHasMacToolsToUse() {
+        let macActionAsks = Self.everydayAsks.filter { !$0.forbiddenTools.isEmpty }
+        #expect(macActionAsks.count >= 3)
+        for ask in macActionAsks {
+            #expect(ask.forbiddenTools.contains("do_task_on_screen"), "\(ask.words) may become a screen job")
+            #expect(ask.fittingTools.isDisjoint(with: ask.forbiddenTools), "\(ask.words) both fits and forbids a tool")
+            // The request brain must actually be given a fitting tool.
+            #expect(!ask.fittingTools.isDisjoint(with: DottieTalkerProtocol.requestToolNames), "\(ask.words) has no fitting tool on the request list")
+        }
+    }
 
     @Test func everyFittingToolIsARealTool() {
         let knownNames = Set((DottieVoiceTools.everyFunctionDeclaration.compactMap { $0["name"] as? String })

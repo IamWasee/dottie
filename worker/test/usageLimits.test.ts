@@ -2,7 +2,7 @@ import { env as workerBindings } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/index";
-import { DEFAULT_DAILY_LIMITS, dailyLimits, splitPassthroughKey, usageArea, usageIdentity, usageRefusal } from "../src/usageLimits";
+import { DEFAULT_DAILY_LIMITS, JEV_DOLLARS_PER_ANSWER, SPEND_DAYS_KEPT, costCategory, costCategoryKey, dailyLimits, dayBefore, installSpendResponse, recordInstallSpend, spendInAnswer, splitPassthroughKey, usageArea, usageIdentity, usageRefusal } from "../src/usageLimits";
 import { chatAnswer, fakeFetch, jsonAnswer, makeEnv } from "./helpers";
 
 const usageBinding = (workerBindings as unknown as Env).INSTALL_USAGE;
@@ -277,5 +277,171 @@ describe("new installs in a day", () => {
     const roomyEnv = limitedEnv("chat=5,newInstalls=100000");
     expect((await speak(installID, roomyEnv)).status).toBe(200);
     expect((await speak(installID, env)).status).toBe(200);
+  });
+});
+
+describe("what each install spends", () => {
+  const usageLine = (usage: Record<string, unknown>) => `data: ${JSON.stringify({ candidates: [], dottieUsage: usage })}\r\n\r\n`;
+
+  it("reads every answer's usage from server-sent events and JSON bodies", () => {
+    const sse = usageLine({ inputTokens: 100, outputTokens: 20, estimatedDollars: 0.002 }) + usageLine({ inputTokens: 50, outputTokens: 5, estimatedDollars: null });
+    expect(spendInAnswer(sse)).toEqual({ asks: 2, dollars: 0.002, unpricedAsks: 1, inputTokens: 150, outputTokens: 25 });
+    expect(spendInAnswer(JSON.stringify({ dottieUsage: { inputTokens: 3, outputTokens: 4, estimatedDollars: 0.5 } }))).toEqual({
+      asks: 1, dollars: 0.5, unpricedAsks: 0, inputTokens: 3, outputTokens: 4,
+    });
+  });
+
+  it("finds nothing in an answer without usage, broken JSON or odd numbers", () => {
+    expect(spendInAnswer("data: {not json}\r\n\r\n")).toBeUndefined();
+    expect(spendInAnswer(JSON.stringify({ candidates: [] }))).toBeUndefined();
+    expect(spendInAnswer("null")).toBeUndefined();
+    expect(spendInAnswer(JSON.stringify({ dottieUsage: { inputTokens: -5, outputTokens: "lots", estimatedDollars: 0.1 } }))).toEqual({
+      asks: 1, dollars: 0.1, unpricedAsks: 0, inputTokens: 0, outputTokens: 0,
+    });
+  });
+
+  it("counts days back across months, and nothing for a non-date", () => {
+    expect(dayBefore("2026-12-01", 1)).toBe("2026-11-30");
+    expect(dayBefore("2026-11-22", SPEND_DAYS_KEPT - 1)).toBe("2026-10-23");
+    expect(dayBefore("", 3)).toBe("");
+  });
+
+  it("adds a /chat answer's cost to the install's day and shows it at /usage", async () => {
+    fakeFetch([["api.groq.com", chatAnswer({ content: "ok" })]]);
+    const env = limitedEnv("chat=100");
+    const installID = newInstallID();
+    expect((await speak(installID, env)).status).toBe(200);
+    expect((await speak(installID, env)).status).toBe(200);
+    const usage = (await (await fromInstall(installID, "/usage", { env })).json()) as { days: Array<Record<string, unknown>> };
+    expect(usage.days).toHaveLength(1);
+    expect(usage.days[0]).toMatchObject({ day: new Date().toISOString().slice(0, 10), asks: 2, inputTokens: 10, outputTokens: 14 });
+    // Another install sees only its own.
+    const otherUsage = (await (await fromInstall(newInstallID(), "/usage", { env })).json()) as { days: unknown[] };
+    expect(otherUsage.days).toEqual([]);
+  });
+
+  it("adds a helper's Gemini CLI call to its install too", async () => {
+    fakeFetch([["api.groq.com", chatAnswer({ content: "ok" })]]);
+    const env = limitedEnv("helpers=100");
+    const installID = newInstallID();
+    const helperCall = await worker.fetch(
+      new Request("https://worker.test/gemini/v1beta/models/m:generateContent", {
+        method: "POST",
+        headers: { "x-goog-api-key": `secret:${installID}` },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+      }),
+      env
+    );
+    expect(helperCall.status).toBe(200);
+    const usage = (await (await fromInstall(installID, "/usage", { env })).json()) as { days: Array<Record<string, unknown>> };
+    expect(usage.days[0]).toMatchObject({ asks: 1 });
+  });
+
+  it("records after the answer goes back when the Worker has a context", async () => {
+    fakeFetch([["api.groq.com", chatAnswer({ content: "ok" })]]);
+    const env = limitedEnv("chat=100");
+    const installID = newInstallID();
+    const waited: Promise<unknown>[] = [];
+    const context = { waitUntil: (promise: Promise<unknown>) => waited.push(promise), passThroughOnException: () => {} } as unknown as ExecutionContext;
+    const answer = await worker.fetch(
+      new Request("https://worker.test/chat", { method: "POST", headers: { "x-dottie-install": installID }, body: JSON.stringify({ contents: [] }) }),
+      env,
+      context
+    );
+    expect(answer.status).toBe(200);
+    expect(waited).toHaveLength(1);
+    await Promise.all(waited);
+    const usage = (await (await fromInstall(installID, "/usage", { env })).json()) as { days: unknown[] };
+    expect(usage.days).toHaveLength(1);
+  });
+
+  it("keeps the last month of spend across days and drops older days and counts", async () => {
+    const counter = usageBinding!.get(usageBinding!.idFromName(`install:${newInstallID()}`));
+    const post = (path: string, body: Record<string, unknown>) => counter.fetch(`https://install-usage${path}`, { method: "POST", body: JSON.stringify(body) });
+    await post("/spend", { day: "2026-09-01", asks: 1, dollars: 0.01 });
+    await post("/spend", { day: "2026-11-01", asks: 2, dollars: 0.02 });
+    await post("/count", { area: "chat", limit: 1, newInstallLimit: 10, day: "2026-11-01" });
+    expect(await (await post("/count", { area: "chat", limit: 1, newInstallLimit: 10, day: "2026-11-01" })).json()).toEqual({ allowed: false });
+    await post("/spend", { day: "2026-11-22", asks: 1, dollars: 0.005, unpricedAsks: 1 });
+    const days = ((await (await counter.fetch("https://install-usage/spend")).json()) as { days: Array<{ day: string }> }).days.map((entry) => entry.day);
+    expect(days).toEqual(["2026-11-01", "2026-11-22"]);
+    // A new day lets the install ask again.
+    expect(await (await post("/count", { area: "chat", limit: 1, newInstallLimit: 10, day: "2026-11-22" })).json()).toEqual({ allowed: true });
+  });
+
+  it("does nothing without the counters, for a failed answer or one without usage", async () => {
+    const request = new Request("https://worker.test/chat", { method: "POST" });
+    const url = new URL(request.url);
+    await expect(recordInstallSpend(new Response("x"), request, url, {})).resolves.toBeUndefined();
+    await expect(recordInstallSpend(new Response("x", { status: 500 }), request, url, { INSTALL_USAGE: usageBinding })).resolves.toBeUndefined();
+    await expect(recordInstallSpend(new Response("{}"), request, url, { INSTALL_USAGE: usageBinding })).resolves.toBeUndefined();
+    expect(await (await installSpendResponse(request, url, {})).json()).toEqual({ days: [] });
+  });
+
+  it("only logs a counter that fails", async () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const brokenBinding = { idFromName: () => { throw new Error("down"); }, get: () => undefined } as unknown as DurableObjectNamespace;
+    const request = new Request("https://worker.test/chat", { method: "POST" });
+    const url = new URL(request.url);
+    await recordInstallSpend(new Response(JSON.stringify({ dottieUsage: { inputTokens: 1 } })), request, url, { INSTALL_USAGE: brokenBinding });
+    const failed = await installSpendResponse(request, url, { INSTALL_USAGE: { idFromName: () => "id", get: () => ({ fetch: () => Promise.reject(new Error("down")) }) } as unknown as DurableObjectNamespace });
+    expect(failed.status).toBe(503);
+    expect(warnings.mock.calls.flat().join(" ")).toContain("couldn't");
+  });
+
+  it("cleans a sent cost category and files unlabeled requests together", () => {
+    expect(costCategory("Screen_Job_Steps")).toBe("screen_job_steps");
+    expect(costCategory("other:dottiefoo<script>")).toBe("other:dottiefooscript");
+    expect(costCategory("")).toBe("unlabeled");
+    expect(costCategory("!!!")).toBe("unlabeled");
+    expect(costCategory(undefined)).toBe("unlabeled");
+    expect(costCategory("x".repeat(200))).toHaveLength(80);
+  });
+
+  it("files a request under its feature and the role it asked for", () => {
+    const labeled = new Request("https://worker.test/chat", { method: "POST", headers: { "x-dottie-cost-category": "voice" } });
+    expect(costCategoryKey(labeled, new URL(labeled.url), "request")).toBe("voice/request");
+    expect(costCategoryKey(labeled, new URL(labeled.url), undefined)).toBe("voice/default");
+    expect(costCategoryKey(labeled, new URL(labeled.url), "Sc reen!")).toBe("voice/screen");
+    const unlabeled = new Request("https://worker.test/chat", { method: "POST" });
+    expect(costCategoryKey(unlabeled, new URL(unlabeled.url), "groq")).toBe("unlabeled/groq");
+    expect(costCategoryKey(labeled, new URL("https://worker.test/gemini/v1beta/models/m:generateContent"), "x")).toBe("helpers");
+    expect(costCategoryKey(labeled, new URL("https://worker.test/jev"), undefined)).toBe("jev");
+  });
+
+  it("keeps each install's spend per category, and everyone's for the owner", async () => {
+    fakeFetch([
+      ["api.groq.com", chatAnswer({ content: "ok" })],
+      ["api.typesafe.ai", jsonAnswer({ answers: { done: { probability: 0.9 } } })],
+    ]);
+    const ownerID = newInstallID();
+    const otherID = newInstallID();
+    const env = limitedEnv("chat=100", { UNLIMITED_INSTALL_IDS: ownerID, JEV_API_KEY: "jev-key" });
+    const labeledChat = (installID: string, category: string, provider: string) =>
+      fromInstall(installID, "/chat", { body: { provider, contents: [] }, env, headers: { "x-dottie-cost-category": category } });
+    expect((await labeledChat(otherID, "screen_job_steps", "screen")).status).toBe(200);
+    expect((await labeledChat(otherID, "screen_job_steps", "screen")).status).toBe(200);
+    expect((await labeledChat(otherID, "screen_job_plan", "plan")).status).toBe(200);
+    const jevAnswer = await fromInstall(otherID, "/jev", {
+      body: { state: { task: "t" }, questions: { done: { type: "noul" } } },
+      env,
+      headers: { "x-dottie-cost-category": "jev" },
+    });
+    expect(jevAnswer.status).toBe(200);
+
+    const own = (await (await fromInstall(otherID, "/usage", { env })).json()) as { days: Array<{ asks: number; byCategory: Record<string, { asks: number; dollars: number }> }> };
+    const today = own.days[own.days.length - 1];
+    expect(today.byCategory["screen_job_steps/screen"].asks).toBe(2);
+    expect(today.byCategory["screen_job_plan/plan"].asks).toBe(1);
+    expect(today.byCategory.jev).toMatchObject({ asks: 1, dollars: JEV_DOLLARS_PER_ANSWER });
+    expect(today.asks).toBe(4);
+
+    expect((await fromInstall(otherID, "/usage?scope=everyone", { env })).status).toBe(403);
+    await labeledChat(ownerID, "voice", "groq");
+    const everyone = (await (await fromInstall(ownerID, "/usage?scope=everyone", { env })).json()) as { days: Array<{ day: string; byCategory: Record<string, { asks: number }> }> };
+    // Other tests reach everyone's counter on other days too.
+    const everyoneToday = everyone.days.find((entry) => entry.day === new Date().toISOString().slice(0, 10))!;
+    expect(everyoneToday.byCategory["voice/groq"].asks).toBeGreaterThanOrEqual(1);
+    expect(everyoneToday.byCategory["screen_job_steps/screen"].asks).toBeGreaterThanOrEqual(2);
   });
 });

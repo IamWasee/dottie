@@ -300,14 +300,15 @@ struct TeachingBoardTests {
         #expect(nudged.penPath == drawn.penPath)
     }
 
-    @Test func aLabelBuriedUnderManyGivesUpAfterAFewLines() {
+    /// With no free spot within six lines up or down, moving the label
+    /// would only land it on other text somewhere else, so it stays put.
+    @Test func aLabelBuriedUnderManyStaysWhereItWasWritten() {
         var drawn = DottieTeaching.DrawnStep()
         drawn.addText("Label", origin: CGPoint(x: 100, y: 500), fontSize: 26, ink: .gold)
         let wall = [CGRect(x: 0, y: -2_000, width: 1_000, height: 4_000)]
         let nudged = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: wall)
         guard case .text(_, let origin, _) = nudged.figures[0].shape else { return }
-        #expect(origin.y < 500)
-        #expect(origin.y > 500 - 26 * 2 * 0.6 * 0.8 * 9)
+        #expect(origin.y == 500)
     }
 
     @Test func onlyWrittenTextTakesUpSpaceAndItIsTrimmedTopAndBottom() {

@@ -227,6 +227,7 @@ private enum DottieEpisodeIconCache {
 struct DottieScreenMemorySettings: View {
     @ObservedObject var brain: DottieBrain
     @ObservedObject var screenMemory: DottieScreenMemory
+    @AppStorage(DottieAppMemory.enabledDefaultsKey) private var isAppMemorySwitchedOn = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -240,6 +241,18 @@ struct DottieScreenMemorySettings: View {
             }
             .toggleStyle(.switch)
             Text("Every few minutes while you're using the Mac, Dottie notes the app, the window, the web address and a little of the window's text. The text is read on this Mac and no screenshot is kept. Every half hour or so the notes are turned into timeline moments, and only those short notes go to an AI model (through Dottie's server). Password boxes, private browser windows and the apps below are always skipped. A small green light shows in the notch while it's on.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(isOn: $isAppMemorySwitchedOn) {
+                Text("App memory: learn my apps as I use them")
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.Colors.textPrimary)
+            }
+            .toggleStyle(.switch)
+            .disabled(!screenMemory.isEnabled)
+            Text("While this and \"Remember what's on my screen\" are both on, Dottie keeps a memory of each app you use, in its own folder: a picture of each new page, where every button and text sits, and what you clicked or typed into (never the words you typed, never passwords) step by step. Screen jobs look it up only when they need it. It's kept on this Mac; the first time a screen job needs to understand a page, that page's picture is sent once to an AI model (through Dottie's server) to explain its buttons.")
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

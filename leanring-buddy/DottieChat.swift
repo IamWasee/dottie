@@ -19,7 +19,7 @@ enum DottieChat {
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request)
+        ClickyWorkerConfiguration.applyAuthenticationHeaders(to: &request, callerFile: callerFile)
         guard var requestBodyData = try? JSONSerialization.data(withJSONObject: requestBody) else { return nil }
         let carriesPicturesOrAudio = String(decoding: requestBodyData, as: UTF8.self).contains("\"inlineData\"")
         if requestBody["provider"] == nil && !carriesPicturesOrAudio {

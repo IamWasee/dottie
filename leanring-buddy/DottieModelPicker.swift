@@ -146,7 +146,10 @@ final class DottieModelPicker: @unchecked Sendable {
             return (responseData, response)
         } catch {
             if (error as? URLError)?.code == .timedOut {
-                record(model: model, seconds: Date().timeIntervalSince(startedAt), statusCode: 504)
+                let waitedSeconds = Date().timeIntervalSince(startedAt)
+                record(model: model, seconds: waitedSeconds, statusCode: 504)
+                // Public on purpose: testers count these per ask (usage-per-ask.py).
+                DottieLog.warning("⏱️ The step model timed out after \(public: String(format: "%.1f", waitedSeconds)) s")
             }
             throw error
         }

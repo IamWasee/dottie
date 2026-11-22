@@ -200,7 +200,6 @@ final class DottieScreenTaskRunner {
         guard let runTask else { return stoppedPlayback }
         DottieScreenJobQuestions.shared.resolve(with: nil)
         DottieScreenJobClaudeBrain.shared.stop()
-        DottieScreenJobGuesser.shared.stop()
         runTask.cancel()
         self.runTask = nil
         currentTaskText = nil
@@ -305,8 +304,8 @@ final class DottieScreenTaskRunner {
         if referenceImageParts.isEmpty, replayUsed == nil {
             let jevActions = DottieJevDriver.Actions(
                 progress: { [weak self] stepNumber, line in self?.onProgress?(stepNumber, line) },
-                click: { [weak self] point, label, screen, stepNumber in
-                    _ = await self?.performClick(at: point, label: label, isDoubleClick: false, isRightClick: false, screen: screen, stepNumber: stepNumber)
+                click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
+                    _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
                 },
                 openSite: { [weak self] address, stepNumber in
                     _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
@@ -963,8 +962,20 @@ final class DottieScreenTaskRunner {
             return await performOpenURL(address: text("url"), browserName: text("browser"), stepNumber: stepNumber)
 
         case "click":
+            let modelBoxCenter = boxCenter()
+            let snappedModelPoint = clickPoint()
             let jevClickPoint = await Self.jevClickPoint(label: text("label"), screen: screen)
-            return await performClick(at: jevClickPoint ?? clickPoint(), label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
+            let finalClickPoint = jevClickPoint ?? snappedModelPoint
+            // Click check: where the model pointed vs. where Dottie clicks,
+            // logged and kept as a picture, so a miss shows its cause.
+            if let modelBoxCenter, let finalClickPoint {
+                let finalPointSource: DottieClickCheck.FinalPointSource = jevClickPoint != nil
+                    ? .jev
+                    : (finalClickPoint == modelBoxCenter ? .modelBox : .accessibilitySnap)
+                DottieClickCheck.record(stepNumber: stepNumber, label: text("label") ?? "it", screenshot: screen.image, displayFrame: screen.displayFrame,
+                                        modelPoint: modelBoxCenter, finalPoint: finalClickPoint, source: finalPointSource)
+            }
+            return await performClick(at: finalClickPoint, label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
@@ -1003,6 +1014,11 @@ final class DottieScreenTaskRunner {
             onProgress?(stepNumber, seconds > 10 ? "waiting \(Int(seconds)) seconds" : "waiting for it to load")
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return "waited \(Int(seconds.rounded())) seconds"
+
+        case "app_memory":
+            onProgress?(stepNumber, "remembering how this app works")
+            let rememberedText = await DottieAppMemory.shared.recall(forTask: currentTaskText ?? "", readsPageClosely: flag("read_page_closely"))
+            return rememberedText.isEmpty ? "Dottie doesn't remember anything about this app yet (or app memory is off)." : rememberedText
 
         case "zoom":
             return await performZoom(arguments: arguments, screen: screen, stepNumber: stepNumber)
@@ -1174,7 +1190,7 @@ final class DottieScreenTaskRunner {
     /// exactly where.
     private static func jevClickPoint(label: String?, screen: DottieDisplayCapture.Screenshot) async -> CGPoint? {
         guard let label, DottieJevProtocol.isUsefulTargetLabel(label),
-              let jevBox = await DottieJev.findBox(target: label, in: screen.image) else { return nil }
+              let jevBox = await DottieJev.findPreciseBox(target: label, on: screen) else { return nil }
         let normalizedBox = jevBox.normalizedBox
         let topLeft = screen.globalPoint(normalizedX: normalizedBox.xmin, normalizedY: normalizedBox.ymin)
         let bottomRight = screen.globalPoint(normalizedX: normalizedBox.xmax, normalizedY: normalizedBox.ymax)
@@ -1196,18 +1212,50 @@ final class DottieScreenTaskRunner {
     }
 
     /// Brings a running app forward, else launches it by name.
+    /// Opens (or brings to the front) an app by name. Always through
+    /// NSWorkspace.openApplication, also for a running app: since macOS 14
+    /// NSRunningApplication.activate from an app that isn't in front (Dottie
+    /// almost never is) often does nothing and returns false, which is why
+    /// "open Notes" failed with Notes already running in round 2 of 1.0.80.
     static func openApplication(named appName: String) async -> Bool {
-        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "")
-        if let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
-            $0.activationPolicy == .regular && ($0.localizedName?.lowercased() == wantedName)
-        }) {
-            runningApplication.unhide()
-            return runningApplication.activate(options: [.activateAllWindows])
+        let wantedName = comparableApplicationName(appName)
+        let runningApplication = NSWorkspace.shared.runningApplications.first(where: {
+            $0.activationPolicy == .regular && comparableApplicationName($0.localizedName ?? "") == wantedName
+        })
+        let applicationURL = runningApplication?.bundleURL
+            ?? applicationURL(named: appName)
+            ?? DottieInstalledApps.shared.installedApp(matchingSpokenName: appName)?.url
+        if let applicationURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            do {
+                _ = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                return true
+            } catch {
+                DottieLog.warning("⚠️ Couldn't open \(appName) through Launch Services: \(error.localizedDescription)")
+            }
+        } else {
+            DottieLog.warning("⚠️ No installed app is called \(appName)")
         }
-        guard let applicationURL = applicationURL(named: appName) else { return false }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        return (try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)) != nil
+        guard let runningApplication else { return false }
+        runningApplication.unhide()
+        return runningApplication.activate(options: [.activateAllWindows])
+    }
+
+    /// An app name the way it's compared: lowercased, without ".app" or
+    /// spaces around it.
+    nonisolated static func comparableApplicationName(_ appName: String) -> String {
+        appName.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The best of `candidateNames` (app names without ".app") for an asked
+    /// name: an exact match first, else the first that starts with it
+    /// ("opera" finds "Opera GX"). nil when none fits.
+    nonisolated static func bestApplicationName(for appName: String, among candidateNames: [String]) -> String? {
+        let wantedName = comparableApplicationName(appName)
+        guard !wantedName.isEmpty else { return nil }
+        if let exactName = candidateNames.first(where: { comparableApplicationName($0) == wantedName }) { return exactName }
+        return candidateNames.first { comparableApplicationName($0).hasPrefix(wantedName) }
     }
 
     static func open(_ url: URL, inApplicationNamed appName: String) async -> Bool {
@@ -1220,7 +1268,6 @@ final class DottieScreenTaskRunner {
     /// Finds an installed app by name in the usual folders ("opera" finds
     /// Opera GX.app too).
     private static func applicationURL(named appName: String) -> URL? {
-        let wantedName = appName.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespaces)
         let searchFolders = [
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/Applications/Utilities"),
@@ -1228,16 +1275,18 @@ final class DottieScreenTaskRunner {
             URL(fileURLWithPath: "/System/Applications/Utilities"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
         ]
-        var prefixMatch: URL?
+        var appURLsByName: [String: URL] = [:]
+        var appNamesInOrder: [String] = []
         for folder in searchFolders {
             guard let folderItems = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
             for itemURL in folderItems where itemURL.pathExtension == "app" {
-                let itemName = itemURL.deletingPathExtension().lastPathComponent.lowercased()
-                if itemName == wantedName { return itemURL }
-                if prefixMatch == nil && itemName.hasPrefix(wantedName) { prefixMatch = itemURL }
+                let itemName = itemURL.deletingPathExtension().lastPathComponent
+                guard appURLsByName[itemName] == nil else { continue }
+                appURLsByName[itemName] = itemURL
+                appNamesInOrder.append(itemName)
             }
         }
-        return prefixMatch
+        return bestApplicationName(for: appName, among: appNamesInOrder).flatMap { appURLsByName[$0] }
     }
 
     // MARK: - New tabs and windows
@@ -1445,6 +1494,13 @@ final class DottieScreenTaskRunner {
                 "description": "Wait until the video or reel playing in the browser has played through once (reels loop, so this notices when it starts over), then carry on. Use it when the task says to watch something, play it once, or do something after a video ends.",
                 "parameters": ["type": "object", "properties": [
                     "max_seconds": ["type": "number", "description": "Give up after this long; default 600."]
+                ]]
+            ],
+            [
+                "name": "app_memory",
+                "description": "Look up what Dottie remembers about the app in front: where its buttons, icons and fields are (0-1000), what clicking them did before, and how the user did tasks there step by step. Use it when you don't know this app or page well. read_page_closely also has a smarter model explain every control on this page once (slower the first time).",
+                "parameters": ["type": "object", "properties": [
+                    "read_page_closely": ["type": "boolean"]
                 ]]
             ],
             [

@@ -61,4 +61,25 @@ struct ClaudeBotReasonTests {
         #expect(lineCount == 20_000)
         #expect(Date().timeIntervalSince(startedAt) < 1.0)
     }
+
+    // MARK: Leaving Claude alone after timeouts
+
+    @Test func aTimeoutLeavesClaudeAloneTenMinutesThenLonger() {
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 1) == 600)
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 2) == 1200)
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 3) == 2400)
+    }
+
+    @Test func theWaitStopsGrowingAtTwoHours() {
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 5) == 7200)
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 50) == 7200)
+        // A count that never happened still gets the shortest wait.
+        #expect(DottieClaudeBot.skipSeconds(afterTimeoutsInARow: 0) == 600)
+    }
+
+    @Test func aFreshCollectorHasNotTimedOut() {
+        let collector = DottieStreamedReplyCollector()
+        #expect(!collector.timedOut)
+        #expect(collector.text.isEmpty)
+    }
 }

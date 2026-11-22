@@ -163,7 +163,9 @@ final class DottieScreenLessons {
         let candidates = lessons.compactMap { lesson -> (Lesson, Double)? in
             guard lesson.isPlan, !lesson.hasProvenUseless else { return nil }
             if let lessonApp = lesson.appName, let appName, lessonApp != appName { return nil }
-            let overlap = DottieReplayStore.wordOverlap(lesson.task, task)
+            // Only the words saying what the job is about count, so "open
+            // notes" never gets the plan for "open Finder and show Downloads".
+            let overlap = DottieTaskMatching.taskSimilarity(lesson.task, task)
             return overlap >= 0.6 ? (lesson, overlap) : nil
         }
         guard let best = candidates.max(by: { first, second in

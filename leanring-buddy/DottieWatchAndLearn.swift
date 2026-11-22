@@ -250,12 +250,12 @@ final class DottieWatchAndLearn: ObservableObject {
 
     /// The how-tos that fit a job, for its instructions. "" when none.
     func howToText(forTask taskText: String, appName: String?) -> String {
-        let taskWords = Self.words(taskText)
         let matchingHowTos = howTos.filter { howTo in
-            let isSameApp = appName.map { !$0.isEmpty && howTo.appName.lowercased().contains($0.lowercased()) } ?? false
-            let appNamed = taskWords.contains(where: { howTo.appName.lowercased().contains($0) && $0.count > 3 })
-            let sharedWords = taskWords.intersection(Self.words(howTo.name + " " + howTo.goal + " " + howTo.worksFor))
-            return isSameApp || appNamed || sharedWords.count >= 2
+            DottieTaskMatching.howToFits(taskText: taskText, frontmostAppName: appName,
+                                         howToName: howTo.name, howToGoal: howTo.goal, howToAppName: howTo.appName)
+        }
+        if !matchingHowTos.isEmpty {
+            DottieLog.notice("🎓 Using \(public: matchingHowTos.count) learned how-to(s): \(public: matchingHowTos.map(\.name).joined(separator: ", "))")
         }
         return matchingHowTos.suffix(3).map(\.promptText).joined(separator: "\n\n")
     }
@@ -292,10 +292,6 @@ final class DottieWatchAndLearn: ObservableObject {
     }
 
     // MARK: - Helpers
-
-    private static func words(_ text: String) -> Set<String> {
-        Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 })
-    }
 
     private static func evenlySpaced(_ allFrames: [Data], count: Int) -> [Data] {
         guard allFrames.count > count, count > 1 else { return allFrames }

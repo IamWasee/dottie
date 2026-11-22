@@ -442,6 +442,31 @@ describe("talking and requests", () => {
     await call("/chat", { provider: "request", contents: [userText("do it")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", REQUEST_PROVIDER_ORDER: "glm" });
     expect(glmCalls).toHaveLength(1);
   });
+
+  it("asks GLM first for a screen job's plan, then Claude, and follows PLAN_PROVIDER_ORDER", async () => {
+    const glmFirst = fakeFetch([["api.z.ai", chatAnswer({ content: "{\"can_guess\":false}" })]]);
+    const planned = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect((await sseJSON(planned)).candidates[0].content.parts[0].text).toContain("can_guess");
+    expect(glmFirst.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+
+    const glmDown = fakeFetch([
+      ["api.z.ai", new Response("busy", { status: 400 })],
+      ["api.anthropic.com", claudeAnswer([{ type: "text", text: "{}" }])],
+    ]);
+    const fellBack = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(fellBack.status).toBe(200);
+    expect(glmDown.some((recorded) => recorded.url.includes("anthropic"))).toBe(true);
+
+    const claudeOnly = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "{}" }])]]);
+    await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", PLAN_PROVIDER_ORDER: "claude" });
+    expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+  });
+
+  it("keeps Claude first for other text asks", async () => {
+    const calls = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "hi" }])]]);
+    await call("/chat", { provider: "groq", contents: [userText("write a note")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(new URL(calls[0].url).host).toBe("api.anthropic.com");
+  });
 });
 
 describe("GET /config", () => {

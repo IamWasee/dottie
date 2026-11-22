@@ -31,7 +31,7 @@ extension CompanionManager {
         }
         notchPresenter.onStopScreenTask = { [weak self] in
             // The same stop button serves jobs and guides.
-            self?.stopScreenTask()
+            self?.stopScreenTask(reason: .stopButton)
             self?.stopGuide()
             if self?.smartHome.tvTaskRunner.stop() == true {
                 self?.noteStoppedJob("the TV job")
@@ -316,7 +316,7 @@ extension CompanionManager {
         stopAllSpeechPlayback()
         clearDetectedElementLocation()
         screenAnnotationManager.clear()
-        stopScreenTask()
+        stopScreenTask(reason: .escape)
         stopGuide()
         stopTeaching(clearingDrawing: true)
         fireLiveTurnFinishedHandler()

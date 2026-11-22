@@ -17,6 +17,7 @@ enum GeminiServerSentEvents {
     static func parts(from responseData: Data, callerFile: String = #fileID) -> [[String: Any]] {
         var allParts: [[String: Any]] = []
         var lastUsageMetadata: [String: Any]?
+        var lastAnswerUsage: DottieAskUsage?
         let responseText = String(decoding: responseData, as: UTF8.self)
         for line in responseText.components(separatedBy: .newlines) where line.hasPrefix("data:") {
             guard let eventData = line.dropFirst(5).trimmingCharacters(in: .whitespaces).data(using: .utf8),
@@ -25,13 +26,16 @@ enum GeminiServerSentEvents {
             if let usageMetadata = event["usageMetadata"] as? [String: Any] {
                 lastUsageMetadata = usageMetadata
             }
+            if let answerUsage = DottieAskUsage.fromAnswerEvent(event) {
+                lastAnswerUsage = answerUsage
+            }
             guard let candidates = event["candidates"] as? [[String: Any]],
                   let content = candidates.first?["content"] as? [String: Any],
                   let parts = content["parts"] as? [[String: Any]] else { continue }
             allParts.append(contentsOf: parts)
         }
         if let lastUsageMetadata {
-            recordUsageOnce(lastUsageMetadata, responseByteCount: responseData.count, callerFile: callerFile)
+            recordUsageOnce(lastUsageMetadata, answerUsage: lastAnswerUsage, responseByteCount: responseData.count, callerFile: callerFile)
         }
         return allParts
     }
@@ -51,7 +55,7 @@ enum GeminiServerSentEvents {
 
     /// Some callers read the same response twice (its parts, then its
     /// text), so each response is counted once.
-    private static func recordUsageOnce(_ usageMetadata: [String: Any], responseByteCount: Int, callerFile: String) {
+    private static func recordUsageOnce(_ usageMetadata: [String: Any], answerUsage: DottieAskUsage?, responseByteCount: Int, callerFile: String) {
         let usageDescription = ["promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount"]
             .map { "\(usageMetadata[$0] as? Int ?? 0)" }
             .joined(separator: "-")
@@ -67,6 +71,10 @@ enum GeminiServerSentEvents {
         }
         recentlyRecordedResponseKeysLock.unlock()
         guard !wasAlreadyRecorded else { return }
-        DottieUsage.recordFromAnyThread(area: DottieUsage.area(forCallerFile: callerFile), usageMetadata: usageMetadata)
+        let area = DottieUsage.area(forCallerFile: callerFile)
+        DottieUsage.recordFromAnyThread(area: area, usageMetadata: usageMetadata)
+        if let answerUsage {
+            DottieAskUsageLog.note(answerUsage, area: area, costCategory: DottieCostCategory.category(forCallerFile: callerFile))
+        }
     }
 }

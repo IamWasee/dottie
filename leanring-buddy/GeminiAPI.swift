@@ -172,6 +172,7 @@ final class GeminiAPI {
         var accumulatedResponseText = ""
         var answeringModel: String?
         var lastUsageMetadata: [String: Any]?
+        var lastAnswerUsage: DottieAskUsage?
         for try await line in byteStream.lines {
             guard line.hasPrefix("data: ") else { continue }
             let jsonString = String(line.dropFirst(6))
@@ -187,6 +188,9 @@ final class GeminiAPI {
             if let usageMetadata = responsePayload["usageMetadata"] as? [String: Any] {
                 lastUsageMetadata = usageMetadata
             }
+            if let answerUsage = DottieAskUsage.fromAnswerEvent(responsePayload) {
+                lastAnswerUsage = answerUsage
+            }
             let textChunk = Self.extractText(fromGenerateContentResponse: responsePayload)
             guard !textChunk.isEmpty else { continue }
             accumulatedResponseText += textChunk
@@ -197,6 +201,9 @@ final class GeminiAPI {
         let duration = Date().timeIntervalSince(startTime)
         if let lastUsageMetadata {
             DottieUsage.recordFromAnyThread(area: .voice, usageMetadata: lastUsageMetadata)
+        }
+        if let lastAnswerUsage {
+            DottieAskUsageLog.note(lastAnswerUsage, area: .voice, costCategory: "voice")
         }
         // Teaches the model picker how quick (or busy) this model is.
         DottieModelPicker.shared.record(model: requestedModel, seconds: duration, statusCode: 200, answeredBy: answeringModel)

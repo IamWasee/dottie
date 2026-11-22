@@ -155,6 +155,30 @@ enum DottieJev {
         return box
     }
 
+    /// Where `target` is on the screenshot, sharpened with a close-up when
+    /// the box is small (an icon, a small button): the close-up is cut from
+    /// a full-resolution capture and Jev is asked again on it
+    /// (DottieJevZoom). Falls back to the first box when the close-up
+    /// can't be made or Jev found something else there.
+    static func findPreciseBox(target: String, userContext: String? = nil, on screen: DottieDisplayCapture.Screenshot) async -> DottieJevBox? {
+        guard let firstBox = await findBox(target: target, userContext: userContext, in: screen.image) else { return nil }
+        guard DottieJevZoom.needsCloseUp(firstBox),
+              let sharpScreen = await DottieDisplayCapture.capture(displayFrame: screen.displayFrame, maximumDimension: 6000),
+              let closeUpRect = DottieJevZoom.closeUpRect(around: firstBox, imageWidth: sharpScreen.image.width, imageHeight: sharpScreen.image.height),
+              let closeUpImage = sharpScreen.image.cropping(to: closeUpRect),
+              let closeUpBox = await findBox(target: target, userContext: userContext, in: closeUpImage, timeoutSeconds: 3) else {
+            return firstBox
+        }
+        let refinedBox = DottieJevZoom.wholePictureBox(fromCloseUpBox: closeUpBox, closeUpRect: closeUpRect,
+                                                       imageWidth: sharpScreen.image.width, imageHeight: sharpScreen.image.height)
+        guard DottieJevZoom.isSameTarget(refinedBox: refinedBox, firstBox: firstBox) else {
+            DottieLog.notice("🎯 Jev's close-up found something else; keeping the first box")
+            return firstBox
+        }
+        DottieLog.notice("🎯 Jev sharpened the box on a close-up")
+        return refinedBox
+    }
+
     /// How likely `statement` is true on `image` (0-1), or nil.
     static func probability(of statement: String, in image: CGImage, timeoutSeconds: TimeInterval = 4) async -> Double? {
         guard let imageBase64 = sendableJPEGBase64(image) else { return nil }
@@ -188,11 +212,13 @@ enum DottieJev {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 let errorDetail = String(decoding: answerData.prefix(300), as: UTF8.self)
-                DottieLog.warning("⚠️ Jev answered \(statusCode) (\(errorDetail)); leaving it alone for a while")
+                DottieLog.warning("⚠️ Jev answered \(public: statusCode) (\(errorDetail)); leaving it alone for a while")
                 pausedUntil = Date().addingTimeInterval(pauseAfterFailureSeconds)
                 return nil
             }
-            DottieLog.notice("🎯 Jev answered in \(String(format: "%.2f", Date().timeIntervalSince(startedAt))) s")
+            let answerSeconds = Date().timeIntervalSince(startedAt)
+            DottieLog.notice("🎯 Jev answered in \(public: String(format: "%.2f", answerSeconds)) s")
+            DottieAskUsageLog.note(.jevAnswer(seconds: answerSeconds), area: .screenTasks, costCategory: "jev")
             return answerData
         } catch {
             DottieLog.warning("⚠️ Jev didn't answer: \(error.localizedDescription)")

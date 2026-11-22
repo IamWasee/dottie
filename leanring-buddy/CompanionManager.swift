@@ -1078,7 +1078,7 @@ final class CompanionManager: ObservableObject {
                 return self.screenTaskQueueSummary()
             default:
                 let didStopTV = self.smartHome.tvTaskRunner.stop()
-                return self.stopScreenTask() || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
+                return self.stopScreenTask(reason: .askedToStop) || didStopTV ? "stopped everything; the list is clear." : "nothing was running."
             }
         }
 
@@ -1501,6 +1501,8 @@ final class CompanionManager: ObservableObject {
         var missedSteps = 0
         // Text already written, so a new label doesn't land on top of one.
         var occupiedTextRects = DottieTeaching.textRects(of: drawingOverlayManager.figures)
+        // Lines already drawn, so a label doesn't land on one either.
+        var occupiedStrokeSegments = DottieTeaching.strokeSegments(of: drawingOverlayManager.figures)
         for plannedStep in plan.steps {
             if Task.isCancelled { break }
             var step = plannedStep
@@ -1539,8 +1541,16 @@ final class CompanionManager: ObservableObject {
                 let name = reference.lowercased()
                 return builtInAnchorFrames[name] != nil || builtInAnchorFrames.keys.contains(where: { name.hasPrefix($0 + ".") })
             }
-            let usesAnchors = usesPlanAnchors || usesCircledArea
-            if usesPlanAnchors && anchorFrames == nil {
+            var usesAnchors = usesPlanAnchors || usesCircledArea
+            // With a board open, writing tied to something on the screen
+            // goes on the board instead (under what's already written), so
+            // the board isn't left empty while the words cover the page.
+            if usesAnchors, let boardRect, !DottieTeaching.drawsOnScreenWhileBoardIsOpen(step) {
+                step = step.replacingPoints([DottieTeaching.boardPointBelowWrittenText(boardRect: boardRect, writtenTextRects: occupiedTextRects)])
+                usesAnchors = false
+                DottieLog.notice("✏️ Text tied to the screen written on the board instead")
+            }
+            if usesPlanAnchors && usesAnchors && anchorFrames == nil {
                 notchPresenter.showScreenTaskStep("finding it on your screen", title: "drawing")
                 anchorFrames = await anchorLookup?.value ?? [:]
                 notchPresenter.endScreenTask()
@@ -1559,10 +1569,14 @@ final class CompanionManager: ObservableObject {
                 teachingNarrationTask = narration
             }
             if var drawn = DottieTeaching.draw(step, in: space) {
-                if step.kind == .text {
-                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects)
+                // Text and the labels of curves, arrows and shapes keep off
+                // earlier text and lines, not only text steps.
+                if DottieTeaching.movesLabelsClearOfLines(step.kind) {
+                    drawn = DottieTeaching.nudgedClearOfText(drawn, occupiedTextRects: occupiedTextRects,
+                                                             occupiedStrokeSegments: occupiedStrokeSegments, boardRect: space.boardRect)
                 }
                 occupiedTextRects += DottieTeaching.textRects(of: drawn.figures)
+                occupiedStrokeSegments += DottieTeaching.strokeSegments(of: drawn.figures)
                 let leadInSeconds = 0.4
                 penTrace = DottiePenTrace(points: drawn.penPath, leadInSeconds: leadInSeconds, drawSeconds: drawn.duration,
                                           caption: step.caption.map(DottieMathText.prettyPlainText), displayFrame: displayFrame)
@@ -1929,18 +1943,23 @@ final class CompanionManager: ObservableObject {
     /// Stops the running job and drops every waiting one. Returns true if
     /// anything was running or waiting.
     @discardableResult
-    func stopScreenTask() -> Bool {
+    func stopScreenTask(reason: ScreenJobStopReason = .stopButton) -> Bool {
         let hadQueuedTasks = !queuedScreenTasks.isEmpty
         for queuedTask in queuedScreenTasks {
             noteStoppedJob("the waiting on-screen job \"\(queuedTask.text)\"")
         }
         queuedScreenTasks.removeAll()
         let stoppedTaskText = currentScreenTaskText
+        let lastStepText = notchPresenter.screenTaskStepText
         guard screenTaskRunner.stop() else { return hadQueuedTasks }
         currentScreenTaskText = nil
         noteStoppedJob("the on-screen job \"\(stoppedTaskText ?? "you started")\"")
-        DottieLog.notice("🧭 Screen task stopped")
+        DottieLog.notice("🧭 Screen task stopped (\(public: reason.rawValue)) at: \(lastStepText)")
+        // A job never just disappears: in round 2 of 1.0.80 a Notes job
+        // stopped after 24 steps and the user heard nothing about it.
+        let stoppedSummary = ScreenJobStopReason.summary(taskText: stoppedTaskText, lastStepText: lastStepText, reason: reason)
         notchPresenter.endScreenTask()
+        notchPresenter.showAgentUpdate(title: stoppedSummary.title, text: stoppedSummary.text)
         clearDetectedElementLocation()
         scheduleTransientHideIfNeeded()
         return true
@@ -2050,7 +2069,7 @@ final class CompanionManager: ObservableObject {
                 startNextQueuedScreenTask()
                 return
             }
-            resultText = "it couldn't be finished: \(reason)"
+            resultText = DottieScreenJobResultLine.failurePrefix + reason
         case .stopped:
             scheduleTransientHideIfNeeded()
             return
@@ -2076,7 +2095,11 @@ final class CompanionManager: ObservableObject {
             let handBackText = jobSucceeded
                 ? "Dottie did the on-screen part you asked for (\(taskText.prefix(300))). Result: \(resultText)\nCarry on and finish the task."
                 : "Dottie tried the on-screen part you asked for (\(taskText.prefix(300))) and \(resultText). Try another route if there is one, otherwise finish with what you have and say what's missing."
-            _ = clickyRoster.sendOrQueueMessage(handBackText, to: requestingHelper)
+            if !clickyRoster.sendOrQueueFollowUp(handBackText, to: requestingHelper) {
+                // The helper's task took all its turns: the user hears the
+                // result instead, and can tell the helper to carry on.
+                speakScreenTaskResult(taskText: taskText, resultText: resultText)
+            }
             return
         }
         // A smart replay's closing line only follows a run that worked.
@@ -2106,21 +2129,30 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Dottie says how the job went, as a turn of its own, so it reads like
-    /// her answer and lands in the conversation history.
+    /// Dottie says how the job went: the job's own answer, said as it is
+    /// (DottieScreenJobResultLine), with no model call. It lands in the
+    /// conversation history and in Home as her line alone.
     func speakScreenTaskResult(taskText: String, resultText: String, waitingCount: Int = 0, closingMessage: String? = nil) {
-        let nextLine = waitingCount == 0 ? "" : " you've already started the next job on the list (\(waitingCount) were waiting); you can mention you're moving on to it."
-        var instructionText = "the on-screen job you started is finished. job: \"\(taskText)\". result: \(resultText)\n"
-            + "tell the user the result now in one short, fun sentence. don't start the job again." + nextLine
-        // The user typed this line for the end of every run of a smart
-        // replay, so it's said exactly, in place of the usual result.
-        if let closingMessage {
-            instructionText = "the smart replay you were running is finished. say exactly this, word for word, and nothing else: \"\(closingMessage)\". don't start the job again." + nextLine
-        }
+        let spokenLine = DottieScreenJobResultLine.spokenLine(resultText: resultText, waitingCount: waitingCount, closingMessage: closingMessage)
         transientHideTask?.cancel()
         transientHideTask = nil
         showOverlayTransientlyIfNeeded()
-        sendTranscriptToGeminiWithScreenshot(transcript: instructionText, inputKind: .typed)
+        conversationHistory.append((
+            userTranscript: DottieScreenJobResultLine.historyUserLine(taskText: taskText),
+            assistantResponse: spokenLine
+        ))
+        if conversationHistory.count > Self.rememberedExchangeCount {
+            conversationHistory.removeFirst(conversationHistory.count - Self.rememberedExchangeCount)
+        }
+        conversationStore.append(userText: "", clickyText: spokenLine, inputKind: .typed)
+        notchPresenter.updateLiveCaption(spokenLine)
+        notchPresenter.showFinishedResponse(spokenLine)
+        DottieLog.notice("🧭 Said the screen job's result without a model call")
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.speakClassicAnswer(spokenLine)
+            self.scheduleTransientHideIfNeeded()
+        }
     }
 
     // MARK: - Guides (teaching the app on screen)
@@ -2136,7 +2168,7 @@ final class CompanionManager: ObservableObject {
         modeName: String,
         scriptedNextStep: (@MainActor (Int) async -> DottieGuide.Step?)? = nil
     ) -> String {
-        stopScreenTask()
+        stopScreenTask(reason: .guideStarted)
         let mode = DottieGuide.Mode(rawValue: modeName.lowercased()) ?? .steps
         currentGuideGoal = goal
         DottieLog.notice("🧑‍🏫 Guide (\(mode.rawValue)): \(goal)")

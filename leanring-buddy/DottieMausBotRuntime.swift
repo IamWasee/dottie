@@ -254,6 +254,10 @@ final class DottieMausBotRuntime {
             translator.consume(frame)
         }
 
+        // A bot Dottie paused while it was idle (so MausBot's nightly
+        // memory run skipped it) is woken first.
+        await DottieMausBotIdlePause.shared.prepareForTurn(botID: botID, launcher: launcher)
+
         DottieMausBotPaths.ensureFoldersExist()
         let messageFileURL = DottieMausBotPaths.messageFilesFolderURL.appendingPathComponent("\(UUID().uuidString).md")
         DottieFileSaver.save(text: message, to: messageFileURL)

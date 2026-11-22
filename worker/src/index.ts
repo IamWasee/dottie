@@ -57,6 +57,13 @@ export interface Env {
   HELPER_PROVIDER_ORDER?: string;
   GROQ_TALK_MODELS?: string;
   REQUEST_PROVIDER_ORDER?: string;
+  PLAN_PROVIDER_ORDER?: string;
+  /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
+  SCREEN_STEP_ATTEMPT_SECONDS?: string;
+  /** How many of a screen step's newest screenshots go to the model (1-5, default 2). */
+  SCREEN_STEP_SCREENSHOTS?: string;
+  /** "model=input/output,…" dollars per million tokens, on top of DEFAULT_MODEL_PRICES; for the cost in each answer's usage. */
+  MODEL_PRICES?: string;
   /** Dottie's own Telegram bot, for one-tap phone pairing (see phoneRelay.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   PHONE_RELAY: DurableObjectNamespace;
@@ -165,12 +172,12 @@ import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fitt
 import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
-import { splitPassthroughKey, usageRefusal } from "./usageLimits";
+import { type AnswerSpend, JEV_DOLLARS_PER_ANSWER, costCategoryKey, installSpendResponse, recordInstallSpend, splitPassthroughKey, usageRefusal } from "./usageLimits";
 export { PhoneRelay } from "./phoneRelay";
 export { InstallUsage } from "./usageLimits";
 
 export default {
-  async fetch(incomingRequest: Request, env: Env): Promise<Response> {
+  async fetch(incomingRequest: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(incomingRequest.url);
 
     const request = await requestWithinSizeLimit(incomingRequest, maximumBodyBytes(url));
@@ -195,7 +202,7 @@ export default {
       const passthroughUsageRefusal = await usageRefusal(request, url, env);
       if (passthroughUsageRefusal) return passthroughUsageRefusal;
       try {
-        return await handleGeminiPassthrough(request, url, env);
+        return await withSpendRecorded(await handleGeminiPassthrough(request, url, env), request, url, env, ctx, costCategoryKey(request, url, undefined));
       } catch (error) {
         console.error(`[/gemini] Unhandled error:`, error);
         return jsonResponse({ error: SERVER_ERROR_MESSAGE }, 500);
@@ -238,6 +245,11 @@ export default {
         return await handleSearch(url);
       }
 
+      // This install's own spend for the last 31 days (asks, tokens, estimated dollars).
+      if (request.method === "GET" && url.pathname === "/usage") {
+        return await installSpendResponse(request, url, env);
+      }
+
       if (request.method === "GET" && url.pathname === "/config") {
         return jsonResponse({
           groq: env.GROQ_API_KEY
@@ -255,11 +267,13 @@ export default {
       }
 
       if (url.pathname === "/chat") {
-        return await handleChat(request, env);
+        const category = costCategoryKey(request, url, await chatRole(request));
+        return await withSpendRecorded(await handleChat(request, env), request, url, env, ctx, category);
       }
 
       if (url.pathname === "/jev") {
-        return await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL);
+        const jevSpend = { asks: 1, dollars: JEV_DOLLARS_PER_ANSWER, unpricedAsks: 0, inputTokens: 0, outputTokens: 0 };
+        return await withSpendRecorded(await handleJev(request, env.JEV_API_KEY, env.JEV_MODEL), request, url, env, ctx, costCategoryKey(request, url, undefined), jevSpend);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
@@ -269,6 +283,33 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+/** The role a /chat body asks for ("talk", "request", "screen", "plan"…), read from a copy so the body stays unread. */
+async function chatRole(request: Request): Promise<string | undefined> {
+  const body = await request.clone().json<{ provider?: unknown }>().catch(() => undefined);
+  return typeof body?.provider === "string" ? body.provider : undefined;
+}
+
+/**
+ * Hands the answer back and adds what it cost to the install's spend for
+ * the day, after the answer has gone (or right away without a context, in
+ * tests).
+ */
+async function withSpendRecorded(
+  answer: Response,
+  request: Request,
+  url: URL,
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  category: string,
+  fixedSpend?: AnswerSpend
+): Promise<Response> {
+  if (!env.INSTALL_USAGE || !answer.ok) return answer;
+  const recording = recordInstallSpend(answer.clone(), request, url, env, category, fixedSpend);
+  if (ctx) ctx.waitUntil(recording);
+  else await recording;
+  return answer;
+}
 
 /**
  * Answers a chat request in Gemini's request and streaming format (the app
@@ -300,8 +341,77 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return requestResponse ?? jsonResponse({ error: "Claude couldn't answer this request" }, 503);
   }
 
-  const answer = await answerWithAnyProvider(env, requestBody, true, "/chat");
+  // A screen step: the app waits about 20 s in all, so each model gets a
+  // short try and the next provider still answers in time. In round 2 of
+  // 1.0.80 GLM held steps for its whole 45 s try, the app gave up at 20 s
+  // and Claude, next in line, never got the step.
+  const attemptLimitMilliseconds = wantedRole === "screen" ? screenStepAttemptMilliseconds(env.SCREEN_STEP_ATTEMPT_SECONDS) : undefined;
+  // A screen step needs the screen as it is now, not the last five: every
+  // older screenshot made GLM read up to five full-size pictures a step.
+  const routedBody = wantedRole === "screen" ? keepingNewestScreenshots(requestBody, screenStepScreenshotCount(env.SCREEN_STEP_SCREENSHOTS)) : requestBody;
+  // A screen job's plan in words: GLM first (celly's call), Claude only
+  // when GLM can't; it used to go to Claude Haiku like any other text.
+  const forcedOrder = wantedRole === "plan" ? env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER : undefined;
+  const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
+}
+
+/** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
+export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
+
+/** How many of a screen step's screenshots are sent on, by default 2. */
+export const DEFAULT_SCREEN_STEP_SCREENSHOTS = 2;
+
+/** SCREEN_STEP_SCREENSHOTS as a count; the default when unset or not a whole number from 1 to 5. */
+export function screenStepScreenshotCount(setting: string | undefined): number {
+  const count = Number(setting ?? "");
+  return Number.isInteger(count) && count >= 1 && count <= 5 ? count : DEFAULT_SCREEN_STEP_SCREENSHOTS;
+}
+
+/**
+ * The body with only its newest screenshots left as pictures; older ones
+ * become a short note so the steps still read in order. Pictures the user
+ * shared sit before the first screenshot in the first turn and are always
+ * kept, since the job is about finding them.
+ */
+export function keepingNewestScreenshots(body: Record<string, unknown>, screenshotsToKeep: number): Record<string, unknown> {
+  type Part = { inlineData?: { mimeType?: string } } & Record<string, unknown>;
+  type Content = { parts?: Part[] } & Record<string, unknown>;
+  const contents = structuredClone((body.contents ?? []) as Content[]);
+  const isPicture = (part: Part) => (part.inlineData?.mimeType ?? "").startsWith("image/");
+  const firstTurnParts = contents[0]?.parts ?? [];
+  const firstTurnScreenshotIndex = firstTurnParts.map(isPicture).lastIndexOf(true);
+  let screenshotsLeft = screenshotsToKeep;
+  for (let contentIndex = contents.length - 1; contentIndex >= 0; contentIndex -= 1) {
+    const parts = contents[contentIndex].parts ?? [];
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      if (!isPicture(parts[partIndex])) continue;
+      const isSharedPicture = contentIndex === 0 && partIndex < firstTurnScreenshotIndex;
+      if (isSharedPicture) continue;
+      if (screenshotsLeft > 0) {
+        screenshotsLeft -= 1;
+      } else {
+        parts[partIndex] = { text: "(an earlier screenshot, left out)" };
+      }
+    }
+  }
+  return { ...body, contents };
+}
+
+/** How long one model may take on a screen step, by default 8 s. */
+export const DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS = 8;
+
+/** SCREEN_STEP_ATTEMPT_SECONDS in milliseconds; the default when unset or not a number from 1 to 60. */
+export function screenStepAttemptMilliseconds(setting: string | undefined): number {
+  const seconds = Number.parseFloat(setting ?? "");
+  const usableSeconds = Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? seconds : DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS;
+  return Math.round(usableSeconds * 1000);
+}
+
+/** The provider with its tries cut to at most the limit; unchanged without one. */
+export function withAttemptLimit(provider: ChatProvider, attemptLimitMilliseconds: number | undefined): ChatProvider {
+  if (attemptLimitMilliseconds === undefined || provider.attemptTimeoutMilliseconds <= attemptLimitMilliseconds) return provider;
+  return { ...provider, attemptTimeoutMilliseconds: attemptLimitMilliseconds };
 }
 
 /** What a caller hears when every model is busy, down or has no key. */
@@ -316,21 +426,24 @@ async function answerWithAnyProvider(
   env: Env,
   geminiBody: Record<string, unknown>,
   streaming: boolean,
-  routeName: string
+  routeName: string,
+  attemptLimitMilliseconds?: number,
+  forcedOrder?: string
 ): Promise<Response | undefined> {
-  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName);
+  const paidResponse = await answerWithPaidProviders(env, geminiBody, streaming, routeName, forcedOrder, attemptLimitMilliseconds);
   if (paidResponse) return paidResponse;
   const backups: ChatProvider[] = [];
   const groq = groqFromEnv(env);
   if (groq) backups.push(groq);
   if (env.NVIDIA_API_KEY) backups.push(nimProvider(env.NVIDIA_API_KEY, env.NIM_MODELS));
-  for (const backup of backups) {
+  for (const unlimitedBackup of backups) {
+    const backup = withAttemptLimit(unlimitedBackup, attemptLimitMilliseconds);
     const fittedBody = fittedForProvider(backup, geminiBody, routeName === "/chat");
     if (!canAnswer(backup, fittedBody)) {
       console.warn(`[${routeName}] too big for ${backup.name}`);
       continue;
     }
-    const backupResponse = await answerWithProvider(backup, fittedBody, streaming);
+    const backupResponse = await answerWithProvider(backup, fittedBody, streaming, { pricesSetting: env.MODEL_PRICES });
     if (backupResponse) return backupResponse;
     console.warn(`[${routeName}] ${backup.name} couldn't answer`);
   }
@@ -374,16 +487,18 @@ async function answerWithPaidProviders(
   geminiBody: Record<string, unknown>,
   streaming: boolean,
   routeName: string,
-  forcedOrder?: string
+  forcedOrder?: string,
+  attemptLimitMilliseconds?: number
 ): Promise<Response | undefined> {
-  for (const provider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
+  for (const unlimitedProvider of paidProviders(env, geminiBody, routeName === "/gemini", forcedOrder)) {
+    const provider = withAttemptLimit(unlimitedProvider, attemptLimitMilliseconds);
     // Screen jobs send a screenshot every step: only the newest ones go.
     const fittedBody = fittedForProvider(provider, geminiBody, routeName === "/chat");
     if (!canAnswer(provider, fittedBody)) {
       console.warn(`[${routeName}] too big for ${provider.name}`);
       continue;
     }
-    const response = await answerWithProvider(provider, fittedBody, streaming);
+    const response = await answerWithProvider(provider, fittedBody, streaming, { pricesSetting: env.MODEL_PRICES });
     if (response) return response;
     console.warn(`[${routeName}] ${provider.name} couldn't answer`);
   }
@@ -403,7 +518,7 @@ async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promi
   const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
   const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
   if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
-  const groqResponse = await answerWithProvider(groq, requestBody, true);
+  const groqResponse = await answerWithProvider(groq, requestBody, true, { pricesSetting: env.MODEL_PRICES });
   return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);
 }
 

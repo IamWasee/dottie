@@ -52,6 +52,13 @@ nonisolated struct DottieLogMessage: ExpressibleByStringInterpolation, Sendable 
             textWithDetails += String(describing: value)
             textWithoutDetails += DottieLogMessage.hiddenValueMarker
         }
+
+        /// A value that is never personal (a model name, a token count), so
+        /// it always shows: `"\(public: modelName)"`.
+        mutating func appendInterpolation<Value>(public value: Value) {
+            textWithDetails += String(describing: value)
+            textWithoutDetails += String(describing: value)
+        }
     }
 }
 
