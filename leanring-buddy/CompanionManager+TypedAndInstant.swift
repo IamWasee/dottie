@@ -29,6 +29,11 @@ extension CompanionManager {
         notchPresenter.onOpenHome = { [weak self] in
             self?.openHomeWindow()
         }
+        notchPresenter.onStopSpeaking = { [weak self] in
+            guard let self else { return }
+            self.stopAllSpeechPlayback()
+            if self.voiceState == .responding { self.voiceState = .idle }
+        }
         notchPresenter.onStopScreenTask = { [weak self] in
             // The same stop button serves jobs and guides.
             self?.stopScreenTask(reason: .stopButton)

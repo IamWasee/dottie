@@ -1662,6 +1662,10 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Multi-step screen tasks
 
+    /// What the last screen job did, handed to the next turns so a "why?"
+    /// is answered from the record, not guessed (DottieLastScreenJob).
+    var lastScreenJob: DottieLastScreenJob?
+
     /// A job for the screen task runner: what to do and which saved
     /// pictures it's about.
     struct ScreenJob {
@@ -2091,6 +2095,8 @@ final class CompanionManager: ObservableObject {
         brain.record(.screenJob, "did on screen: \(taskText). result: \(resultText)")
         var jobSucceeded = false
         if case .finished = outcome { jobSucceeded = true }
+        lastScreenJob = DottieLastScreenJob(taskText: taskText, resultText: resultText, succeeded: jobSucceeded,
+                                            moveSummaries: screenTaskRunner.lastJobMoveSummaries, endedAt: Date())
         if DottieAwayMode.shared.isAway {
             let jobTitle = "On screen: " + String(taskText.components(separatedBy: Self.awayRetryMarker)[0].prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
             let succeeded = jobSucceeded
@@ -2166,6 +2172,7 @@ final class CompanionManager: ObservableObject {
             guard let self else { return }
             try? await self.speakClassicAnswer(spokenLine)
             self.scheduleTransientHideIfNeeded()
+            await self.returnToIdleWhenSpeechEnds()
         }
     }
 
@@ -2515,6 +2522,21 @@ final class CompanionManager: ObservableObject {
         systemSpeechSynthesizer.stopSpeaking()
     }
 
+    /// Speaking sets voiceState to responding, and only a turn's own
+    /// pipeline set it back. A line said outside a turn (a screen job's
+    /// result, the "couldn't reach my brain" line) left it there, so the
+    /// notch stayed on the speaking card, which has no timer, after the
+    /// line was said. Once the speech ends this goes back to idle (unless a
+    /// new turn already moved on), and the card becomes the answer card,
+    /// which closes by itself.
+    func returnToIdleWhenSpeechEnds() async {
+        while isAnySpeechPlaying, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        guard voiceState == .responding else { return }
+        voiceState = .idle
+    }
+
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
     /// waits for speech and any pointing animation to finish, then
     /// fades out the overlay after a 1-second pause. Cancelled automatically
@@ -2580,5 +2602,6 @@ final class CompanionManager: ObservableObject {
             ? "I couldn't reach my brain just now. Give it a second and try me again."
             : "I'm not connected yet. Open Settings, add the server address under Connection, and try again."
         speakWithSystemVoice(utterance)
+        Task { [weak self] in await self?.returnToIdleWhenSpeechEnds() }
     }
 }

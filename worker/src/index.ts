@@ -58,6 +58,7 @@ export interface Env {
   GROQ_TALK_MODELS?: string;
   REQUEST_PROVIDER_ORDER?: string;
   PLAN_PROVIDER_ORDER?: string;
+  SCREEN_PROVIDER_ORDER?: string;
   /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
   SCREEN_STEP_ATTEMPT_SECONDS?: string;
   /** How many of a screen step's newest screenshots go to the model (1-5, default 2). */
@@ -351,13 +352,21 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   const routedBody = wantedRole === "screen" ? keepingNewestScreenshots(requestBody, screenStepScreenshotCount(env.SCREEN_STEP_SCREENSHOTS)) : requestBody;
   // A screen job's plan in words: GLM first (celly's call), Claude only
   // when GLM can't; it used to go to Claude Haiku like any other text.
-  const forcedOrder = wantedRole === "plan" ? env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER : undefined;
+  // A screen step: GLM only by default (celly, 22 Nov). Claude used to take
+  // every step GLM was slow on, with the screenshot, which ran up her bill;
+  // Jev does the deciding and GLM is the cheaper backup.
+  let forcedOrder: string | undefined;
+  if (wantedRole === "plan") forcedOrder = env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER;
+  if (wantedRole === "screen") forcedOrder = env.SCREEN_PROVIDER_ORDER || DEFAULT_SCREEN_PROVIDER_ORDER;
   const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
 }
 
 /** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
 export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
+
+/** The order a screen step (`"provider": "screen"`) asks the paid providers in. */
+export const DEFAULT_SCREEN_PROVIDER_ORDER = "glm";
 
 /** How many of a screen step's screenshots are sent on, by default 2. */
 export const DEFAULT_SCREEN_STEP_SCREENSHOTS = 2;

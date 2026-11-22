@@ -210,6 +210,7 @@ final class NotchPresenter: ObservableObject {
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool, _ alwaysAllow: Bool) -> Void)?
     var onRemoveLearnedDictionaryWord: ((String) -> Void)?
     var onStopScreenTask: (() -> Void)?
+    var onStopSpeaking: (() -> Void)?
     var onStopStatusLine: ((String) -> Void)?
 
     private var autoDismissTask: Task<Void, Never>?
@@ -475,6 +476,12 @@ final class NotchPresenter: ObservableObject {
 
     func cancelTextInput() {
         draftText = ""
+        collapse()
+    }
+
+    /// The speaking card's close button: stops the voice and folds the card.
+    func closeSpeakingCard() {
+        onStopSpeaking?()
         collapse()
     }
 

@@ -47,18 +47,49 @@ enum DottieTalkerProtocol {
 
     static let requestWord = "REQUEST"
     static let screenWord = "SCREEN"
+    /// The talker's one control for giving an ask to Claude.
+    static let handToClaudeToolName = "hand_to_claude"
+    static let handToClaudeDeclaration: [String: Any] = [
+        "name": handToClaudeToolName,
+        "description": "Give this ask to Claude. Call it for anything that isn't chat: doing, finding or looking something up, the user's screen, apps, files, a job Dottie ran, drawing, teaching, or anything you aren't sure of.",
+        "parameters": [
+            "type": "OBJECT",
+            "properties": [
+                "needs_screen": ["type": "BOOLEAN", "description": "True when it's about what is on the user's screen."]
+            ],
+            "required": ["needs_screen"]
+        ]
+    ]
 
-    /// The talker's only rules. Short on purpose: it's read on every turn.
+    /// Groq's only tool.
+    static let talkerToolDeclarations: [[String: Any]] = [handToClaudeDeclaration]
+
+    /// What one talker answer means: hand_to_claude (or any other call,
+    /// which Groq has no business making) goes to Claude; words are read as
+    /// before (REQUEST still counts).
+    static func decision(fromTalkerAnswer answer: DottieBrainAnswer) -> DottieTalkDecision {
+        if let handOver = answer.functionCalls.first(where: { $0.name == handToClaudeToolName }) {
+            return .request(needsScreen: (handOver.arguments["needs_screen"] as? Bool) ?? true)
+        }
+        if !answer.functionCalls.isEmpty {
+            return .request(needsScreen: true)
+        }
+        return decision(fromTalkerAnswer: answer.text)
+    }
+
+    /// The talker's rules: Groq only chats. Everything else goes to Claude
+    /// through its one control, hand_to_claude, so it has to know what each
+    /// of them is for.
     static func talkerSystemPrompt(personalityLine: String) -> String {
         """
         \(personalityLine)
-        you are dottie's voice on the user's mac. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no extra details or follow-up questions, no lists or symbols.
-        if the user is only chatting (hello, how are you, jokes, opinions, a quick fact you know), answer them.
-        if they want anything done or looked up, or ask about their screen, apps, files, helpers, reminders, calendar, the web, or anything you aren't sure of, reply with only \(requestWord). asking you to open, move, click, change, add, send, write or find something is always \(requestWord), even when you could explain how; never write steps or a plan. so is pointing at, drawing or explaining something on their screen, or teaching them. never say you can't do something: reply \(requestWord) instead. add \(screenWord) after it (\(requestWord) \(screenWord)) when it's about what is on their screen.
+        you are dottie's voice on the user's mac, and you only chat. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no lists or symbols.
+        you answer chat yourself: hello, how are you, jokes, opinions, a quick fact you know.
+        claude is the brain that does everything else: it runs jev on their screen (clicking, typing, moving, filling in), the mac tools (apps, folders, files, sites, music), the web, reminders, helpers, memory, and pointing at, drawing or explaining something on their screen or teaching them. so for anything that isn't chat, call \(handToClaudeToolName), never answer it yourself: anything done or looked up, anything about their screen, apps, files or a job dottie ran, or anything you aren't sure of. never write steps or a plan, and never say you can't do something.
         """
     }
 
-    static func requestSystemPrompt(personalityLine: String, profile: String) -> String {
+    static func requestSystemPrompt(personalityLine: String, profile: String, lastScreenJobSection: String = "") -> String {
         var prompt = """
         \(personalityLine)
         you are dottie, on the user's mac, doing what they asked. your final reply is spoken aloud: answer only what they asked, in one short, casual, lowercase sentence (two only if they asked for more). no extra details, no describing things they didn't ask about, no offers or follow-up questions, no lists, markdown or symbols.
@@ -69,6 +100,9 @@ enum DottieTalkerProtocol {
         """
         if !profile.isEmpty {
             prompt += "\nwhat you know about the user:\n" + profile
+        }
+        if !lastScreenJobSection.isEmpty {
+            prompt += "\n" + lastScreenJobSection
         }
         return prompt
     }
@@ -86,15 +120,21 @@ enum DottieTalkerProtocol {
     static func talkerRequestBody(
         transcript: String,
         exchanges: [(userTranscript: String, assistantResponse: String)],
-        personalityLine: String
+        personalityLine: String,
+        lastScreenJobLine: String = ""
     ) -> [String: Any] {
-        [
+        let systemText = lastScreenJobLine.isEmpty
+            ? talkerSystemPrompt(personalityLine: personalityLine)
+            : talkerSystemPrompt(personalityLine: personalityLine) + "\n" + lastScreenJobLine
+        let body: [String: Any] = [
             "provider": "talk",
-            "systemInstruction": ["parts": [["text": talkerSystemPrompt(personalityLine: personalityLine)]]],
+            "systemInstruction": ["parts": [["text": systemText]]],
             "contents": historyContents(exchanges, count: talkerExchangeCount)
                 + [["role": "user", "parts": [["text": transcript]]]],
+            "tools": [["functionDeclarations": talkerToolDeclarations]],
             "generationConfig": ["maxOutputTokens": talkerAnswerTokenLimit, "temperature": 0.6]
         ]
+        return body
     }
 
     /// Reads the talker's answer. An empty answer counts as a request, so a
@@ -228,24 +268,43 @@ enum DottieTalkerProtocol {
     /// Voice Dottie's tools the request brain gets declared. The rest stay
     /// behind find_tool, so each request carries a short tool list. Pointing
     /// is a [POINT:] tag here, and there's no higher model to hand to.
+    /// Every declared tool is sent with every round, so the list is kept to
+    /// what most asks use (celly, 22 Nov: Claude costs); helpers' status,
+    /// guides, memory, the schedule, typing and smart devices are found
+    /// with find_tool when needed.
     static let requestToolNames: Set<String> = [
         "do_task_on_screen", "stop_screen_task", "answer_screen_job",
-        "start_helper", "check_helper", "list_helpers",
-        "search_web", "guide_user", "quick_mac_action",
-        "remember", "recall_memory", "get_schedule", "add_reminder",
+        "start_helper", "search_web", "quick_mac_action", "add_reminder",
         "copy_to_clipboard", "explain_on_screen", "write_notes", "click_on_screen",
         // Direct Mac tools. Without them Claude only had quick_mac_action or
         // a screen job, and in round 2 of 1.0.80 "open my folder" and "open
         // Notes" became screen jobs that looked at screenshots for minutes.
-        "run_applescript", "open_url", "browser", "press_keys", "type_text",
-        "apps_and_tools", "use_app_tool", "control_device"
+        "run_applescript", "open_url", "browser", "press_keys",
+        "apps_and_tools", "use_app_tool"
     ]
 
     /// Mac tools the request brain must try before a screen job for an
     /// everyday Mac action. The Pre-ship check holds asks to this.
     static let macToolNames: Set<String> = [
-        "quick_mac_action", "run_applescript", "open_url", "browser", "press_keys", "control_device", "use_app_tool"
+        "quick_mac_action", "run_applescript", "open_url", "browser", "press_keys", "use_app_tool"
     ]
+
+    /// What a picture is replaced with after Claude's first round.
+    static let leftOutPictureText = "(the screenshot was shown in the first round and is left out now to save tokens)"
+
+    /// The conversation with every picture swapped for a short note: Claude
+    /// sees the screen once, and each later tool round would otherwise send
+    /// the same screenshot again.
+    static func withoutPictures(_ conversation: [[String: Any]]) -> [[String: Any]] {
+        conversation.map { content in
+            guard let parts = content["parts"] as? [[String: Any]], parts.contains(where: { $0["inlineData"] != nil }) else { return content }
+            var keptParts = parts.filter { $0["inlineData"] == nil }
+            keptParts.append(["text": leftOutPictureText])
+            var changedContent = content
+            changedContent["parts"] = keptParts
+            return changedContent
+        }
+    }
 
     static func requestToolDeclarations(from everyDeclaration: [[String: Any]], findAndUseDeclarations: [[String: Any]]) -> [[String: Any]] {
         everyDeclaration.filter { declaration in
@@ -271,15 +330,17 @@ enum DottieTalker {
     static func decide(
         transcript: String,
         exchanges: [(userTranscript: String, assistantResponse: String)],
-        personalityLine: String
+        personalityLine: String,
+        lastScreenJobLine: String = ""
     ) async -> DottieTalkDecision {
-        let requestBody = DottieTalkerProtocol.talkerRequestBody(transcript: transcript, exchanges: exchanges, personalityLine: personalityLine)
+        let requestBody = DottieTalkerProtocol.talkerRequestBody(transcript: transcript, exchanges: exchanges,
+                                                                 personalityLine: personalityLine, lastScreenJobLine: lastScreenJobLine)
         // Every model call from here until the next turn counts toward this ask.
         let askNumber = DottieAskCounter.startNewAsk()
         DottieLog.notice("💬 Ask \(public: askNumber) started")
         do {
             let answer = try await post(requestBody, timeoutSeconds: 12)
-            let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer.text)
+            let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer)
             if case .request(let needsScreen) = decision {
                 DottieLog.notice("🗣️ Groq handed the turn to Claude\(needsScreen ? " with the screen" : "")")
             }
@@ -322,6 +383,10 @@ enum DottieTalker {
                 toolResults.append((functionCall.name, await runTool(functionCall.name, functionCall.arguments)))
             }
             conversation.append(DottieTalkerProtocol.toolResultsTurn(toolResults))
+            // The screenshot goes once: later rounds carry a note instead.
+            if toolRound == 0 {
+                conversation = DottieTalkerProtocol.withoutPictures(conversation)
+            }
         }
         return ""
     }

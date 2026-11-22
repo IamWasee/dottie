@@ -107,6 +107,9 @@ final class DottieScreenTaskRunner {
     private var jobTier: DottieModelPicker.Tier = .normal
     /// "⚡ done from memory in 2.1s" when the last job used a replay.
     private(set) var lastReplayReport: String?
+    /// Every move and tool call of the job running now or that just ended,
+    /// for what Dottie says about it afterwards (DottieLastScreenJob).
+    private(set) var lastJobMoveSummaries: [String] = []
     /// True while a replay plays (no Gemini calls, quicker cursor).
     private(set) var isReplaying = false
     /// A replay the user asked for by name, for the job with this wording.
@@ -239,6 +242,8 @@ final class DottieScreenTaskRunner {
         // Every action and tool call, and which round of a repeated job this is.
         var jobMemory = DottieJobMemory(taskText: taskText)
         var earlyFinishRejectionCount = 0
+        var unfinishedFinishRejectionCount = 0
+        lastJobMoveSummaries = []
         let lessonSelection = DottieScreenLessons.shared.select(forTask: taskText, frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName)
         var lessonsText = lessonSelection.promptText
         // A form job gets the user's saved details up front, so it fills
@@ -324,8 +329,12 @@ final class DottieScreenTaskRunner {
                 click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
                     _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
                 },
-                openSite: { [weak self] address, stepNumber in
-                    _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+                openSite: { [weak self] address, stepNumber, inSameTab in
+                    if inSameTab {
+                        _ = await self?.performOpenURLInFrontTab(address: address, stepNumber: stepNumber)
+                    } else {
+                        _ = await self?.performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+                    }
                 }
             )
             let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, actions: jevActions)
@@ -537,6 +546,17 @@ final class DottieScreenTaskRunner {
                         respond("not finished: this is round \(jobMemory.currentRound) of \(jobMemory.totalRounds). If this round is done, call round_done, then do the next round the same way.")
                         continue
                     }
+                    // "Only the first move went through, so I stopped": its
+                    // own words say there's more to do and nothing needs the
+                    // user, so it carries on instead of ending half done.
+                    if unfinishedFinishRejectionCount < Self.maximumFinishRejections,
+                       DottieLastScreenJob.finishShouldCarryOn(answer: answer) {
+                        unfinishedFinishRejectionCount += 1
+                        DottieLog.notice("🧭 The finish said the job isn't done, carrying on")
+                        onProgress?(stepNumber, "doing the rest")
+                        respond(DottieLastScreenJob.carryOnReply)
+                        continue
+                    }
                     // Don't finish early: a long job is done only when its
                     // "done when" shows on a fresh screen.
                     if didSucceed, isLongJob, finishRejectionCount < Self.maximumFinishRejections,
@@ -572,6 +592,7 @@ final class DottieScreenTaskRunner {
                 if recentActionSignatures.count > 6 { recentActionSignatures.removeFirst() }
                 actionLog.append(actionSignature)
                 jobMemory.noteMove(actionSignature)
+                lastJobMoveSummaries = jobMemory.allMoves
                 let result: String
                 // Clicking the same thing over and over (a link that opens a
                 // new tab each time) piles up tabs, so the third click in a
@@ -1105,6 +1126,23 @@ final class DottieScreenTaskRunner {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         return didOpen ? "opened \(address)" : "couldn't open \(address)"
+    }
+
+    /// Opens a page in the browser tab in front, the way a person would
+    /// (cmd+L, the address, Return), so a job that already opened the site
+    /// doesn't pile up tabs. Works in every browser, Opera included, since
+    /// it needs no scripting.
+    private func performOpenURLInFrontTab(address: String, stepNumber: Int) async -> String {
+        let fullAddress = address.contains("://") ? address : "https://" + address
+        onProgress?(stepNumber, "opening \(URL(string: fullAddress)?.host ?? address)")
+        guard DottieScreenActionPerformer.press(keyCombination: "cmd+l") else {
+            return await performOpenURL(address: address, browserName: nil, stepNumber: stepNumber)
+        }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await DottieScreenActionPerformer.type(fullAddress)
+        _ = DottieScreenActionPerformer.press(keyCombination: "return")
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        return "opened \(fullAddress) in the same tab"
     }
 
     /// Clicks a point, showing the cursor fly there first.

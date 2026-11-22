@@ -97,7 +97,8 @@ struct TalkerTests {
     }
 
     @Test func talkerPromptStaysShort() {
-        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 900)
+        // Room for "never guess what you did or why" (a job's made-up reasons, 1.0.82).
+        #expect(DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "").count < 1000)
         // Room for the Mac-tool-first rule (round 2 of 1.0.80); it's cached.
         #expect(DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "").count < 1800)
     }
@@ -170,7 +171,7 @@ struct TalkerTests {
     // MARK: - Mac tools before screen jobs (round 2 of 1.0.80)
 
     @Test func requestBrainGetsTheDirectMacTools() {
-        for toolName in ["run_applescript", "open_url", "browser", "press_keys", "type_text", "apps_and_tools", "use_app_tool", "control_device", "quick_mac_action"] {
+        for toolName in ["run_applescript", "open_url", "browser", "press_keys", "apps_and_tools", "use_app_tool", "quick_mac_action"] {
             #expect(DottieTalkerProtocol.requestToolNames.contains(toolName), "\(toolName) isn't on the request list")
         }
     }
@@ -213,4 +214,83 @@ struct TalkerTests {
         let quickDescription = await MainActor.run { DottieQuickMacAction.toolDescription }
         #expect(quickDescription.contains("open a folder or file"))
     }
+
+    // MARK: - Groq's one control: talk, or hand the ask to Claude
+
+    @Test func groqHasOnlyTheHandToClaudeControl() throws {
+        let body = DottieTalkerProtocol.talkerRequestBody(transcript: "open notes", exchanges: [], personalityLine: "")
+        let tools = try #require(body["tools"] as? [[String: Any]])
+        let declarations = try #require(tools.first?["functionDeclarations"] as? [[String: Any]])
+        #expect(declarations.compactMap { $0["name"] as? String } == [DottieTalkerProtocol.handToClaudeToolName])
+        #expect(JSONSerialization.isValidJSONObject(body))
+    }
+
+    @Test func handToClaudeSendsTheAskOnWithOrWithoutTheScreen() {
+        let withScreen = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: ["needs_screen": true])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: withScreen) == .request(needsScreen: true))
+        let withoutScreen = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: ["needs_screen": false])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: withoutScreen) == .request(needsScreen: false))
+        // A call missing its argument looks at the screen, to be safe.
+        let noArgument = DottieBrainAnswer(text: "", functionCalls: [(name: "hand_to_claude", arguments: [:])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: noArgument) == .request(needsScreen: true))
+    }
+
+    @Test func anyOtherCallFromGroqStillGoesToClaude() {
+        let madeUpCall = DottieBrainAnswer(text: "", functionCalls: [(name: "open_app", arguments: ["name": "Notes"])], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: madeUpCall) == .request(needsScreen: true))
+    }
+
+    @Test func groqsWordsAreStillReadAsBefore() {
+        let chat = DottieBrainAnswer(text: "doing great, you?", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: chat) == .say("doing great, you?"))
+        let oldWay = DottieBrainAnswer(text: "REQUEST SCREEN", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: oldWay) == .request(needsScreen: true))
+        let empty = DottieBrainAnswer(text: "", functionCalls: [], modelContent: nil)
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: empty) == .request(needsScreen: false))
+    }
+
+    @Test func groqKnowsItOnlyChatsAndWhatClaudeIsFor() {
+        let prompt = DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "")
+        #expect(prompt.contains("you only chat"))
+        #expect(prompt.contains("claude is the brain that does everything else"))
+        #expect(prompt.contains("jev on their screen"))
+        #expect(prompt.contains("call hand_to_claude"))
+        #expect(prompt.contains("a job dottie ran"))
+    }
+
+    // MARK: - Fewer tokens per Claude ask (celly, 22 Nov)
+
+    @Test func claudeSeesTheScreenshotOnlyOnce() throws {
+        let picture = Data([0xFF, 0xD8, 0xFF])
+        let firstTurn = DottieTalkerProtocol.requestUserTurn(transcript: "what's this error?", labeledImages: [(data: picture, label: "screen 1")])
+        let conversation: [[String: Any]] = [
+            ["role": "user", "parts": [["text": "earlier ask"]]],
+            firstTurn,
+            ["role": "model", "parts": [["functionCall": ["name": "search_web", "args": ["query": "error"]]]]]
+        ]
+        let trimmed = DottieTalkerProtocol.withoutPictures(conversation)
+        #expect(trimmed.count == conversation.count)
+        let trimmedParts = try #require(trimmed[1]["parts"] as? [[String: Any]])
+        #expect(!trimmedParts.contains { $0["inlineData"] != nil })
+        #expect(trimmedParts.contains { ($0["text"] as? String) == DottieTalkerProtocol.leftOutPictureText })
+        #expect(trimmedParts.contains { ($0["text"] as? String)?.contains("what's this error?") == true })
+        // Turns without pictures are left exactly as they were.
+        #expect((trimmed[0]["parts"] as? [[String: Any]])?.first?["text"] as? String == "earlier ask")
+        #expect(trimmed[2]["role"] as? String == "model")
+        #expect(JSONSerialization.isValidJSONObject(trimmed))
+        // Already without pictures: nothing more is added.
+        let trimmedTwice = DottieTalkerProtocol.withoutPictures(trimmed)
+        #expect((trimmedTwice[1]["parts"] as? [[String: Any]])?.count == trimmedParts.count)
+    }
+
+    @Test func claudesToolListIsShortAndTheRestAreFound() {
+        #expect(DottieTalkerProtocol.requestToolNames.count <= 18)
+        for rarelyUsed in ["check_helper", "list_helpers", "guide_user", "remember", "recall_memory", "get_schedule", "type_text", "control_device"] {
+            #expect(!DottieTalkerProtocol.requestToolNames.contains(rarelyUsed), "\(rarelyUsed) should be found with find_tool")
+        }
+        let every: [[String: Any]] = [["name": "guide_user"], ["name": "search_web"], ["name": "get_schedule"]]
+        let declared = DottieTalkerProtocol.requestToolDeclarations(from: every, findAndUseDeclarations: [["name": "find_tool"], ["name": "use_tool"]])
+        #expect(declared.compactMap { $0["name"] as? String } == ["search_web", "find_tool", "use_tool"])
+    }
 }
+

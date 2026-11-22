@@ -454,6 +454,18 @@ struct NotchRootView: View {
                 .lineLimit(3)
                 .truncationMode(.head)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            // The speaking card has no timer of its own, so it always has a
+            // way out: stop talking and fold back into the notch.
+            Button(action: { notchPresenter.closeSpeakingCard() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Stop and close")
         }
         .padding(.top, 8)
     }

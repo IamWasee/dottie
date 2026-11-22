@@ -76,13 +76,24 @@ describe("screen step tries", () => {
     expect(glm.attemptTimeoutMilliseconds).toBe(45_000);
   });
 
-  it("hands a screen step to Claude when GLM doesn't answer within the limit", async () => {
+  it("never hands a screen step to Claude by default, even when GLM is slow", async () => {
+    const abortedAfter: number[] = [];
+    stubGLMThatNeverAnswers(abortedAfter);
+    const response = await callChat(
+      { provider: "screen", contents: [screenshotTurn()] },
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1" }
+    );
+    expect(response.status).toBe(503);
+    expect(abortedAfter).toHaveLength(1);
+  });
+
+  it("hands a screen step to Claude when GLM doesn't answer within the limit and SCREEN_PROVIDER_ORDER says so", async () => {
     const abortedAfter: number[] = [];
     stubGLMThatNeverAnswers(abortedAfter);
     const startedAt = Date.now();
     const response = await callChat(
       { provider: "screen", contents: [screenshotTurn()] },
-      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1" }
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1", SCREEN_PROVIDER_ORDER: "glm,claude" }
     );
     expect(response.status).toBe(200);
     const answer = await sseJSON(response);
@@ -137,7 +148,7 @@ describe("model prices", () => {
 
   it("skips entries that aren't model=in/out", () => {
     const prices = modelPrices("broken, =1/2, glm=abc/1, glm-x=1, , qwen/qwen3.8-27b=0.1/0.2");
-    expect(Object.keys(prices).sort()).toEqual(["claude-haiku-5-5", "qwen/qwen3.8-27b"]);
+    expect(Object.keys(prices).sort()).toEqual(["claude-haiku-5-5", "glm-5.3-flash", "qwen/qwen3.8-27b"]);
   });
 
   it("matches model names whatever their case", () => {
@@ -152,7 +163,9 @@ describe("answer usage", () => {
   });
 
   it("says the cost is unknown for a model without a price", () => {
-    expect(answerUsage("glm", "glm-5.3-flash", { promptTokenCount: 10, candidatesTokenCount: 5 }, 800).estimatedDollars).toBeNull();
+    expect(answerUsage("groq", "openai/gpt-oss-20b", { promptTokenCount: 10, candidatesTokenCount: 5 }, 800).estimatedDollars).toBeNull();
+    // GLM-5.3-Flash has its regular price built in now.
+    expect(answerUsage("glm", "glm-5.3-flash", { promptTokenCount: 1_000_000, candidatesTokenCount: 1_000_000 }, 800).estimatedDollars).toBeCloseTo(0.65);
   });
 
   it("uses a price from the setting", () => {

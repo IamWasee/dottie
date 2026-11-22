@@ -293,12 +293,13 @@ type AnswerUsageMetadata = { promptTokenCount?: number; candidatesTokenCount?: n
 
 /**
  * Dollars per million tokens (input/output) for the models Dottie uses.
- * Claude Haiku 5.5's are Anthropic's list prices. GLM, Groq and NIM aren't
- * listed here because their prices weren't checked: set them in
+ * Claude Haiku 5.5's are Anthropic's list prices; GLM-5.3-Flash's are
+ * Z.ai's regular price after its launch discount ended (9 Sep 2026). Groq
+ * and NIM aren't listed because their prices weren't checked: set them in
  * MODEL_PRICES ("model=input/output,…") from the providers' consoles, and
  * until then their answers say the cost is unknown instead of $0.
  */
-export const DEFAULT_MODEL_PRICES = "claude-haiku-5-5=0.10/0.50";
+export const DEFAULT_MODEL_PRICES = "claude-haiku-5-5=0.10/0.50,glm-5.3-flash=0.15/0.50";
 
 export interface ModelPrice {
   inputDollarsPerMillion: number;
