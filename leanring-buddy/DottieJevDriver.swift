@@ -50,6 +50,9 @@ enum DottieJevDriverPlan {
         case rightClick(label: String, centerX: Double, centerY: Double)
         case drag(fromLabel: String, fromX: Double, fromY: Double, toLabel: String, toX: Double, toY: Double)
         case typeText(String, pressesReturn: Bool)
+        /// Click a text box, then type into it: one move, so the typing
+        /// never lands nowhere because the box wasn't selected.
+        case typeIntoField(fieldLabel: String, centerX: Double, centerY: Double, text: String, pressesReturn: Bool)
         case pressReturn
         case pressKeys(keys: String, meaning: String)
         case scrollDown
@@ -83,6 +86,10 @@ enum DottieJevDriverPlan {
             case .scrollRight: return "Scroll or swipe right"
             case .quickMacAction(let text): return "Do it straight on the Mac without the screen: \"\(text)\""
             case .recallAppMemory: return "Look up what Dottie remembers about this app first (its buttons, where they are, and how the user did this before)"
+            case .typeIntoField(let fieldLabel, _, _, let text, let pressesReturn):
+                return pressesReturn
+                    ? "Click the text box \"\(fieldLabel)\", type \"\(text)\", then press Return"
+                    : "Click the text box \"\(fieldLabel)\" and type \"\(text)\""
             case .typeText(let text, let pressesReturn):
                 return pressesReturn
                     ? "Type \"\(text)\" into the text box that's selected now, then press Return"
@@ -104,6 +111,7 @@ enum DottieJevDriverPlan {
             switch self {
             case .openSite, .searchWeb, .openApp, .goBack, .pressReturn, .doubleClick, .pressKeys, .quickMacAction: return true
             case .typeText(_, let pressesReturn): return pressesReturn
+            case .typeIntoField(_, _, _, _, let pressesReturn): return pressesReturn
             case .click, .clickControl, .clickUnlabeled, .rightClick, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory, .finished, .noneFits: return false
             }
         }
@@ -137,6 +145,8 @@ enum DottieJevDriverPlan {
             case .quickMacAction(let text): return "did \"\(text)\" on the Mac"
             case .recallAppMemory: return "looked up what Dottie remembers about this app"
             case .typeText(let text, let pressesReturn): return pressesReturn ? "typed \"\(text)\" and pressed Return" : "typed \"\(text)\""
+            case .typeIntoField(let fieldLabel, _, _, let text, let pressesReturn):
+                return pressesReturn ? "typed \"\(text)\" into \(fieldLabel) and pressed Return" : "typed \"\(text)\" into \(fieldLabel)"
             case .pressReturn: return "pressed Return"
             case .scrollDown: return "scrolled down"
             case .scrollUp: return "scrolled up"
@@ -176,6 +186,9 @@ enum DottieJevDriverPlan {
     static let maximumOptions = 250
     static let maximumControlOptions = 50
     static let maximumDoubleAndRightClickTargets = 8
+    /// Text boxes that get "click it and type" options, and pieces per box.
+    static let maximumTypingFields = 4
+    static let maximumPiecesPerField = 3
     /// Jev saying the goal is done this surely ends the job.
     static let doneProbabilityToFinish = 0.8
     /// Below both of these Jev is guessing among many; the step model goes on.
@@ -384,6 +397,7 @@ enum DottieJevDriverPlan {
         if !trimmedTaskText.isEmpty, trimmedTaskText.count <= 120 {
             leadingMoves.append(.quickMacAction(trimmedTaskText))
         }
+        leadingMoves.append(contentsOf: typeIntoFieldMoves(screenControls: screenControls, textPieces: textPieces))
         leadingMoves.append(contentsOf: controlsWorthOffering(screenControls, screenTexts: screenTexts, taskText: taskText).map {
             Move.clickControl(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
         })
@@ -411,6 +425,22 @@ enum DottieJevDriverPlan {
             return seenSignatures.insert(moveSignature).inserted
         }
         return freshMoves.enumerated().map { index, move in Option(key: "o\(index + 1)", move: move) }
+    }
+
+    /// "Click this text box and type this" for the screen's text boxes
+    /// (top to bottom) and the first pieces of text, with and without Return.
+    static func typeIntoFieldMoves(screenControls: [ScreenControl], textPieces: [String]) -> [Move] {
+        let textBoxes = screenControls.filter { $0.kind == "text box" }
+            .sorted { ($0.centerY, $0.centerX) < ($1.centerY, $1.centerX) }
+            .prefix(maximumTypingFields)
+        var moves: [Move] = []
+        for textBox in textBoxes {
+            for textPiece in textPieces.prefix(maximumPiecesPerField) {
+                moves.append(.typeIntoField(fieldLabel: textBox.label, centerX: textBox.centerX, centerY: textBox.centerY, text: textPiece, pressesReturn: true))
+                moves.append(.typeIntoField(fieldLabel: textBox.label, centerX: textBox.centerX, centerY: textBox.centerY, text: textPiece, pressesReturn: false))
+            }
+        }
+        return moves
     }
 
     /// Keys people press all day, each with what it does, so Jev can pick a
@@ -703,7 +733,14 @@ enum DottieJevDriver {
         var knownHowTo = givenHowTo
         // App memory is read only when Jev asks, once per job.
         var hasRecalledAppMemory = false
-        let textPieces = DottieJevDriverPlan.textPieces(from: taskText)
+        let requestTextPieces = DottieJevDriverPlan.textPieces(from: taskText)
+        var textPieces = requestTextPieces
+        // The text a job needs typed, written once in the background while
+        // Jev starts (DottieJevTextPieces); picked up as soon as it's ready.
+        var textPieceWriter: Task<[String], Never>?
+        if DottieJevTextPieces.jobNeedsTyping(taskText) {
+            textPieceWriter = Task { await DottieJevTextPieces.write(forTask: taskText) }
+        }
         let siteAddresses = DottieJevDriverPlan.siteAddresses(from: taskText)
         let appNames = appNamesNamed(in: taskText)
         var movesSoFar: [String] = []
@@ -759,6 +796,14 @@ enum DottieJevDriver {
                 DottieAppPage.Control(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
             })
             let screenTexts = DottieJevDriverPlan.clickableTexts(from: allScreenTexts, taskText: taskText)
+            // Wait for the written text once a text box is on screen or
+            // after the first move (pages whose boxes Accessibility doesn't
+            // name); on the first screen there's usually nothing to type into.
+            if let pendingWriter = textPieceWriter,
+               stepNumber >= 2 || screenControls.contains(where: { $0.kind == "text box" }) || DottieScreenActionPerformer.isTextFieldFocused {
+                textPieces = DottieJevTextPieces.merged(requestTextPieces, await pendingWriter.value)
+                textPieceWriter = nil
+            }
 
             // Something clicked here before led where this task is going:
             // click it now (where it sits on this screen) without asking Jev.
@@ -895,6 +940,16 @@ enum DottieJevDriver {
             _ = await DottieQuickMacAction.perform(arguments: ["action": text])
         case .recallAppMemory:
             break
+        case .typeIntoField(let fieldLabel, let centerX, let centerY, let text, let pressesReturn):
+            await actions.click(screen.globalPoint(normalizedX: centerX, normalizedY: centerY), fieldLabel, 1, false, screen, stepNumber)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if DottieScreenActionPerformer.isFocusedFieldSecure { return }
+            actions.progress(stepNumber, "typing \"\(text.prefix(40))\"")
+            await DottieScreenActionPerformer.type(text)
+            if pressesReturn {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                DottieScreenActionPerformer.press(keyCombination: "enter")
+            }
         case .typeText(let text, let pressesReturn):
             actions.progress(stepNumber, "typing \"\(text.prefix(40))\"")
             await DottieScreenActionPerformer.type(text)

@@ -23,7 +23,7 @@ nonisolated enum DottieCostCategory {
     static let filesByCategory: [String: [String]] = [
         "voice": ["DottieTalker", "GeminiAPI", "CompanionManager", "CompanionManager+ClassicVoice", "CompanionManager+TypedAndInstant"],
         "screen_job_steps": ["DottieScreenTaskRunner", "DottieScreenJobClaudeBrain"],
-        "screen_job_plan": ["DottieScreenJobGuesser", "DottieTaskGoal"],
+        "screen_job_plan": ["DottieScreenJobGuesser", "DottieTaskGoal", "DottieJevTextPieces"],
         "jev": ["DottieJev", "DottieJevDriver"],
         "tv_jobs": ["DottieTVTaskRunner"],
         "guides": ["DottieGuide", "DottieGuideBrain"],
