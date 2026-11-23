@@ -12,9 +12,9 @@
     "check": "npm run typecheck && npm run test:coverage && npm run test:performance && npm run build:check"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.8.3",
+    "@cloudflare/vitest-plugin": "^1.8.5",
     "@cloudflare/workers-types": "^5.20261112.1",
-    "@vitest/coverage-istanbul": "^5.1.0",
+    "@vitest/coverage-istanbul": "^5.1.1",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
     "wrangler": "^4.161.0"
