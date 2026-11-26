@@ -40,6 +40,12 @@ export interface ChatProvider {
   attemptTimeoutMilliseconds: number;
   /** Model-specific switches (thinking off); retried without them on a 400. */
   extrasForModel: (model: string) => Record<string, unknown>;
+  /**
+   * The provider's own server-side tools for this model (Groq's
+   * browser_search on GPT-OSS), added after the request's own tools. Like
+   * the extras, they are dropped on the retry after a 400.
+   */
+  builtInToolsForModel?: (model: string) => Array<Record<string, unknown>>;
   /** "anthropic" speaks Claude's Messages API; otherwise OpenAI's chat format. */
   format?: "chat" | "anthropic";
   /** Asked for boxes in pixels of the newest picture (see pixelBoxConversion). */
@@ -70,6 +76,21 @@ export const DEFAULT_NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-
 
 /** Answers at the end count toward Groq's per-minute tokens too. */
 const DEFAULT_ANSWER_TOKENS = 1024;
+
+/**
+ * Room for a built-in search: the model's reasoning and its search calls
+ * count as answer tokens, so a talker's 160 would be used up before the
+ * answer. Only the tokens actually written are paid for.
+ */
+export const MINIMUM_ANSWER_TOKENS_WITH_BUILT_IN_TOOLS = 1024;
+
+/** Groq's own web search, which GPT-OSS runs on Groq's side. */
+export const GROQ_BROWSER_SEARCH_TOOL = { type: "browser_search" };
+
+/** Groq's built-in browser search for the GPT-OSS models, none for the others. */
+export function groqBrowserSearchTools(model: string): Array<Record<string, unknown>> {
+  return model.startsWith("openai/gpt-oss") ? [GROQ_BROWSER_SEARCH_TOOL] : [];
+}
 
 /** Groq's free plan allows 8,000 tokens a minute per model. */
 const DEFAULT_GROQ_MAX_REQUEST_TOKENS = 7000;
@@ -386,7 +407,8 @@ export async function answerWithProvider(
     ? { "x-api-key": provider.apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json", accept: "application/json" }
     : { authorization: `Bearer ${provider.apiKey}`, "content-type": "application/json", accept: "application/json" };
   for (const model of models) {
-    for (const extras of [provider.extrasForModel(model), {}]) {
+    const builtInTools = speaksAnthropic ? [] : provider.builtInToolsForModel?.(model) ?? [];
+    for (const extras of [withBuiltInTools(provider.extrasForModel(model), requestForProvider, builtInTools), {}]) {
       const startedAt = Date.now();
       let response: Response;
       try {
@@ -611,6 +633,29 @@ export function lowercaseSchema(schema: unknown): unknown {
 
 // MARK: - chat → Gemini
 
+/**
+ * The first try's extras with the provider's built-in tools added after the
+ * request's own (a talker's hand_to_claude stays), and room for the search
+ * in the answer tokens.
+ */
+export function withBuiltInTools(
+  extras: Record<string, unknown>,
+  request: Record<string, unknown>,
+  builtInTools: Array<Record<string, unknown>>
+): Record<string, unknown> {
+  if (!builtInTools.length) return extras;
+  const requestTools = Array.isArray(request.tools) ? (request.tools as Array<Record<string, unknown>>) : [];
+  const answerTokens = typeof request.max_tokens === "number" ? request.max_tokens : 0;
+  return {
+    ...extras,
+    tools: [...requestTools, ...builtInTools],
+    max_tokens: Math.max(answerTokens, MINIMUM_ANSWER_TOKENS_WITH_BUILT_IN_TOOLS),
+  };
+}
+
+/** GPT-OSS cites its search results as 【1†source】, which isn't for speaking. */
+const SEARCH_CITATION_PATTERN = /【[^】]*】/g;
+
 export function toGeminiResponse(chatResponse: Record<string, unknown>, answeringModel: string): Record<string, unknown> | undefined {
   const choice = ((chatResponse.choices ?? []) as Array<Record<string, unknown>>)[0];
   const message = (choice?.message ?? {}) as Record<string, unknown>;
@@ -618,7 +663,7 @@ export function toGeminiResponse(chatResponse: Record<string, unknown>, answerin
 
   // GLM wraps boxes in <|begin_of_box|>…<|end_of_box|>; the app wants the JSON.
   const text = typeof message.content === "string"
-    ? message.content.replace(/<\|(begin|end)_of_box\|>/g, "").trim()
+    ? message.content.replace(/<\|(begin|end)_of_box\|>/g, "").replace(SEARCH_CITATION_PATTERN, "").trim()
     : "";
   if (text) parts.push({ text });
 

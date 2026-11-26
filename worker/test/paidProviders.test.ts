@@ -9,7 +9,9 @@ import {
 import {
   anthropicProvider,
   answerWithProvider,
+  groqBrowserSearchTools,
   toChatRequest,
+  withBuiltInTools,
   zaiProvider,
   DEFAULT_ANTHROPIC_MODELS,
   DEFAULT_ZAI_MODELS,
@@ -417,6 +419,70 @@ describe("talking and requests", () => {
     expect(calls).toHaveLength(1);
     expect(new URL(calls[0].url).host).toBe("api.groq.com");
     expect(calls[0].json.tools[0].function.name).toBe("hand_to_claude");
+  });
+
+  it("adds built-in tools after the request's own and keeps a bigger answer budget", () => {
+    const extras = { reasoning_effort: "low" };
+    expect(withBuiltInTools(extras, { max_tokens: 160 }, [])).toBe(extras);
+    expect(withBuiltInTools(extras, { tools: [{ type: "function" }], max_tokens: 160 }, [{ type: "browser_search" }]))
+      .toEqual({ reasoning_effort: "low", tools: [{ type: "function" }, { type: "browser_search" }], max_tokens: 1024 });
+    expect(withBuiltInTools({}, { max_tokens: 4000 }, [{ type: "browser_search" }]).max_tokens).toBe(4000);
+    expect(withBuiltInTools({}, {}, [{ type: "browser_search" }]).max_tokens).toBe(1024);
+    expect(groqBrowserSearchTools("openai/gpt-oss-20b")).toEqual([{ type: "browser_search" }]);
+    expect(groqBrowserSearchTools("qwen/qwen3.8-27b")).toEqual([]);
+  });
+
+  it("gives the talker Groq's own browser search beside hand_to_claude, with room for the search", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "it's 31 degrees and sunny in dhaka【0†weather.com】" })]]);
+    const body = {
+      ...talkBody,
+      contents: [userText("what's the weather in dhaka")],
+      tools: [{ functionDeclarations: [{ name: "hand_to_claude", description: "Give this ask to Claude.", parameters: { type: "OBJECT", properties: {} } }] }],
+      generationConfig: { maxOutputTokens: 160 },
+    };
+    const response = await call("/chat", body, { GROQ_API_KEY: "g" });
+    const parts = (await sseJSON(response)).candidates[0].content.parts;
+    expect(parts[0].text).toBe("it's 31 degrees and sunny in dhaka");
+    expect(calls[0].json.tools.map((tool: { type: string; function?: { name: string } }) => tool.function?.name ?? tool.type))
+      .toEqual(["hand_to_claude", "browser_search"]);
+    expect(calls[0].json.max_tokens).toBe(1024);
+    expect(calls[0].json.reasoning_effort).toBe("low");
+  });
+
+  it("gives browser search even when the talker sends no tools of its own", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect(calls[0].json.tools).toEqual([{ type: "browser_search" }]);
+  });
+
+  it("asks again without browser search when Groq turns it down", async () => {
+    const calls = fakeFetch([
+      ["api.groq.com", (recorded) => Array.isArray((recorded.json as { tools?: unknown[] }).tools)
+        ? new Response(JSON.stringify({ error: { message: "browser_search not supported" } }), { status: 400 })
+        : chatAnswer({ content: "hey there" })],
+    ]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("hey there");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].json.tools).toBeUndefined();
+    expect(calls[1].json.model).toBe("openai/gpt-oss-120b");
+  });
+
+  it("leaves browser search off with GROQ_TALK_WEB_SEARCH=off and for models that aren't GPT-OSS", async () => {
+    let calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g", GROQ_TALK_WEB_SEARCH: " OFF " });
+    expect(calls[0].json.tools).toBeUndefined();
+    expect(calls[0].json.max_tokens).toBe(120);
+    calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g", GROQ_TALK_MODELS: "qwen/qwen3.8-27b" });
+    expect(calls[0].json.tools).toBeUndefined();
+  });
+
+  it("never gives browser search to Groq outside the talker", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "a quick answer" })]]);
+    await call("/chat", { provider: "groq", contents: [userText("summarize this")] }, { GROQ_API_KEY: "g" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].json.tools).toBeUndefined();
   });
 
   it("follows GROQ_TALK_MODELS, trying the next when one fails", async () => {

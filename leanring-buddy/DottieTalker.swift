@@ -234,8 +234,8 @@ enum DottieTalkerProtocol {
         """
         \(personalityLine)
         you are dottie's voice on the user's mac, and you only chat. your words are spoken aloud: answer only what they asked, in one short, casual, lowercase sentence, no lists or symbols.
-        you answer chat yourself: hello, how are you, jokes, opinions, a quick fact you know.
-        claude is the brain that does everything else: it runs jev on their screen (clicking, typing, moving, filling in), the mac tools (apps, folders, files, sites, music), the web, reminders, helpers, memory, and pointing at, drawing or explaining something on their screen or teaching them. so for anything that isn't chat, call \(handToClaudeToolName), never answer it yourself: anything done or looked up, anything about their screen, apps, files or a job dottie ran, or anything you aren't sure of. never write steps or a plan, and never say you can't do something.
+        you answer chat yourself: hello, how are you, jokes, opinions, a quick fact. for a quick fact you don't know or that changes (weather, news, scores, prices, times), search the web yourself and say just the answer, not that you searched.
+        claude is the brain that does everything else: it runs jev on their screen (clicking, typing, moving, filling in), the mac tools (apps, folders, files, sites, music), reminders, helpers, memory, and pointing at, drawing or explaining something on their screen or teaching them. so for anything else, call \(handToClaudeToolName), never answer it yourself: anything to be done, anything about their screen, apps, files or a job dottie ran, or anything you aren't sure of. never write steps or a plan, and never say you can't do something.
         """
     }
 
@@ -500,7 +500,8 @@ enum DottieTalker {
             return .request(needsScreen: needsScreen)
         }
         do {
-            let answer = try await post(requestBody, timeoutSeconds: 12)
+            // Room for Groq's own web search on a quick fact; a timeout still goes to Claude.
+            let answer = try await post(requestBody, timeoutSeconds: 15)
             let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer)
             if case .request(let needsScreen) = decision {
                 DottieLog.notice("🗣️ Groq handed the turn to Claude\(needsScreen ? " with the screen" : "")")

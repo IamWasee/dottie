@@ -56,6 +56,8 @@ export interface Env {
   TEXT_PROVIDER_ORDER?: string;
   HELPER_PROVIDER_ORDER?: string;
   GROQ_TALK_MODELS?: string;
+  /** "off" turns off the talker's built-in web search (Groq's browser_search on GPT-OSS). */
+  GROQ_TALK_WEB_SEARCH?: string;
   REQUEST_PROVIDER_ORDER?: string;
   PLAN_PROVIDER_ORDER?: string;
   ADVISOR_PROVIDER_ORDER?: string;
@@ -170,7 +172,7 @@ function tooManyRequestsResponse(): Response {
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
 import { handleJev } from "./jev";
-import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
+import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fittedForProvider, groqBrowserSearchTools, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
 import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
@@ -538,6 +540,11 @@ async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promi
   if (!env.GROQ_API_KEY) return jsonResponse({ error: "talking needs GROQ_API_KEY" }, 503);
   const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
   const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
+  // Wasee (27 Nov): the talker searches the web itself for quick facts
+  // (weather, news, scores) with Groq's own browser search.
+  if (env.GROQ_TALK_WEB_SEARCH?.trim().toLowerCase() !== "off") {
+    groq.builtInToolsForModel = groqBrowserSearchTools;
+  }
   if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
   const groqResponse = await answerWithProvider(groq, requestBody, true, { pricesSetting: env.MODEL_PRICES });
   return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);

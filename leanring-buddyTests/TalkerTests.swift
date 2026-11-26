@@ -384,4 +384,25 @@ struct TalkerTests {
         // Runs before every spoken turn: 5,000 of each in well under a second.
         #expect(Date().timeIntervalSince(startedAt) < 1.0)
     }
+
+    // MARK: Groq's own web search (Wasee, 27 Nov)
+
+    @Test func groqSearchesTheWebForQuickFactsAndStillOnlyChats() {
+        let prompt = DottieTalkerProtocol.talkerSystemPrompt(personalityLine: "")
+        #expect(prompt.contains("search the web yourself"))
+        #expect(prompt.contains("weather, news, scores"))
+        #expect(prompt.contains("not that you searched"))
+        #expect(prompt.contains("anything to be done"))
+        // Its only declared tool is still hand_to_claude; the search runs on Groq's side.
+        #expect(DottieTalkerProtocol.talkerToolDeclarations.count == 1)
+    }
+
+    @Test func aSearchedAnswerIsSaidAsIs() {
+        let searchedAnswer = "it's 31 degrees and sunny in dhaka right now"
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: searchedAnswer) == .say(searchedAnswer))
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "real madrid won 2 to 1 last night") == .say("real madrid won 2 to 1 last night"))
+        // A question about a fact stays with Groq; looking it up as a job goes to Claude.
+        #expect(!DottieTalkerProtocol.isClearlyAnAskToDoSomething("what's the weather in dhaka"))
+        #expect(DottieTalkerProtocol.isClearlyAnAskToDoSomething("search the web for flights to dubai"))
+    }
 }
