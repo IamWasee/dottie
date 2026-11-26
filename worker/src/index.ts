@@ -58,6 +58,7 @@ export interface Env {
   GROQ_TALK_MODELS?: string;
   REQUEST_PROVIDER_ORDER?: string;
   PLAN_PROVIDER_ORDER?: string;
+  ADVISOR_PROVIDER_ORDER?: string;
   SCREEN_PROVIDER_ORDER?: string;
   /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
   SCREEN_STEP_ATTEMPT_SECONDS?: string;
@@ -357,6 +358,9 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   // Jev does the deciding and GLM is the cheaper backup.
   let forcedOrder: string | undefined;
   if (wantedRole === "plan") forcedOrder = env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER;
+  // Jev's advisor (text only: the screen's words and Jev's options): Claude
+  // Haiku (Wasee, 27 Nov), never GLM unless ADVISOR_PROVIDER_ORDER says so.
+  if (wantedRole === "advisor") forcedOrder = env.ADVISOR_PROVIDER_ORDER || DEFAULT_ADVISOR_PROVIDER_ORDER;
   if (wantedRole === "screen") forcedOrder = env.SCREEN_PROVIDER_ORDER || DEFAULT_SCREEN_PROVIDER_ORDER;
   const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
@@ -364,6 +368,9 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
 /** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
 export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
+
+/** The order Jev's advisor (`"provider": "advisor"`) asks the paid providers in. */
+export const DEFAULT_ADVISOR_PROVIDER_ORDER = "claude";
 
 /** The order a screen step (`"provider": "screen"`) asks the paid providers in. */
 export const DEFAULT_SCREEN_PROVIDER_ORDER = "glm";

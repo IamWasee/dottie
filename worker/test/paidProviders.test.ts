@@ -479,6 +479,25 @@ describe("talking and requests", () => {
     expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
   });
 
+  it("asks only Claude for Jev's advisor, and follows ADVISOR_PROVIDER_ORDER", async () => {
+    const claudeOnly = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "{\"do\":\"none\"}" }])]]);
+    const advised = await call("/chat", { provider: "advisor", contents: [userText("which email is newest?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect((await sseJSON(advised)).candidates[0].content.parts[0].text).toContain("none");
+    expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+
+    const claudeDown = fakeFetch([
+      ["api.anthropic.com", new Response("busy", { status: 529 })],
+      ["api.z.ai", chatAnswer({ content: "glm" })],
+    ]);
+    const failed = await call("/chat", { provider: "advisor", contents: [userText("which email?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(failed.ok).toBe(false);
+    expect(claudeDown.some((recorded) => recorded.url.includes("api.z.ai"))).toBe(false);
+
+    const glmChosen = fakeFetch([["api.z.ai", chatAnswer({ content: "glm" })]]);
+    await call("/chat", { provider: "advisor", contents: [userText("which email?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", ADVISOR_PROVIDER_ORDER: "glm" });
+    expect(glmChosen.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+  });
+
   it("keeps Claude first for other text asks", async () => {
     const calls = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "hi" }])]]);
     await call("/chat", { provider: "groq", contents: [userText("write a note")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });

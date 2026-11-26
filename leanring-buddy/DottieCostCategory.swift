@@ -25,6 +25,7 @@ nonisolated enum DottieCostCategory {
         "screen_job_steps": ["DottieScreenTaskRunner", "DottieScreenJobClaudeBrain"],
         "screen_job_plan": ["DottieScreenJobGuesser", "DottieTaskGoal", "DottieJevTextPieces"],
         "jev": ["DottieJev", "DottieJevDriver"],
+        "jev_advisor": ["DottieJevAdvisor"],
         "tv_jobs": ["DottieTVTaskRunner"],
         "guides": ["DottieGuide", "DottieGuideBrain"],
         "pointing": ["PointingRefiner", "PointingPrecision", "DottieReadClosely"],

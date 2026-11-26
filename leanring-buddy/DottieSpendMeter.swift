@@ -87,9 +87,11 @@ nonisolated enum DottieSpendMeter {
 
     /// One day's total from each provider's totals that day.
     static func daySpend(dayKey: String, providers: [String: DottieUsage.ProviderTotals]) -> DottieDaySpend {
-        let dollarsByProvider = providers
-            .map { (provider: $0.key, dollars: $0.value.dollars) }
-            .sorted { $0.dollars == $1.dollars ? $0.provider < $1.provider : $0.dollars > $1.dollars }
+        var dollarsByProvider: [(provider: String, dollars: Double)] = []
+        for (providerName, providerTotals) in providers {
+            dollarsByProvider.append((provider: providerName, dollars: providerTotals.dollars))
+        }
+        dollarsByProvider.sort(by: isSpentMore)
         var totalDollars = 0.0
         var totalAnswers = 0
         var totalAnswersWithoutPrice = 0
@@ -105,6 +107,12 @@ nonisolated enum DottieSpendMeter {
             answersWithoutPrice: totalAnswersWithoutPrice,
             dollarsByProvider: dollarsByProvider
         )
+    }
+
+    /// Biggest spend first; the same spend sorts by name.
+    private static func isSpentMore(_ first: (provider: String, dollars: Double), than second: (provider: String, dollars: Double)) -> Bool {
+        if first.dollars != second.dollars { return first.dollars > second.dollars }
+        return first.provider < second.provider
     }
 
     /// "Claude $0.05, Glm $0.01" for a day row, providers that spent nothing left out.

@@ -244,8 +244,10 @@ enum DottieJevDriverPlan {
     static let minimumTopProbability = 0.2
     /// The Jev lane's own step budget before the step model takes over.
     static let maximumSteps = 25
-    /// A job that repeats gets the budget once per round, up to this.
-    static let maximumStepsForRepeatedJobs = 100
+    /// A job that repeats gets the budget once per round, up to this. Long
+    /// jobs stay light: their memory is saved and trimmed every 100 moves
+    /// (DottieJobLedger).
+    static let maximumStepsForRepeatedJobs = maximumSteps * DottieJobMemory.maximumRounds
 
     static func stepBudget(rounds: Int) -> Int {
         min(maximumSteps * max(rounds, 1), maximumStepsForRepeatedJobs)
@@ -843,7 +845,7 @@ enum DottieJevDriverPlan {
     /// The step model's note when it takes over.
     static func handOverNote(movesSoFar: [String], reason: String) -> String {
         guard !movesSoFar.isEmpty else { return "" }
-        return "Dottie already did these steps on screen: \(movesSoFar.joined(separator: "; ")). \(reason) Carry on from the screen as it is now; don't redo them."
+        return "Dottie already did these steps on screen: \(DottieJobMemory.compactList(movesSoFar)). \(reason) Carry on from the screen as it is now; don't redo them."
     }
 
     /// Vision's box (0-1, bottom-left origin) as a 0-1000 top-left middle.
@@ -950,6 +952,21 @@ enum DottieJevDriver {
         var labelsClickedFromMemory = Set<String>()
         // Every move, and which round of a repeated job this is.
         var jobMemory = DottieJobMemory(taskText: taskText)
+        // The advisor reads the task now, while Jev starts (DottieJevAdvisor),
+        // and is asked again only when a step needs judging, waiting or reasoning.
+        let advisor = DottieJevAdvisorSession(taskText: taskText, rounds: jobMemory.totalRounds)
+        // The last moves changed nothing: the advisor gets one go before the
+        // job hands over, and another only once a move has changed the screen.
+        var isStuck = false
+        var screenChangedSinceStuckAdvice = true
+        // The screen the advisor was asked on because Jev was unsure.
+        var screenAdvisedWhileUnsure: [UInt8]?
+        // Waits don't use up Jev's steps.
+        var waitsGiven = 0
+        // Long jobs: every 100 moves the state goes to a file and starts again from it.
+        var ledgerSlot: Int?
+        var movesAtLastLedgerPage = 0
+        var ledgerPageCount = 0
         // The button Jev pressed and hasn't let go of yet (0-1000).
         var heldMouse: (label: String, centerX: Double, centerY: Double)?
         // Clicks dropped in a row because their spot changed before the click.
@@ -970,7 +987,7 @@ enum DottieJevDriver {
 
         func handOver(_ reason: String) -> Outcome {
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
-            DottieLog.notice("🎯 Jev handed the screen job over after \(movesSoFar.count) moves (\(reason)); \(aloneReport)")
+            DottieLog.notice("🎯 Jev handed the screen job over after \(jobMemory.totalMovesNoted) moves (\(reason)); \(aloneReport)")
             var note = DottieJevDriverPlan.handOverNote(movesSoFar: movesSoFar, reason: reason)
             if jobMemory.isRepeatedJob { note += "\n" + jobMemory.stateText() }
             return .handedOver(note: note)
@@ -981,8 +998,54 @@ enum DottieJevDriver {
             jobMemory.noteMove(move.summary)
         }
 
-        for stepNumber in 1...DottieJevDriverPlan.stepBudget(rounds: jobMemory.totalRounds) {
+        /// Asks the advisor and does the waiting it says; the caller does
+        /// the move, looks again or hands over.
+        func askAdvisor(
+            _ trigger: DottieJevAdvisorPlan.Trigger, screenTexts: [DottieJevDriverPlan.ScreenText],
+            options: [DottieJevDriverPlan.Option], stepNumber: Int
+        ) async -> AdvisedStep {
+            actions.progress(stepNumber, "thinking it over")
+            let help = await advisor.help(
+                trigger: trigger, screenTexts: screenTexts, options: options, jobStateText: jobMemory.stateText(),
+                hasRoundsLeft: jobMemory.hasRoundsLeft, roundHasMoves: !jobMemory.movesThisRound.isEmpty
+            )
+            switch help {
+            case .decision(let advisedDecision):
+                return .useDecision(advisedDecision)
+            case .wait(let seconds):
+                waitsGiven += 1
+                await waitWhileBusy(firstSeconds: seconds, advisor: advisor, stepNumber: stepNumber, actions: actions)
+                return .lookAgain
+            case .noted:
+                return .lookAgain
+            case .noHelp:
+                return .handOverNow
+            }
+        }
+
+        let stepBudget = DottieJevDriverPlan.stepBudget(rounds: jobMemory.totalRounds)
+        var stepNumber = 0
+        while stepNumber - waitsGiven < stepBudget {
+            stepNumber += 1
             if Task.isCancelled { return .handedOver(note: "") }
+            // A long job's memory goes to a file every 100 moves and the job
+            // goes on from that file alone, so old details never pile up.
+            if DottieJobLedger.isPageDue(totalMoves: jobMemory.totalMovesNoted, movesAtLastPage: movesAtLastLedgerPage) {
+                ledgerPageCount += 1
+                let slot = ledgerSlot ?? DottieJobLedger.takeSlotForNewJob()
+                ledgerSlot = slot
+                let page = DottieJobLedger.page(goal: taskText, pageNumber: ledgerPageCount, jobMemory: jobMemory, advisorNotes: advisor.notes)
+                let savedPage = DottieJobLedger.saveAndReload(page, slot: slot) ?? page
+                jobMemory = DottieJobMemory(ledgerPage: savedPage)
+                advisor.restoreNotes(savedPage.advisorNotes)
+                movesSoFar = DottieJobLedger.keptRecentMoves(movesSoFar)
+                // Screens struck off long ago don't come back; the last one's moves stay struck off.
+                triedSignaturesByScreen = triedSignaturesByScreen.filter { entry in
+                    previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen(entry.key, $0) } ?? false
+                }
+                movesAtLastLedgerPage = jobMemory.totalMovesNoted
+                DottieLog.notice("🗂️ Saved page \(public: ledgerPageCount) of a long screen job's memory after \(public: jobMemory.totalMovesNoted) moves; going on from it")
+            }
             // Video players (YouTube's gear, captions, speed) show their
             // controls only while the mouse moves: a still screenshot never
             // had them. Never while a button is held, which would drag.
@@ -1017,10 +1080,16 @@ enum DottieJevDriver {
                 triedSignaturesByScreen[previousScreenThumbnail, default: []].insert(lastMoveSignature)
                 movesWithoutChange += 1
                 if movesWithoutChange >= DottieJevDriverPlan.maximumMovesWithoutChange {
-                    return handOver("The last moves didn't change the screen.")
+                    guard heldMouse == nil, screenChangedSinceStuckAdvice, advisor.adviceCallsLeft > 0 else {
+                        return handOver("The last moves didn't change the screen.")
+                    }
+                    isStuck = true
+                    screenChangedSinceStuckAdvice = false
+                    movesWithoutChange = 0
                 }
             } else {
                 movesWithoutChange = 0
+                if lastMoveSignature != nil { screenChangedSinceStuckAdvice = true }
             }
             let screenKey = triedSignaturesByScreen.keys.first { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? screenThumbnail
 
@@ -1097,45 +1166,111 @@ enum DottieJevDriver {
                 isBrowserInFront: DottieBrowser.isBrowser(bundleIdentifier: frontAppBundleIdentifier),
                 frontAppBundleIdentifier: frontAppBundleIdentifier
             )
-            let requestBody = DottieJevDriverPlan.requestBody(
-                goal: taskText, movesSoFar: movesSoFar, knownHowTo: knownHowTo, options: options,
-                jobMemory: jobMemory, hintsText: DottieScreenJobHints.shared.stateText, isHoldingMouse: heldMouse != nil,
-                lastMoveSummary: lastMove?.summary
-            )
-            guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
-                  let answer = DottieJevDriverPlan.answer(fromAnswer: answerData, options: options) else {
-                return movesSoFar.isEmpty ? .notTried : handOver("Jev didn't answer.")
+            // The advisor steps in before Jev only when this step needs it: the
+            // job is stuck, the user just said something, a time shows on
+            // screen, or a moment the advisor's brief named is here.
+            var advisedDecision: DottieJevDriverPlan.Decision?
+            if heldMouse == nil, let trigger = advisor.triggerBeforeJev(
+                screenTexts: allScreenTexts.map(\.text), newHintTexts: newHints.map(\.text), isStuck: isStuck
+            ) {
+                let wasStuck = isStuck
+                isStuck = false
+                switch await askAdvisor(trigger, screenTexts: allScreenTexts, options: options, stepNumber: stepNumber) {
+                case .useDecision(let decisionFromAdvisor):
+                    advisedDecision = decisionFromAdvisor
+                case .lookAgain:
+                    // Waited, or left Jev a note: look again before Jev picks.
+                    previousScreenThumbnail = nil
+                    lastMoveSignature = nil
+                    lastMove = nil
+                    continue
+                case .handOverNow:
+                    // No help: a stuck job hands over, any other step goes on with Jev.
+                    if wasStuck { return handOver("The last moves didn't change the screen.") }
+                }
+            }
+            let answer: DottieJevDriverPlan.Answer?
+            if advisedDecision == nil {
+                let advisorHowTo = advisor.howToText
+                let requestBody = DottieJevDriverPlan.requestBody(
+                    goal: taskText, movesSoFar: movesSoFar, knownHowTo: advisorHowTo.isEmpty ? knownHowTo : advisorHowTo + "\n" + knownHowTo,
+                    options: options, jobMemory: jobMemory, hintsText: DottieScreenJobHints.shared.stateText,
+                    isHoldingMouse: heldMouse != nil, lastMoveSummary: lastMove?.summary
+                )
+                guard let answerData = await DottieJev.answer(to: requestBody, screenImage: screen.image),
+                      let jevAnswer = DottieJevDriverPlan.answer(fromAnswer: answerData, options: options) else {
+                    return movesSoFar.isEmpty ? .notTried : handOver("Jev didn't answer.")
+                }
+                answer = jevAnswer
+            } else {
+                answer = nil
             }
             if Task.isCancelled { return .handedOver(note: "") }
 
-            // Jev's step check of the last move, from this same answer.
-            if let checkedMove = lastMove {
-                if DottieJevDriverPlan.lastMoveFailed(answer) {
-                    failedStepChecksInARow += 1
-                    failedSignaturesThisRound.insert(checkedMove.signature)
-                    openedSignaturesThisRound.remove(checkedMove.signature)
-                    if let lastIndex = movesSoFar.indices.last { movesSoFar[lastIndex] += " (Jev's check: it didn't work)" }
-                    DottieLog.notice("🎯 Jev's step check: the last move didn't work")
-                    if failedStepChecksInARow >= DottieJevDriverPlan.maximumFailedStepChecks {
-                        return handOver("Jev's step check said the last \(failedStepChecksInARow) moves didn't work.")
+            var decision: DottieJevDriverPlan.Decision
+            if let advisedDecision {
+                decision = advisedDecision
+            } else if let answer {
+                // Jev's step check of the last move, from this same answer.
+                if let checkedMove = lastMove {
+                    if DottieJevDriverPlan.lastMoveFailed(answer) {
+                        failedStepChecksInARow += 1
+                        failedSignaturesThisRound.insert(checkedMove.signature)
+                        openedSignaturesThisRound.remove(checkedMove.signature)
+                        if let lastIndex = movesSoFar.indices.last { movesSoFar[lastIndex] += " (Jev's check: it didn't work)" }
+                        DottieLog.notice("🎯 Jev's step check: the last move didn't work")
+                        if failedStepChecksInARow >= DottieJevDriverPlan.maximumFailedStepChecks {
+                            // The advisor's go before handing over.
+                            switch await askAdvisor(.moveFailed, screenTexts: allScreenTexts, options: options, stepNumber: stepNumber) {
+                            case .useDecision(let decisionFromAdvisor):
+                                failedStepChecksInARow = 0
+                                advisedDecision = decisionFromAdvisor
+                            case .lookAgain:
+                                failedStepChecksInARow = DottieJevDriverPlan.maximumFailedStepChecks - 1
+                                lastMove = nil
+                                previousScreenThumbnail = nil
+                                lastMoveSignature = nil
+                                continue
+                            case .handOverNow:
+                                return handOver("Jev's step check said the last \(failedStepChecksInARow) moves didn't work.")
+                            }
+                        }
+                        // The move Jev just picked was chosen on the same look:
+                        // ask again next step with the failed move struck off.
+                        if advisedDecision == nil, case .act(let pickedMove) = DottieJevDriverPlan.decision(for: answer),
+                           pickedMove.signature == checkedMove.signature {
+                            lastMove = nil
+                            previousScreenThumbnail = nil
+                            lastMoveSignature = nil
+                            continue
+                        }
+                    } else {
+                        failedStepChecksInARow = 0
                     }
-                    // The move Jev just picked was chosen on the same look:
-                    // ask again next step with the failed move struck off.
-                    if case .act(let pickedMove) = DottieJevDriverPlan.decision(for: answer), pickedMove.signature == checkedMove.signature {
-                        lastMove = nil
-                        previousScreenThumbnail = nil
-                        lastMoveSignature = nil
-                        continue
-                    }
-                } else {
-                    failedStepChecksInARow = 0
+                }
+                decision = advisedDecision ?? DottieJevDriverPlan.decision(
+                    for: answer, hasRoundsLeft: jobMemory.hasRoundsLeft, roundHasMoves: !jobMemory.movesThisRound.isEmpty,
+                    heldMouseAt: heldMouse.map { (centerX: $0.centerX, centerY: $0.centerY) }
+                )
+            } else {
+                return handOver("Jev didn't answer.")
+            }
+            // Jev unsure: the advisor's go before handing over, once per screen.
+            if decision == .unsure, heldMouse == nil,
+               !(screenAdvisedWhileUnsure.map { DottieJevDriverPlan.isSameScreen($0, screenKey) } ?? false) {
+                screenAdvisedWhileUnsure = screenKey
+                switch await askAdvisor(.jevUnsure, screenTexts: allScreenTexts, options: options, stepNumber: stepNumber) {
+                case .useDecision(let decisionFromAdvisor):
+                    decision = decisionFromAdvisor
+                case .lookAgain:
+                    previousScreenThumbnail = nil
+                    lastMoveSignature = nil
+                    lastMove = nil
+                    continue
+                case .handOverNow:
+                    break
                 }
             }
-
-            let decision = DottieJevDriverPlan.decision(
-                for: answer, hasRoundsLeft: jobMemory.hasRoundsLeft, roundHasMoves: !jobMemory.movesThisRound.isEmpty,
-                heldMouseAt: heldMouse.map { (centerX: $0.centerX, centerY: $0.centerY) }
-            )
             switch decision {
             case .roundDone:
                 // The next round starts like a fresh job on whatever screen
@@ -1143,6 +1278,7 @@ enum DottieJevDriver {
                 DottieMouseHold.releaseNow(reason: "a round ended")
                 heldMouse = nil
                 jobMemory.finishRound()
+                advisor.startRound()
                 triedSignaturesByScreen = [:]
                 movesWithoutChange = 0
                 labelsClickedFromMemory = []
@@ -1160,8 +1296,8 @@ enum DottieJevDriver {
                     return handOver("The screen should now show what the user asked about: read it and finish with the answer.")
                 }
                 UserDefaults.standard.set(UserDefaults.standard.integer(forKey: finishedCountKey) + 1, forKey: finishedCountKey)
-                DottieLog.notice("🎯 Jev finished the screen job alone in \(movesSoFar.count) moves; \(aloneReport)")
-                return .finished(stepCount: movesSoFar.count)
+                DottieLog.notice("🎯 Jev finished the screen job alone in \(jobMemory.totalMovesNoted) moves; \(aloneReport)")
+                return .finished(stepCount: jobMemory.totalMovesNoted)
             case .unsure:
                 return movesSoFar.isEmpty ? .notTried : handOver("Jev wasn't sure what comes next.")
             case .act(.recallAppMemory):
@@ -1226,6 +1362,39 @@ enum DottieJevDriver {
             }
         }
         return handOver("Jev used its step budget.")
+    }
+
+    /// What the driver does after asking the advisor.
+    private enum AdvisedStep {
+        case useDecision(DottieJevDriverPlan.Decision)
+        /// It waited or left Jev a note: look at the screen again.
+        case lookAgain
+        case handOverNow
+    }
+
+    /// Waits while something on screen is busy, without using Jev's steps
+    /// (Wasee, 27 Nov): the time the advisor or the screen gives, then a new
+    /// look; while the screen still shows a time left, it waits that long
+    /// again, else the job goes on and Jev checks whether it's done. A round
+    /// waits 30 minutes at most in all; Stop ends a wait at once.
+    private static func waitWhileBusy(firstSeconds: Int, advisor: DottieJevAdvisorSession, stepNumber: Int, actions: Actions) async {
+        var nextWaitSeconds = firstSeconds
+        while !Task.isCancelled {
+            let allowedSeconds = advisor.allowedWait(nextWaitSeconds)
+            guard allowedSeconds > 0 else {
+                DottieLog.notice("🧭 This round has waited as long as it may; going on")
+                return
+            }
+            actions.progress(stepNumber, "waiting \(DottieJevAdvisorPlan.waitText(seconds: allowedSeconds)), then looking again")
+            DottieLog.notice("🧭 Waiting \(public: allowedSeconds) s for the screen, then looking again")
+            try? await Task.sleep(nanoseconds: UInt64(allowedSeconds) * 1_000_000_000)
+            advisor.noteWaited(allowedSeconds)
+            guard !Task.isCancelled,
+                  let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: DottieJevProtocol.maximumImageSide) else { return }
+            let lookTexts = await readTexts(on: look.image).map(\.text)
+            guard let shownSeconds = DottieJevAdvisorPlan.secondsShown(in: lookTexts) else { return }
+            nextWaitSeconds = DottieJevAdvisorPlan.waitSeconds(shownSeconds: shownSeconds)
+        }
     }
 
     /// Waits until the page has finished: the browser (when it says) has
