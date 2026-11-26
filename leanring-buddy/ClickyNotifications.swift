@@ -28,6 +28,8 @@ final class ClickyNotifications: NSObject {
 
     /// Clicked a notification (or its body): show this Dot.
     var onOpenDot: ((UUID) -> Void)?
+    /// Clicked the daily cost report: show Settings → Usage.
+    var onOpenDailyCostReport: (() -> Void)?
     /// Answered a computer-use request from the notification's buttons.
     var onAnswerComputerUseRequest: ((_ agentID: UUID, _ isAllowed: Bool) -> Void)?
 
@@ -67,6 +69,23 @@ final class ClickyNotifications: NSObject {
     /// because the Dot is stuck until someone answers.
     func notifyComputerUseRequest(agentID: UUID, title: String, text: String) {
         post(agentID: agentID, title: title, body: text, isComputerUseRequest: true)
+    }
+
+    nonisolated private static let dailyCostReportIdentifier = "dottie-daily-cost-report"
+
+    /// Yesterday's cost (DottieDailyCostReporter). Posted even while Dottie
+    /// is in front, once a day, and replaces the day before's.
+    func notifyDailyCostReport(title: String, body: String) {
+        guard Self.isEnabled else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = Self.shortened(body)
+        content.threadIdentifier = Self.dailyCostReportIdentifier
+        let request = UNNotificationRequest(identifier: Self.dailyCostReportIdentifier, content: content, trigger: nil)
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { [weak self] isGranted, _ in
+            guard isGranted else { return }
+            Task { @MainActor in self?.notificationCenter.add(request) }
+        }
     }
 
     private func post(agentID: UUID, title: String, body: String, isComputerUseRequest: Bool) {
@@ -149,6 +168,11 @@ extension ClickyNotifications: UNUserNotificationCenterDelegate {
     ) {
         let actionIdentifier = response.actionIdentifier
         let agentIDString = response.notification.request.content.userInfo[Self.agentIDUserInfoKey] as? String
+        if response.notification.request.identifier == Self.dailyCostReportIdentifier {
+            Task { @MainActor in self.onOpenDailyCostReport?() }
+            completionHandler()
+            return
+        }
         Task { @MainActor in
             self.handleResponse(actionIdentifier: actionIdentifier, agentIDString: agentIDString)
         }

@@ -53,6 +53,9 @@ final class DottieUsage: ObservableObject {
         var areas: [String: AreaTotals] = [:]
         /// Optional so days saved before per-provider totals still load.
         var providers: [String: ProviderTotals]? = nil
+        /// The same per feature (cost category, or the area when there is none),
+        /// for the daily cost report. Optional so older days still load.
+        var features: [String: ProviderTotals]? = nil
         var voiceAnswerStartSecondsTotal = 0.0
         var voiceAnswerStartCount = 0
     }
@@ -133,6 +136,12 @@ final class DottieUsage: ObservableObject {
         var providers = today.providers ?? [:]
         providers[usage.provider] = Self.adding(usage, to: providers[usage.provider] ?? ProviderTotals())
         today.providers = providers
+        let featureName = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !featureName.isEmpty {
+            var features = today.features ?? [:]
+            features[featureName] = Self.adding(usage, to: features[featureName] ?? ProviderTotals())
+            today.features = features
+        }
         days[todayKey] = today
         scheduleSave()
     }
@@ -247,6 +256,12 @@ final class DottieUsage: ObservableObject {
         }
     }
 
+    /// One day's full cost report, or nil when nothing answered that day.
+    func dailyCostReport(forDayKey dayKey: String) -> DottieDailyCostReport? {
+        guard let day = days[dayKey] else { return nil }
+        return DottieDailyCostReport.report(dayKey: dayKey, providers: day.providers ?? [:], features: day.features ?? [:])
+    }
+
     func reset() {
         days = [:]
         meteredCalls = []
@@ -279,7 +294,7 @@ final class DottieUsage: ObservableObject {
         days = days.filter { $0.key >= oldestKeptKey }
     }
 
-    private static func dayKey(for date: Date) -> String {
+    nonisolated static func dayKey(for date: Date) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -336,6 +351,7 @@ struct HomeUsageSettings: View {
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            dailyReport
             claudeCallMeter
             dayTotals
             if let averageVoiceAnswerStartSeconds = totals.averageVoiceAnswerStartSeconds {
@@ -380,6 +396,36 @@ struct HomeUsageSettings: View {
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Yesterday's full report (the one the daily notification gives) and today's so far.
+    @ViewBuilder private var dailyReport: some View {
+        let todayKey = DottieUsage.dayKey(for: Date())
+        let yesterdayKey = Calendar.current.date(byAdding: .day, value: -1, to: Date()).map { DottieUsage.dayKey(for: $0) } ?? ""
+        ForEach([("Today so far", todayKey), ("Yesterday", yesterdayKey)], id: \.1) { title, dayKey in
+            if let report = usage.dailyCostReport(forDayKey: dayKey) {
+                dailyReportSection(title: title, report: report)
+            }
+        }
+    }
+
+    @ViewBuilder private func dailyReportSection(title: String, report: DottieDailyCostReport) -> some View {
+        Text("\(title): \(DottieAskUsage.dollarsText(report.totalDollars)) in all")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(DS.Colors.textPrimary)
+            .padding(.top, 4)
+        meterRow("Answers and tokens", "\(report.answers.formatted()) · \(DottieDailyCostReport.tokensText(report.inputTokens)) in · \(DottieDailyCostReport.tokensText(report.outputTokens)) out")
+        ForEach(report.providers, id: \.name) { line in
+            meterRow(line.name.capitalized, DottieDailyCostReport.lineDetail(line))
+        }
+        ForEach(report.features, id: \.name) { line in
+            meterRow("  \(DottieDailyCostReport.featureName(line.name))", DottieDailyCostReport.lineDetail(line))
+        }
+        if report.answersWithoutPrice > 0 {
+            Text("\(report.answersWithoutPrice) answers had no price, so the total leaves them out.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
         }
     }
 

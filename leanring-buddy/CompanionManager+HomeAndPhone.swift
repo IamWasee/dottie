@@ -401,6 +401,11 @@ extension CompanionManager {
             self.clickyRoster.requestShowInHome(agentID: agentID)
             self.openHomeWindow()
         }
+        dotNotifications.onOpenDailyCostReport = { [weak self] in
+            DottieHomeNavigator.shared.requestedSection = .settings
+            self?.openHomeWindow()
+        }
+        DottieDailyCostReporter.start(notifications: dotNotifications)
         dotNotifications.onAnswerComputerUseRequest = { [weak self] agentID, isAllowed in
             guard let self, let requestingAgent = self.clickyRoster.agent(withID: agentID) else { return }
             self.notchPresenter.dropComputerUseRequest(forAgentID: agentID)
