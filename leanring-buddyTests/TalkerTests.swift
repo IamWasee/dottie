@@ -292,5 +292,96 @@ struct TalkerTests {
         let declared = DottieTalkerProtocol.requestToolDeclarations(from: every, findAndUseDeclarations: [["name": "find_tool"], ["name": "use_tool"]])
         #expect(declared.compactMap { $0["name"] as? String } == ["search_web", "find_tool", "use_tool"])
     }
-}
 
+    // MARK: Asks to do something skip Groq (Wasee, 27 Nov: "turn on focus mode")
+
+    @Test func asksToDoSomethingGoStraightToClaude() {
+        for ask in ["turn on focus mode", "hey dottie, can you turn on focus mode please", "could you open notes",
+                    "let's play a game", "go to youtube", "i want you to block youtube", "help me open safari",
+                    "remind me at 5", "focus for 30 minutes", "Okay, START focus mode."] {
+            #expect(DottieTalkerProtocol.isClearlyAnAskToDoSomething(ask), "\(ask) should go straight to Claude")
+        }
+    }
+
+    @Test func chatStillGoesToGroq() {
+        for chat in ["do you like pizza", "how are you", "what's the capital of france", "tell me a joke",
+                     "can you tell me a joke", "whats up", "why is the sky blue", "thanks dottie", "", "hey dottie"] {
+            #expect(!DottieTalkerProtocol.isClearlyAnAskToDoSomething(chat), "\(chat) is chat")
+        }
+    }
+
+    @Test func fillersAndPoliteOpeningsAreSkipped() {
+        #expect(DottieTalkerProtocol.firstWordOfTheAsk("hey dottie, could you please just open notes") == "open")
+        #expect(DottieTalkerProtocol.firstWordOfTheAsk("i need you to set a timer") == "set")
+        #expect(DottieTalkerProtocol.firstWordOfTheAsk("go ahead and stop") == "stop")
+        // An opening with nothing after it is left as it is.
+        #expect(DottieTalkerProtocol.firstWordOfTheAsk("can you") == "can")
+        #expect(DottieTalkerProtocol.firstWordOfTheAsk("hey, dottie!") == nil)
+        #expect(DottieTalkerProtocol.spokenWords("I’m ON it!") == ["i'm", "on", "it"])
+    }
+
+    @Test func askThatSkipsGroqTakesTheScreenOnlyWhenItTalksAboutIt() {
+        #expect(DottieTalkerProtocol.asksAboutTheScreen("click the sign in button"))
+        #expect(DottieTalkerProtocol.asksAboutTheScreen("read this"))
+        #expect(!DottieTalkerProtocol.asksAboutTheScreen("turn on focus mode"))
+        #expect(!DottieTalkerProtocol.asksAboutTheScreen("remind me at 5"))
+    }
+
+    @Test func groqSayingItDidSomethingGoesToClaude() {
+        for claim in ["turning on focus mode now!", "sure, i'll turn it on", "i'm on it", "focus mode is on now",
+                      "okay, focus mode started", "i've set a reminder for 5", "done", "opening notes for you", "all set!"] {
+            #expect(DottieTalkerProtocol.claimsToHaveDoneSomething(claim), "\(claim) claims an action")
+            #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: claim) == .request(needsScreen: false))
+        }
+    }
+
+    @Test func chatAnswersAreNotClaims() {
+        for chat in ["doing great, thanks!", "i'm here to help", "i'm going to say pizza", "ha, good one", "hi! how can i help?",
+                     "i'm doing well, how about you?", "i'll keep that in mind", "paris is the capital of france",
+                     "i love that song", "sure thing, what's up?", "let me think, i'd say blue", ""] {
+            #expect(!DottieTalkerProtocol.claimsToHaveDoneSomething(chat), "\(chat) is chat")
+        }
+        #expect(DottieTalkerProtocol.decision(fromTalkerAnswer: "doing great, thanks!") == .say("doing great, thanks!"))
+    }
+
+    @Test func doneAndDoingFormsCoverHowGroqSaysIt() {
+        #expect(DottieTalkerProtocol.doneOrDoingForms(of: "stop").isSuperset(of: ["stopping", "stopped"]))
+        #expect(DottieTalkerProtocol.doneOrDoingForms(of: "save").isSuperset(of: ["saving", "saved"]))
+        #expect(DottieTalkerProtocol.doneOrDoingForms(of: "turn").isSuperset(of: ["turning", "turned"]))
+        #expect(DottieTalkerProtocol.claimWords.isDisjoint(with: DottieTalkerProtocol.wordsAlsoUsedInChat))
+    }
+
+    @Test func claudeIsToldToFindFocusModeAndTheOtherHiddenTools() {
+        let requestPrompt = DottieTalkerProtocol.requestSystemPrompt(personalityLine: "", profile: "")
+        #expect(requestPrompt.contains("focus mode"))
+        #expect(requestPrompt.contains("call find_tool first"))
+    }
+
+    /// A morning of asks: the doing ones skip Groq, the chat stays with
+    /// Groq, and Groq pretending it did one still ends with Claude.
+    @Test func aMorningOfAsksJourney() {
+        let turns: [(words: String, groqWouldSay: String, expected: DottieTalkDecision)] = [
+            ("good morning dottie", "morning! sleep well?", .say("morning! sleep well?")),
+            ("turn on focus mode for an hour", "", .request(needsScreen: false)),
+            ("click the first email", "", .request(needsScreen: true)),
+            ("you're funny", "turning on comedy mode!", .request(needsScreen: false)),
+            ("what's 2 plus 2", "it's 4", .say("it's 4"))
+        ]
+        for turn in turns {
+            let decision: DottieTalkDecision = DottieTalkerProtocol.isClearlyAnAskToDoSomething(turn.words)
+                ? .request(needsScreen: DottieTalkerProtocol.asksAboutTheScreen(turn.words))
+                : DottieTalkerProtocol.decision(fromTalkerAnswer: turn.groqWouldSay)
+            #expect(decision == turn.expected, "\(turn.words)")
+        }
+    }
+
+    @Test func checkingAnAskIsQuick() {
+        let startedAt = Date()
+        for turnNumber in 0..<5_000 {
+            _ = DottieTalkerProtocol.isClearlyAnAskToDoSomething("hey dottie can you please turn on focus mode number \(turnNumber)")
+            _ = DottieTalkerProtocol.claimsToHaveDoneSomething("sure, i'll keep that in mind and maybe check back later \(turnNumber)")
+        }
+        // Runs before every spoken turn: 5,000 of each in well under a second.
+        #expect(Date().timeIntervalSince(startedAt) < 1.0)
+    }
+}

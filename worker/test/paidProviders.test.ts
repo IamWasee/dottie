@@ -380,13 +380,26 @@ describe("/gemini (helpers) with paid keys", () => {
 describe("talking and requests", () => {
   const talkBody = { provider: "talk", contents: [userText("hey dottie, how are you?")], generationConfig: { maxOutputTokens: 120 } };
 
-  it("answers talk from Groq's small model only, even with paid keys", async () => {
+  it("answers talk from Groq's GPT-OSS 120B only, even with paid keys", async () => {
     const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "Doing great!" })]]);
     const response = await call("/chat", talkBody, { GROQ_API_KEY: "g", ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("Doing great!");
     expect(calls).toHaveLength(1);
-    expect(calls[0].json.model).toBe("openai/gpt-oss-20b");
+    expect(calls[0].json.model).toBe("openai/gpt-oss-120b");
     expect(calls[0].json.reasoning_effort).toBe("low");
+  });
+
+  it("falls back from GPT-OSS 120B to 20B when the 120B is busy", async () => {
+    // fakeFetch keeps answering with the first matching rule, so the answer depends on the model asked.
+    const calls = fakeFetch([
+      ["api.groq.com", (recorded) => (recorded.json as { model: string }).model === "openai/gpt-oss-120b"
+        ? new Response("busy", { status: 503 })
+        : chatAnswer({ content: "hi" })],
+    ]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect(response.status).toBe(200);
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("hi");
+    expect(calls.map((recorded) => recorded.json.model)).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   });
 
   it("gives Groq its one hand_to_claude control and hands the call back as a function call", async () => {
@@ -427,6 +440,7 @@ describe("talking and requests", () => {
     const toolUseFailed = JSON.stringify({ error: { code: "tool_use_failed", failed_generation: "REQUEST SCREEN" } });
     const calls = fakeFetch([["api.groq.com", new Response(toolUseFailed, { status: 400 })]]);
     const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    console.log("DEBUG", response.status, await response.clone().text(), JSON.stringify(calls.map((c) => c.json.model)));
     expect(response.status).toBe(200);
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("REQUEST SCREEN");
     expect(calls).toHaveLength(1);

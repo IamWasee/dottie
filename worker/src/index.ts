@@ -521,8 +521,13 @@ async function answerWithPaidProviders(
   return undefined;
 }
 
-/** Groq's small talk models, cheapest first; text only, so no vision models. */
-export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-20b,qwen/qwen3.8-27b";
+/**
+ * Groq's talk models, best first; text only, so no vision models. GPT-OSS
+ * 120B first: the 20B kept answering asks it should have handed to Claude
+ * (Wasee, 27 Nov), and the 120B still answers a short reply in well under a
+ * second on Groq. The 20B is the backup when the 120B is busy.
+ */
+export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b";
 
 /**
  * Dottie's talker: Groq alone answers small talk or says the ask is a

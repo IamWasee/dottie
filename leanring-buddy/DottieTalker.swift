@@ -77,6 +77,156 @@ enum DottieTalkerProtocol {
         return decision(fromTalkerAnswer: answer.text)
     }
 
+    // MARK: Asks that skip Groq
+
+    /// Words that start an ask for something to be done ("turn on focus
+    /// mode", "open notes", "remind me at 5"). Wasee (27 Nov): Groq kept
+    /// answering asks like "turn on focus mode" itself, saying it was done
+    /// while nothing happened. An ask that starts with one of these goes
+    /// straight to Claude, which has the tools, without asking Groq first.
+    static let doingWords: Set<String> = [
+        "turn", "switch", "open", "close", "quit", "launch", "start", "stop", "end", "cancel", "set", "put", "make",
+        "play", "pause", "resume", "skip", "mute", "unmute", "find", "search", "google", "look", "check", "show",
+        "send", "text", "message", "email", "call", "reply", "post", "share", "remind", "add", "create", "write",
+        "draw", "circle", "explain", "teach", "move", "drag", "click", "type", "press", "scroll", "select", "fill",
+        "go", "take", "clean", "block", "focus", "read", "watch", "install", "run", "record", "save", "copy",
+        "paste", "enable", "disable", "schedule", "book", "pull", "bring", "minimize", "maximize", "hide",
+        "delete", "remove", "rename", "download", "upload", "translate", "fix", "rewrite", "summarize", "change",
+        "update", "edit", "join", "zoom", "lock", "remember", "forget", "keep", "help", "order", "buy",
+        "log", "sign", "browse", "point", "highlight", "screenshot", "note", "list", "organize", "sort", "tidy"
+    ]
+
+    /// Words said before the ask itself, skipped when reading its first word.
+    static let leadingFillerWords: Set<String> = [
+        "hey", "dottie", "dotty", "okay", "ok", "so", "um", "uh", "please", "yo", "now", "just", "quickly",
+        "lets", "let's", "alright", "actually", "also", "and", "then"
+    ]
+
+    /// Polite openings skipped the same way ("can you turn on…").
+    static let leadingFillerPhrases: [[String]] = [
+        ["can", "you"], ["could", "you"], ["would", "you"], ["will", "you"], ["can", "u"], ["i", "want", "you", "to"],
+        ["i", "need", "you", "to"], ["i'd", "like", "you", "to"], ["go", "ahead", "and"], ["try", "to"], ["help", "me"]
+    ]
+
+    /// The user's words, lowercased, with punctuation (but not apostrophes) as spaces.
+    static func spokenWords(_ text: String) -> [String] {
+        let normalizedText = text.lowercased().replacingOccurrences(of: "’", with: "'")
+        return normalizedText.split { character in
+            !(character.isLetter || character.isNumber || character == "'")
+        }.map(String.init)
+    }
+
+    /// The first word of the ask itself, after "hey dottie, can you…".
+    static func firstWordOfTheAsk(_ transcript: String) -> String? {
+        var remainingWords = spokenWords(transcript)[...]
+        var skippedSomething = true
+        while skippedSomething, !remainingWords.isEmpty {
+            skippedSomething = false
+            if let firstWord = remainingWords.first, leadingFillerWords.contains(firstWord) {
+                remainingWords = remainingWords.dropFirst()
+                skippedSomething = true
+                continue
+            }
+            for fillerPhrase in leadingFillerPhrases where remainingWords.starts(with: fillerPhrase) && remainingWords.count > fillerPhrase.count {
+                remainingWords = remainingWords.dropFirst(fillerPhrase.count)
+                skippedSomething = true
+                break
+            }
+        }
+        return remainingWords.first
+    }
+
+    /// True when the words ask for something to be done, so Claude gets
+    /// the turn straight away.
+    static func isClearlyAnAskToDoSomething(_ transcript: String) -> Bool {
+        guard let firstWord = firstWordOfTheAsk(transcript) else { return false }
+        return doingWords.contains(firstWord)
+    }
+
+    /// Words that mean an ask is about what's on screen right now.
+    static let screenWords: Set<String> = [
+        "screen", "this", "that", "these", "those", "here", "there", "click", "point", "circle", "highlight",
+        "selected", "page", "window", "tab", "button", "see", "draw", "scroll"
+    ]
+
+    /// Whether an ask that skipped Groq should carry a screenshot to Claude.
+    static func asksAboutTheScreen(_ transcript: String) -> Bool {
+        spokenWords(transcript).contains { screenWords.contains($0) }
+    }
+
+    /// The forms Groq says a doing word in when it pretends it did it:
+    /// "turning", "turned", "stopping", "setting", "started".
+    static func doneOrDoingForms(of doingWord: String) -> Set<String> {
+        var forms: Set<String> = [doingWord + "ing", doingWord + "ed", doingWord + "d"]
+        if doingWord.hasSuffix("e") {
+            forms.insert(String(doingWord.dropLast()) + "ing")
+        }
+        if let lastLetter = doingWord.last {
+            forms.insert(doingWord + String(lastLetter) + "ing")
+            forms.insert(doingWord + String(lastLetter) + "ed")
+        }
+        return forms
+    }
+
+    /// Doing words that also come up in plain chat ("i'm doing great",
+    /// "i'm here to help", "i'm going to say pizza"), so they never count
+    /// as Groq claiming it did something.
+    static let wordsAlsoUsedInChat: Set<String> = [
+        "do", "doing", "did", "go", "going", "goes", "help", "helping", "helped", "look", "looking", "looked",
+        "keep", "keeping", "make", "making", "made", "take", "taking", "took", "end", "ending", "ended",
+        "note", "noted", "list", "post", "call", "calling", "called", "run", "running", "ran", "read", "reading",
+        "watch", "watching", "watched"
+    ]
+
+    /// Words Groq would use to say it did, or is doing, something.
+    static let claimWords: Set<String> = {
+        var words: Set<String> = ["sent", "wrote", "drew", "found", "put", "set", "done"]
+        for doingWord in doingWords {
+            words.insert(doingWord)
+            words.formUnion(doneOrDoingForms(of: doingWord))
+        }
+        return words.subtracting(wordsAlsoUsedInChat)
+    }()
+
+    /// The "-ing" and "-ed" words alone, for an answer that starts with one.
+    static let doneOrDoingWords: Set<String> = claimWords.subtracting(doingWords).union(["set", "put", "done"])
+
+    /// Openings Groq uses to say it's doing something it can't do.
+    static let claimOpenings: [[String]] = [
+        ["i'll"], ["i", "will"], ["let", "me"], ["i'm"], ["i", "am"], ["i've"], ["i", "have"], ["going", "to"],
+        ["sure"], ["okay"], ["ok"], ["alright"], ["got", "it"]
+    ]
+
+    /// Short claims that mean the same wherever they are.
+    static let claimPhrases: [[String]] = [["on", "it"], ["all", "set"], ["it's", "done"], ["is", "on", "now"], ["is", "now", "on"]]
+
+    /// True when Groq's answer says it did, or is doing, something:
+    /// "turning on focus mode now", "i've set a reminder", "on it!". Groq
+    /// only chats, so the action never happened; Claude does it instead.
+    static func claimsToHaveDoneSomething(_ answerText: String) -> Bool {
+        let answerWords = spokenWords(answerText)
+        guard !answerWords.isEmpty else { return false }
+        if answerWords == ["done"] { return true }
+        for wordIndex in answerWords.indices {
+            for claimPhrase in claimPhrases where answerWords[wordIndex...].starts(with: claimPhrase) {
+                return true
+            }
+        }
+        // "turning on focus mode now!"
+        if let firstWord = answerWords.first, doneOrDoingWords.contains(firstWord) {
+            return true
+        }
+        // "sure, i'll turn it on": an opening, then a doing word close behind.
+        for wordIndex in answerWords.indices {
+            for opening in claimOpenings where answerWords[wordIndex...].starts(with: opening) {
+                let wordsAfterOpening = answerWords.dropFirst(wordIndex + opening.count).prefix(3)
+                let mentionsAnAction = wordsAfterOpening.contains { claimWords.contains($0) }
+                if mentionsAnAction { return true }
+            }
+        }
+        return false
+    }
+
     /// The talker's rules: Groq only chats. Everything else goes to Claude
     /// through its one control, hand_to_claude, so it has to know what each
     /// of them is for.
@@ -94,7 +244,7 @@ enum DottieTalkerProtocol {
         \(personalityLine)
         you are dottie, on the user's mac, doing what they asked. your final reply is spoken aloud: answer only what they asked, in one short, casual, lowercase sentence (two only if they asked for more). no extra details, no describing things they didn't ask about, no offers or follow-up questions, no lists, markdown or symbols.
         anything on the mac itself goes to a mac tool first, never a screen job: opening an app, folder or file, quitting, windows, music, volume or a named shortcut is quick_mac_action ("open my downloads folder", "open notes"); if it says it couldn't, use run_applescript (finder, apps' own scripting). a web page is open_url or browser, a key press press_keys, a connected app use_app_tool.
-        use your tools to do things (screen jobs, helpers, the web, reminders, memory). click one thing on the screenshot with click_on_screen (0-1000 of that image); anything longer on their screen (move, drag, type, fill in), start right away with do_task_on_screen; never tell them to do it themselves or say you can't from here. find_tool finds more tools by what the user wants and use_tool runs one; check find_tool before saying you can't do something. don't repeat a tool call that worked.
+        use your tools to do things (screen jobs, helpers, the web, reminders, memory). for focus mode, watches, folder cleanup, the calendar, contacts, games or anything not in your list, call find_tool first. click one thing on the screenshot with click_on_screen (0-1000 of that image); anything longer on their screen (move, drag, type, fill in), start right away with do_task_on_screen; never tell them to do it themselves or say you can't from here. find_tool finds more tools by what the user wants and use_tool runs one; check find_tool before saying you can't do something. don't repeat a tool call that worked.
         if a screenshot is attached and pointing at one thing on it helps, end your reply with [POINT:x,y:label] in that image's pixels (add :screenN for another screen); otherwise end with [POINT:none].
         to explain or mark something on their screen, draw over it with explain_on_screen (surface screen, anchors); for its own graph or diagram, or to help them understand an idea, draw on a board. worked math and notes go in write_notes.
         """
@@ -157,6 +307,10 @@ enum DottieTalkerProtocol {
         // Claude does it instead, looking at the screen.
         if looksLikeAPlan(trimmedAnswer) || saysItCantDoSomething(trimmedAnswer) {
             return .request(needsScreen: true)
+        }
+        // "turning on focus mode now!" from Groq means nothing was done.
+        if claimsToHaveDoneSomething(trimmedAnswer) {
+            return .request(needsScreen: false)
         }
         return .say(trimmedAnswer)
     }
@@ -338,6 +492,13 @@ enum DottieTalker {
         // Every model call from here until the next turn counts toward this ask.
         let askNumber = DottieAskCounter.startNewAsk()
         DottieLog.notice("💬 Ask \(public: askNumber) started")
+        // An ask to do something goes straight to Claude: Groq would only
+        // chat about it (or say it was done), and skipping it is faster.
+        if DottieTalkerProtocol.isClearlyAnAskToDoSomething(transcript) {
+            let needsScreen = DottieTalkerProtocol.asksAboutTheScreen(transcript)
+            DottieLog.notice("🗣️ An ask to do something went straight to Claude\(needsScreen ? " with the screen" : "")")
+            return .request(needsScreen: needsScreen)
+        }
         do {
             let answer = try await post(requestBody, timeoutSeconds: 12)
             let decision = DottieTalkerProtocol.decision(fromTalkerAnswer: answer)

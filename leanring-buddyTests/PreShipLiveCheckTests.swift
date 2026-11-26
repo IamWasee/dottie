@@ -59,7 +59,10 @@ struct PreShipLiveCheckTests {
         EverydayAsk(feature: "mac", words: "copy the terminal command that lists files to my clipboard", fittingTools: ["copy_to_clipboard"]),
         EverydayAsk(feature: "search", words: "what's the weather in Dhaka right now", fittingTools: ["search_web"]),
         EverydayAsk(feature: "helpers", words: "make me a website for my coffee shop", fittingTools: ["start_helper"]),
-        EverydayAsk(feature: "hidden tools", words: "turn your cursor into a cat", fittingTools: ["find_tool", "use_tool"])
+        EverydayAsk(feature: "hidden tools", words: "turn your cursor into a cat", fittingTools: ["find_tool", "use_tool"]),
+        // Groq used to answer this one itself and say it was on (Wasee, 27 Nov).
+        EverydayAsk(feature: "hidden tools", words: "turn on focus mode for 25 minutes", fittingTools: ["find_tool", "use_tool"],
+                    forbiddenTools: macActionForbiddenTools)
     ]
 
     private struct Outcome {
