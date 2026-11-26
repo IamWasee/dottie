@@ -12,6 +12,7 @@
 //  Foundation only, so it can be unit tested.
 //
 
+import CoreGraphics
 import Foundation
 
 enum DottieScreenSettle {

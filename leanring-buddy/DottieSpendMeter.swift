@@ -73,9 +73,16 @@ nonisolated enum DottieSpendMeter {
     /// Average tokens in and out per call, rounded.
     static func averageTokens(_ calls: [DottieMeteredCall]) -> (input: Int, output: Int)? {
         guard !calls.isEmpty else { return nil }
-        let inputTotal = calls.reduce(0) { $0 + $1.inputTokens }
-        let outputTotal = calls.reduce(0) { $0 + $1.outputTokens }
-        return (Int((Double(inputTotal) / Double(calls.count)).rounded()), Int((Double(outputTotal) / Double(calls.count)).rounded()))
+        var inputTotal = 0
+        var outputTotal = 0
+        for call in calls {
+            inputTotal += call.inputTokens
+            outputTotal += call.outputTokens
+        }
+        let callCount = Double(calls.count)
+        let averageInput = Int((Double(inputTotal) / callCount).rounded())
+        let averageOutput = Int((Double(outputTotal) / callCount).rounded())
+        return (averageInput, averageOutput)
     }
 
     /// One day's total from each provider's totals that day.
@@ -83,11 +90,19 @@ nonisolated enum DottieSpendMeter {
         let dollarsByProvider = providers
             .map { (provider: $0.key, dollars: $0.value.dollars) }
             .sorted { $0.dollars == $1.dollars ? $0.provider < $1.provider : $0.dollars > $1.dollars }
+        var totalDollars = 0.0
+        var totalAnswers = 0
+        var totalAnswersWithoutPrice = 0
+        for providerTotals in providers.values {
+            totalDollars += providerTotals.dollars
+            totalAnswers += providerTotals.answers
+            totalAnswersWithoutPrice += providerTotals.answersWithoutPrice
+        }
         return DottieDaySpend(
             dayKey: dayKey,
-            dollars: providers.values.reduce(0) { $0 + $1.dollars },
-            answers: providers.values.reduce(0) { $0 + $1.answers },
-            answersWithoutPrice: providers.values.reduce(0) { $0 + $1.answersWithoutPrice },
+            dollars: totalDollars,
+            answers: totalAnswers,
+            answersWithoutPrice: totalAnswersWithoutPrice,
             dollarsByProvider: dollarsByProvider
         )
     }
