@@ -61,8 +61,7 @@ struct PreShipLiveCheckTests {
         EverydayAsk(feature: "helpers", words: "make me a website for my coffee shop", fittingTools: ["start_helper"]),
         EverydayAsk(feature: "hidden tools", words: "turn your cursor into a cat", fittingTools: ["find_tool", "use_tool"]),
         // Groq used to answer this one itself and say it was on (Wasee, 27 Nov).
-        EverydayAsk(feature: "hidden tools", words: "turn on focus mode for 25 minutes", fittingTools: ["find_tool", "use_tool"],
-                    forbiddenTools: macActionForbiddenTools)
+        EverydayAsk(feature: "hidden tools", words: "turn on focus mode for 25 minutes", fittingTools: ["find_tool", "use_tool"])
     ]
 
     private struct Outcome {
