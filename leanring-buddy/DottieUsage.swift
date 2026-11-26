@@ -58,8 +58,11 @@ final class DottieUsage: ObservableObject {
     }
 
     @Published private(set) var days: [String: DayTotals] = [:]
+    /// The newest Claude calls one by one, for the call meter.
+    @Published private(set) var meteredCalls: [DottieMeteredCall] = []
 
     private static let defaultsKey = "dottieUsageByDay"
+    private static let meteredCallsDefaultsKey = "dottieMeteredClaudeCalls"
     private static let daysKept = 14
     private var pendingSaveTask: Task<Void, Never>?
 
@@ -67,6 +70,10 @@ final class DottieUsage: ObservableObject {
         if let savedData = UserDefaults.standard.data(forKey: Self.defaultsKey),
            let savedDays = try? JSONDecoder().decode([String: DayTotals].self, from: savedData) {
             days = savedDays
+        }
+        if let savedCallsData = UserDefaults.standard.data(forKey: Self.meteredCallsDefaultsKey),
+           let savedCalls = try? JSONDecoder().decode([DottieMeteredCall].self, from: savedCallsData) {
+            meteredCalls = savedCalls
         }
     }
 
@@ -113,7 +120,14 @@ final class DottieUsage: ObservableObject {
     }
 
     /// One model answer's provider, tokens, time and cost (DottieAskUsage).
-    func recordProviderAnswer(_ usage: DottieAskUsage) {
+    /// `purpose` (the cost category or area) labels Claude calls on the meter.
+    func recordProviderAnswer(_ usage: DottieAskUsage, purpose: String = "") {
+        if usage.provider == DottieSpendMeter.meteredProvider {
+            meteredCalls = DottieSpendMeter.adding(DottieMeteredCall(
+                date: Date(), area: purpose, model: usage.model, inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens, seconds: usage.seconds, dollars: usage.estimatedDollars
+            ), to: meteredCalls)
+        }
         let todayKey = Self.dayKey(for: Date())
         var today = days[todayKey] ?? DayTotals()
         var providers = today.providers ?? [:]
@@ -223,9 +237,21 @@ final class DottieUsage: ObservableObject {
         return (combinedAreas, averageVoiceAnswerStartSeconds)
     }
 
+    /// Each of the last few days' spend, newest first, days with no answers left out.
+    func daySpends(forDaysBack numberOfDays: Int) -> [DottieDaySpend] {
+        (0..<max(numberOfDays, 1)).compactMap { dayOffset in
+            guard let date = Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date()) else { return nil }
+            let dayKey = Self.dayKey(for: date)
+            guard let providers = days[dayKey]?.providers, !providers.isEmpty else { return nil }
+            return DottieSpendMeter.daySpend(dayKey: dayKey, providers: providers)
+        }
+    }
+
     func reset() {
         days = [:]
+        meteredCalls = []
         UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+        UserDefaults.standard.removeObject(forKey: Self.meteredCallsDefaultsKey)
     }
 
     // MARK: - Saving
@@ -240,6 +266,9 @@ final class DottieUsage: ObservableObject {
             self.pruneOldDays()
             if let encodedDays = try? JSONEncoder().encode(self.days) {
                 UserDefaults.standard.set(encodedDays, forKey: Self.defaultsKey)
+            }
+            if let encodedCalls = try? JSONEncoder().encode(self.meteredCalls) {
+                UserDefaults.standard.set(encodedCalls, forKey: Self.meteredCallsDefaultsKey)
             }
         }
     }
@@ -307,6 +336,8 @@ struct HomeUsageSettings: View {
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            claudeCallMeter
+            dayTotals
             if let averageVoiceAnswerStartSeconds = totals.averageVoiceAnswerStartSeconds {
                 HStack {
                     Text("Voice answers start after")
@@ -322,6 +353,68 @@ struct HomeUsageSettings: View {
                 .font(.system(size: 11))
                 .foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Each Claude call's tokens and cost, to check them against the price list.
+    @ViewBuilder private var claudeCallMeter: some View {
+        let calls = usage.meteredCalls
+        if !calls.isEmpty {
+            Text("Claude call meter")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(DS.Colors.textPrimary)
+                .padding(.top, 4)
+            if let averageDollars = DottieSpendMeter.averageDollarsPerCall(calls) {
+                meterRow("Average per call", DottieAskUsage.dollarsText(averageDollars))
+            }
+            if let averageTokens = DottieSpendMeter.averageTokens(calls) {
+                meterRow("Average tokens", "\(averageTokens.input.formatted()) in · \(averageTokens.output.formatted()) out")
+            }
+            if let highestCall = DottieSpendMeter.highestDollarCall(calls) {
+                meterRow("Most expensive (\(highestCall.area))", DottieSpendMeter.callDetailText(highestCall))
+            }
+            ForEach(Array(calls.suffix(8).reversed().enumerated()), id: \.offset) { _, call in
+                meterRow("\(call.date.formatted(date: .omitted, time: .shortened)) · \(call.area)", DottieSpendMeter.callDetailText(call))
+            }
+            Text("The newest \(calls.count) Claude calls from this Mac. Compare the tokens with the Claude Console; it also counts calls from the release checks.")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What Dottie spent each day, all providers together.
+    @ViewBuilder private var dayTotals: some View {
+        let daySpends = usage.daySpends(forDaysBack: 7)
+        if !daySpends.isEmpty {
+            Text("Spent per day")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(DS.Colors.textPrimary)
+                .padding(.top, 4)
+            ForEach(daySpends, id: \.dayKey) { daySpend in
+                VStack(alignment: .leading, spacing: 1) {
+                    meterRow(daySpend.dayKey, "\(DottieAskUsage.dollarsText(daySpend.dollars)) · \(daySpend.answers) answers")
+                    let breakdown = DottieSpendMeter.providerBreakdownText(daySpend)
+                    if !breakdown.isEmpty {
+                        Text(breakdown)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundColor(DS.Colors.textTertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func meterRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundColor(DS.Colors.textPrimary)
+                .lineLimit(1)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundColor(DS.Colors.textSecondary)
         }
     }
 

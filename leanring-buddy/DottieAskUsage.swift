@@ -112,8 +112,9 @@ nonisolated enum DottieAskUsageLog {
     /// Logs one answer's usage and adds it to the day's totals.
     static func note(_ usage: DottieAskUsage, area: DottieUsage.Area, costCategory: String? = nil) {
         DottieLog.notice("\(public: usage.logText(askNumber: DottieAskCounter.currentAskNumber, area: area.rawValue, costCategory: costCategory))")
+        let callPurpose = costCategory ?? area.rawValue
         Task { @MainActor in
-            DottieUsage.shared.recordProviderAnswer(usage)
+            DottieUsage.shared.recordProviderAnswer(usage, purpose: callPurpose)
         }
     }
 }
