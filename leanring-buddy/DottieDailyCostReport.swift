@@ -12,9 +12,9 @@
 
 import Foundation
 
-nonisolated struct DottieDailyCostReport: Equatable, Sendable {
+struct DottieDailyCostReport: Equatable {
     /// One provider's or one feature's share of the day.
-    nonisolated struct Line: Equatable, Sendable {
+    struct Line: Equatable {
         let name: String
         let answers: Int
         let inputTokens: Int

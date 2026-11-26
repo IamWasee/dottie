@@ -77,15 +77,20 @@ final class ClickyNotifications: NSObject {
     /// is in front, once a day, and replaces the day before's.
     func notifyDailyCostReport(title: String, body: String) {
         guard Self.isEnabled else { return }
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { [weak self] isGranted, _ in
+            guard isGranted else { return }
+            Task { @MainActor in self?.addDailyCostReport(title: title, body: body) }
+        }
+    }
+
+    /// Made here, on the main actor: the request itself can't cross into
+    /// the authorization callback.
+    private func addDailyCostReport(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = Self.shortened(body)
         content.threadIdentifier = Self.dailyCostReportIdentifier
-        let request = UNNotificationRequest(identifier: Self.dailyCostReportIdentifier, content: content, trigger: nil)
-        notificationCenter.requestAuthorization(options: [.alert, .sound]) { [weak self] isGranted, _ in
-            guard isGranted else { return }
-            Task { @MainActor in self?.notificationCenter.add(request) }
-        }
+        notificationCenter.add(UNNotificationRequest(identifier: Self.dailyCostReportIdentifier, content: content, trigger: nil))
     }
 
     private func post(agentID: UUID, title: String, body: String, isComputerUseRequest: Bool) {
