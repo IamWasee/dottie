@@ -130,6 +130,23 @@ enum DottieJevDriverPlan {
             }
         }
 
+        /// Where on the screen (0-1) the move acts, for moves aimed at one
+        /// spot: checked again right before acting, in case the page moved.
+        var aimedPoint: (centerX: Double, centerY: Double)? {
+            switch self {
+            case .click(_, let centerX, let centerY), .clickControl(_, _, let centerX, let centerY),
+                 .doubleClick(_, let centerX, let centerY), .rightClick(_, let centerX, let centerY),
+                 .typeIntoField(_, let centerX, let centerY, _, _), .holdMouseDown(_, let centerX, let centerY),
+                 .releaseMouseOn(_, let centerX, let centerY):
+                return (centerX, centerY)
+            case .drag(_, let fromX, let fromY, _, _, _):
+                return (fromX, fromY)
+            case .clickUnlabeled, .typeText, .pressReturn, .pressKeys, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .goBack,
+                 .openSite, .searchWeb, .openApp, .quickMacAction, .recallAppMemory, .releaseMouseHere, .finishedRound, .finished, .noneFits:
+                return nil
+            }
+        }
+
         /// The same move on the same screen is the same move, wherever OCR
         /// put the label's middle this time.
         var signature: String {
@@ -935,6 +952,8 @@ enum DottieJevDriver {
         var jobMemory = DottieJobMemory(taskText: taskText)
         // The button Jev pressed and hasn't let go of yet (0-1000).
         var heldMouse: (label: String, centerX: Double, centerY: Double)?
+        // Clicks dropped in a row because their spot changed before the click.
+        var staleMovesDroppedInARow = 0
         // Keys the user's hints name, offered first.
         var hintKeyMoves: [DottieJevDriverPlan.Move] = []
         // Step checks: the last move Jev made, the open moves that worked
@@ -964,6 +983,12 @@ enum DottieJevDriver {
 
         for stepNumber in 1...DottieJevDriverPlan.stepBudget(rounds: jobMemory.totalRounds) {
             if Task.isCancelled { return .handedOver(note: "") }
+            // Video players (YouTube's gear, captions, speed) show their
+            // controls only while the mouse moves: a still screenshot never
+            // had them. Never while a button is held, which would drag.
+            if heldMouse == nil, DottieBrowser.isBrowser(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+                await wakeHoverControls()
+            }
             guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: DottieJevProtocol.maximumImageSide) else {
                 return movesSoFar.isEmpty ? .notTried : handOver("The screen couldn't be read.")
             }
@@ -1047,7 +1072,7 @@ enum DottieJevDriver {
                 if let frontPageIdentity {
                     clickWaitingForResult = (frontPageIdentity.bundleIdentifier, frontPageIdentity.key, visibleText.text, visibleText.centerX, visibleText.centerY)
                 }
-                await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
+                await waitForScreenToSettle(opensSomethingNew: move.opensSomethingNew)
                 continue
             }
             let alreadyTriedSignatures = (triedSignaturesByScreen[screenKey] ?? [])
@@ -1153,6 +1178,27 @@ enum DottieJevDriver {
                 if case .typeText = move, DottieScreenActionPerformer.isFocusedFieldSecure {
                     return handOver("A password box is selected.")
                 }
+                // The page may have moved while Jev thought: a click picked on
+                // the old screen would land on whatever is there now.
+                if let aimedPoint = move.aimedPoint,
+                   DottieScreenSettle.shouldDropStaleMove(
+                       targetRegionChanged: await targetRegionChanged(
+                           around: aimedPoint, pickedOn: screen.image,
+                           wakesHoverControls: heldMouse == nil && DottieBrowser.isBrowser(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+                       ),
+                       staleMovesDroppedInARow: staleMovesDroppedInARow
+                   ) {
+                    staleMovesDroppedInARow += 1
+                    DottieLog.notice("🎯 The screen changed under Jev's click before it was made; looking again")
+                    actions.progress(stepNumber, "the page moved, looking again")
+                    // Not a move that changed nothing: nothing was done.
+                    previousScreenThumbnail = nil
+                    lastMoveSignature = nil
+                    lastMove = nil
+                    await waitForScreenToSettle(maximumSeconds: 2)
+                    continue
+                }
+                staleMovesDroppedInARow = 0
                 await perform(move, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions,
                               frontSiteHost: frontSiteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
                 if DottieJevDriverPlan.opensOnlyOnce(move) {
@@ -1176,25 +1222,133 @@ enum DottieJevDriver {
                 // Let the app draw what the move opened before looking again:
                 // a page still loading looked like "nothing changed" and the
                 // move was struck off.
-                await waitForScreenToSettle(maximumSeconds: move.opensSomethingNew ? 5 : 2)
+                await waitForScreenToSettle(opensSomethingNew: move.opensSomethingNew)
             }
         }
         return handOver("Jev used its step budget.")
     }
 
-    /// Waits until two looks a moment apart show the same screen (the page
-    /// or app has finished drawing), or the time is up.
-    private static func waitForScreenToSettle(maximumSeconds: Double) async {
+    /// Waits until the page has finished: the browser (when it says) has
+    /// loaded the page and two looks in a row matched the one before.
+    /// One match let a page that hadn't started drawing pass, and Jev
+    /// pressed keys before a video had loaded (Wasee's tests, 27 Nov).
+    private static func waitForScreenToSettle(opensSomethingNew: Bool) async {
         let startedAt = Date()
         try? await Task.sleep(nanoseconds: 400_000_000)
         var lastThumbnail: [UInt8]?
-        while Date().timeIntervalSince(startedAt) < maximumSeconds, !Task.isCancelled {
+        var matchingLooksInARow = 0
+        while !Task.isCancelled {
+            let pageLoad = frontWebPageLoad()
+            let maximumSeconds = DottieScreenSettle.maximumWaitSeconds(opensSomethingNew: opensSomethingNew, pageLoad: pageLoad)
+            guard Date().timeIntervalSince(startedAt) < maximumSeconds else { return }
             guard let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320) else { return }
             let lookThumbnail = thumbnail(of: look.image)
-            if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) { return }
+            if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) {
+                matchingLooksInARow += 1
+            } else {
+                matchingLooksInARow = 0
+            }
+            if DottieScreenSettle.isSettled(matchingLooksInARow: matchingLooksInARow, pageLoad: pageLoad) { return }
             lastThumbnail = lookThumbnail
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
+    }
+
+    /// The old fixed-time wait, for the places that only know a time.
+    private static func waitForScreenToSettle(maximumSeconds: Double) async {
+        let startedAt = Date()
+        var lastThumbnail: [UInt8]?
+        var matchingLooksInARow = 0
+        while Date().timeIntervalSince(startedAt) < maximumSeconds, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320) else { return }
+            let lookThumbnail = thumbnail(of: look.image)
+            if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) {
+                matchingLooksInARow += 1
+            } else {
+                matchingLooksInARow = 0
+            }
+            if DottieScreenSettle.isSettled(matchingLooksInARow: matchingLooksInARow, pageLoad: .unknown) { return }
+            lastThumbnail = lookThumbnail
+        }
+    }
+
+    /// Whether the browser in front says its page finished loading, read
+    /// from its web area through Accessibility. Bounded: a slow app answers
+    /// "unknown" and the screen check alone decides.
+    private static func frontWebPageLoad() -> DottieScreenSettle.PageLoad {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication,
+              DottieBrowser.isBrowser(bundleIdentifier: frontmostApplication.bundleIdentifier) else { return .unknown }
+        let applicationElement = AXUIElementCreateApplication(frontmostApplication.processIdentifier)
+        var focusedWindowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(applicationElement, kAXFocusedWindowAttribute as CFString, &focusedWindowValue) == .success,
+              let focusedWindow = DottieAccessibilityCast.element(focusedWindowValue) else { return .unknown }
+        let deadline = Date().addingTimeInterval(0.15)
+        var elementsToVisit: [(element: AXUIElement, depth: Int)] = [(focusedWindow, 0)]
+        var visitedCount = 0
+        while !elementsToVisit.isEmpty, visitedCount < 300, Date() < deadline {
+            let next = elementsToVisit.removeFirst()
+            visitedCount += 1
+            var roleValue: CFTypeRef?
+            AXUIElementCopyAttributeValue(next.element, kAXRoleAttribute as CFString, &roleValue)
+            if (roleValue as? String) == "AXWebArea" {
+                var loadedValue: CFTypeRef?
+                var progressValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(next.element, "AXLoaded" as CFString, &loadedValue)
+                AXUIElementCopyAttributeValue(next.element, "AXLoadingProgress" as CFString, &progressValue)
+                return DottieScreenSettle.pageLoad(loadedAttribute: (loadedValue as? NSNumber)?.boolValue,
+                                                   loadingProgress: (progressValue as? NSNumber)?.doubleValue)
+            }
+            guard next.depth < 12 else { continue }
+            var childrenValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(next.element, kAXChildrenAttribute as CFString, &childrenValue) == .success,
+               let childElements = childrenValue as? [AXUIElement] {
+                elementsToVisit.append(contentsOf: childElements.map { ($0, next.depth + 1) })
+            }
+        }
+        return .unknown
+    }
+
+    /// Nudges the mouse two points and back, so players that hide their
+    /// controls while the mouse is still show them for the next look.
+    private static func wakeHoverControls() async {
+        guard let mouseLocation = CGEvent(source: nil)?.location else { return }
+        for point in [CGPoint(x: mouseLocation.x + 2, y: mouseLocation.y), mouseLocation] {
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        // The controls fade in: give them a moment before the screenshot.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+
+    /// Whether the spot a move aims at looks different now from the
+    /// screenshot Jev picked the move on.
+    private static func targetRegionChanged(around aimedPoint: (centerX: Double, centerY: Double), pickedOn pickedImage: CGImage,
+                                            wakesHoverControls: Bool) async -> Bool {
+        // Jev picked on a screen with the player's controls showing; they
+        // fade while it thinks, which isn't the page moving.
+        if wakesHoverControls { await wakeHoverControls() }
+        guard let now = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 800) else { return false }
+        let pickedRegion = regionThumbnail(of: pickedImage, centerX: aimedPoint.centerX, centerY: aimedPoint.centerY)
+        let nowRegion = regionThumbnail(of: now.image, centerX: aimedPoint.centerX, centerY: aimedPoint.centerY)
+        return DottieScreenSettle.targetRegionChanged(pickedOn: pickedRegion, now: nowRegion)
+    }
+
+    /// The square around a point (0-1 of the image), shrunk to a small grey picture.
+    private static func regionThumbnail(of image: CGImage, centerX: Double, centerY: Double) -> [UInt8] {
+        let region = DottieScreenSettle.targetRegion(centerX: centerX, centerY: centerY, imageWidth: image.width, imageHeight: image.height)
+        guard region.width > 0, let croppedImage = image.cropping(to: region) else { return [] }
+        let side = DottieScreenSettle.targetRegionSide
+        var pixels = [UInt8](repeating: 0, count: side * side)
+        let didDraw = pixels.withUnsafeMutableBytes { pixelBuffer -> Bool in
+            guard let context = CGContext(
+                data: pixelBuffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+            context.draw(croppedImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        return didDraw ? pixels : []
     }
 
     private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions,
