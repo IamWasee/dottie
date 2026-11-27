@@ -40,6 +40,26 @@ struct ScreenJobHintTests {
         #expect(!HintPlan.isGuidance(String(repeating: "no ", count: 200)))
     }
 
+    @Test func anyWordsAnswerAWaitingQuestion() {
+        #expect(HintPlan.isAnswerToWaitingQuestion("use the second account"))
+        #expect(HintPlan.isAnswerToWaitingQuestion("John Smith, born 1980"))
+        #expect(HintPlan.isAnswerToWaitingQuestion("yes"))
+        #expect(HintPlan.isAnswerToWaitingQuestion("open the patient tab and click new"))
+    }
+
+    @Test func stoppingIsNotAnAnswer() {
+        #expect(!HintPlan.isAnswerToWaitingQuestion("stop"))
+        #expect(!HintPlan.isAnswerToWaitingQuestion("Cancel that"))
+        #expect(!HintPlan.isAnswerToWaitingQuestion("never mind"))
+        #expect(!HintPlan.isAnswerToWaitingQuestion("   "))
+    }
+
+    @Test func answeringIsQuick() {
+        let started = Date()
+        for _ in 0..<5_000 { _ = HintPlan.isAnswerToWaitingQuestion("click the blue save button at the bottom") }
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+
     @Test func aHintThatChangesTheScreenWorked() {
         let hint = HintPlan.Hint(text: "use the search bar").updated(afterMoveChangedScreen: true)
         #expect(hint.status == .worked)

@@ -1759,7 +1759,7 @@ enum DottieJevDriver {
     /// pressed keys before a video had loaded (Wasee's tests, 27 Nov).
     private static func waitForScreenToSettle(opensSomethingNew: Bool) async {
         let startedAt = Date()
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.firstLookDelaySeconds * 1_000_000_000))
         var lastThumbnail: [UInt8]?
         var matchingLooksInARow = 0
         while !Task.isCancelled {
@@ -1775,7 +1775,7 @@ enum DottieJevDriver {
             }
             if DottieScreenSettle.isSettled(matchingLooksInARow: matchingLooksInARow, pageLoad: pageLoad) { return }
             lastThumbnail = lookThumbnail
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.secondsBetweenLooks * 1_000_000_000))
         }
     }
 
@@ -1785,7 +1785,7 @@ enum DottieJevDriver {
         var lastThumbnail: [UInt8]?
         var matchingLooksInARow = 0
         while Date().timeIntervalSince(startedAt) < maximumSeconds, !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.secondsBetweenLooks * 1_000_000_000))
             guard let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320) else { return }
             let lookThumbnail = thumbnail(of: look.image)
             if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) {

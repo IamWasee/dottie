@@ -25,9 +25,17 @@ enum DottieScreenSettle {
         case unknown
     }
 
-    /// Looks in a row that must match before the screen counts as settled.
-    /// One match let a blank page that hadn't started drawing pass.
+    /// Looks in a row that must match before the screen counts as settled
+    /// when nothing says the page loaded. One match let a blank page that
+    /// hadn't started drawing pass.
     static let matchingLooksNeeded = 2
+    /// When the browser says its page loaded, one matching look is enough:
+    /// the second look cost every move about half a second (Wasee, 28 Nov:
+    /// "it got way too slow").
+    static let matchingLooksNeededOnALoadedPage = 1
+    /// How long after a move the first look waits, and between looks.
+    static let firstLookDelaySeconds = 0.25
+    static let secondsBetweenLooks = 0.2
     /// Extra time given while the browser still says it's loading.
     static let extraSecondsWhilePageLoads = 6.0
     /// A click aimed at a spot that changed is dropped at most this many
@@ -51,11 +59,17 @@ enum DottieScreenSettle {
     }
 
     static func isSettled(matchingLooksInARow: Int, pageLoad: PageLoad) -> Bool {
-        pageLoad != .loading && matchingLooksInARow >= matchingLooksNeeded
+        switch pageLoad {
+        case .loading: return false
+        case .loaded: return matchingLooksInARow >= matchingLooksNeededOnALoadedPage
+        case .unknown: return matchingLooksInARow >= matchingLooksNeeded
+        }
     }
 
+    /// A screen that never stops moving (a playing video) used to make
+    /// every move wait the whole time; ordinary moves now wait 1.5 s at most.
     static func maximumWaitSeconds(opensSomethingNew: Bool, pageLoad: PageLoad) -> Double {
-        let baseSeconds = opensSomethingNew ? 5.0 : 2.0
+        let baseSeconds = opensSomethingNew ? 5.0 : 1.5
         return pageLoad == .loading ? baseSeconds + extraSecondsWhilePageLoads : baseSeconds
     }
 
