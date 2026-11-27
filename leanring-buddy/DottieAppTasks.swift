@@ -22,6 +22,7 @@
 //  advisor and the step model. Stored in Application Support/Dottie/AppTasks/.
 //
 
+import Combine
 import Foundation
 
 /// One step of a named task, kept so it can be done again.

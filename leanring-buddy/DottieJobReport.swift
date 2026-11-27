@@ -13,6 +13,7 @@
 //  The pure parts are Foundation only, so they're unit tested.
 //
 
+import Combine
 import Foundation
 
 /// What one screen job did and cost.
