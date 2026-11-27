@@ -120,7 +120,8 @@ struct RoundReplayTests {
         #expect(roundTwoSteps[6].label == "male")
         #expect(roundTwoSteps[7].label == "Create New Patient")
         #expect(roundTwoSteps[1].label == "Patient")
-        #expect(!roundTwoSteps.contains(where: \.textCameFromRequest))
+        let anyStepStillSwapsInRequestWords = roundTwoSteps.contains { $0.textCameFromRequest }
+        #expect(!anyStepStillSwapsInRequestWords)
     }
 
     @Test func aClickOnRoundOnesDetailsThatCantBePlacedIsJevs() {
@@ -188,7 +189,8 @@ struct RoundReplayTests {
                                                       frontSiteHost: "localhost", frontAppName: "Safari"))
             replay.advance()
         }
-        #expect(moves.allSatisfy { $0 != .jevTakesIt && $0 != .notOnScreen })
+        let everyStepFitTheScreen = moves.allSatisfy { $0 != .jevTakesIt && $0 != .notOnScreen }
+        #expect(everyStepFitTheScreen)
         #expect(moves.contains(.move(.typeIntoField(fieldLabel: "First Name", centerX: 300, centerY: 200, text: "Mary", pressesReturn: false))))
         #expect(moves.contains(.move(.typeIntoField(fieldLabel: "Last Name", centerX: 500, centerY: 200, text: "Lee", pressesReturn: false))))
         #expect(moves.contains(.move(.typeIntoField(fieldLabel: "DOB", centerX: 300, centerY: 260, text: "03/04/1970", pressesReturn: false))))
