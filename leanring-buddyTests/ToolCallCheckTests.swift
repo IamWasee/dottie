@@ -109,6 +109,35 @@ struct ToolCallCheckTests {
         #expect(found.isEmpty, "\(found)")
     }
 
+    @Test func oneBadStepAmongGoodOnesIsDrawnSoItIsNoProblem() {
+        // The 27 Nov pre-ship run: supply and demand with one plot step that had no function.
+        let found = problems("explain_on_screen", ["steps": [
+            ["kind": "axes", "points": ["100,900", "900,100"]],
+            ["kind": "plot", "points": ["100,100", "900,900"], "text": ""],
+            ["kind": "line", "points": ["150,200", "850,800"], "text": "Demand"],
+            ["kind": "line", "points": ["150,800", "850,200"], "text": "Supply"]
+        ]])
+        #expect(found.isEmpty, "\(found)")
+    }
+
+    @Test func aDrawingThatLosesMostOfItsStepsIsAProblem() {
+        let found = problems("explain_on_screen", ["steps": [
+            ["kind": "axes", "points": ["100,900", "900,100"]],
+            ["kind": "plot", "points": ["100,100", "900,900"], "text": "demand curve"],
+            ["kind": "curve", "points": ["somewhere", "elsewhere"]]
+        ]])
+        #expect(found.count == 2)
+        #expect(found.contains { $0.contains("function of x") })
+    }
+
+    @Test func halfTheStepsBadStillDraws() {
+        let found = problems("explain_on_screen", ["steps": [
+            ["kind": "axes", "points": ["100,900", "900,100"]],
+            ["kind": "plot", "points": ["100,100", "900,900"], "text": "demand curve"]
+        ]])
+        #expect(found.isEmpty, "\(found)")
+    }
+
     @Test func aDrawingWithNoStepsIsAProblem() {
         #expect(problems("explain_on_screen", [:]).contains("explain_on_screen: no steps Dottie can read"))
     }

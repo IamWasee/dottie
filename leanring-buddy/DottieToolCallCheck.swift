@@ -57,7 +57,13 @@ enum DottieToolCallCheck {
         guard let plan = DottieTeaching.Plan(arguments: toolCall.arguments) else {
             return ["\(toolCall.name): no steps Dottie can read"]
         }
-        return plan.problems.map { "\(toolCall.name): \($0)" }
+        // The app draws every step it can and leaves the bad ones out
+        // (CompanionManager.startTeaching), so one bad step among good
+        // ones is drawn; a drawing that loses most of its steps isn't.
+        let stepProblems = plan.problems
+        let drawableStepCount = plan.keepingOnlyDrawableSteps().steps.count
+        guard drawableStepCount == 0 || stepProblems.count > drawableStepCount else { return [] }
+        return stepProblems.map { "\(toolCall.name): \($0)" }
     }
 
     /// Whether a value fits a Gemini declaration schema (OBJECT, ARRAY,
