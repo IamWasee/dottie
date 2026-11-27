@@ -376,13 +376,22 @@ struct TalkerTests {
     }
 
     @Test func checkingAnAskIsQuick() {
-        let startedAt = Date()
-        for turnNumber in 0..<5_000 {
-            _ = DottieTalkerProtocol.isClearlyAnAskToDoSomething("hey dottie can you please turn on focus mode number \(turnNumber)")
-            _ = DottieTalkerProtocol.claimsToHaveDoneSomething("sure, i'll keep that in mind and maybe check back later \(turnNumber)")
+        // Runs before every spoken turn: 1,000 of each in well under 200 ms
+        // (the same 5,000 a second as before). The median of 7 rounds, so
+        // other tests running beside it on CI can't fail it with one slow round.
+        let clock = ContinuousClock()
+        var roundMilliseconds: [Double] = []
+        for _ in 0..<7 {
+            let duration = clock.measure {
+                for turnNumber in 0..<1_000 {
+                    _ = DottieTalkerProtocol.isClearlyAnAskToDoSomething("hey dottie can you please turn on focus mode number \(turnNumber)")
+                    _ = DottieTalkerProtocol.claimsToHaveDoneSomething("sure, i'll keep that in mind and maybe check back later \(turnNumber)")
+                }
+            }
+            roundMilliseconds.append(Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1e15)
         }
-        // Runs before every spoken turn: 5,000 of each in well under a second.
-        #expect(Date().timeIntervalSince(startedAt) < 1.0)
+        let medianMilliseconds = roundMilliseconds.sorted()[roundMilliseconds.count / 2]
+        #expect(medianMilliseconds < 200, "1,000 ask checks took \(medianMilliseconds) ms")
     }
 
     // MARK: Groq's own web search (Wasee, 27 Nov)
