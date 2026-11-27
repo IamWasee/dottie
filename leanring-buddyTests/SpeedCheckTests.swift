@@ -319,4 +319,28 @@ struct SpeedCheckTests {
         }
         #expect(median < 5, "the last job's record took \(median) ms")
     }
+
+    /// Every screen-job step may do a saved task's step and note remembered
+    /// clicks on Jev's options; on a busy screen (400 texts, 255 options,
+    /// 40 remembered clicks) both must cost next to nothing.
+    @Test func savedStepsAndRememberedClickNotesStayQuick() {
+        let screenTexts = (0..<400).map { DottieJevDriverPlan.ScreenText(text: "Row \($0) of the sheet (\($0) items)", centerX: 500, centerY: Double($0) * 2) }
+        let savedStep = DottieAppTaskPlan.step(from: .click(label: "Row 399 of the sheet (3 items)", centerX: 500, centerY: 798),
+                                               pageTitle: "Sheet", requestText: "open row")!
+        let options = (0..<255).map { DottieJevDriverPlan.Option(key: "o\($0)", move: .click(label: "Button number \($0)", centerX: 1, centerY: 1)) }
+        let clicks = (0..<DottieAppMemoryPlan.maximumClicksPerPage).map {
+            DottieAppPage.Click(label: "Button number \($0)", centerX: 10, centerY: Double($0), resultPageKey: "page \($0)",
+                                resultPageTitle: "Page", timesSeen: $0, lastSeen: Date())
+        }
+        let memoryPage = DottieAppPage(key: "home", title: "Home", elements: [], clicks: clicks, lastSeen: Date(), screenshotFileName: nil)
+        let median = medianMilliseconds {
+            for _ in 0..<5 {
+                _ = DottieAppTaskPlan.replayStep(savedStep, recordedForRequest: "open row", newRequest: "open row",
+                                                 screenTexts: screenTexts, screenControls: [], frontSiteHost: nil, frontAppName: nil)
+                _ = DottieAppMemoryPlan.optionsNotingRememberedClicks(options, on: memoryPage)
+            }
+        }
+
+        #expect(median < 300, "5 steps of saved-task checks and option notes took \(median) ms")
+    }
 }

@@ -302,4 +302,16 @@ struct JevAdvisorTests {
         // Runs once per Jev step, which takes about a second: 200 in a few seconds at most.
         #expect(Date().timeIntervalSince(startedAt) < 4.0)
     }
+
+    // MARK: What Dottie knows about the app (looked up once at job start)
+
+    @Test func theBriefAndAdviceGetWhatDottieKnowsAboutTheApp() {
+        let knowledge = "How Sheets works (Dottie's card): columns are renamed from the header menu."
+        #expect(Advisor.briefPrompt(taskText: "rename the column", appKnowledge: knowledge).contains("What Dottie knows about this app and task:\n" + knowledge))
+        let prompt = Advisor.advicePrompt(taskText: "x", trigger: .jevUnsure, screenLines: [], optionDescriptions: [], jobStateText: "",
+                                          appKnowledge: knowledge)
+        #expect(prompt.contains(knowledge))
+        #expect(!Advisor.briefPrompt(taskText: "x").contains("What Dottie knows"))
+        #expect(Advisor.appKnowledgeLines(String(repeating: "a", count: 5000)).count < 2100)
+    }
 }

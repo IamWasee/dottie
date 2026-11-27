@@ -46,6 +46,8 @@ struct HomeAdminView: View {
                     autoTyperCard
                 }
 
+                HomeAppTasksAdminSection()
+
                 section(title: "Hide this tab") {
                     VStack(alignment: .leading, spacing: 8) {
                         Button("Lock the Admin tab") { adminMode.lock() }

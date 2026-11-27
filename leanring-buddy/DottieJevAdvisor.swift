@@ -96,15 +96,22 @@ enum DottieJevAdvisorPlan {
 
     // MARK: The brief, once per job
 
-    static func briefPrompt(taskText: String) -> String {
+    static func briefPrompt(taskText: String, appKnowledge: String = "") -> String {
         """
         You advise Jev, a fast model that does a job on a Mac screen one move at a time. Jev picks moves well but can't judge or compare, reason, or wait.
-        The job: \(taskText)
+        The job: \(taskText)\(appKnowledgeLines(appKnowledge))
         Write:
         - steps: the steps in order, short, at most \(maximumSteps).
         - checkpoints: up to \(maximumCheckpoints) moments where Jev will need you: judging or comparing (newest, cheapest, most viewed, the right one), waiting (something loads, exports, uploads, a timer runs), or reasoning (check a total, read and decide). For each: "watch": 1 to 3 words that will be on the screen at that moment, "kind": judge, wait or reason, "advice": what to do then, one line. Only real ones; none is fine.
         Answer JSON only: {"steps":["..."],"checkpoints":[{"watch":["..."],"kind":"judge","advice":"..."}]}
         """
+    }
+
+    /// What Dottie knows about the app and the task, on its own lines
+    /// after the job, or nothing when she knows nothing.
+    static func appKnowledgeLines(_ appKnowledge: String) -> String {
+        let trimmedKnowledge = appKnowledge.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedKnowledge.isEmpty ? "" : "\nWhat Dottie knows about this app and task:\n" + String(trimmedKnowledge.prefix(2000))
     }
 
     static func brief(fromAnswer answerText: String) -> Brief? {
@@ -149,7 +156,8 @@ enum DottieJevAdvisorPlan {
         trigger: Trigger,
         screenLines: [(text: String, centerX: Double, centerY: Double)],
         optionDescriptions: [String],
-        jobStateText: String
+        jobStateText: String,
+        appKnowledge: String = ""
     ) -> String {
         let shownLines = screenLines
             .sorted { $0.centerY == $1.centerY ? $0.centerX < $1.centerX : $0.centerY < $1.centerY }
@@ -158,7 +166,7 @@ enum DottieJevAdvisorPlan {
         let shownOptions = optionDescriptions.prefix(maximumOptionsShown).enumerated().map { "\($0.offset + 1). \($0.element)" }
         return """
         You advise Jev on one step of a job on a Mac screen. Jev picks moves but can't judge, reason or wait.
-        The job: \(taskText)
+        The job: \(taskText)\(appKnowledgeLines(appKnowledge))
         Why you're asked: \(trigger.reasonText)
         \(jobStateText)
         Text on the screen now, top to bottom, (x,y) from 0 to 100:
@@ -341,10 +349,10 @@ enum DottieJevAdvisorPlan {
 /// Asks the Worker's advisor role. nil when it fails or is too slow; the
 /// job then goes on as if there were no advisor.
 enum DottieJevAdvisor {
-    static func brief(forTask taskText: String) async -> DottieJevAdvisorPlan.Brief? {
+    static func brief(forTask taskText: String, appKnowledge: String = "") async -> DottieJevAdvisorPlan.Brief? {
         let requestBody: [String: Any] = [
             "provider": "advisor",
-            "contents": [["role": "user", "parts": [["text": DottieJevAdvisorPlan.briefPrompt(taskText: taskText)]]]],
+            "contents": [["role": "user", "parts": [["text": DottieJevAdvisorPlan.briefPrompt(taskText: taskText, appKnowledge: appKnowledge)]]]],
             "generationConfig": ["maxOutputTokens": 500]
         ]
         guard let answerText = await DottieChat.send(requestBody, timeout: 12) else { return nil }
@@ -384,12 +392,17 @@ final class DottieJevAdvisorSession {
     private var firedCheckpointIndexes = Set<Int>()
     private var timeTriggerArmed = true
 
-    init(taskText: String, rounds: Int, asksForBrief: Bool = true) {
+    /// What Dottie knows about the app and this task (its card, a saved
+    /// task's steps and problems), looked up once as the job started.
+    let appKnowledge: String
+
+    init(taskText: String, rounds: Int, asksForBrief: Bool = true, appKnowledge: String = "") {
         self.taskText = taskText
+        self.appKnowledge = appKnowledge
         adviceCallsLeft = DottieJevAdvisorPlan.adviceCallBudget(rounds: rounds)
         guard asksForBrief else { return }
         Task { [weak self] in
-            let askedBrief = await DottieJevAdvisor.brief(forTask: taskText)
+            let askedBrief = await DottieJevAdvisor.brief(forTask: taskText, appKnowledge: appKnowledge)
             self?.brief = askedBrief
         }
     }
@@ -433,7 +446,7 @@ final class DottieJevAdvisorSession {
         let prompt = DottieJevAdvisorPlan.advicePrompt(
             taskText: taskText, trigger: trigger,
             screenLines: screenTexts.map { (text: $0.text, centerX: $0.centerX / 1000, centerY: $0.centerY / 1000) },
-            optionDescriptions: options.map(\.move.description), jobStateText: jobStateText
+            optionDescriptions: options.map(\.textForModels), jobStateText: jobStateText, appKnowledge: appKnowledge
         )
         guard let advice = await DottieJevAdvisor.advise(prompt: prompt, optionCount: options.count) else {
             DottieLog.notice("🧭 The advisor didn't answer")

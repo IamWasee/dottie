@@ -128,6 +128,8 @@ final class DottieScreenTaskRunner {
     private(set) var currentGoal: DottieTaskGoal?
     /// A long job gets a plan and a done check before it may finish.
     private var isLongJob = false
+    /// What this job did and cost, logged and kept when it ends (DottieJobReport).
+    private var jobReport = DottieJobReport()
     /// How many times a finish was sent back because it wasn't done yet.
     private var finishRejectionCount = 0
     private static let maximumFinishRejections = 2
@@ -190,9 +192,13 @@ final class DottieScreenTaskRunner {
                 ["inlineData": ["mimeType": "image/jpeg", "data": referenceImage.jpegData.base64EncodedString()]]
             ]
         }
+        jobReport = DottieJobReport()
+        let jobStartedAt = Date()
+        let dollarsBeforeJob = DottieAskUsageLog.dollarsSinceLaunch
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
+            self.finishJobReport(outcome: outcome, startedAt: jobStartedAt, dollarsBeforeJob: dollarsBeforeJob)
             DottieMouseHold.releaseNow(reason: "the job ended")
             guard !Task.isCancelled else { return }
             DottieScreenJobHints.shared.jobIsRunning = false
@@ -204,6 +210,20 @@ final class DottieScreenTaskRunner {
             self.currentTaskText = nil
             completion(outcome)
         }
+    }
+
+    /// One report line per job, kept for the memory trial in Home → Admin.
+    private func finishJobReport(outcome: Outcome, startedAt: Date, dollarsBeforeJob: Double) {
+        var finishedReport = jobReport
+        finishedReport.seconds = Date().timeIntervalSince(startedAt)
+        finishedReport.dollars = max(0, DottieAskUsageLog.dollarsSinceLaunch - dollarsBeforeJob)
+        switch outcome {
+        case .finished: finishedReport.outcome = "finished"
+        case .stopped: finishedReport.outcome = "stopped"
+        case .failed: finishedReport.outcome = "failed"
+        }
+        finishedReport.finishedAt = Date()
+        DottieJobReports.shared.add(finishedReport)
     }
 
     /// Stops after the current action. Returns true if a task was running.
@@ -266,6 +286,16 @@ final class DottieScreenTaskRunner {
             isLongJob = true
             setUpGoal(taskText: taskText, appName: jobContext.appName)
         }
+        // App memory, looked up once as the job starts (the app memory
+        // review): a task Dottie has done before here (its steps, done check
+        // and problems) and the app's card. The memory trial in Home → Admin
+        // can run a job without them, to compare.
+        let usesAppMemory = DottieAppMemoryTrial.usesMemoryThisJob()
+        let startKnowledge = DottieAppTasks.shared.knowledgeAtJobStart(forTask: taskText, context: jobContext)
+        let appKnowledgeText = usesAppMemory ? startKnowledge.fullText : ""
+        let hasSavedTaskToReplay = usesAppMemory && startKnowledge.taskToReplay != nil
+        jobReport.memoryArm = usesAppMemory ? "on" : "off"
+        jobReport.appName = jobContext.siteHost ?? jobContext.appName ?? "unknown"
         var recordedSteps: [DottieReplay.Step] = []
         var unconfirmedStepIndices: [Int] = []
         var replayUsed: DottieReplay?
@@ -304,8 +334,11 @@ final class DottieScreenTaskRunner {
         // through Accessibility, which web pages mostly don't fill in, so
         // it only cost a model call before Jev started.
         let namesAWebsite = !DottieJevDriverPlan.siteAddresses(from: taskText).isEmpty
-        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short, !namesAWebsite {
-            let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: lessonsText) { [weak self] progressLine in
+        // A task Dottie has done before here goes to Jev, which does its
+        // saved steps again, so it skips the guess.
+        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short, !namesAWebsite, !hasSavedTaskToReplay {
+            let guessKnownHowTo = appKnowledgeText.isEmpty ? lessonsText : lessonsText + "\n" + appKnowledgeText
+            let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: guessKnownHowTo) { [weak self] progressLine in
                 self?.onProgress?(0, progressLine)
             }
             if Task.isCancelled { return .stopped }
@@ -337,7 +370,9 @@ final class DottieScreenTaskRunner {
                     }
                 }
             )
-            let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, actions: jevActions)
+            let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, startKnowledge: startKnowledge,
+                                                       usesAppMemory: usesAppMemory, actions: jevActions)
+            jobReport.addJevRun(DottieJevDriver.lastRunStats)
             if Task.isCancelled { return .stopped }
             switch jevOutcome {
             case .finished(let stepCount):
@@ -350,6 +385,10 @@ final class DottieScreenTaskRunner {
                 break
             }
         }
+        // The step model gets the app's card and the saved task's notes too.
+        if !appKnowledgeText.isEmpty {
+            lessonsText += "\n" + appKnowledgeText
+        }
         // How hard the job is decides the model; asked while the first
         // screenshot is taken.
         let tierTask = Task { () -> DottieModelPicker.Tier in
@@ -361,6 +400,7 @@ final class DottieScreenTaskRunner {
             if Task.isCancelled { return .stopped }
             stepLimit = Self.stepLimit(isLongJob: isLongJob)
             if stepNumber > stepLimit { break }
+            jobReport.stepModelSteps += 1
 
             // Before looking: if the last click opened something in an app
             // behind this one, bring it forward so the screenshot shows it.

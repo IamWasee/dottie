@@ -198,4 +198,40 @@ struct AppMemoryTests {
         #expect(DottieFileSaver.save(try JSONEncoder().encode(memoryFile), to: fileURL))
         #expect(DottieFileLoader.load(DottieAppMemoryFile.self, from: fileURL) == memoryFile)
     }
+
+    // MARK: Looser matching, Jev's options and cards (app memory review)
+
+    @Test func aRememberedClickWhoseCountChangedIsStillPicked() {
+        let memoryPage = page("home", clicks: [click("Subscriptions (3)", to: "subs")])
+        let picked = Plan.rememberedClick(on: memoryPage, forTask: "open my subscriptions (3)",
+                                          visibleLabels: ["Home", "Subscriptions (12)"], alreadyClickedLabels: [])
+        #expect(picked?.label == "Subscriptions (3)")
+    }
+
+    @Test func jevsClickOptionsNoteWhatTheyOpenedBefore() {
+        let memoryPage = page("home", clicks: [click("Rename column", to: "edit column"), click("Stay here", to: "home")])
+        let options = [
+            DottieJevDriverPlan.Option(key: "o1", move: .click(label: "Rename column", centerX: 1, centerY: 1)),
+            DottieJevDriverPlan.Option(key: "o2", move: .click(label: "Stay here", centerX: 1, centerY: 1)),
+            DottieJevDriverPlan.Option(key: "o3", move: .scrollDown)
+        ]
+        let noted = Plan.optionsNotingRememberedClicks(options, on: memoryPage)
+        #expect(noted[0].memoryNote == "Dottie clicked this here before and it opened \"edit column\"")
+        #expect(noted[0].textForModels.hasSuffix("(Dottie clicked this here before and it opened \"edit column\")"))
+        #expect(noted[1].memoryNote == nil)
+        #expect(noted[2].textForModels == DottieJevDriverPlan.Move.scrollDown.description)
+    }
+
+    @Test func cardLinesComeFromThePlacesOwnPages() {
+        var youTubeHome = page(Plan.pageKey(bundleIdentifier: "com.google.Chrome", siteHost: "youtube.com", windowTitle: "Home"),
+                               clicks: [click("Subscriptions", to: "subs")])
+        youTubeHome.title = "Home"
+        youTubeHome.controls = [DottieAppPage.Control(label: "Search", kind: "text box", centerX: 500, centerY: 60)]
+        let gitHubHome = page(Plan.pageKey(bundleIdentifier: "com.google.Chrome", siteHost: "github.com", windowTitle: "Home"))
+        let lines = Plan.cardLines(pages: [youTubeHome, gitHubHome], siteHost: "youtube.com")
+        #expect(lines.count == 1)
+        #expect(lines[0].contains("Page \"Home\""))
+        #expect(lines[0].contains("clicking \"Subscriptions\" opens \"subs\""))
+        #expect(lines[0].contains("text box \"Search\""))
+    }
 }

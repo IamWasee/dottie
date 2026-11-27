@@ -109,9 +109,23 @@ nonisolated enum DottieAskCounter {
 }
 
 nonisolated enum DottieAskUsageLog {
+    private static let dollarsLock = NSLock()
+    private static var dollarsNotedSinceLaunch = 0.0
+
+    /// Every priced answer's dollars since Dottie started, so a screen job's
+    /// report can say what the job cost (the difference across it).
+    static var dollarsSinceLaunch: Double {
+        dollarsLock.lock()
+        defer { dollarsLock.unlock() }
+        return dollarsNotedSinceLaunch
+    }
+
     /// Logs one answer's usage and adds it to the day's totals.
     static func note(_ usage: DottieAskUsage, area: DottieUsage.Area, costCategory: String? = nil) {
         DottieLog.notice("\(public: usage.logText(askNumber: DottieAskCounter.currentAskNumber, area: area.rawValue, costCategory: costCategory))")
+        dollarsLock.lock()
+        dollarsNotedSinceLaunch += usage.estimatedDollars ?? 0
+        dollarsLock.unlock()
         let callPurpose = costCategory ?? area.rawValue
         Task { @MainActor in
             DottieUsage.shared.recordProviderAnswer(usage, purpose: callPurpose)
