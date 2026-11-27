@@ -22,6 +22,27 @@ struct JobMemoryTests {
         #expect(DottieJobMemory.roundCount(in: "do it 2 more times") == 2)
     }
 
+    @Test func aNumberOfNewThingsIsOneRoundEach() {
+        // The OpenEMR demo (27 Nov): a list of patients ran as one job and lost its place.
+        #expect(DottieJobMemory.roundCount(in: "hover over Patient, click New/Search, then add three new patients one at a time") == 3)
+        #expect(DottieJobMemory.roundCount(in: "Add these two new patients one at a time, each time filling the form") == 2)
+        #expect(DottieJobMemory.roundCount(in: "add the following 4 patients") == 4)
+        #expect(DottieJobMemory.roundCount(in: "book 2 new appointments for tomorrow") == 2)
+    }
+
+    @Test func aNumberedListIsOneRoundPerItem() {
+        let request = "add patients: (1) first name Maria, DOB March 4 1985; (2) first name David, DOB October 21 1977; (3) first name Sarah"
+        #expect(DottieJobMemory.roundCount(in: request) == 3)
+        #expect(DottieJobMemory.numberedListLength(in: "1) open the form 2) fill it in") == 2)
+        #expect(DottieJobMemory.numberedListLength(in: "call (555) 123 4567") == 0)
+        #expect(DottieJobMemory.numberedListLength(in: "step (2) only") == 0)
+    }
+
+    @Test func aCountThatIsntNewThingsIsOneRound() {
+        #expect(DottieJobMemory.roundCount(in: "add two numbers in the calculator") == 1)
+        #expect(DottieJobMemory.roundCount(in: "make three columns wider") == 1)
+    }
+
     @Test func aJobDoneOnceHasOneRound() {
         #expect(DottieJobMemory.roundCount(in: "open my downloads folder") == 1)
         #expect(DottieJobMemory.roundCount(in: "do it 1 times") == 1)

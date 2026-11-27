@@ -459,6 +459,12 @@ final class DottieScreenTaskRunner {
             if let repeatedAction = Self.repeatedAction(in: recentActionSignatures) {
                 screenNote += "\nYou've done \(repeatedAction) several times and it isn't getting you further. Stop doing it. Check which steps of the task are already done on this screen and move to the next one, or try a completely different way."
                 escalateModelIfSimple()
+            } else if let actionCycle = Self.alternatingActions(in: recentActionSignatures) {
+                // Back and forth (scroll up, scroll down…) or round in a
+                // circle of three: on the OpenEMR demo (27 Nov) the job
+                // scrolled up and down for 18 steps unnoticed.
+                screenNote += "\nYou keep going round in a loop: \(actionCycle). It isn't getting you anywhere. Stop it: check what this screen shows is already done, then do the next part of the task a different way (another control, Tab to the next field, or finish if it's done)."
+                escalateModelIfSimple()
             }
             previousScreenFingerprint = screenFingerprint
             didActSinceLastLook = false
@@ -1035,6 +1041,22 @@ final class DottieScreenTaskRunner {
         let label = (arguments["label"] as? String) ?? (arguments["text"] as? String) ?? (arguments["keys"] as? String)
             ?? (arguments["url"] as? String) ?? (arguments["name"] as? String) ?? (arguments["direction"] as? String) ?? ""
         return label.isEmpty ? functionName : "\(functionName) \"\(label.prefix(60))\""
+    }
+
+    /// The newest moves going round in a loop: two moves taking turns
+    /// (scroll up, scroll down, scroll up, scroll down) or a circle of three
+    /// done twice. Nil when the moves aren't a loop.
+    static func alternatingActions(in signatures: [String]) -> String? {
+        for loopLength in [2, 3] {
+            let movesNeeded = loopLength * 2
+            guard signatures.count >= movesNeeded else { continue }
+            let newestMoves = Array(signatures.suffix(movesNeeded))
+            let firstPass = Array(newestMoves.prefix(loopLength))
+            let secondPass = Array(newestMoves.suffix(loopLength))
+            guard firstPass == secondPass, Set(firstPass).count == loopLength else { continue }
+            return firstPass.joined(separator: ", then ")
+        }
+        return nil
     }
 
     /// An action done three times in the last four (scrolling and waiting
