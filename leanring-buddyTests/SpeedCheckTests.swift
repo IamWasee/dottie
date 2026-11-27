@@ -343,4 +343,18 @@ struct SpeedCheckTests {
 
         #expect(median < 300, "5 steps of saved-task checks and option notes took \(median) ms")
     }
+
+    /// Jev's hover moves on a packed screen that talks about menus, and the
+    /// pointer's glide, as each step builds them.
+    @Test func hoverMovesAndPointerGlidesStayQuick() {
+        let screenTexts = (0..<300).map { DottieJevDriverPlan.ScreenText(text: "Menu \($0)", centerX: Double($0 % 30) * 30, centerY: Double($0)) }
+        let screenControls = (0..<100).map { DottieJevDriverPlan.ScreenControl(label: "Tool \($0)", kind: "menu", centerX: 900, centerY: Double($0)) }
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                _ = DottieJevDriverPlan.hoverMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: "open the file menu and pick export")
+                _ = DottieScreenJobPointerPlan.glidePath(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 2000, y: 1200))
+            }
+        }
+        #expect(median < 50, "20 steps of hover moves and glides took \(median) ms")
+    }
 }

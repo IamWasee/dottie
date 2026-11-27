@@ -219,12 +219,36 @@ enum DottieScreenActionPerformer {
             mouseUp?.post(tap: .cghidEventTap)
         }
 
+        // During a screen job the pointer stays where it clicked, so a menu
+        // that opened under it stays open; it goes back when the job ends.
+        if DottieScreenJobPointer.keepsPointerWhereItActs {
+            DottieScreenJobPointer.notePlaced(clickLocation)
+            return
+        }
         // Put the user's pointer back where it was, a beat after the click
         // lands, so Dottie doesn't steal their mouse.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             CGWarpMouseCursorPosition(originalMouseLocation)
             CGAssociateMouseAndMouseCursorPosition(1)
         }
+    }
+
+    /// Moves the pointer to `appKitPoint` in small steps without clicking,
+    /// so whatever it passes over and lands on sees the mouse arrive (menus
+    /// that open on hover, a video's controls). `isHover` marks a spot Jev
+    /// hovered on purpose, so the next click glides from it too.
+    static func glidePointer(to appKitPoint: CGPoint, isHover: Bool) async {
+        let targetLocation = quartzPoint(fromAppKit: appKitPoint)
+        let startLocation = CGEvent(source: nil)?.location ?? targetLocation
+        let eventSource = CGEventSource(stateID: .hidSystemState)
+        let pathPoints = DottieScreenJobPointerPlan.glidePath(from: startLocation, to: targetLocation)
+        let stepDelayNanoseconds = UInt64(DottieScreenJobPointerPlan.glideSeconds / Double(pathPoints.count) * 1_000_000_000)
+        for pathPoint in pathPoints {
+            CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: pathPoint, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: stepDelayNanoseconds)
+        }
+        DottieScreenJobPointer.notePlaced(targetLocation, isHover: isHover)
     }
 
     /// True when the focused field is a password box (or secure input is on).
@@ -526,6 +550,7 @@ enum DottieScreenActionPerformer {
         try? await Task.sleep(nanoseconds: 60_000_000)
         CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: quartzEnd, mouseButton: .left)?
             .post(tap: .cghidEventTap)
+        DottieScreenJobPointer.notePlaced(quartzEnd)
     }
 
     /// Scrolls whatever is under the pointer, or under `appKitPoint` when
@@ -540,7 +565,9 @@ enum DottieScreenActionPerformer {
                 .post(tap: .cghidEventTap)
         }
         defer {
-            if appKitPoint != nil {
+            if let appKitPoint, DottieScreenJobPointer.keepsPointerWhereItActs {
+                DottieScreenJobPointer.notePlaced(quartzPoint(fromAppKit: appKitPoint))
+            } else if appKitPoint != nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     CGWarpMouseCursorPosition(originalMouseLocation)
                     CGAssociateMouseAndMouseCursorPosition(1)

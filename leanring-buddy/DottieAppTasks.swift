@@ -29,6 +29,8 @@ import Foundation
 struct DottieAppTaskStep: Codable, Equatable {
     enum Kind: String, Codable {
         case click, doubleClick, rightClick, typeIntoField, typeText, pressReturn, pressKeys
+        /// The mouse pointed at it without a click (a menu that opens on hover).
+        case hover
         case scrollDown, scrollUp, scrollLeft, scrollRight, goBack
         case openSite, searchWeb, openApp, quickMacAction
         /// A step only Jev can pick again (an icon with no words, a drag).
@@ -236,6 +238,8 @@ enum DottieAppTaskPlan {
             return make(.doubleClick, label: label, at: (centerX, centerY))
         case .rightClick(let label, let centerX, let centerY):
             return make(.rightClick, label: label, at: (centerX, centerY))
+        case .hover(let label, let centerX, let centerY):
+            return make(.hover, label: label, at: (centerX, centerY))
         case .typeIntoField(let fieldLabel, let centerX, let centerY, let text, let pressesReturn):
             return make(.typeIntoField, label: fieldLabel, role: "text box", at: (centerX, centerY), text: text, pressesReturn: pressesReturn)
         case .typeText(let text, let pressesReturn):
@@ -301,7 +305,7 @@ enum DottieAppTaskPlan {
             + screenTexts.map { DottieLooseLabels.Candidate(label: $0.text, role: nil, centerX: $0.centerX, centerY: $0.centerY) }
         let typedText = textToType(for: step, recordedForRequest: oldRequest, newRequest: newRequest)
         switch step.kind {
-        case .click, .doubleClick, .rightClick, .typeIntoField:
+        case .click, .doubleClick, .rightClick, .typeIntoField, .hover:
             if step.kind == .typeIntoField && typedText == nil { return .jevTakesIt }
             guard let target = DottieLooseLabels.bestMatch(forLabel: step.label, role: step.role,
                                                            centerX: step.centerX, centerY: step.centerY, among: candidates) else {
@@ -310,7 +314,8 @@ enum DottieAppTaskPlan {
             // A buy, delete or send button is pressed from memory only when
             // this request asks for it too; otherwise Jev decides (and isn't
             // offered it either).
-            if DottieJevDriverPlan.isRiskyLabel(target.label, forTask: newRequest) { return .jevTakesIt }
+            // Pointing at it presses nothing, so a hover is never risky.
+            if step.kind != .hover, DottieJevDriverPlan.isRiskyLabel(target.label, forTask: newRequest) { return .jevTakesIt }
             return .move(targetedMove(step, target: target, typedText: typedText ?? ""))
         case .typeText:
             return typedText.map { ReplayStep.move(.typeText($0, pressesReturn: step.pressesReturn)) } ?? .jevTakesIt
@@ -344,6 +349,8 @@ enum DottieAppTaskPlan {
             return .doubleClick(label: target.label, centerX: target.centerX, centerY: target.centerY)
         case .rightClick:
             return .rightClick(label: target.label, centerX: target.centerX, centerY: target.centerY)
+        case .hover:
+            return .hover(label: target.label, centerX: target.centerX, centerY: target.centerY)
         case .typeIntoField:
             return .typeIntoField(fieldLabel: target.label, centerX: target.centerX, centerY: target.centerY,
                                   text: typedText, pressesReturn: step.pressesReturn)
@@ -532,6 +539,7 @@ enum DottieAppTaskPlan {
         case .click: return "click " + (step.role.map { "the \($0) " } ?? "") + "\"\(step.label)\""
         case .doubleClick: return "double-click \"\(step.label)\""
         case .rightClick: return "right-click \"\(step.label)\""
+        case .hover: return "point the mouse at \"\(step.label)\""
         case .typeIntoField: return "type \(typedText) into \"\(step.label)\"\(returnText)"
         case .typeText: return "type \(typedText)\(returnText)"
         case .pressReturn: return "press Return"

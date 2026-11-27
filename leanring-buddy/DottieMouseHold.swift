@@ -49,6 +49,7 @@ enum DottieMouseHold {
         CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown, mouseCursorPosition: quartzPoint, mouseButton: .left)?
             .post(tap: .cghidEventTap)
         heldAt = point
+        DottieScreenJobPointer.notePlaced(quartzPoint)
         DottieLog.notice("🖱️ Holding the mouse button down")
         safetyReleaseTask?.cancel()
         safetyReleaseTask = Task {
@@ -77,6 +78,7 @@ enum DottieMouseHold {
         CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: quartzEnd, mouseButton: .left)?
             .post(tap: .cghidEventTap)
         clear()
+        DottieScreenJobPointer.notePlaced(quartzEnd)
         DottieLog.notice("🖱️ Let go of the mouse button")
     }
 

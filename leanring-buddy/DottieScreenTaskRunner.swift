@@ -153,6 +153,8 @@ final class DottieScreenTaskRunner {
     private var lastScreenshotPixelSize: CGSize = .zero
 
     var isRunning: Bool { runTask != nil }
+    /// The running job's turn with the pointer (DottieScreenJobPointer).
+    private var currentPointerJobNumber = 0
 
     /// A job this long gets a short memory of its own steps with each look.
     static let stepsBeforeJobMemoryNote = 8
@@ -195,11 +197,16 @@ final class DottieScreenTaskRunner {
         jobReport = DottieJobReport()
         let jobStartedAt = Date()
         let dollarsBeforeJob = DottieAskUsageLog.dollarsSinceLaunch
+        // The pointer stays where the job last acted until it ends (a hover
+        // menu stays open), then goes back to where the user had it.
+        let pointerJobNumber = DottieScreenJobPointer.beginJob()
+        currentPointerJobNumber = pointerJobNumber
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
             self.finishJobReport(outcome: outcome, startedAt: jobStartedAt, dollarsBeforeJob: dollarsBeforeJob)
             DottieMouseHold.releaseNow(reason: "the job ended")
+            DottieScreenJobPointer.endJob(pointerJobNumber)
             guard !Task.isCancelled else { return }
             DottieScreenJobHints.shared.jobIsRunning = false
             if case .finished = outcome {
@@ -235,6 +242,7 @@ final class DottieScreenTaskRunner {
         DottieScreenJobQuestions.shared.resolve(with: nil)
         DottieScreenJobClaudeBrain.shared.stop()
         DottieMouseHold.releaseNow(reason: "the job stopped")
+        DottieScreenJobPointer.endJob(currentPointerJobNumber)
         DottieScreenJobHints.shared.reset()
         DottieScreenJobHints.shared.jobIsRunning = false
         runTask.cancel()
@@ -361,6 +369,9 @@ final class DottieScreenTaskRunner {
                 progress: { [weak self] stepNumber, line in self?.onProgress?(stepNumber, line) },
                 click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
                     _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
+                },
+                hover: { [weak self] point, label, screen, stepNumber in
+                    _ = await self?.performHover(at: point, label: label, screen: screen, stepNumber: stepNumber)
                 },
                 openSite: { [weak self] address, stepNumber, inSameTab in
                     if inSameTab {
@@ -758,7 +769,7 @@ final class DottieScreenTaskRunner {
     /// A step as it can be done again: its arguments, and for clicks and
     /// fields, everything that finds the target again.
     private func replayStep(functionName: String, arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) async -> DottieReplay.Step? {
-        let replayableActions: Set<String> = ["open_app", "open_url", "click", "type_text", "press_keys", "scroll", "wait", "wait_for_video_end"]
+        let replayableActions: Set<String> = ["open_app", "open_url", "click", "hover", "type_text", "press_keys", "scroll", "wait", "wait_for_video_end"]
         guard replayableActions.contains(functionName) else { return nil }
         var storedArguments: [String: String] = [:]
         for key in ["double_click", "right_click", "select_all_first", "press_enter"] {
@@ -777,10 +788,10 @@ final class DottieScreenTaskRunner {
             }
         }
         var target: DottieReplay.Target?
-        if ["click", "type_text", "scroll"].contains(functionName), let point = Self.clickPoint(arguments: arguments, screen: screen) {
+        if ["click", "hover", "type_text", "scroll"].contains(functionName), let point = Self.clickPoint(arguments: arguments, screen: screen) {
             target = await DottieReplayTargets.capture(at: point, label: arguments["label"] as? String, screen: screen)
         }
-        if functionName == "click", target == nil { return nil }
+        if ["click", "hover"].contains(functionName), target == nil { return nil }
         return DottieReplay.Step(action: functionName, arguments: storedArguments, target: target)
     }
 
@@ -1089,6 +1100,9 @@ final class DottieScreenTaskRunner {
             }
             return await performClick(at: finalClickPoint, label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
+        case "hover":
+            return await performHover(at: clickPoint(), label: text("label") ?? "it", screen: screen, stepNumber: stepNumber)
+
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
 
@@ -1198,11 +1212,28 @@ final class DottieScreenTaskRunner {
     private func performClick(at clickPoint: CGPoint?, label: String, isDoubleClick: Bool, isRightClick: Bool, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
         guard let point = clickPoint else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
         onProgress?(stepNumber, "clicking \(label)")
+        // From a hover menu, glide to the item so the menu stays open on the way.
+        if DottieScreenJobPointer.restsOnHoverSpot {
+            await DottieScreenActionPerformer.glidePointer(to: point, isHover: false)
+        }
         await onWillClick?(point, screen.displayFrame)
         if Task.isCancelled { return "stopped" }
         windowsBeforeLastClick = Self.windowSnapshot()
         DottieScreenActionPerformer.click(at: point, clickCount: isDoubleClick ? 2 : 1, isRightClick: isRightClick)
         return "clicked \(label)"
+    }
+
+    /// Points the mouse at something without clicking, for menus and
+    /// controls that only show while the mouse is over them. The pointer
+    /// stays there until the next move.
+    private func performHover(at hoverPoint: CGPoint?, label: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard let point = hoverPoint else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
+        onProgress?(stepNumber, "pointing at \(label)")
+        await DottieScreenActionPerformer.glidePointer(to: point, isHover: true)
+        await onWillClick?(point, screen.displayFrame)
+        if Task.isCancelled { return "stopped" }
+        try? await Task.sleep(nanoseconds: UInt64(DottieScreenJobPointerPlan.hoverRestSeconds * 1_000_000_000))
+        return "the mouse is over \(label) now and stays there. If a menu or controls opened, they're on the next screenshot: click the one you need."
     }
 
     /// Types text, after clicking the field when a box came with it. Passwords are typed only when the user gave them.
@@ -1575,6 +1606,14 @@ final class DottieScreenTaskRunner {
                     "label": ["type": "string", "description": "The element's visible text or a short name."],
                     "double_click": ["type": "boolean"],
                     "right_click": ["type": "boolean"]
+                ], "required": ["box_2d", "label"]]
+            ],
+            [
+                "name": "hover",
+                "description": "Point the mouse at an element without clicking, for menus, submenus and controls that only appear while the mouse is over something (a site's top menu, a video's settings). The mouse stays there until your next move, so the menu stays open: then click its item.",
+                "parameters": ["type": "object", "properties": [
+                    "box_2d": boxProperty,
+                    "label": ["type": "string", "description": "The element's visible text or a short name."]
                 ], "required": ["box_2d", "label"]]
             ],
             [

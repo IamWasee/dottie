@@ -48,6 +48,9 @@ enum DottieJevDriverPlan {
         case clickUnlabeled
         case doubleClick(label: String, centerX: Double, centerY: Double)
         case rightClick(label: String, centerX: Double, centerY: Double)
+        /// Point the mouse at it without clicking: menus and controls that
+        /// only show while the mouse is over something. The pointer stays.
+        case hover(label: String, centerX: Double, centerY: Double)
         case drag(fromLabel: String, fromX: Double, fromY: Double, toLabel: String, toX: Double, toY: Double)
         case typeText(String, pressesReturn: Bool)
         /// Click a text box, then type into it: one move, so the typing
@@ -89,6 +92,7 @@ enum DottieJevDriverPlan {
             case .clickUnlabeled: return "Click an icon, picture or button that has no words on it (Dottie finds the one that helps)"
             case .doubleClick(let label, _, _): return "Double-click \"\(label)\" (opens a file, folder or item)"
             case .rightClick(let label, _, _): return "Right-click \"\(label)\" for its menu"
+            case .hover(let label, _, _): return "Point the mouse at \"\(label)\" without clicking (opens a menu or controls that only show while the mouse is over it)"
             case .drag(let fromLabel, _, _, let toLabel, _, _): return "Drag \"\(fromLabel)\" onto \"\(toLabel)\""
             case .pressKeys(let keys, let meaning): return "Press \(keys) (\(meaning))"
             case .scrollLeft: return "Scroll or swipe left"
@@ -125,7 +129,7 @@ enum DottieJevDriverPlan {
             case .openSite, .searchWeb, .openApp, .goBack, .pressReturn, .doubleClick, .pressKeys, .quickMacAction: return true
             case .typeText(_, let pressesReturn): return pressesReturn
             case .typeIntoField(_, _, _, _, let pressesReturn): return pressesReturn
-            case .click, .clickControl, .clickUnlabeled, .rightClick, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory,
+            case .click, .clickControl, .clickUnlabeled, .rightClick, .hover, .drag, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .recallAppMemory,
                  .holdMouseDown, .releaseMouseHere, .releaseMouseOn, .finishedRound, .finished, .noneFits: return false
             }
         }
@@ -136,7 +140,7 @@ enum DottieJevDriverPlan {
             switch self {
             case .click(_, let centerX, let centerY), .clickControl(_, _, let centerX, let centerY),
                  .doubleClick(_, let centerX, let centerY), .rightClick(_, let centerX, let centerY),
-                 .typeIntoField(_, let centerX, let centerY, _, _), .holdMouseDown(_, let centerX, let centerY),
+                 .hover(_, let centerX, let centerY), .typeIntoField(_, let centerX, let centerY, _, _), .holdMouseDown(_, let centerX, let centerY),
                  .releaseMouseOn(_, let centerX, let centerY):
                 return (centerX, centerY)
             case .drag(_, let fromX, let fromY, _, _, _):
@@ -156,6 +160,7 @@ enum DottieJevDriverPlan {
             case .clickControl(let label, _, _, _): return "click:\(label.lowercased())"
             case .doubleClick(let label, _, _): return "doubleclick:\(label.lowercased())"
             case .rightClick(let label, _, _): return "rightclick:\(label.lowercased())"
+            case .hover(let label, _, _): return "hover:\(label.lowercased())"
             case .drag(let fromLabel, _, _, let toLabel, _, _): return "drag:\(fromLabel.lowercased())>\(toLabel.lowercased())"
             case .holdMouseDown(let label, _, _): return "hold:\(label.lowercased())"
             case .releaseMouseOn(let label, _, _): return "release:\(label.lowercased())"
@@ -171,6 +176,7 @@ enum DottieJevDriverPlan {
             case .clickUnlabeled: return "clicked an icon"
             case .doubleClick(let label, _, _): return "double-clicked \(label)"
             case .rightClick(let label, _, _): return "right-clicked \(label)"
+            case .hover(let label, _, _): return "pointed the mouse at \(label)"
             case .drag(let fromLabel, _, _, let toLabel, _, _): return "dragged \(fromLabel) onto \(toLabel)"
             case .pressKeys(let keys, _): return "pressed \(keys)"
             case .scrollLeft: return "scrolled left"
@@ -481,6 +487,7 @@ enum DottieJevDriverPlan {
             trailingMoves.append(dragMove)
         }
         trailingMoves.append(contentsOf: holdMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: taskText))
+        trailingMoves.append(contentsOf: hoverMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: taskText))
         trailingMoves.append(contentsOf: [.pressReturn, .scrollDown, .scrollUp, .scrollLeft, .scrollRight, .goBack])
         // Quick commands for where the user is (Mac, browser, YouTube,
         // Finder), risky ones loudly labeled and only when asked for.
@@ -525,6 +532,39 @@ enum DottieJevDriverPlan {
             : doubleAndRightClickTargets(screenTexts: screenTexts, taskText: taskText)
         moves.append(contentsOf: targets.map { Move.holdMouseDown(label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
         return moves
+    }
+
+    /// Requests that talk about hovering or the menus that open from it.
+    static func asksToHover(_ taskText: String) -> Bool {
+        let paddedTask = " " + comparableWords(taskText) + " "
+        return [" hover", " mouse over ", " mouseover ", " roll over ", " dropdown ", " drop down ", " submenu ", " sub menu ", " menu "].contains { paddedTask.contains($0) }
+    }
+
+    static let maximumHoverTargets = 20
+    /// Texts this near the top (0-1000) are often a site's top menu, whose
+    /// menus open on hover.
+    static let topMenuBand = 160.0
+    static let maximumTopMenuHoverTargets = 8
+
+    /// "Point the mouse at" moves: the screen's menu buttons, the texts the
+    /// request talks about and the short texts along the top (a site's
+    /// menu), or the screen's texts when the request talks about hovering
+    /// or menus. Few, so screen texts keep their room under Jev's limit.
+    static func hoverMoves(screenTexts: [ScreenText], screenControls: [ScreenControl], taskText: String) -> [Move] {
+        var targets: [(label: String, centerX: Double, centerY: Double)] = screenControls.filter { $0.kind == "menu" }.prefix(6).map {
+            (label: $0.label, centerX: $0.centerX, centerY: $0.centerY)
+        }
+        let textTargets: [ScreenText]
+        if asksToHover(taskText) {
+            textTargets = Array(screenTexts.prefix(maximumHoverTargets))
+        } else {
+            let topMenuTexts = screenTexts.filter { screenText in
+                screenText.centerY <= topMenuBand && screenText.text.split(separator: " ").count <= 3
+            }.prefix(maximumTopMenuHoverTargets)
+            textTargets = doubleAndRightClickTargets(screenTexts: screenTexts, taskText: taskText) + topMenuTexts
+        }
+        targets.append(contentsOf: textTargets.map { (label: $0.text, centerX: $0.centerX, centerY: $0.centerY) })
+        return targets.prefix(maximumHoverTargets).map { Move.hover(label: $0.label, centerX: $0.centerX, centerY: $0.centerY) }
     }
 
     /// The moves while the mouse button is held down: let go where it is,
@@ -921,6 +961,8 @@ enum DottieJevDriver {
     struct Actions {
         let progress: @MainActor (_ stepNumber: Int, _ line: String) -> Void
         let click: @MainActor (_ point: CGPoint, _ label: String, _ clickCount: Int, _ isRightClick: Bool, _ screen: DottieDisplayCapture.Screenshot, _ stepNumber: Int) async -> Void
+        /// Points the mouse at something without clicking; the pointer stays there.
+        let hover: @MainActor (_ point: CGPoint, _ label: String, _ screen: DottieDisplayCapture.Screenshot, _ stepNumber: Int) async -> Void
         /// `inSameTab`: replace the tab in front instead of opening another.
         let openSite: @MainActor (_ address: String, _ stepNumber: Int, _ inSameTab: Bool) async -> Void
     }
@@ -1714,6 +1756,8 @@ enum DottieJevDriver {
             await actions.click(snappedPoint(centerX: centerX, centerY: centerY), label, 2, false, screen, stepNumber)
         case .rightClick(let label, let centerX, let centerY):
             await actions.click(snappedPoint(centerX: centerX, centerY: centerY), label, 1, true, screen, stepNumber)
+        case .hover(let label, let centerX, let centerY):
+            await actions.hover(snappedPoint(centerX: centerX, centerY: centerY), label, screen, stepNumber)
         case .drag(let fromLabel, let fromX, let fromY, let toLabel, let toX, let toY):
             actions.progress(stepNumber, "dragging \(fromLabel) onto \(toLabel)")
             await DottieScreenActionPerformer.drag(from: snappedPoint(centerX: fromX, centerY: fromY), to: screen.globalPoint(normalizedX: toX, normalizedY: toY))

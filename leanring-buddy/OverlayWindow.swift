@@ -715,6 +715,16 @@ struct BlueCursorView: View {
             }
             return
         }
+        // A screen job keeps the cursor on its last spot until the job ends
+        // (its words fade); a new spot takes over with its own flight.
+        if companionManager.screenJobHoldsCursorAtItsLastSpot {
+            if navigationBubbleOpacity != 0 { navigationBubbleOpacity = 0.0 }
+            if let currentLocation = companionManager.detectedElementScreenLocation, currentLocation != pointedLocation { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.flyBackWhenPointingIsDone(pointedLocation: pointedLocation)
+            }
+            return
+        }
         navigationBubbleOpacity = 0.0
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard self.buddyNavigationMode == .pointingAtTarget else { return }
