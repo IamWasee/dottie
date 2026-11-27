@@ -29,7 +29,7 @@ struct ScreenJobPointerTests {
     // MARK: Which hover moves are offered
 
     @Test func shortTextsAlongTheTopGetHoverMoves() {
-        let moves = Plan.hoverMoves(screenTexts: siteTopMenu, screenControls: [], taskText: "open the store's pricing page")
+        let moves = Plan.hoverMoves(screenTexts: siteTopMenu, screenControls: [], taskText: "show me the plans")
         #expect(moves.contains(.hover(label: "Products", centerX: 200, centerY: 60)))
         #expect(moves.contains(.hover(label: "Pricing", centerX: 320, centerY: 60)))
         // A long header sentence isn't a menu, and the page's middle isn't the top.
