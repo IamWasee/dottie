@@ -47,10 +47,10 @@ function stubGLMThatNeverAnswers(abortedAfter: number[]) {
 }
 
 describe("screen step tries", () => {
-  it("defaults to 8 seconds", () => {
-    expect(DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS).toBe(8);
-    expect(screenStepAttemptMilliseconds(undefined)).toBe(8000);
-    expect(screenStepAttemptMilliseconds("")).toBe(8000);
+  it("defaults to 15 seconds, Claude being the only one asked", () => {
+    expect(DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS).toBe(15);
+    expect(screenStepAttemptMilliseconds(undefined)).toBe(15000);
+    expect(screenStepAttemptMilliseconds("")).toBe(15000);
   });
 
   it("takes a setting from 1 to 60 seconds", () => {
@@ -62,7 +62,7 @@ describe("screen step tries", () => {
 
   it("ignores a setting that isn't a sensible number", () => {
     for (const badSetting of ["abc", "0", "0.5", "61", "-3", "NaN"]) {
-      expect(screenStepAttemptMilliseconds(badSetting)).toBe(8000);
+      expect(screenStepAttemptMilliseconds(badSetting)).toBe(15000);
     }
   });
 
@@ -76,12 +76,43 @@ describe("screen step tries", () => {
     expect(glm.attemptTimeoutMilliseconds).toBe(45_000);
   });
 
-  it("never hands a screen step to Claude by default, even when GLM is slow", async () => {
+  it("never asks GLM for a screen step by default, only Claude", async () => {
+    const hosts: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      hosts.push(new URL(url).host);
+      if (url.includes("anthropic")) {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "click Notes" }], usage: { input_tokens: 5, output_tokens: 2 } }), { status: 200 });
+      }
+      return chatAnswer({ role: "assistant", content: "from glm" });
+    });
+    const response = await callChat({ provider: "screen", contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude" });
+    expect(response.status).toBe(200);
+    const answer = await sseJSON(response);
+    expect(answer.modelVersion).toBe("claude/claude-haiku-5-5");
+    expect(hosts.every((host) => host.includes("anthropic"))).toBe(true);
+  });
+
+  it("answers 503 for a screen step with only a GLM key, never asking GLM, Groq or NIM", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      asked.push(String(input instanceof Request ? input.url : input));
+      return chatAnswer({ role: "assistant", content: "x" });
+    });
+    const response = await callChat(
+      { provider: "screen", contents: [screenshotTurn()] },
+      { ZAI_API_KEY: "zai", GROQ_API_KEY: "groq", NVIDIA_API_KEY: "nim" }
+    );
+    expect(response.status).toBe(503);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("never hands a screen step to Claude when SCREEN_PROVIDER_ORDER is GLM only, even when GLM is slow", async () => {
     const abortedAfter: number[] = [];
     stubGLMThatNeverAnswers(abortedAfter);
     const response = await callChat(
       { provider: "screen", contents: [screenshotTurn()] },
-      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1" }
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", SCREEN_STEP_ATTEMPT_SECONDS: "1", SCREEN_PROVIDER_ORDER: "glm" }
     );
     expect(response.status).toBe(503);
     expect(abortedAfter).toHaveLength(1);
@@ -110,7 +141,7 @@ describe("screen step tries", () => {
       glmSignal = init?.signal;
       return chatAnswer({ role: "assistant", content: "there" });
     });
-    const response = await callChat({ contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", SCREEN_STEP_ATTEMPT_SECONDS: "1" });
+    const response = await callChat({ contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", SCREEN_STEP_ATTEMPT_SECONDS: "1", PICTURE_PROVIDER_ORDER: "glm" });
     expect(response.status).toBe(200);
     // Still answering after the screen limit would have fired: not cut.
     await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -127,9 +158,12 @@ describe("screen step tries", () => {
         });
       });
     });
-    const response = await callChat({ provider: "screen", contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", GROQ_API_KEY: "groq", SCREEN_STEP_ATTEMPT_SECONDS: "1" });
+    const response = await callChat(
+      { provider: "screen", contents: [screenshotTurn()] },
+      { ZAI_API_KEY: "zai", ANTHROPIC_API_KEY: "claude", GROQ_API_KEY: "groq", SCREEN_STEP_ATTEMPT_SECONDS: "1", SCREEN_PROVIDER_ORDER: "claude,glm" }
+    );
     expect(response.status).toBe(503);
-    // GLM, then Groq's vision model: each cut to the limit.
+    // Claude, then GLM: each cut to the limit, and no Groq after them.
     expect(abortedAfter.length).toBe(2);
   });
 });
@@ -201,7 +235,7 @@ describe("answer usage", () => {
 
   it("uses MODEL_PRICES from the Worker's settings", async () => {
     fakeFetch([["z.ai", chatAnswer({ role: "assistant", content: "ok" })]]);
-    const response = await callChat({ contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", MODEL_PRICES: "glm-5.3-flash=1000000/0" });
+    const response = await callChat({ contents: [screenshotTurn()] }, { ZAI_API_KEY: "zai", MODEL_PRICES: "glm-5.3-flash=1000000/0", PICTURE_PROVIDER_ORDER: "glm" });
     const answer = await sseJSON(response);
     expect(answer.dottieUsage.model).toBe("glm-5.3-flash");
     expect(answer.dottieUsage.estimatedDollars).toBe(5);
@@ -264,7 +298,7 @@ describe("screenshots sent with a screen step", () => {
       return chatAnswer({ role: "assistant", content: "ok" });
     });
     const contents = [{ role: "user", parts: [{ text: "open notes" }, imagePart(pngBase64(1440, 900))] }, ...stepTurns(4)];
-    const response = await callChat({ provider: "screen", contents }, { ZAI_API_KEY: "zai" });
+    const response = await callChat({ provider: "screen", contents }, { ZAI_API_KEY: "zai", SCREEN_PROVIDER_ORDER: "glm" });
     expect(response.status).toBe(200);
     expect(sentToGLM.split("\"type\":\"image_url\"").length - 1).toBe(2);
     expect(sentToGLM).toContain("an earlier screenshot, left out");
@@ -277,7 +311,7 @@ describe("screenshots sent with a screen step", () => {
       return chatAnswer({ role: "assistant", content: "ok" });
     });
     const contents = [{ role: "user", parts: [{ text: "what changed?" }, picture()] }, ...stepTurns(3)];
-    await callChat({ contents }, { ZAI_API_KEY: "zai" });
+    await callChat({ contents }, { ZAI_API_KEY: "zai", PICTURE_PROVIDER_ORDER: "glm" });
     expect(sentToGLM.split("\"type\":\"image_url\"").length - 1).toBe(4);
   });
 });

@@ -30,6 +30,15 @@ struct JevQuickCommandsTests {
         #expect(!offered.contains("cmd+shift+n"))
     }
 
+    @Test func youTubeSpeedKeysAreOfferedOnYouTube() throws {
+        let offered = Commands.commands(forTask: "play mr beast at 1.5 speed", isBrowserInFront: true, frontSiteHost: "www.youtube.com", frontAppBundleIdentifier: "com.brave.Browser")
+        let faster = try #require(offered.first { $0.keys == "shift+." })
+        #expect(faster.meaning.contains("1.5x"))
+        #expect(keys(offered).contains("shift+,"))
+        let elsewhere = keys(Commands.commands(forTask: "play faster", isBrowserInFront: true, frontSiteHost: "vimeo.com", frontAppBundleIdentifier: "com.brave.Browser"))
+        #expect(!elsewhere.contains("shift+."))
+    }
+
     @Test func browserShortcutsComeWithABrowser() {
         let offered = keys(Commands.commands(forTask: "check my mail", isBrowserInFront: true, frontSiteHost: "mail.google.com", frontAppBundleIdentifier: "com.operasoftware.Opera"))
         for expectedKeys in ["cmd+l", "cmd+t", "cmd+r", "cmd+[", "cmd+]", "ctrl+tab", "cmd+shift+t"] {

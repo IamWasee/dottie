@@ -315,3 +315,70 @@ struct JevAdvisorTests {
         #expect(Advisor.appKnowledgeLines(String(repeating: "a", count: 5000)).count < 2100)
     }
 }
+
+/// Claude thinks alongside Jev instead of holding it up, and says when a
+/// job Jev can't judge is done (Wasee, 27 Nov).
+@MainActor
+struct JevAdvisorAlongsideTests {
+    private typealias Advisor = DottieJevAdvisorPlan
+    private typealias Plan = DottieJevDriverPlan
+
+    private let clickVideo = Plan.Move.click(label: "Hunger Games In Real Life", centerX: 400, centerY: 300)
+
+    @Test func onlyAJobAboutToHandOverWaitsForTheAdvisor() {
+        #expect(Advisor.mustWaitForAdvice(.moveFailed))
+        #expect(Advisor.mustWaitForAdvice(.jevUnsure))
+        #expect(!Advisor.mustWaitForAdvice(.userHint("use the search bar")))
+        #expect(!Advisor.mustWaitForAdvice(.timeShown(seconds: 30)))
+        #expect(!Advisor.mustWaitForAdvice(.checkpoint(.init(watchWords: ["views"], kind: .judge, advice: "most views"))))
+    }
+
+    @Test func theAdvisorCanSayTheJobIsDone() {
+        #expect(Advisor.advice(fromAnswer: #"{"do":"done"}"#, optionCount: 3) == .done)
+        #expect(Advisor.advice(fromAnswer: #"Sure: {"do":"DONE","note":"captions and speed are set"}"#, optionCount: 3) == .done)
+    }
+
+    @Test func thePromptOffersDone() {
+        let prompt = Advisor.advicePrompt(taskText: "turn on captions", trigger: .jevUnsure, screenLines: [], optionDescriptions: ["click CC"], jobStateText: "")
+        #expect(prompt.contains(#"{"do":"done"}"#))
+    }
+
+    @Test func aPickThatCameBackLaterIsMadeWhileItsMoveIsStillOffered() {
+        let movedVideo = Plan.Move.click(label: "Hunger Games In Real Life", centerX: 410, centerY: 320)
+        let currentOptions = [Plan.Option(key: "o1", move: .scrollDown), Plan.Option(key: "o2", move: movedVideo)]
+        let use = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: false, currentOptions: currentOptions)
+        // Same move by its words, made where it is now.
+        if case .decision(.act(let move)) = use {
+            #expect(move.signature == clickVideo.signature)
+        } else {
+            Issue.record("expected the advisor's pick to be used")
+        }
+    }
+
+    @Test func aPickWhoseMoveIsGoneIsDropped() {
+        let use = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: true, currentOptions: [Plan.Option(key: "o1", move: .scrollDown)])
+        #expect(use == .nothing)
+    }
+
+    @Test func doneAndWaitsOnlyCountOnTheScreenTheyWereAskedAbout() {
+        #expect(Advisor.use(of: .decision(.finished), askedOnSameScreen: true, currentOptions: []) == .decision(.finished))
+        #expect(Advisor.use(of: .decision(.finished), askedOnSameScreen: false, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .wait(seconds: 30), askedOnSameScreen: true, currentOptions: []) == .wait(seconds: 30))
+        #expect(Advisor.use(of: .wait(seconds: 30), askedOnSameScreen: false, currentOptions: []) == .nothing)
+    }
+
+    @Test func notesAndNoHelpChangeNothingAtTheStep() {
+        #expect(Advisor.use(of: .noted, askedOnSameScreen: true, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .noHelp, askedOnSameScreen: true, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .decision(.unsure), askedOnSameScreen: true, currentOptions: []) == .nothing)
+    }
+
+    @Test func checkingAdviceThatCameBackIsQuick() {
+        let options = (0..<200).map { Plan.Option(key: "o\($0)", move: .click(label: "item \($0)", centerX: 10, centerY: Double($0))) }
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for _ in 0..<1000 { _ = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: true, currentOptions: options) }
+        }
+        #expect(elapsed < .seconds(1))
+    }
+}

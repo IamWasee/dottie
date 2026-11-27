@@ -65,8 +65,8 @@ INSTALL_DAILY_LIMITS = "voice=300,chat=3000,speech=1000,dictation=1000,helpers=3
 # NVIDIA NIM backups (only with NVIDIA_API_KEY), best first.
 NIM_MODELS = "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash"
 # Seconds one model may take on a screen-job step before the next provider
-# answers. The app waits about 20 s, so two tries must fit in it.
-SCREEN_STEP_ATTEMPT_SECONDS = "8"
+# answers. The app waits about 20 s; Claude is the only one asked by default.
+SCREEN_STEP_ATTEMPT_SECONDS = "15"
 # Newest screenshots sent with each screen step (older ones become a note).
 SCREEN_STEP_SCREENSHOTS = "2"
 # Dollars per million tokens, input/output, for each answer's estimated

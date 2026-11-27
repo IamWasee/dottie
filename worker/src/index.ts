@@ -353,29 +353,35 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   // A screen step needs the screen as it is now, not the last five: every
   // older screenshot made GLM read up to five full-size pictures a step.
   const routedBody = wantedRole === "screen" ? keepingNewestScreenshots(requestBody, screenStepScreenshotCount(env.SCREEN_STEP_SCREENSHOTS)) : requestBody;
-  // A screen job's plan in words: GLM first (celly's call), Claude only
-  // when GLM can't; it used to go to Claude Haiku like any other text.
-  // A screen step: GLM only by default (celly, 22 Nov). Claude used to take
-  // every step GLM was slow on, with the screenshot, which ran up her bill;
-  // Jev does the deciding and GLM is the cheaper backup.
+  // A screen job's plan in words and a screen step: Claude only (Wasee,
+  // 27 Nov). GLM answered "no model could answer" mid-demo; Jev does the
+  // deciding and Claude is the one backup. PLAN_PROVIDER_ORDER and
+  // SCREEN_PROVIDER_ORDER can bring GLM back without a code change.
   let forcedOrder: string | undefined;
   if (wantedRole === "plan") forcedOrder = env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER;
   // Jev's advisor (text only: the screen's words and Jev's options): Claude
   // Haiku (Wasee, 27 Nov), never GLM unless ADVISOR_PROVIDER_ORDER says so.
   if (wantedRole === "advisor") forcedOrder = env.ADVISOR_PROVIDER_ORDER || DEFAULT_ADVISOR_PROVIDER_ORDER;
   if (wantedRole === "screen") forcedOrder = env.SCREEN_PROVIDER_ORDER || DEFAULT_SCREEN_PROVIDER_ORDER;
-  const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
+  // Plan, advisor and screen steps stay on their own providers: no Groq
+  // or NIM after them (NIM's first model is GLM), "just Claude" (Wasee, 27 Nov).
+  const answer = forcedOrder
+    ? await answerWithPaidProviders(env, routedBody, true, "/chat", forcedOrder, attemptLimitMilliseconds)
+    : await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
 }
 
 /** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
-export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
+export const DEFAULT_PLAN_PROVIDER_ORDER = "claude";
 
 /** The order Jev's advisor (`"provider": "advisor"`) asks the paid providers in. */
 export const DEFAULT_ADVISOR_PROVIDER_ORDER = "claude";
 
+/** The order asks with pictures (pointing, drawings' anchors) go to the paid providers in: Claude only (Wasee, 27 Nov). */
+export const DEFAULT_PICTURE_PROVIDER_ORDER = "claude";
+
 /** The order a screen step (`"provider": "screen"`) asks the paid providers in. */
-export const DEFAULT_SCREEN_PROVIDER_ORDER = "glm";
+export const DEFAULT_SCREEN_PROVIDER_ORDER = "claude";
 
 /** How many of a screen step's screenshots are sent on, by default 2. */
 export const DEFAULT_SCREEN_STEP_SCREENSHOTS = 2;
@@ -416,8 +422,8 @@ export function keepingNewestScreenshots(body: Record<string, unknown>, screensh
   return { ...body, contents };
 }
 
-/** How long one model may take on a screen step, by default 8 s. */
-export const DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS = 8;
+/** How long one model may take on a screen step, by default 15 s: Claude is the only one asked now, inside the app's 20 s. */
+export const DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS = 15;
 
 /** SCREEN_STEP_ATTEMPT_SECONDS in milliseconds; the default when unset or not a number from 1 to 60. */
 export function screenStepAttemptMilliseconds(setting: string | undefined): number {
@@ -470,8 +476,8 @@ async function answerWithAnyProvider(
 }
 
 /**
- * The paid providers whose keys are set, in the order they answer: GLM
- * first for asks with pictures (screen steps, pointing), only GLM for
+ * The paid providers whose keys are set, in the order they answer: Claude
+ * for asks with pictures (screen steps, pointing), only GLM for
  * helpers' text turns (celly's call), Claude first for other text. PICTURE_PROVIDER_ORDER,
  * HELPER_PROVIDER_ORDER and TEXT_PROVIDER_ORDER change the order without a
  * code change.
@@ -485,7 +491,7 @@ export function paidProviders(env: Env, geminiBody: Record<string, unknown>, isH
   if (forcedOrder) {
     order = forcedOrder;
   } else if (imageCount(geminiBody) > 0) {
-    order = env.PICTURE_PROVIDER_ORDER || "glm,claude";
+    order = env.PICTURE_PROVIDER_ORDER || DEFAULT_PICTURE_PROVIDER_ORDER;
   } else if (isHelperTurn) {
     order = env.HELPER_PROVIDER_ORDER || "glm";
   } else {

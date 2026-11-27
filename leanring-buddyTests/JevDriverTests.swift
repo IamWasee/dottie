@@ -42,6 +42,18 @@ struct JevDriverTests {
         #expect(pieces.count == 1)
     }
 
+    @Test func aPieceStopsAtAQuoteOrBracket() {
+        // Claude's task line on Wasee's Mac (27 Nov) gave the search `MrBeast" (go`.
+        let pieces = Plan.textPieces(from: #"search "MrBeast" (go to youtube.com and search MrBeast)"#)
+        #expect(pieces == ["MrBeast"])
+        #expect(!pieces.contains { $0.contains("\"") || $0.contains("(") })
+    }
+
+    @Test func aPieceStopsAtTheNextStep() {
+        #expect(Plan.textPieces(from: "search for mr beast click on the first video you see turn on the captions") == ["mr beast"])
+        #expect(Plan.textPieces(from: "search lofi play the first one") == ["lofi"])
+    }
+
     @Test func contractionsArentReadAsQuotes() {
         #expect(Plan.textPieces(from: "tell me what's my rank on kaggle's page").isEmpty)
     }

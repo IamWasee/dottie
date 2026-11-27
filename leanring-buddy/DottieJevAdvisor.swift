@@ -71,6 +71,10 @@ enum DottieJevAdvisorPlan {
         case wait(seconds: Int)
         /// A short instruction for Jev's next steps.
         case note(String)
+        /// The whole job is already done: Jev couldn't tell, so the advisor
+        /// says so (Wasee, 27 Nov: a YouTube job that had worked ended in
+        /// "slow answer" instead of finishing).
+        case done
         case none
     }
 
@@ -177,6 +181,7 @@ enum DottieJevAdvisorPlan {
         {"do":"pick","option":N,"note":"why, short"} to do one of Jev's options now;
         {"do":"wait","seconds":N} when the screen is busy (loading, exporting, a timer);
         {"do":"note","note":"..."} a short instruction for Jev's next moves when no option fits yet;
+        {"do":"done"} when the moves so far and the screen show every part of the job is already done;
         {"do":"none"} when you can't help.
         """
     }
@@ -195,6 +200,8 @@ enum DottieJevAdvisorPlan {
         case "note":
             guard let note, !note.isEmpty else { return nil }
             return .note(note)
+        case "done":
+            return .done
         case "none":
             return Advice.none
         default:
@@ -287,6 +294,16 @@ enum DottieJevAdvisorPlan {
         return nil
     }
 
+    /// Whether Jev waits for this advice. Only when the job would hand over
+    /// otherwise (stuck, unsure, failed checks); everything else is thought
+    /// over alongside Jev, which keeps moving (Wasee, 27 Nov).
+    static func mustWaitForAdvice(_ trigger: Trigger) -> Bool {
+        switch trigger {
+        case .moveFailed, .jevUnsure: return true
+        case .checkpoint, .userHint, .timeShown: return false
+        }
+    }
+
     /// What Jev's driver does with an option the advisor picked: the
     /// finishing options end the round or the job like Jev's own pick
     /// would; "none of these" is no help (nil).
@@ -312,6 +329,33 @@ enum DottieJevAdvisorPlan {
     /// "45 s", "2 min" for the notch while Dottie waits.
     static func waitText(seconds: Int) -> String {
         seconds < 90 ? "\(seconds) s" : "\(Int((Double(seconds) / 60).rounded())) min"
+    }
+
+    // MARK: Advice that came back while Jev went on
+
+    enum BackgroundAdviceUse: Equatable {
+        case decision(DottieJevDriverPlan.Decision)
+        case wait(seconds: Int)
+        case nothing
+    }
+
+    /// What a step does with advice that came back while Jev kept going:
+    /// a picked move is made when that same move is still offered (with
+    /// where it is now); "done" and waits only count on the screen they
+    /// were asked about, since Jev may have moved on since.
+    @MainActor
+    static func use(of help: DottieJevAdvisorSession.Help, askedOnSameScreen: Bool, currentOptions: [DottieJevDriverPlan.Option]) -> BackgroundAdviceUse {
+        switch help {
+        case .decision(.act(let advisedMove)):
+            guard let currentOption = currentOptions.first(where: { $0.move.signature == advisedMove.signature }) else { return .nothing }
+            return .decision(.act(currentOption.move))
+        case .decision(let otherDecision):
+            return askedOnSameScreen && otherDecision != .unsure ? .decision(otherDecision) : .nothing
+        case .wait(let seconds):
+            return askedOnSameScreen ? .wait(seconds: seconds) : .nothing
+        case .noted, .noHelp:
+            return .nothing
+        }
     }
 
     // MARK: What Jev reads from the advisor
@@ -467,9 +511,54 @@ final class DottieJevAdvisorSession {
             notes = DottieJevAdvisorPlan.keptNotes(notes, adding: noteText)
             DottieLog.notice("🧭 The advisor left Jev a note: \(noteText)")
             return .noted
+        case .done:
+            guard let decision = DottieJevAdvisorPlan.decision(forAdvisedMove: .finished, hasRoundsLeft: hasRoundsLeft, roundHasMoves: roundHasMoves) else {
+                return .noHelp
+            }
+            DottieLog.notice("🧭 The advisor said the job is done")
+            return .decision(decision)
         case .none:
             return .noHelp
         }
+    }
+
+    // MARK: Thinking alongside Jev
+
+    /// The advice asked in the background, and what came back. Jev never
+    /// waits for it (Wasee, 27 Nov: "Claude isn't supposed to slow Dottie
+    /// down"); the next step uses it if it still fits the screen.
+    @MainActor
+    final class AdviceInFlight {
+        let askedOnScreen: [UInt8]
+        let trigger: DottieJevAdvisorPlan.Trigger
+        var help: Help?
+        init(askedOnScreen: [UInt8], trigger: DottieJevAdvisorPlan.Trigger) {
+            self.askedOnScreen = askedOnScreen
+            self.trigger = trigger
+        }
+    }
+
+    /// Asks for advice without waiting: the answer lands on the returned
+    /// value when it comes.
+    func helpInBackground(
+        trigger: DottieJevAdvisorPlan.Trigger,
+        askedOnScreen: [UInt8],
+        screenTexts: [DottieJevDriverPlan.ScreenText],
+        options: [DottieJevDriverPlan.Option],
+        jobStateText: String,
+        hasRoundsLeft: Bool,
+        roundHasMoves: Bool
+    ) -> AdviceInFlight {
+        let inFlight = AdviceInFlight(askedOnScreen: askedOnScreen, trigger: trigger)
+        DottieLog.notice("🧭 Asking the advisor alongside Jev (Jev doesn't wait)")
+        Task { [weak self] in
+            guard let self else { return }
+            inFlight.help = await self.help(
+                trigger: trigger, screenTexts: screenTexts, options: options, jobStateText: jobStateText,
+                hasRoundsLeft: hasRoundsLeft, roundHasMoves: roundHasMoves
+            )
+        }
+        return inFlight
     }
 
     /// Seconds this wait may take; 0 when the round has waited its most.
