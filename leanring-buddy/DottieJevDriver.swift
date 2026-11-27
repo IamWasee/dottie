@@ -1120,6 +1120,17 @@ enum DottieJevDriver {
                                                   recording: recording, pathProblem: pathProblem)
         }
 
+        /// The advisor named a spot that isn't one of Jev's options ("the
+        /// empty box to the right of DOB"): Jev finds it on a fresh look,
+        /// Dottie clicks it and types what the advisor said.
+        func doWhatTheAdvisorPointedAt(_ description: String, typeText: String?, stepNumber: Int) async {
+            let found = await clickDescribedThing(description, typeText: typeText, stepNumber: stepNumber, actions: actions)
+            let summary = DottieJevAdvisorPlan.summaryOfPointedMove(description: description, typeText: typeText, wasFound: found)
+            movesSoFar.append(summary)
+            jobMemory.noteMove(summary)
+            if found { await waitForScreenToSettle(opensSomethingNew: false) }
+        }
+
         /// Asks the advisor and does the waiting it says; the caller does
         /// the move, looks again or hands over.
         func askAdvisor(
@@ -1139,6 +1150,9 @@ enum DottieJevDriver {
                 await waitWhileBusy(firstSeconds: seconds, advisor: advisor, stepNumber: stepNumber, actions: actions)
                 return .lookAgain
             case .noted:
+                return .lookAgain
+            case .clickThing(let description, let typeText):
+                await doWhatTheAdvisorPointedAt(description, typeText: typeText, stepNumber: stepNumber)
                 return .lookAgain
             case .noHelp:
                 return .handOverNow
@@ -1390,6 +1404,12 @@ enum DottieJevDriver {
                     lastMoveSignature = nil
                     lastMove = nil
                     continue
+                case .clickThing(let description, let typeText) where heldMouse == nil:
+                    await doWhatTheAdvisorPointedAt(description, typeText: typeText, stepNumber: stepNumber)
+                    previousScreenThumbnail = nil
+                    lastMoveSignature = nil
+                    lastMove = nil
+                    continue
                 default:
                     break
                 }
@@ -1626,6 +1646,28 @@ enum DottieJevDriver {
         /// It waited or left Jev a note: look at the screen again.
         case lookAgain
         case handOverNow
+    }
+
+    /// Finds the thing the advisor described on a fresh look (Jev's box,
+    /// sharpened on a close-up when small), clicks its middle and types the
+    /// advisor's text into it. False when Jev couldn't find it.
+    private static func clickDescribedThing(_ description: String, typeText: String?, stepNumber: Int, actions: Actions) async -> Bool {
+        actions.progress(stepNumber, "finding \(description.prefix(50))")
+        guard let screen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: DottieJevProtocol.maximumImageSide),
+              let jevBox = await DottieJev.findPreciseBox(target: description, on: screen) else {
+            DottieLog.notice("🧭 Jev couldn't find what the advisor pointed at")
+            return false
+        }
+        let normalizedBox = jevBox.normalizedBox
+        let middlePoint = screen.globalPoint(normalizedX: (normalizedBox.xmin + normalizedBox.xmax) / 2,
+                                             normalizedY: (normalizedBox.ymin + normalizedBox.ymax) / 2)
+        await actions.click(middlePoint, description, 1, false, screen, stepNumber)
+        if let typeText, !typeText.isEmpty {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            actions.progress(stepNumber, "typing \"\(typeText.prefix(40))\"")
+            await DottieScreenActionPerformer.type(typeText)
+        }
+        return true
     }
 
     /// Waits while something on screen is busy, without using Jev's steps

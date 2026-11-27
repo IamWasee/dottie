@@ -373,6 +373,51 @@ struct JevAdvisorAlongsideTests {
         #expect(Advisor.use(of: .decision(.unsure), askedOnSameScreen: true, currentOptions: []) == .nothing)
     }
 
+    // MARK: The advisor says where to click (the OpenEMR DOB box, 27 Nov)
+
+    @Test func theAdvisorCanNameASpotThatIsNotAnOption() {
+        let advice = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the empty text box to the right of DOB","type":"1990-05-12"}"#, optionCount: 4)
+        #expect(advice == .clickThing(description: "the empty text box to the right of DOB", typeText: "1990-05-12"))
+        let clickOnly = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the box right of Last Name"}"#, optionCount: 4)
+        #expect(clickOnly == .clickThing(description: "the box right of Last Name", typeText: nil))
+        let emptyType = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the box right of DOB","type":"  "}"#, optionCount: 4)
+        #expect(emptyType == .clickThing(description: "the box right of DOB", typeText: nil))
+    }
+
+    @Test func aClickWithNothingDescribedIsNoAdvice() {
+        #expect(Advisor.advice(fromAnswer: #"{"do":"click"}"#, optionCount: 4) == nil)
+        #expect(Advisor.advice(fromAnswer: #"{"do":"click","thing":"   "}"#, optionCount: 4) == nil)
+    }
+
+    @Test func longClickAdviceIsCut() throws {
+        let longThing = String(repeating: "box ", count: 200)
+        let longText = String(repeating: "a", count: 1000)
+        let advice = Advisor.advice(fromAnswer: #"{"do":"click","thing":"\#(longThing)","type":"\#(longText)"}"#, optionCount: 1)
+        guard case .clickThing(let description, let typeText) = try #require(advice) else { Issue.record("expected a click"); return }
+        #expect(description.count <= Advisor.maximumNoteCharacters)
+        #expect((typeText ?? "").count == Advisor.maximumTypedCharacters)
+    }
+
+    @Test func thePromptTellsTheAdvisorItCanSayWhereToClick() {
+        let prompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .moveFailed, screenLines: [(text: "DOB", centerX: 0.3, centerY: 0.4)],
+                                          optionDescriptions: ["click DOB"], jobStateText: "")
+        #expect(prompt.contains(#""do":"click""#))
+        #expect(prompt.contains("right of DOB"))
+    }
+
+    @Test func aSpotPointedAtWhileJevWentOnCountsOnlyOnTheSameScreen() {
+        let pointed = DottieJevAdvisorSession.Help.clickThing(description: "the box right of DOB", typeText: "1990-05-12")
+        #expect(Advisor.use(of: pointed, askedOnSameScreen: true, currentOptions: []) == .clickThing(description: "the box right of DOB", typeText: "1990-05-12"))
+        #expect(Advisor.use(of: pointed, askedOnSameScreen: false, currentOptions: []) == .nothing)
+    }
+
+    @Test func thePointedMoveIsKeptInTheJobsMoves() {
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: "1990-05-12", wasFound: true)
+                == #"clicked the box right of DOB and typed "1990-05-12" (the advisor's pick)"#)
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: nil, wasFound: true) == "clicked the box right of DOB (the advisor's pick)")
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: "x", wasFound: false).hasPrefix("couldn't find"))
+    }
+
     @Test func checkingAdviceThatCameBackIsQuick() {
         let options = (0..<200).map { Plan.Option(key: "o\($0)", move: .click(label: "item \($0)", centerX: 10, centerY: Double($0))) }
         let clock = ContinuousClock()
