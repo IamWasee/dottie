@@ -931,16 +931,39 @@ enum DottieInstantText {
     ]
     private static let followOnJoinWords: Set<String> = ["and", "then"]
 
+    /// Action words that start a step even with no "and" before them, when
+    /// what follows names the thing to act on: speech has no commas, so
+    /// "search for mrbeast click on the first video you see turn on the
+    /// captions" reached YouTube's search box whole on Wasee's Mac (27 Nov).
+    private static let unjoinedFollowOnActionWords: Set<String> = followOnActionWords.union(["turn", "set", "change", "switch", "enable", "make"])
+    private static let followOnTargetWords: Set<String> = [
+        "on", "off", "the", "a", "an", "first", "second", "third", "last", "top", "it", "that", "this",
+        "them", "up", "down", "into", "my", "its", "any", "one"
+    ]
+    /// "how to play the piano" and "best way to save the planet" are
+    /// searches, not a second step: the action word follows one of these.
+    private static let wordsBeforeAnActionInASearch: Set<String> = [
+        "to", "how", "i", "you", "we", "they", "can", "do", "does", "did", "will", "would", "should", "could",
+        "not", "dont", "don't", "lets", "let's", "who", "kids", "people"
+    ]
+
     /// Whether the words go on to a further step ("mrbeast and click on the
-    /// first video", "cats then play the second one"). "salt and pepper"
-    /// doesn't: "pepper" isn't an action.
+    /// first video", "cats then play the second one", "mrbeast click on the
+    /// first video"). "salt and pepper" doesn't: "pepper" isn't an action.
     static func hasFollowOnInstruction(_ text: String) -> Bool {
-        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
         for (index, word) in words.enumerated() where followOnJoinWords.contains(word) {
             var nextIndex = index + 1
             // "and then click"
             while nextIndex < words.count, followOnJoinWords.contains(words[nextIndex]) { nextIndex += 1 }
             if nextIndex < words.count, followOnActionWords.contains(words[nextIndex]) { return true }
+        }
+        // No "and": an action word after the search words, with the thing
+        // it acts on right after it ("click on", "turn on the", "play the").
+        guard words.count >= 3 else { return false }
+        for index in 1..<(words.count - 1) where unjoinedFollowOnActionWords.contains(words[index]) {
+            if wordsBeforeAnActionInASearch.contains(words[index - 1]) { continue }
+            if followOnTargetWords.contains(words[index + 1]) { return true }
         }
         return false
     }

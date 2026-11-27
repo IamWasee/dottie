@@ -100,7 +100,7 @@ describe("a chat turn", () => {
 describe("a spoken request and its screen job, with usage", () => {
   it("says which model answered each ask and what it cost, with wrangler.toml's screen-step limit", async () => {
     const env = deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", ZAI_API_KEY: "test-zai-key", GROQ_API_KEY: "test-groq-key" });
-    expect(env.SCREEN_STEP_ATTEMPT_SECONDS).toBe("8");
+    expect(env.SCREEN_STEP_ATTEMPT_SECONDS).toBe("15");
     const callWorker = appCaller(env);
     vi.spyOn(console, "log").mockImplementation(() => {});
     fakeFetch([
@@ -119,15 +119,16 @@ describe("a spoken request and its screen job, with usage", () => {
     const screenStep = await sseJSON(await callWorker("/chat", {
       body: { provider: "screen", contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/png", data: "iVBORw0KGgo=" } }, { text: "next?" }] }] },
     }));
-    expect(screenStep.dottieUsage).toMatchObject({ provider: "glm", model: "glm-5.3-flash" });
+    // Screen steps are Claude's alone now (Wasee, 27 Nov).
+    expect(screenStep.dottieUsage).toMatchObject({ provider: "claude", model: "claude-haiku-5-5" });
   });
 });
 
 describe("a screen job and a helper on the paid models", () => {
-  it("sends screen steps and a helper's turn to GLM, and never asks Claude, Groq or Gemini", async () => {
+  it("sends screen asks to Claude only and a helper's text turn to GLM, and never asks Groq or Gemini", async () => {
     const callWorker = appCaller(deployedEnv({ ANTHROPIC_API_KEY: "test-claude-key", ZAI_API_KEY: "test-zai-key", GROQ_API_KEY: "test-groq-key" }));
     const calls = fakeFetch([
-      ["api.z.ai", chatAnswer({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "click", arguments: '{"box_2d":[1,2,3,4]}' } }] })],
+      ["api.anthropic.com", jsonAnswer({ type: "message", role: "assistant", content: [{ type: "tool_use", id: "c1", name: "click", input: { box_2d: [1, 2, 3, 4] } }], stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 5 } })],
     ]);
     const screenStep = await callWorker("/chat", {
       body: {
@@ -142,7 +143,7 @@ describe("a screen job and a helper on the paid models", () => {
     const helperTurn = await callWorker("/gemini/v1beta/models/gemini-3.8-flash:generateContent", { body: { contents: [userText("build my site")] } });
     expect(((await helperTurn.json()) as any).candidates[0].content.parts[0].text).toBe("Site built.");
 
-    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
+    expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
     expect(helperCalls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
   });
 });

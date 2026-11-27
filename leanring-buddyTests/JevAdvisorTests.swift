@@ -315,3 +315,124 @@ struct JevAdvisorTests {
         #expect(Advisor.appKnowledgeLines(String(repeating: "a", count: 5000)).count < 2100)
     }
 }
+
+/// Claude thinks alongside Jev instead of holding it up, and says when a
+/// job Jev can't judge is done (Wasee, 27 Nov).
+@MainActor
+struct JevAdvisorAlongsideTests {
+    private typealias Advisor = DottieJevAdvisorPlan
+    private typealias Plan = DottieJevDriverPlan
+
+    private let clickVideo = Plan.Move.click(label: "Hunger Games In Real Life", centerX: 400, centerY: 300)
+
+    @Test func onlyAJobAboutToHandOverWaitsForTheAdvisor() {
+        #expect(Advisor.mustWaitForAdvice(.moveFailed))
+        #expect(Advisor.mustWaitForAdvice(.jevUnsure))
+        #expect(!Advisor.mustWaitForAdvice(.userHint("use the search bar")))
+        #expect(!Advisor.mustWaitForAdvice(.timeShown(seconds: 30)))
+        #expect(!Advisor.mustWaitForAdvice(.checkpoint(.init(watchWords: ["views"], kind: .judge, advice: "most views"))))
+    }
+
+    @Test func theAdvisorCanSayTheJobIsDone() {
+        #expect(Advisor.advice(fromAnswer: #"{"do":"done"}"#, optionCount: 3) == .done)
+        #expect(Advisor.advice(fromAnswer: #"Sure: {"do":"DONE","note":"captions and speed are set"}"#, optionCount: 3) == .done)
+    }
+
+    @Test func thePromptOffersDone() {
+        let prompt = Advisor.advicePrompt(taskText: "turn on captions", trigger: .jevUnsure, screenLines: [], optionDescriptions: ["click CC"], jobStateText: "")
+        #expect(prompt.contains(#"{"do":"done"}"#))
+    }
+
+    @Test func aPickThatCameBackLaterIsMadeWhileItsMoveIsStillOffered() {
+        let movedVideo = Plan.Move.click(label: "Hunger Games In Real Life", centerX: 410, centerY: 320)
+        let currentOptions = [Plan.Option(key: "o1", move: .scrollDown), Plan.Option(key: "o2", move: movedVideo)]
+        let use = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: false, currentOptions: currentOptions)
+        // Same move by its words, made where it is now.
+        if case .decision(.act(let move)) = use {
+            #expect(move.signature == clickVideo.signature)
+        } else {
+            Issue.record("expected the advisor's pick to be used")
+        }
+    }
+
+    @Test func aPickWhoseMoveIsGoneIsDropped() {
+        let use = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: true, currentOptions: [Plan.Option(key: "o1", move: .scrollDown)])
+        #expect(use == .nothing)
+    }
+
+    @Test func doneAndWaitsOnlyCountOnTheScreenTheyWereAskedAbout() {
+        #expect(Advisor.use(of: .decision(.finished), askedOnSameScreen: true, currentOptions: []) == .decision(.finished))
+        #expect(Advisor.use(of: .decision(.finished), askedOnSameScreen: false, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .wait(seconds: 30), askedOnSameScreen: true, currentOptions: []) == .wait(seconds: 30))
+        #expect(Advisor.use(of: .wait(seconds: 30), askedOnSameScreen: false, currentOptions: []) == .nothing)
+    }
+
+    @Test func notesAndNoHelpChangeNothingAtTheStep() {
+        #expect(Advisor.use(of: .noted, askedOnSameScreen: true, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .noHelp, askedOnSameScreen: true, currentOptions: []) == .nothing)
+        #expect(Advisor.use(of: .decision(.unsure), askedOnSameScreen: true, currentOptions: []) == .nothing)
+    }
+
+    // MARK: The advisor says where to click (the OpenEMR DOB box, 27 Nov)
+
+    @Test func theAdvisorCanNameASpotThatIsNotAnOption() {
+        let advice = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the empty text box to the right of DOB","type":"1990-05-12"}"#, optionCount: 4)
+        #expect(advice == .clickThing(description: "the empty text box to the right of DOB", typeText: "1990-05-12"))
+        let clickOnly = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the box right of Last Name"}"#, optionCount: 4)
+        #expect(clickOnly == .clickThing(description: "the box right of Last Name", typeText: nil))
+        let emptyType = Advisor.advice(fromAnswer: #"{"do":"click","thing":"the box right of DOB","type":"  "}"#, optionCount: 4)
+        #expect(emptyType == .clickThing(description: "the box right of DOB", typeText: nil))
+    }
+
+    @Test func aClickWithNothingDescribedIsNoAdvice() {
+        #expect(Advisor.advice(fromAnswer: #"{"do":"click"}"#, optionCount: 4) == nil)
+        #expect(Advisor.advice(fromAnswer: #"{"do":"click","thing":"   "}"#, optionCount: 4) == nil)
+    }
+
+    @Test func longClickAdviceIsCut() throws {
+        let longThing = String(repeating: "box ", count: 200)
+        let longText = String(repeating: "a", count: 1000)
+        let advice = Advisor.advice(fromAnswer: #"{"do":"click","thing":"\#(longThing)","type":"\#(longText)"}"#, optionCount: 1)
+        guard case .clickThing(let description, let typeText) = try #require(advice) else { Issue.record("expected a click"); return }
+        #expect(description.count <= Advisor.maximumNoteCharacters)
+        #expect((typeText ?? "").count == Advisor.maximumTypedCharacters)
+    }
+
+    @Test func thePromptTellsTheAdvisorItCanSayWhereToClick() {
+        let prompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .moveFailed, screenLines: [(text: "DOB", centerX: 0.3, centerY: 0.4)],
+                                          optionDescriptions: ["click DOB"], jobStateText: "")
+        #expect(prompt.contains(#""do":"click""#))
+        #expect(prompt.contains("right of DOB"))
+    }
+
+    @Test func aStuckJevGetsAMoveNotANote() {
+        let stuckPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .jevUnsure, screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(stuckPrompt.contains("can't act on a note"))
+        let failedPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .moveFailed, screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(failedPrompt.contains("can't act on a note"))
+        let hintPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .userHint("use the menu"), screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(!hintPrompt.contains("can't act on a note"))
+    }
+
+    @Test func aSpotPointedAtWhileJevWentOnCountsOnlyOnTheSameScreen() {
+        let pointed = DottieJevAdvisorSession.Help.clickThing(description: "the box right of DOB", typeText: "1990-05-12")
+        #expect(Advisor.use(of: pointed, askedOnSameScreen: true, currentOptions: []) == .clickThing(description: "the box right of DOB", typeText: "1990-05-12"))
+        #expect(Advisor.use(of: pointed, askedOnSameScreen: false, currentOptions: []) == .nothing)
+    }
+
+    @Test func thePointedMoveIsKeptInTheJobsMoves() {
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: "1990-05-12", wasFound: true)
+                == #"clicked the box right of DOB and typed "1990-05-12" (the advisor's pick)"#)
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: nil, wasFound: true) == "clicked the box right of DOB (the advisor's pick)")
+        #expect(Advisor.summaryOfPointedMove(description: "the box right of DOB", typeText: "x", wasFound: false).hasPrefix("couldn't find"))
+    }
+
+    @Test func checkingAdviceThatCameBackIsQuick() {
+        let options = (0..<200).map { Plan.Option(key: "o\($0)", move: .click(label: "item \($0)", centerX: 10, centerY: Double($0))) }
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for _ in 0..<1000 { _ = Advisor.use(of: .decision(.act(clickVideo)), askedOnSameScreen: true, currentOptions: options) }
+        }
+        #expect(elapsed < .seconds(1))
+    }
+}

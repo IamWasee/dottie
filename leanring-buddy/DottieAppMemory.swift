@@ -591,6 +591,21 @@ final class DottieAppMemory {
 
     /// What app memory saw in one app or site, as short lines for the
     /// card on how it works (DottieAppTasks).
+    /// Every app and site with remembered pages, for Home → Admin. Reads
+    /// each app's file once (they're cached after).
+    func knownPlacesForAdmin() -> [DottieAppNotesPlan.MemoryPlace] {
+        let appFolderURLs = (try? FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        var places: [DottieAppNotesPlan.MemoryPlace] = []
+        for appFolderURL in appFolderURLs where (try? appFolderURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            // Folder names are bundle identifiers with "/" swapped out (appFolderURL).
+            let bundleIdentifier = appFolderURL.lastPathComponent
+            guard FileManager.default.fileExists(atPath: fileURL(bundleIdentifier).path) else { continue }
+            let appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
+            places += DottieAppNotesPlan.memoryPlaces(bundleIdentifier: bundleIdentifier, appName: appFile.appName, pages: Array(appFile.pages.values))
+        }
+        return places
+    }
+
     func cardMaterial(bundleIdentifier: String, siteHost: String?) -> [String] {
         let appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
         return DottieAppMemoryPlan.cardLines(pages: Array(appFile.pages.values), siteHost: siteHost)

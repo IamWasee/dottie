@@ -55,14 +55,24 @@ describe("imageBlockFromDataURL", () => {
 describe("toAnthropicRequest", () => {
   it("puts the system text on its own and starts with the user", () => {
     const request = toAnthropicRequest({ messages: [{ role: "system", content: "Be brief." }, { role: "user", content: "hi" }] });
-    expect(request.system).toBe("Be brief.");
+    expect(request.system).toEqual([{ type: "text", text: "Be brief.", cache_control: { type: "ephemeral" } }]);
     expect(request.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
     expect(request.max_tokens).toBe(DEFAULT_ANTHROPIC_ANSWER_TOKENS);
   });
 
+  it("caches the instructions after the tools, so a job's later steps pay a tenth for them", () => {
+    const request = toAnthropicRequest({
+      messages: [{ role: "system", content: "You run screen jobs." }, { role: "user", content: "step" }],
+      tools: [{ type: "function", function: { name: "click", parameters: { type: "object", properties: {} } } }],
+    });
+    expect((request.system as any[])[0].cache_control).toEqual({ type: "ephemeral" });
+    expect((request.tools as any[])[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(toAnthropicRequest({ messages: [{ role: "user", content: "hi" }] }).system).toBeUndefined();
+  });
+
   it("reads a system message given as parts", () => {
     const request = toAnthropicRequest({ messages: [{ role: "system", content: [{ type: "text", text: "rules" }] }, { role: "user", content: "x" }] });
-    expect(request.system).toBe("rules");
+    expect((request.system as any[])[0].text).toBe("rules");
   });
 
   it("adds a user turn when the conversation starts with the assistant or is empty", () => {
@@ -121,7 +131,7 @@ describe("toAnthropicRequest", () => {
     expect(required.tool_choice).toEqual({ type: "any" });
     expect(required.max_tokens).toBe(99);
     expect(required.temperature).toBe(1);
-    expect(required.system).toContain("only the JSON object");
+    expect((required.system as any[])[0].text).toContain("only the JSON object");
     expect(toAnthropicRequest({ ...base, tool_choice: "none" }).tool_choice).toEqual({ type: "none" });
     expect(toAnthropicRequest({ ...base, tool_choice: "auto", temperature: -1 })).toMatchObject({ tool_choice: { type: "auto" }, temperature: 0 });
   });
@@ -134,7 +144,7 @@ describe("toAnthropicRequest", () => {
       toolConfig: { functionCallingConfig: { mode: "ANY" } },
     });
     const request = toAnthropicRequest(chatRequest);
-    expect(request.system).toBe("You run screen jobs.");
+    expect((request.system as any[])[0].text).toBe("You run screen jobs.");
     expect((request.messages as any[])[0].content.map((block: any) => block.type)).toEqual(["text", "image"]);
     expect((request.tools as any[])[0].input_schema.properties.x.type).toBe("number");
     expect(request.tool_choice).toEqual({ type: "any" });
@@ -154,7 +164,7 @@ describe("fromAnthropicResponse", () => {
       { id: "t2", type: "function", function: { name: "noinput", arguments: "{}" } },
     ]);
     expect(chat.choices[0].finish_reason).toBe("stop");
-    expect(chat.usage).toEqual({ prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 });
+    expect(chat.usage).toEqual({ prompt_tokens: 15, completion_tokens: 5, total_tokens: 20, cache_read_tokens: 3, cache_write_tokens: 2 });
   });
 
   it("marks a cut-off answer and copes with an empty one", () => {
@@ -253,9 +263,9 @@ describe("paidProviders", () => {
     expect(paidProviders(makeEnv(), text)).toEqual([]);
   });
 
-  it("puts GLM first for pictures and Claude first for text", () => {
+  it("uses only Claude for pictures and Claude first for text", () => {
     const env = makeEnv({ ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
-    expect(paidProviders(env, picture).map((provider) => provider.name)).toEqual(["glm", "claude"]);
+    expect(paidProviders(env, picture).map((provider) => provider.name)).toEqual(["claude"]);
     expect(paidProviders(env, text).map((provider) => provider.name)).toEqual(["claude", "glm"]);
   });
 
@@ -268,7 +278,7 @@ describe("paidProviders", () => {
   it("uses only GLM for a helper's text turn, and follows HELPER_PROVIDER_ORDER", () => {
     const env = makeEnv({ ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
     expect(paidProviders(env, text, true).map((provider) => provider.name)).toEqual(["glm"]);
-    expect(paidProviders(env, picture, true).map((provider) => provider.name)).toEqual(["glm", "claude"]);
+    expect(paidProviders(env, picture, true).map((provider) => provider.name)).toEqual(["claude"]);
     const reordered = makeEnv({ ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", HELPER_PROVIDER_ORDER: "claude", TEXT_PROVIDER_ORDER: "glm" });
     expect(paidProviders(reordered, text, true).map((provider) => provider.name)).toEqual(["claude"]);
   });
@@ -287,13 +297,19 @@ describe("/chat with paid keys", () => {
     expect(calls[0].json.provider).toBeUndefined();
   });
 
-  it("sends a screen step with a picture to GLM first, then Claude when GLM is down", async () => {
+  it("sends an ask with a picture to Claude only by default, and to GLM then Claude when PICTURE_PROVIDER_ORDER says so", async () => {
+    const claudeOnly = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "pointed" }])]]);
+    const pictureBody = { contents: [{ role: "user", parts: [{ text: "where is it" }, imagePart(pngBase64(10, 10))] }] };
+    const pointed = await call("/chat", pictureBody, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect((await sseJSON(pointed)).candidates[0].content.parts[0].text).toBe("pointed");
+    expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+
     const calls = fakeFetch([
       ["api.z.ai", new Response("down", { status: 500 })],
       ["api.anthropic.com", claudeAnswer([{ type: "text", text: "clicked" }])],
     ]);
     const body = { contents: [{ role: "user", parts: [{ text: "next step" }, imagePart(pngBase64(10, 10))] }] };
-    const response = await call("/chat", body, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    const response = await call("/chat", body, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", PICTURE_PROVIDER_ORDER: "glm,claude" });
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("clicked");
     expect(calls.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai", "api.anthropic.com"]);
   });
@@ -301,7 +317,7 @@ describe("/chat with paid keys", () => {
   it("sends only the newest screenshots of a long screen job", async () => {
     const calls = fakeFetch([["api.z.ai", chatAnswer({ content: "ok" })]]);
     const contents = Array.from({ length: 10 }, (_, index) => ({ role: index % 2 === 0 ? "user" : "model", parts: index % 2 === 0 ? [{ text: `step ${index}` }, imagePart(pngBase64(10, 10))] : [{ text: "done" }] }));
-    await call("/chat", { contents }, { ZAI_API_KEY: "z" });
+    await call("/chat", { contents }, { ZAI_API_KEY: "z", PICTURE_PROVIDER_ORDER: "glm" });
     const sentPictures = calls[0].bodyText.match(/data:image/g) ?? [];
     expect(sentPictures.length).toBeLessThanOrEqual(5);
   });
@@ -540,17 +556,21 @@ describe("talking and requests", () => {
     expect(glmCalls).toHaveLength(1);
   });
 
-  it("asks GLM first for a screen job's plan, then Claude, and follows PLAN_PROVIDER_ORDER", async () => {
-    const glmFirst = fakeFetch([["api.z.ai", chatAnswer({ content: "{\"can_guess\":false}" })]]);
-    const planned = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+  it("asks only Claude for a screen job's plan by default, and follows PLAN_PROVIDER_ORDER", async () => {
+    const claudeByDefault = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "{\"can_guess\":false}" }])]]);
+    const planned = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", GROQ_API_KEY: "g" });
     expect((await sseJSON(planned)).candidates[0].content.parts[0].text).toContain("can_guess");
+    expect(claudeByDefault.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+
+    const glmFirst = fakeFetch([["api.z.ai", chatAnswer({ content: "{\"can_guess\":false}" })]]);
+    await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", PLAN_PROVIDER_ORDER: "glm,claude" });
     expect(glmFirst.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
 
     const glmDown = fakeFetch([
       ["api.z.ai", new Response("busy", { status: 400 })],
       ["api.anthropic.com", claudeAnswer([{ type: "text", text: "{}" }])],
     ]);
-    const fellBack = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    const fellBack = await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", PLAN_PROVIDER_ORDER: "glm,claude" });
     expect(fellBack.status).toBe(200);
     expect(glmDown.some((recorded) => recorded.url.includes("anthropic"))).toBe(true);
 

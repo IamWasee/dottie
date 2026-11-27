@@ -112,6 +112,35 @@ struct ScreenJobRepeatedActionTests {
         #expect(DottieScreenTaskRunner.repeatedAction(in: signatures) == nil)
     }
 
+    @Test func scrollingUpAndDownIsALoop() {
+        // The OpenEMR demo (27 Nov): 18 steps of scroll up, scroll down.
+        let signatures = ["click \"Male\"", "scroll \"up\"", "scroll \"down\"", "scroll \"up\"", "scroll \"down\""]
+        #expect(DottieScreenTaskRunner.repeatedAction(in: signatures) == nil)
+        #expect(DottieScreenTaskRunner.alternatingActions(in: signatures) == "scroll \"up\", then scroll \"down\"")
+    }
+
+    @Test func aCircleOfThreeIsALoop() {
+        let signatures = ["click \"Finder\"", "click \"Patient\"", "click \"New/Search\"", "click \"Finder\"", "click \"Patient\"", "click \"New/Search\""]
+        #expect(DottieScreenTaskRunner.alternatingActions(in: signatures) == "click \"Finder\", then click \"Patient\", then click \"New/Search\"")
+    }
+
+    @Test func movesThatGoForwardAreNotALoop() {
+        #expect(DottieScreenTaskRunner.alternatingActions(in: []) == nil)
+        #expect(DottieScreenTaskRunner.alternatingActions(in: ["scroll \"up\"", "scroll \"down\"", "scroll \"up\""]) == nil)
+        #expect(DottieScreenTaskRunner.alternatingActions(in: ["type_text \"Maria\"", "type_text \"Lopez\"", "click \"Sex\"", "click \"Female\""]) == nil)
+        // The same move four times is a repeat, not a back-and-forth.
+        #expect(DottieScreenTaskRunner.alternatingActions(in: [String](repeating: "click \"Next\"", count: 4)) == nil)
+    }
+
+    @Test func spottingALoopIsQuick() {
+        let signatures = ["a", "b", "c", "a", "b", "d"]
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for _ in 0..<20_000 { _ = DottieScreenTaskRunner.alternatingActions(in: signatures) }
+        }
+        #expect(elapsed < .seconds(1))
+    }
+
     @Test func scrollingMayRepeatFourTimesButNotFive() {
         let fourScrolls = [String](repeating: "scroll \"down\"", count: 4)
         #expect(DottieScreenTaskRunner.repeatedAction(in: fourScrolls) == nil)

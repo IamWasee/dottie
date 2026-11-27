@@ -136,7 +136,37 @@ struct DottieJobMemory: Equatable {
                 }
             }
         }
+        // "add three new patients", "add these two patients": a number of
+        // new things, one round each. "add two numbers" isn't (no "new",
+        // "these" or "the following"). On the OpenEMR demo (27 Nov) a list
+        // of patients ran as one long job and lost its place after the first.
+        let numberOfThingsPattern = #"\b(?:add|create|book|make|enter|register|schedule)\s+(?:(?:these|the\s+following)\s+(\d{1,3}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+(?:new\s+)?|(\d{1,3}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+new\s+)[a-z]+s\b"#
+        if let expression = try? NSRegularExpression(pattern: numberOfThingsPattern),
+           let match = expression.firstMatch(in: lowercasedTask, range: NSRange(lowercasedTask.startIndex..., in: lowercasedTask)) {
+            for groupIndex in 1..<match.numberOfRanges {
+                guard let range = Range(match.range(at: groupIndex), in: lowercasedTask) else { continue }
+                let countText = String(lowercasedTask[range])
+                if let count = Int(countText) ?? numberWords[countText], count >= 2 { return min(count, maximumRounds) }
+            }
+        }
+        // A numbered list: "(1) Maria … (2) David … (3) Sarah".
+        let numberedItems = numberedListLength(in: lowercasedTask)
+        if numberedItems >= 2 { return min(numberedItems, maximumRounds) }
         return 1
+    }
+
+    /// How many items a numbered list in the request has: "(1) … (2) …" or
+    /// "1) … 2) …", counted from 1 while the numbers follow on.
+    static func numberedListLength(in taskText: String) -> Int {
+        guard let expression = try? NSRegularExpression(pattern: #"(?:^|[\s:;,])\(?(\d{1,2})\)\s"#) else { return 0 }
+        var numbersSeen = Set<Int>()
+        for match in expression.matches(in: taskText, range: NSRange(taskText.startIndex..., in: taskText)) {
+            guard let range = Range(match.range(at: 1), in: taskText), let number = Int(taskText[range]) else { continue }
+            numbersSeen.insert(number)
+        }
+        var listLength = 0
+        while numbersSeen.contains(listLength + 1) { listLength += 1 }
+        return listLength
     }
 
     /// A list of moves, short: all of them when few, else the first few,

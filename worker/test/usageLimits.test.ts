@@ -412,11 +412,13 @@ describe("what each install spends", () => {
   it("keeps each install's spend per category, and everyone's for the owner", async () => {
     fakeFetch([
       ["api.groq.com", chatAnswer({ content: "ok" })],
+      // Screen steps and plans are Claude's alone (no Groq after it).
+      ["api.anthropic.com", jsonAnswer({ type: "message", role: "assistant", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 3, output_tokens: 1 } })],
       ["api.typesafe.ai", jsonAnswer({ answers: { done: { probability: 0.9 } } })],
     ]);
     const ownerID = newInstallID();
     const otherID = newInstallID();
-    const env = limitedEnv("chat=100", { UNLIMITED_INSTALL_IDS: ownerID, JEV_API_KEY: "jev-key" });
+    const env = limitedEnv("chat=100", { UNLIMITED_INSTALL_IDS: ownerID, JEV_API_KEY: "jev-key", ANTHROPIC_API_KEY: "claude-key" });
     const labeledChat = (installID: string, category: string, provider: string) =>
       fromInstall(installID, "/chat", { body: { provider, contents: [] }, env, headers: { "x-dottie-cost-category": category } });
     expect((await labeledChat(otherID, "screen_job_steps", "screen")).status).toBe(200);

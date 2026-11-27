@@ -96,6 +96,18 @@ struct JevStepCheckTests {
         #expect(Plan.lastMoveFailed(justBelow))
     }
 
+    @Test func aMoveThatChangedTheScreenFailsOnlyWhenJevIsSure() {
+        // Wasee's Mac, 27 Nov: nine "didn't work" checks in a row after moves that opened pages.
+        let unsure = Plan.Answer(move: .scrollDown, probability: 1, confidence: 1, doneProbability: nil, lastMoveWorkedProbability: 0.2)
+        #expect(Plan.lastMoveFailed(unsure))
+        #expect(!Plan.lastMoveFailed(unsure, screenChangedAfterMove: true))
+        let sure = Plan.Answer(move: .scrollDown, probability: 1, confidence: 1, doneProbability: nil, lastMoveWorkedProbability: 0.05)
+        #expect(Plan.lastMoveFailed(sure, screenChangedAfterMove: true))
+        let atThreshold = Plan.Answer(move: .scrollDown, probability: 1, confidence: 1, doneProbability: nil,
+                                      lastMoveWorkedProbability: Plan.lastMoveWorkedThresholdWhenScreenChanged)
+        #expect(!Plan.lastMoveFailed(atThreshold, screenChangedAfterMove: true))
+    }
+
     // MARK: Open moves once per round
 
     @Test func openingMovesAreTheOnesOfferedOnce() {

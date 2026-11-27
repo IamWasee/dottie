@@ -110,7 +110,12 @@ export function toAnthropicRequest(chatRequest: Record<string, unknown>): Record
     max_tokens: typeof chatRequest.max_tokens === "number" ? chatRequest.max_tokens : DEFAULT_ANTHROPIC_ANSWER_TOKENS,
     messages,
   };
-  if (systemTexts.length) anthropicRequest.system = systemTexts.join("\n\n");
+  // The instructions are the same every turn of a job too: cached after the
+  // tools (Claude's cache covers tools, then system), so a screen job's later
+  // steps pay a tenth for both. Too short a prefix is simply not cached.
+  if (systemTexts.length) {
+    anthropicRequest.system = [{ type: "text", text: systemTexts.join("\n\n"), cache_control: { type: "ephemeral" } }];
+  }
   if (typeof chatRequest.temperature === "number") anthropicRequest.temperature = Math.min(1, Math.max(0, chatRequest.temperature));
 
   const tools = (chatRequest.tools ?? []) as Array<{ function?: { name?: string; description?: string; parameters?: unknown } }>;
@@ -146,13 +151,19 @@ export function fromAnthropicResponse(anthropicResponse: Record<string, unknown>
     }
   }
   const usage = (anthropicResponse.usage ?? {}) as Record<string, number>;
-  const promptTokens = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const promptTokens = (usage.input_tokens ?? 0) + cacheReadTokens + cacheWriteTokens;
   const completionTokens = usage.output_tokens ?? 0;
   return {
     choices: [{
       message: { content: texts.join("\n"), ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
       finish_reason: anthropicResponse.stop_reason === "max_tokens" ? "length" : "stop",
     }],
-    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
+    usage: {
+      prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens,
+      // Cached tokens cost a tenth to read and a quarter more to write, so the cost estimate counts them apart.
+      cache_read_tokens: cacheReadTokens, cache_write_tokens: cacheWriteTokens,
+    },
   };
 }

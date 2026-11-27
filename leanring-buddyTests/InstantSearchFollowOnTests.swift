@@ -48,6 +48,21 @@ struct InstantSearchFollowOnWordTests {
         #expect(!DottieInstantText.hasFollowOnInstruction("mr beast and then"))
     }
 
+    @Test func anActionWithoutAndStillCounts() {
+        // Speech has no commas: Wasee's whole sentence went into YouTube's search (27 Nov).
+        #expect(DottieInstantText.hasFollowOnInstruction("mrbeast click on the first video you see turn on the captions"))
+        #expect(DottieInstantText.hasFollowOnInstruction("lofi music play the first one"))
+        #expect(DottieInstantText.hasFollowOnInstruction("cats turn on captions"))
+    }
+
+    @Test func searchesThatOnlyMentionAnActionStaySearches() {
+        #expect(!DottieInstantText.hasFollowOnInstruction("how to play the piano"))
+        #expect(!DottieInstantText.hasFollowOnInstruction("best way to save the planet"))
+        #expect(!DottieInstantText.hasFollowOnInstruction("why do cats click their teeth"))
+        #expect(!DottieInstantText.hasFollowOnInstruction("open the door song"))
+        #expect(!DottieInstantText.hasFollowOnInstruction("turn on"))
+    }
+
     @Test func punctuationAndCapitalsDontHideIt() {
         #expect(DottieInstantText.hasFollowOnInstruction("MrBeast, and CLICK the first video"))
     }
@@ -63,6 +78,11 @@ struct InstantSearchFollowOnWordTests {
 
 @MainActor
 struct InstantSearchFollowOnCommandTests {
+    @Test func aSpokenSearchWithMoreStepsAndNoCommasIsNotInstant() {
+        #expect(DottieInstantCommands.parseAll("open youtube search for mrbeast click on the first video you see turn on the captions") == nil)
+        #expect(DottieInstantCommands.parseAll("search youtube for mrbeast click on the first video you see turn on the captions and speed to 1.5") == nil)
+    }
+
     @Test func aSearchWithAFollowOnStepIsNotInstant() {
         #expect(DottieInstantCommands.parseAll("search youtube for mrbeast and click on the first video you see") == nil)
         #expect(DottieInstantCommands.parseAll("open youtube and search up a video about ai and click on the most popular") == nil)

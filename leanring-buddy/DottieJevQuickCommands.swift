@@ -104,6 +104,10 @@ enum DottieJevQuickCommands {
         .init(keys: "l", meaning: "YouTube: skip 10 seconds forward", scope: .youTube, askWords: []),
         .init(keys: "j", meaning: "YouTube: go 10 seconds back", scope: .youTube, askWords: []),
         .init(keys: "c", meaning: "YouTube: captions on or off", scope: .youTube, askWords: []),
+        // Speed in steps of 0.25: from normal, two presses make 1.5x. The
+        // settings menu's speed list was where Jev handed over (27 Nov).
+        .init(keys: "shift+.", meaning: "YouTube: play faster (each press adds 0.25x, twice from normal makes 1.5x)", scope: .youTube, askWords: []),
+        .init(keys: "shift+,", meaning: "YouTube: play slower (each press takes off 0.25x)", scope: .youTube, askWords: []),
         .init(keys: "shift+n", meaning: "YouTube: next video", scope: .youTube, askWords: []),
         .init(keys: "shift+p", meaning: "YouTube: previous video in the playlist", scope: .youTube, askWords: []),
         // Finder
