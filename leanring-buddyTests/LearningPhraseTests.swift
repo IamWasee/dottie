@@ -51,6 +51,40 @@ struct LearningPhraseTests {
         #expect(phrase("watch me for a couple of minutes") == .startWatching(seconds: 120))
     }
 
+    @Test func aMisheardDoneStillStopsTheWatch() {
+        // Wasee's Mac, 27 Nov: "done, that's the end of the tour" came out like this and reached Claude.
+        let heardWhileWatching = [
+            "Done does the end of the door", "done, that's the end of the tour", "Done.", "done for now",
+            "OK done with the tour", "I'm done showing you", "stop watching now please", "that's the end of it",
+            "and that's the end of the tour", "so the tour is over now", "you can stop now"
+        ]
+        for text in heardWhileWatching {
+            #expect(phrase(text, watching: true) == .stopWatching, "\(text)")
+            #expect(phrase(text, recording: true) == .stopReplay, "\(text)")
+            #expect(phrase(text) == nil, "\(text)")
+        }
+    }
+
+    @Test func asksThatOnlyMentionStoppingOrDoneDoNotEndAWatch() {
+        let otherAsksWhileWatching = [
+            "stop the music", "what have you done so far", "is it done", "click done", "the tour of the app",
+            "press the done button", "how do I end this"
+        ]
+        for text in otherAsksWhileWatching {
+            #expect(phrase(text, watching: true) != .stopWatching, "\(text)")
+        }
+    }
+
+    @Test func checkingForAStopIsQuick() {
+        let clock = ContinuousClock()
+        let duration = clock.measure {
+            for askNumber in 0..<5_000 {
+                _ = DottieLearningPhrase.soundsLikeStopping("open the patient finder and search for number \(askNumber)")
+            }
+        }
+        #expect(duration < .seconds(1), "5,000 stop checks took \(duration)")
+    }
+
     @Test func moreWaysToSayTheTourIsOver() {
         for text in ["that's all", "stop", "end of the tour", "the tour is over", "we're done"] {
             #expect(phrase(text, watching: true) == .stopWatching, "\(text)")

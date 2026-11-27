@@ -61,13 +61,35 @@ enum DottieLearningPhrase: Equatable {
         "we're done", "end of the tour", "end of tour", "that's the end of the tour", "that's the end", "the tour is over",
         "tour's over", "the tour's over", "tour over", "that was the tour", "you can stop watching"
     ]
+    /// Openings that end a watch however the rest came out. On Wasee's Mac
+    /// (27 Nov) "done, that's the end of the tour" was heard as "done does
+    /// the end of the door", matched no stop phrase, went to Claude, which
+    /// said it stopped watching without stopping anything.
+    private static let stopOpenings: [[String]] = [
+        ["done"], ["all", "done"], ["ok", "done"], ["okay", "done"], ["i'm", "done"], ["im", "done"], ["i", "am", "done"],
+        ["we're", "done"], ["were", "done"], ["stop", "watching"], ["stop", "recording"], ["you", "can", "stop"],
+        ["that's", "the", "end"], ["thats", "the", "end"], ["that", "was", "the", "tour"]
+    ]
+    /// Words anywhere in the ask that mean the tour is over.
+    private static let stopInsidePhrases = ["end of the tour", "end of tour", "tour is over", "tour's over", "tours over"]
+
+    /// Whether an ask said while watching ends it, though it isn't one of the
+    /// exact stop phrases. Only checked while watching or recording, so
+    /// "done" never means anything otherwise.
+    static func soundsLikeStopping(_ normalizedText: String) -> Bool {
+        let words = normalizedText.split(separator: " ").map(String.init)
+        if stopOpenings.contains(where: { words.starts(with: $0) }) { return true }
+        let paddedText = " " + normalizedText + " "
+        return stopInsidePhrases.contains { paddedText.contains(" " + $0 + " ") }
+    }
+
     /// Words that make a watch a tour of a whole app.
     private static let tourWords = ["tour", "around", "walk you through", "go through", "everything"]
 
     /// What an already-normalized ask means, or nil when it isn't one of
     /// these. "done" only counts while watching or recording.
     static func phrase(in normalizedText: String, isWatching: Bool, isRecordingReplay: Bool) -> DottieLearningPhrase? {
-        if isWatching || isRecordingReplay, stopWords.contains(normalizedText) {
+        if isWatching || isRecordingReplay, stopWords.contains(normalizedText) || soundsLikeStopping(normalizedText) {
             return isWatching ? .stopWatching : .stopReplay
         }
         if let replayMatch = firstMatch(of: replayPattern, in: normalizedText) {
