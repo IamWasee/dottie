@@ -144,7 +144,7 @@ struct JevQuickCommandsTests {
 
     @Test func everyShortcutsKeysArePressable() {
         let knownKeyNames: Set<String> = Set("abcdefghijklmnopqrstuvwxyz0123456789".map(String.init))
-            .union(["return", "tab", "space", "escape", "delete", "up", "down", "left", "right", "[", "]", "-", "=", ",", "/", "`"])
+            .union(["return", "tab", "space", "escape", "delete", "up", "down", "left", "right", "[", "]", "-", "=", ",", ".", "/", "`"])
         for command in Commands.all {
             let keyName = String(command.keys.split(separator: "+").last ?? "")
             #expect(knownKeyNames.contains(keyName), "\(command.keys)")
