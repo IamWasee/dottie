@@ -373,6 +373,8 @@ enum DottieAppTaskPlan {
         switch step.kind {
         case .click, .doubleClick, .rightClick, .typeIntoField, .hover:
             if step.kind == .typeIntoField && typedText == nil { return .jevTakesIt }
+            // No label: a later round's click whose words couldn't be placed (DottieRoundReplayPlan).
+            if step.kind != .typeIntoField && step.label.isEmpty { return .jevTakesIt }
             guard let target = DottieLooseLabels.bestMatch(forLabel: step.label, role: step.role,
                                                            centerX: step.centerX, centerY: step.centerY, among: candidates) else {
                 return .notOnScreen

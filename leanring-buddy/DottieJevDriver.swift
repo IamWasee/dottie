@@ -1023,6 +1023,9 @@ enum DottieJevDriver {
         var pathReplay = taskToReplay.map { DottieAppTaskPathReplay(task: $0) }
         var pathProblem: DottieAppTaskProblem?
         var lastMoveCameFromSavedTask = false
+        // Rounds 2 to N of a repeated job: round 1's own steps done again
+        // with that round's details (DottieRoundReplayPlan), not a saved task.
+        var pathReplayIsRoundRecipe = false
         // The task's own notes go first, so the cut at 4,500 characters
         // drops the general lessons rather than them (the watch me review).
         if usesAppMemory, !startKnowledge.taskText.isEmpty {
@@ -1107,7 +1110,7 @@ enum DottieJevDriver {
             if let taskToReplay, !jevPartWorked {
                 DottieAppTasks.shared.noteJevHandedOver(
                     request: taskText, replayedTaskID: taskToReplay.id,
-                    problem: pathProblem ?? pathReplay?.problemWithCurrentStep("Jev handed the job over: \(reason)", now: Date())
+                    problem: pathProblem ?? (pathReplayIsRoundRecipe ? nil : pathReplay?.problemWithCurrentStep("Jev handed the job over: \(reason)", now: Date()))
                 )
             }
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
@@ -1135,10 +1138,30 @@ enum DottieJevDriver {
         /// The saved steps stopped fitting: Jev carries on with a note.
         func dropSavedTask(_ problem: DottieAppTaskProblem, reason: String) {
             guard let activeReplay = pathReplay else { return }
+            pathReplay = nil
+            if pathReplayIsRoundRecipe {
+                // Only this round goes to Jev: the next round tries round 1's steps again.
+                pathReplayIsRoundRecipe = false
+                movesSoFar.append("round 1's steps stopped fitting at step \(problem.stepNumber) (\(reason)); Jev does the rest of this round")
+                DottieLog.notice("🔁 Round 1's steps stopped fitting at step \(public: problem.stepNumber) of \(activeReplay.task.name); Jev does the rest of it")
+                return
+            }
             pathProblem = problem
             knownHowTo += "\n" + activeReplay.noteForJev(reason: reason)
-            pathReplay = nil
             DottieLog.notice("🗂️ A saved task stopped fitting the screen at step \(public: problem.stepNumber); Jev carries on")
+        }
+
+        /// The next round of a repeated job starts on round 1's own steps,
+        /// with this round's details typed and clicked where round 1's were.
+        func startRoundFromRoundOne() {
+            guard jobMemory.currentRound >= 2,
+                  let roundTask = DottieRoundReplayPlan.roundTask(
+                      roundOneSteps: recording.steps, round: jobMemory.currentRound, totalRounds: jobMemory.totalRounds,
+                      taskText: taskText, appName: recording.mainPlaceName ?? "", places: recording.places, now: Date()
+                  ) else { return }
+            pathReplay = DottieAppTaskPathReplay(task: roundTask)
+            pathReplayIsRoundRecipe = true
+            DottieLog.notice("🔁 Round \(public: jobMemory.currentRound) starts on round 1's \(public: roundTask.steps.count) steps, no Jev call per step")
         }
 
         /// Jev finished: the job is kept as a named task (or counted on its saved one).
@@ -1347,13 +1370,36 @@ enum DottieJevDriver {
                     frontSiteHost: stepContext.siteHost, frontAppName: stepContext.appName
                 ) {
                 case .move(let savedMove):
+                    let savedMoveTypes: Bool
+                    switch savedMove {
+                    case .typeText, .typeIntoField: savedMoveTypes = true
+                    default: savedMoveTypes = false
+                    }
+                    // Never typed from memory into a password box.
+                    if savedMoveTypes, DottieScreenActionPerformer.isFocusedFieldSecure {
+                        dropSavedTask(activeReplay.problemWithCurrentStep("a password box was selected", now: Date()),
+                                      reason: "a password box was selected")
+                        break
+                    }
                     activeReplay.advance()
                     pathReplay = activeReplay
                     runStats.replayedSteps += 1
-                    actions.progress(stepNumber, "doing \"\(activeReplay.task.name)\" from memory, step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count)")
-                    DottieLog.notice("🗂️ Did step \(public: activeReplay.nextStepIndex) of a saved task without asking Jev")
+                    if pathReplayIsRoundRecipe {
+                        actions.progress(stepNumber, "\(activeReplay.task.name), step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count) the way round 1 went")
+                        DottieLog.notice("🔁 Did step \(public: activeReplay.nextStepIndex) of \(activeReplay.task.name) from round 1 without asking Jev")
+                    } else {
+                        actions.progress(stepNumber, "doing \"\(activeReplay.task.name)\" from memory, step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count)")
+                        DottieLog.notice("🗂️ Did step \(public: activeReplay.nextStepIndex) of a saved task without asking Jev")
+                    }
                     await perform(savedMove, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions,
                                   frontSiteHost: stepContext.siteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
+                    // A later round typed into a box that stayed empty: the
+                    // typing went nowhere, so the rest of the round is Jev's.
+                    if pathReplayIsRoundRecipe, savedMoveTypes,
+                       DottieRoundReplayPlan.typingWentNowhere(focusedFieldValue: DottieScreenActionPerformer.focusedTextFieldValue) {
+                        dropSavedTask(activeReplay.problemWithStepJustDone("the box stayed empty after typing", now: Date()),
+                                      reason: "the box stayed empty after typing")
+                    }
                     if let openedHost = DottieJevDriverPlan.openedHost(of: savedMove) { hostsOpenedByThisJob.insert(openedHost) }
                     noteDone(savedMove)
                     record(savedMove, context: stepContext)
@@ -1616,6 +1662,7 @@ enum DottieJevDriver {
                 if jobMemory.currentRound == 1 { keepFinishedTask() }
                 jobMemory.finishRound()
                 advisor.startRound()
+                startRoundFromRoundOne()
                 triedSignaturesByScreen = [:]
                 movesWithoutChange = 0
                 labelsClickedFromMemory = []
