@@ -143,6 +143,30 @@ struct JobMemoryTests {
         #expect((doneQuestion["instructions"] as? String)?.contains("round 1") == true)
     }
 
+    @Test func theLastRoundAsksAboutThatRoundNotTheWholeJob() {
+        var memory = DottieJobMemory(totalRounds: 2)
+        memory.noteMove("added the first patient")
+        memory.finishRound()
+        let question = Plan.doneQuestionInstructions(jobMemory: memory)
+        #expect(question.contains("last round"))
+        #expect(question.contains("round 2 of 2"))
+        #expect(!question.contains("fully done"))
+    }
+
+    @Test func aSingleJobCountsItsShownResultAsDone() {
+        let question = Plan.doneQuestionInstructions(jobMemory: DottieJobMemory(totalRounds: 1))
+        #expect(question.contains("fully done"))
+        #expect(question.contains("saved"))
+        #expect(Plan.doneQuestionInstructions(jobMemory: nil) == question)
+    }
+
+    @Test func theDoneQuestionIsQuick() {
+        let memory = DottieJobMemory(totalRounds: 3)
+        let started = Date()
+        for _ in 0..<10_000 { _ = Plan.doneQuestionInstructions(jobMemory: memory) }
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+
     @Test func roundsLeftOfferTheNextRoundInsteadOfFinishing() {
         let options = Plan.options(screenTexts: [], textPieces: [], siteAddresses: [], appNames: [], alreadyTriedSignatures: [], offersNextRound: true)
         let moves = options.map(\.move)

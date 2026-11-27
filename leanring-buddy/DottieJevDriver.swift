@@ -783,6 +783,22 @@ enum DottieJevDriverPlan {
         return URL(string: withScheme)?.host?.lowercased()
     }
 
+    /// The "done?" question Jev answers every step. A finished job rarely
+    /// shows the whole request on one screen (the last of two new patients
+    /// is on screen, not both), so the last round of a repeated job asks
+    /// about that round alone, and a single job counts its result showing
+    /// (saved, sent, added, a success message) as done (Wasee, 28 Nov: jobs
+    /// that really finished never said so).
+    static func doneQuestionInstructions(jobMemory: DottieJobMemory?) -> String {
+        if let jobMemory, jobMemory.isRepeatedJob {
+            if jobMemory.hasRoundsLeft {
+                return "Is round \(jobMemory.currentRound) of the task finished on this screen?"
+            }
+            return "This is the last round (round \(jobMemory.currentRound) of \(jobMemory.totalRounds)); the earlier rounds are already done. Is this last round finished on this screen?"
+        }
+        return "Is the user's request fully done on this screen already? Say yes when the moves so far did every part of it and this screen shows the result: the thing saved, sent, added, created or opened, a success message, or the new item on its own page or in a list."
+    }
+
     static func requestBody(
         goal: String,
         movesSoFar: [String],
@@ -824,9 +840,7 @@ enum DottieJevDriverPlan {
             ],
             doneQuestionName: [
                 "type": "noul",
-                "instructions": jobMemory.map { $0.hasRoundsLeft } == true
-                    ? "Is round \(jobMemory?.currentRound ?? 1) of the task finished on this screen?"
-                    : "Is the user's request fully done on this screen already?"
+                "instructions": doneQuestionInstructions(jobMemory: jobMemory)
             ]
         ]
         if let lastMoveSummary, !lastMoveSummary.isEmpty {
