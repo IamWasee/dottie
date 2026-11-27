@@ -22,7 +22,10 @@ enum DottieJevTextPieces {
     /// Words that say a job types something.
     private static let typingWords: Set<String> = [
         "type", "write", "search", "reply", "message", "email", "mail", "send", "text", "post", "comment",
-        "fill", "enter", "name", "rename", "title", "caption", "note", "tweet", "dm", "say", "saying", "tell", "ask", "login", "address"
+        "fill", "enter", "name", "rename", "title", "caption", "note", "tweet", "dm", "say", "saying", "tell", "ask", "login", "address",
+        // Forms: a new patient, client or contact is typed box by box.
+        "form", "register", "details", "patient", "patients", "client", "clients", "customer", "customers", "contact", "contacts",
+        "dob", "birth", "birthday", "phone"
     ]
 
     /// Whether the job likely types something worth a writing call.
@@ -36,9 +39,10 @@ enum DottieJevTextPieces {
         """
         A Mac assistant is about to do this job on screen for its user: "\(taskText.prefix(600))"
         Write the exact text a person would type to do it: search words, a message or reply, a name, a title, an address. \
-        Each piece on its own line, the words only, no quotes, no numbering, no explanation, at most \(maximumPieces) lines. \
+        Each piece on its own line, the words only, no quotes, no numbering, no explanation, at most \(maximumPieces) such lines. \
         Use the user's own words where they gave them; write a short natural message when they asked for one. \
         Never write a password or a code. If nothing needs typing, answer NONE.
+        \(DottieFormFillPlan.promptAddition)
         """
     }
 
@@ -54,6 +58,8 @@ enum DottieJevTextPieces {
                 piece.removeSubrange(listMarkRange)
             }
             piece = piece.trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”‘’`"))
+            // A form's box and value (DottieFormFillPlan), not text to type whole.
+            if piece.uppercased().hasPrefix("BOX ") && piece.contains("=") { continue }
             guard !piece.isEmpty, piece.uppercased() != "NONE", piece.count <= maximumPieceLength,
                   seenPieces.insert(piece.lowercased()).inserted else { continue }
             keptPieces.append(piece)
@@ -68,16 +74,23 @@ enum DottieJevTextPieces {
         return (requestPieces + writtenPieces).filter { seenPieces.insert($0.lowercased()).inserted }
     }
 
-    /// Asks the Worker for the pieces, or [] when it fails or takes too long.
-    static func write(forTask taskText: String) async -> [String] {
+    /// What one writing call gave: text for Jev to type, and a form's boxes.
+    struct Written: Equatable {
+        let pieces: [String]
+        let formBoxes: [DottieFormFillPlan.FormBox]
+        static let nothing = Written(pieces: [], formBoxes: [])
+    }
+
+    /// Asks the Worker for the pieces and boxes, or nothing when it fails or takes too long.
+    static func write(forTask taskText: String) async -> Written {
         let requestBody: [String: Any] = [
             "provider": "plan",
             "contents": [["role": "user", "parts": [["text": prompt(forTask: taskText)]]]],
-            "generationConfig": ["maxOutputTokens": 300]
+            "generationConfig": ["maxOutputTokens": 500]
         ]
-        guard let answerText = await DottieChat.send(requestBody, timeout: 10) else { return [] }
-        let writtenPieces = pieces(fromAnswer: answerText)
-        DottieLog.notice("⌨️ Wrote \(public: writtenPieces.count) piece(s) of text for Jev to type")
-        return writtenPieces
+        guard let answerText = await DottieChat.send(requestBody, timeout: 10) else { return .nothing }
+        let written = Written(pieces: pieces(fromAnswer: answerText), formBoxes: DottieFormFillPlan.formBoxes(fromAnswer: answerText))
+        DottieLog.notice("⌨️ Wrote \(public: written.pieces.count) piece(s) of text and \(public: written.formBoxes.count) form box(es) for Jev")
+        return written
     }
 }

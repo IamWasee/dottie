@@ -192,6 +192,26 @@ struct ScreenSettleTests {
         #expect(Settle.shouldDropStaleMove(targetRegionChanged: changed, staleMovesDroppedInARow: 0))
     }
 
+    // MARK: Fixed waits
+
+    @Test func theCursorFlightBeforeAClickIsShortUnlessFilmed() {
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: false) == 0.3)
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: true) == 0.15)
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: true, isReplaying: true) == 1.2)
+        // It was 0.75 s on every click.
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: false) < 0.75)
+    }
+
+    @Test func onlyVideoSitesGetTheSecondMouseNudge() {
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "www.youtube.com"))
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "m.youtube.com"))
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "twitch.tv"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: "localhost"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: "notyoutube.com"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: nil))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: ""))
+    }
+
     // MARK: Speed
 
     @Test func regionCheckIsQuick() {

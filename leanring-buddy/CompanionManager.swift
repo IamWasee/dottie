@@ -1844,8 +1844,9 @@ final class CompanionManager: ObservableObject {
             self.detectedElementDisplayFrame = displayFrame
             // A replay already knows its target, so the flight is quicker.
             // A commercial run is filmed, so it lingers long enough to see.
-            let pauseNanoseconds: UInt64 = job.isCommercial ? 1_200_000_000 : (self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
-            try? await Task.sleep(nanoseconds: pauseNanoseconds)
+            let pauseSeconds = DottieScreenSettle.cursorFlightPauseSeconds(isCommercial: job.isCommercial,
+                                                                           isReplaying: self.screenTaskRunner.isReplaying)
+            try? await Task.sleep(nanoseconds: UInt64(pauseSeconds * 1_000_000_000))
         }
         currentScreenTaskText = taskText
         currentScreenJob = job

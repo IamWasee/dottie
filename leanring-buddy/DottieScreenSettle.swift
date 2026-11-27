@@ -51,6 +51,28 @@ enum DottieScreenSettle {
     /// a blinking caret or a hover tint doesn't drop a good click.
     static let targetRegionChangeThreshold = 12.0
 
+    /// How long the blue cursor flies before a screen-job click. It was
+    /// 0.75 s on every click, about a tenth of a 9-minute job (the speed
+    /// review, 28 Nov); the cursor still finishes its flight after the click.
+    /// A commercial is filmed, so it lingers long enough to see.
+    static func cursorFlightPauseSeconds(isCommercial: Bool, isReplaying: Bool) -> Double {
+        if isCommercial { return 1.2 }
+        return isReplaying ? 0.15 : 0.3
+    }
+
+    /// Video players show their controls only while the mouse moves, so on
+    /// these sites the mouse is nudged again right before a click is checked.
+    /// Elsewhere that second nudge only cost time on every click.
+    private static let hostsWithHoverOnlyControls = [
+        "youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "netflix.com", "dailymotion.com",
+        "primevideo.com", "disneyplus.com", "hulu.com", "max.com", "tv.apple.com", "kick.com", "rumble.com"
+    ]
+
+    static func showsControlsOnlyOnHover(siteHost: String?) -> Bool {
+        guard let siteHost = siteHost?.lowercased(), !siteHost.isEmpty else { return false }
+        return hostsWithHoverOnlyControls.contains { siteHost == $0 || siteHost.hasSuffix("." + $0) }
+    }
+
     static func pageLoad(loadedAttribute: Bool?, loadingProgress: Double?) -> PageLoad {
         if let loadingProgress, loadingProgress < 0.999 { return .loading }
         if let loadedAttribute { return loadedAttribute ? .loaded : .loading }

@@ -1041,7 +1041,11 @@ enum DottieJevDriver {
         var textPieces = requestTextPieces
         // The text a job needs typed, written once in the background while
         // Jev starts (DottieJevTextPieces); picked up as soon as it's ready.
-        var textPieceWriter: Task<[String], Never>?
+        var textPieceWriter: Task<DottieJevTextPieces.Written, Never>?
+        // A form's boxes and values from the same call (DottieFormFillPlan),
+        // and the boxes already typed this round.
+        var formBoxes: [DottieFormFillPlan.FormBox] = []
+        var filledFormBoxLabels = Set<String>()
         if DottieJevTextPieces.jobNeedsTyping(taskText) {
             textPieceWriter = Task { await DottieJevTextPieces.write(forTask: taskText) }
         }
@@ -1357,7 +1361,9 @@ enum DottieJevDriver {
             // name); on the first screen there's usually nothing to type into.
             if let pendingWriter = textPieceWriter,
                stepNumber >= 2 || screenControls.contains(where: { $0.kind == "text box" }) || DottieScreenActionPerformer.isTextFieldFocused {
-                textPieces = DottieJevTextPieces.merged(requestTextPieces, await pendingWriter.value)
+                let written = await pendingWriter.value
+                textPieces = DottieJevTextPieces.merged(requestTextPieces, written.pieces)
+                formBoxes = written.formBoxes
                 textPieceWriter = nil
             }
 
@@ -1465,6 +1471,39 @@ enum DottieJevDriver {
                 }
                 await waitForScreenToSettle(opensSomethingNew: move.opensSomethingNew)
                 continue
+            }
+            // A form whose boxes and values are known: two or more of them on
+            // screen are typed now, one after another, without asking Jev.
+            // Round 1 only: later rounds replay these steps with their own details.
+            if heldMouse == nil, jobMemory.currentRound == 1, pathReplay?.isDone ?? true, !formBoxes.isEmpty {
+                let boxesToFill = DottieFormFillPlan.boxesToFill(formBoxes: formBoxes, screenControls: screenControls,
+                                                                 alreadyFilledLabels: filledFormBoxLabels)
+                if !boxesToFill.isEmpty {
+                    actions.progress(stepNumber, "filling in \(boxesToFill.count) boxes")
+                    DottieLog.notice("📝 Filling \(public: boxesToFill.count) form boxes at once without asking Jev")
+                    var lastFilledMove: DottieJevDriverPlan.Move?
+                    for boxToFill in boxesToFill {
+                        filledFormBoxLabels.insert(DottieAppMemoryPlan.comparableWords(boxToFill.box.label))
+                        let fillMove = DottieJevDriverPlan.Move.typeIntoField(
+                            fieldLabel: boxToFill.control.label, centerX: boxToFill.control.centerX, centerY: boxToFill.control.centerY,
+                            text: boxToFill.box.value, pressesReturn: false
+                        )
+                        let filled = await fillFormBox(boxToFill, screen: screen, stepNumber: stepNumber, actions: actions)
+                        // A password box got selected: Jev takes it from here.
+                        guard filled else { break }
+                        runStats.formBoxesFilled += 1
+                        noteDone(fillMove)
+                        record(fillMove, context: stepContext)
+                        lastFilledMove = fillMove
+                    }
+                    if let lastFilledMove {
+                        lastMove = lastFilledMove
+                        previousScreenThumbnail = screenKey
+                        lastMoveSignature = lastFilledMove.signature
+                        await waitForScreenToSettle(opensSomethingNew: false)
+                        continue
+                    }
+                }
             }
             let alreadyTriedSignatures = (triedSignaturesByScreen[screenKey] ?? [])
                 .union(openedSignaturesThisRound).union(failedSignaturesThisRound)
@@ -1704,7 +1743,7 @@ enum DottieJevDriver {
                    DottieScreenSettle.shouldDropStaleMove(
                        targetRegionChanged: await targetRegionChanged(
                            around: aimedPoint, pickedOn: screen.image,
-                           wakesHoverControls: heldMouse == nil && DottieBrowser.isBrowser(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+                           wakesHoverControls: heldMouse == nil && DottieScreenSettle.showsControlsOnlyOnHover(siteHost: frontSiteHost)
                        ),
                        staleMovesDroppedInARow: staleMovesDroppedInARow
                    ) {
@@ -1906,7 +1945,7 @@ enum DottieJevDriver {
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
         // The controls fade in: give them a moment before the screenshot.
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        try? await Task.sleep(nanoseconds: 80_000_000)
     }
 
     /// Whether the spot a move aims at looks different now from the
@@ -1937,6 +1976,24 @@ enum DottieJevDriver {
             return true
         }
         return didDraw ? pixels : []
+    }
+
+    /// Types one form box: clicks it, replaces whatever it held, types the
+    /// value. False when a password box got selected (nothing is typed).
+    private static func fillFormBox(_ boxToFill: DottieFormFillPlan.BoxToFill, screen: DottieDisplayCapture.Screenshot,
+                                    stepNumber: Int, actions: Actions) async -> Bool {
+        let control = boxToFill.control
+        await actions.click(screen.globalPoint(normalizedX: control.centerX, normalizedY: control.centerY), control.label, 1, false, screen, stepNumber)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        if DottieScreenActionPerformer.isFocusedFieldSecure { return false }
+        // A box that already holds something (an edit form) is replaced, not added to.
+        if let currentValue = DottieScreenActionPerformer.focusedTextFieldValue,
+           !currentValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            DottieScreenActionPerformer.press(keyCombination: "cmd+a")
+        }
+        actions.progress(stepNumber, "typing \(control.label)")
+        await DottieScreenActionPerformer.type(boxToFill.box.value)
+        return true
     }
 
     private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions,
