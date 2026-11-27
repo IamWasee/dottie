@@ -97,8 +97,9 @@ enum DottieAppMemoryPlan {
     static let maximumElementsPerPage = 120
     static let maximumClicksPerPage = 40
     static let maximumMissesPerPage = 30
-    /// A miss older than this is forgotten: the app may have changed.
-    static let missMemorySeconds: TimeInterval = 30 * 24 * 3600
+    /// A miss older than this is forgotten: the app may have changed, and a
+    /// wrongly noted miss mustn't hide a good click for long.
+    static let missMemorySeconds: TimeInterval = 3 * 24 * 3600
     /// Missed this often (and never worked since), a click isn't offered.
     static let missesBeforeStrikingOff = 2
     /// A window covering this much of its display is "in full view", the
@@ -207,6 +208,23 @@ enum DottieAppMemoryPlan {
         return updatedPage
     }
 
+    /// A click option on a text box (field, search box, text area).
+    static func isTextBox(_ option: DottieJevDriverPlan.Option) -> Bool {
+        guard case .clickControl(_, let kind, _, _) = option.move else { return false }
+        let lowercasedKind = kind.lowercased()
+        return ["field", "text", "search", "combo"].contains { lowercasedKind.contains($0) }
+    }
+
+    /// A miss forgiven: the click worked on its page after all.
+    static func page(_ page: DottieAppPage, forgivingMissOf label: String) -> DottieAppPage {
+        guard let misses = page.misses else { return page }
+        let keptMisses = misses.filter { comparableWords($0.label) != comparableWords(label) }
+        guard keptMisses.count != misses.count else { return page }
+        var updatedPage = page
+        updatedPage.misses = keptMisses.isEmpty ? nil : keptMisses
+        return updatedPage
+    }
+
     /// The label a click option clicks, or nil for other moves.
     static func clickedLabel(of option: DottieJevDriverPlan.Option) -> String? {
         switch option.move {
@@ -224,7 +242,8 @@ enum DottieAppMemoryPlan {
         return options.compactMap { option -> DottieJevDriverPlan.Option? in
             guard let clickedLabel = clickedLabel(of: option) else { return option }
             if let miss = recentMisses.first(where: { DottieLooseLabels.similarity($0.label, clickedLabel) >= DottieLooseLabels.sameControlScore }) {
-                if miss.timesMissed >= missesBeforeStrikingOff { return nil }
+                // A text box is never struck off: clicking one barely changes the screen.
+                if miss.timesMissed >= missesBeforeStrikingOff, !isTextBox(option) { return nil }
                 var notedOption = option
                 var note = "Dottie clicked this here before and it did nothing"
                 if let fixLabel = miss.fixLabel { note += "; \"\(fixLabel)\" worked instead" }
@@ -706,6 +725,17 @@ final class DottieAppMemory {
         ))
         save(appFile, bundleIdentifier: bundleIdentifier)
         DottieLog.notice("🧠 Remembered a click that did nothing, so the next job skips it")
+    }
+
+    /// A click that worked on its page after all: its old miss goes.
+    func forgiveMiss(bundleIdentifier: String, pageKey: String, label: String) {
+        guard isEnabled else { return }
+        var appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
+        guard let page = appFile.pages[pageKey], page.misses != nil else { return }
+        let forgivenPage = DottieAppMemoryPlan.page(page, forgivingMissOf: label)
+        guard forgivenPage != page else { return }
+        appFile.pages[pageKey] = forgivenPage
+        save(appFile, bundleIdentifier: bundleIdentifier)
     }
 
     /// The click that worked on a page after the job's misses there.

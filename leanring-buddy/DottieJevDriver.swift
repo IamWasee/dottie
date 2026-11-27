@@ -1224,7 +1224,18 @@ enum DottieJevDriver {
             let screenThumbnail = thumbnail(of: screen.image)
             // Exploring: a move that left the screen as it was is struck
             // off for that screen, so Jev's next best pick gets its turn.
-            let lastMoveChangedNothing = previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? false
+            let screenLooksTheSame = previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? false
+            // Clicking into a text box barely changes the screen (a caret),
+            // but it worked: it isn't struck off, dropped from the recording
+            // or remembered as a miss (the speed review, 28 Nov: round 1
+            // taught memory that its own good field clicks were wrong).
+            let lastMoveWasAClick: Bool
+            switch lastMove {
+            case .some(.click), .some(.clickControl), .some(.doubleClick): lastMoveWasAClick = true
+            default: lastMoveWasAClick = false
+            }
+            let lastClickFocusedATextBox = screenLooksTheSame && lastMoveWasAClick && DottieScreenActionPerformer.isTextFieldFocused
+            let lastMoveChangedNothing = screenLooksTheSame && !lastClickFocusedATextBox
             // A key press can work without changing the screen (copy); any
             // other move that changed nothing isn't a step of the task, and a
             // saved step that changed nothing means the saved way went stale.
@@ -1294,6 +1305,11 @@ enum DottieJevDriver {
                                       fixLabel: clickWaitingForResult.label, missedLabels: missedLabels)
                     missedClickLabelsByPageKey[clickWaitingForResult.pageKey] = nil
                 }
+            }
+            // A click that changed the screen on its own page worked: an old
+            // miss of it is forgiven.
+            if let clickJustMade, !lastMoveChangedNothing, frontPage?.key == clickJustMade.pageKey {
+                appMemory.forgiveMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey, label: clickJustMade.label)
             }
             // A click that changed nothing is remembered on its page, so the
             // next job doesn't make the same mistake.

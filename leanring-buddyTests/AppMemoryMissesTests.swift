@@ -4,8 +4,8 @@
 //
 //  Wrong clicks remembered per page: a click that changed nothing is
 //  noted, the click that worked next is kept as its fix, Jev's options
-//  say so (or drop a click missed twice), a click that works later is
-//  forgiven, old pages still load, and it stays quick.
+//  say so (or drop a click missed twice, never a text box), a click that
+//  works later is forgiven, old pages still load, and it stays quick.
 //
 
 import Foundation
@@ -65,7 +65,7 @@ struct AppMemoryMissesTests {
     }
 
     @Test func oldMissesAreForgotten() {
-        let memoryPage = page(misses: [miss("Add New", times: 3, daysAgo: 40)])
+        let memoryPage = page(misses: [miss("Add New", times: 3, daysAgo: 4)])
         let noted = Plan.optionsNotingMisses([clickOption("o1", "Add New")], on: memoryPage, now: Date())
         #expect(noted.count == 1)
         #expect(noted[0].memoryNote == nil)
@@ -84,6 +84,21 @@ struct AppMemoryMissesTests {
             label: "Add New", centerX: 10, centerY: 10, resultPageKey: "openemr|localhost|patient",
             resultPageTitle: "Patient", timesSeen: 1, lastSeen: Date()))
         #expect(memoryPage.misses?.count == 1)
+    }
+
+    @Test func aTextBoxIsNeverStruckOff() {
+        let memoryPage = page(misses: [miss("First Name", times: 5)])
+        let fieldOption = DottieJevDriverPlan.Option(key: "o1", move: .clickControl(label: "First Name", kind: "text field", centerX: 1, centerY: 1))
+        let noted = Plan.optionsNotingMisses([fieldOption], on: memoryPage, now: Date())
+        #expect(noted.count == 1)
+        #expect(Plan.isTextBox(fieldOption))
+        #expect(!Plan.isTextBox(clickOption("o2", "First Name")))
+    }
+
+    @Test func aMissIsForgivenWhenTheClickWorksOnItsPage() {
+        let memoryPage = Plan.page(page(misses: [miss("Add New"), miss("Save")]), forgivingMissOf: "add new")
+        #expect(memoryPage.misses?.map(\.label) == ["Save"])
+        #expect(Plan.page(page(), forgivingMissOf: "Save").misses == nil)
     }
 
     @Test func theStepModelReadsTheMistakes() {
