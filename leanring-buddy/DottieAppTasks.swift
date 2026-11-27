@@ -898,6 +898,14 @@ final class DottieAppTasks: ObservableObject {
         return watchedTasks.count
     }
 
+    /// Forgets a place: its tasks (those done only there) and its card.
+    func forget(placeKey: String) {
+        tasks = DottieAppNotesPlan.tasksAfterForgetting(tasks, placeKey: placeKey)
+        cardsByPlace.removeValue(forKey: placeKey.lowercased())
+        saveTasks()
+        saveCards()
+    }
+
     func forget(taskID: UUID) {
         tasks.removeAll { $0.id == taskID }
         saveTasks()

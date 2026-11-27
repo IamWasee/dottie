@@ -25,6 +25,8 @@ struct HomeAppTasksAdminSection: View {
     @State private var newPlaceName = ""
     @State private var newPlaceNotes = ""
     @State private var newPlaceProblem = ""
+    /// The app or site waiting for the user to confirm Forget.
+    @State private var placeToForget: DottieKnownPlace?
 
     private var knownPlaces: [DottieKnownPlace] {
         DottieAppNotesPlan.knownPlaces(tasks: appTasks.tasks, howTos: watchAndLearn.howTos, memoryPlaces: memoryPlaces,
@@ -90,6 +92,26 @@ struct HomeAppTasksAdminSection: View {
             }
         }
         .onAppear { memoryPlaces = DottieAppMemory.shared.knownPlacesForAdmin() }
+        .confirmationDialog(
+            "Forget everything Dottie learned about \(placeToForget?.appName ?? "this")?",
+            isPresented: Binding(get: { placeToForget != nil }, set: { if !$0 { placeToForget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Forget", role: .destructive) {
+                if let place = placeToForget { forget(place) }
+                placeToForget = nil
+            }
+            Button("Cancel", role: .cancel) { placeToForget = nil }
+        } message: {
+            Text("Its remembered pages, tasks, how it works, watched how-tos and your notes are removed. Dottie learns it again only if she uses it or you teach her.")
+        }
+    }
+
+    private func forget(_ place: DottieKnownPlace) {
+        appNotes.forgetEverything(aboutPlace: place.placeKey)
+        expandedPlaceKeys.remove(place.placeKey)
+        draftNotesByPlace[place.placeKey] = nil
+        memoryPlaces = DottieAppMemory.shared.knownPlacesForAdmin()
     }
 
     private func teachNewPlace() {
@@ -216,6 +238,12 @@ struct HomeAppTasksAdminSection: View {
             .disabled(isTeaching || (draftNotesByPlace[place.placeKey] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .pointerCursor()
             if let status = appNotes.statusByPlace[place.placeKey] { hintText(status) }
+            Spacer(minLength: 8)
+            Button("Forget \(place.appName)") {
+                placeToForget = place
+            }
+            .buttonStyle(DSSecondaryButtonStyle(isFullWidth: false))
+            .pointerCursor()
         }
     }
 

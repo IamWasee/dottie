@@ -606,6 +606,29 @@ final class DottieAppMemory {
         return places
     }
 
+    /// Forgets one app's or site's remembered pages in every app (a site can
+    /// be seen in several browsers), and an app's own flows.
+    func forget(placeKey: String) {
+        let appFolderURLs = (try? FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        for appFolderURL in appFolderURLs where (try? appFolderURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let bundleIdentifier = appFolderURL.lastPathComponent
+            if FileManager.default.fileExists(atPath: fileURL(bundleIdentifier).path) {
+                var appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
+                let keptPages = DottieAppNotesPlan.pagesAfterForgetting(appFile.pages, bundleIdentifier: bundleIdentifier, placeKey: placeKey)
+                if keptPages.count != appFile.pages.count {
+                    appFile.pages = keptPages
+                    save(appFile, bundleIdentifier: bundleIdentifier)
+                }
+            }
+            if bundleIdentifier.lowercased() == placeKey.lowercased() {
+                flowsByBundleIdentifier[bundleIdentifier] = []
+                if let emptyFlowsData = try? JSONEncoder().encode([DottieAppFlow]()) {
+                    _ = DottieFileSaver.save(emptyFlowsData, to: appFolderURL.appendingPathComponent("flows.json"))
+                }
+            }
+        }
+    }
+
     func cardMaterial(bundleIdentifier: String, siteHost: String?) -> [String] {
         let appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
         return DottieAppMemoryPlan.cardLines(pages: Array(appFile.pages.values), siteHost: siteHost)

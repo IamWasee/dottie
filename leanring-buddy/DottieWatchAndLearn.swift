@@ -434,6 +434,14 @@ final class DottieWatchAndLearn: ObservableObject {
             .joined(separator: "\n\n")
     }
 
+    /// Forgets the how-tos watched only in one place (Home → Admin's Forget).
+    func forget(placeKey: String) {
+        let keptHowTos = DottieAppNotesPlan.howTosAfterForgetting(howTos, placeKey: placeKey)
+        guard keptHowTos != howTos else { return }
+        howTos = keptHowTos
+        save()
+    }
+
     func forget(named spokenName: String) -> Bool {
         let wantedName = spokenName.lowercased()
         guard let howTo = howTos.first(where: { $0.name.lowercased().contains(wantedName) || wantedName.contains($0.name.lowercased()) }) else { return false }
