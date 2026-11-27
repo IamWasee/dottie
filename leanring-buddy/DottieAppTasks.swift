@@ -96,6 +96,9 @@ struct DottieAppTask: Codable, Equatable, Identifiable {
     /// The user showed it while Dottie watched (watch me): worth one try
     /// from memory before it has worked in a job.
     var learnedByWatching: Bool? = nil
+    /// The user explained it in words in Home → Admin (DottieAppNotes): its
+    /// steps are tips until a job records real ones.
+    var learnedFromNotes: Bool? = nil
 }
 
 /// A short card on how one app or site works.
@@ -644,8 +647,10 @@ enum DottieAppTaskPlan {
 
     /// What Dottie knows about a task, for Jev, its advisor and the step model.
     static func knowledgeText(for task: DottieAppTask) -> String {
-        var lines = ["Dottie has done this task in \(task.appName) before: \"\(task.name)\""
-            + (task.purpose.isEmpty ? "" : " (\(task.purpose))") + ". It worked \(task.timesSucceeded) of \(task.timesRun) times."]
+        let purposeText = task.purpose.isEmpty ? "" : " (\(task.purpose))"
+        var lines = [task.learnedFromNotes == true && task.timesRun == 0
+            ? "The user explained how to do this task in \(task.appName): \"\(task.name)\"\(purposeText)."
+            : "Dottie has done this task in \(task.appName) before: \"\(task.name)\"\(purposeText). It worked \(task.timesSucceeded) of \(task.timesRun) times."]
         if !task.steps.isEmpty {
             let shownSteps = task.steps.prefix(15).enumerated().map { "\($0.offset + 1). \(stepLine($0.element))" }
             lines.append("Her steps last time: " + shownSteps.joined(separator: "; "))
@@ -743,7 +748,7 @@ enum DottieAppTaskPlan {
     }
 
     /// The card call's prompt, from app memory's pages and the known tasks.
-    static func cardPrompt(appName: String, memoryLines: [String], tasks: [DottieAppTask]) -> String {
+    static func cardPrompt(appName: String, memoryLines: [String], tasks: [DottieAppTask], userNotes: String = "") -> String {
         let taskLines = tasks.prefix(15).map { task in
             "- \(task.name)" + (task.purpose.isEmpty ? "" : ": \(task.purpose)") + " (steps: "
                 + task.steps.prefix(6).map(stepLine).joined(separator: ", ") + ")"
@@ -756,7 +761,7 @@ enum DottieAppTaskPlan {
         \(memoryLines.prefix(25).joined(separator: "\n"))
         Tasks Dottie knows there:
         \(taskLines.joined(separator: "\n"))
-        """
+        """ + (userNotes.isEmpty ? "" : "\n\(userNotes)\nKeep what the user said: it's the most reliable part.")
     }
 
     static func cardKnowledgeText(_ card: DottieAppCard) -> String {
@@ -835,7 +840,10 @@ final class DottieAppTasks: ObservableObject {
         if startedFromDottie { placeKeys.formUnion(tasks.flatMap(\.places)) }
         let task = DottieAppTaskPlan.bestTask(forRequest: taskText, placeKeys: placeKeys, among: tasks)
         let cardPlaceKey = task?.places.first(where: { placeKeys.contains($0) }) ?? task?.places.first ?? frontPlaceKey
-        let cardText = cardPlaceKey.flatMap { cardsByPlace[$0] }.map(DottieAppTaskPlan.cardKnowledgeText) ?? ""
+        let savedCardText = cardPlaceKey.flatMap { cardsByPlace[$0] }.map(DottieAppTaskPlan.cardKnowledgeText) ?? ""
+        // What the user typed about the place in Home → Admin goes with the card.
+        let userNotesText = cardPlaceKey.map { DottieAppNotes.shared.knowledgeText(forPlace: $0) } ?? ""
+        let cardText = [savedCardText, userNotesText].filter { !$0.isEmpty }.joined(separator: "\n")
         if task != nil {
             DottieLog.notice("🗂️ This screen job is a task Dottie has done before")
         }
@@ -938,7 +946,8 @@ final class DottieAppTasks: ObservableObject {
         let memoryLines = cardPlace.bundleIdentifier.map {
             DottieAppMemory.shared.cardMaterial(bundleIdentifier: $0, siteHost: cardPlace.siteHost)
         } ?? []
-        let prompt = DottieAppTaskPlan.cardPrompt(appName: cardPlace.appName, memoryLines: memoryLines, tasks: placeTasks)
+        let prompt = DottieAppTaskPlan.cardPrompt(appName: cardPlace.appName, memoryLines: memoryLines, tasks: placeTasks,
+                                                  userNotes: DottieAppNotes.shared.knowledgeText(forPlace: cardPlace.placeKey))
         let taskCount = placeTasks.count
         Task { [weak self] in
             let answerText = await DottieChat.send(DottieAppTasks.textRequestBody(prompt: prompt, maximumOutputTokens: 260), timeout: 30)
@@ -958,6 +967,25 @@ final class DottieAppTasks: ObservableObject {
     /// The card for a place, for Home → Admin.
     func card(forPlace placeKey: String) -> DottieAppCard? {
         cardsByPlace[placeKey]
+    }
+
+    /// The places that have a card, for Home → Admin.
+    var cardPlaceKeys: Set<String> { Set(cardsByPlace.keys) }
+
+    /// The user taught Dottie about a place in Home → Admin: the model's card
+    /// replaces the old one and the tasks it named are kept. Kept even with
+    /// app memory off, since the user asked for it.
+    func noteTaught(placeKey: String, appName: String, card cardText: String, tasks taughtTasks: [DottieAppTask]) {
+        if !taughtTasks.isEmpty {
+            tasks = DottieAppNotesPlan.tasksAfterTeaching(tasks, adding: taughtTasks)
+            saveTasks()
+        }
+        if !cardText.isEmpty {
+            cardsByPlace[placeKey] = DottieAppCard(appName: appName, text: cardText, madeAt: Date(),
+                                                   taskCountWhenMade: tasks.filter { $0.places.contains(placeKey) }.count)
+            saveCards()
+        }
+        objectWillChange.send()
     }
 
     /// A text-only ask; the Worker sends it to the cheap text model first.
