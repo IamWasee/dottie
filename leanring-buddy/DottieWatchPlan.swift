@@ -232,20 +232,29 @@ enum DottieWatchPlan {
     /// text cursor doesn't.
     static func isSameScreen(_ first: [UInt8], _ second: [UInt8], width: Int = DottieWatchPlan.fingerprintWidth) -> Bool {
         guard first.count == second.count, width > 0, !first.isEmpty else { return false }
-        let changedPixels = zip(first, second).map { abs(Int($0) - Int($1)) > 12 }
-        if changedPixels.filter({ $0 }).count >= max(1, first.count / 200) { return false }
-        let height = first.count / width
-        let blockSize = 8
-        for blockTop in stride(from: 0, to: height, by: blockSize) {
-            for blockLeft in stride(from: 0, to: width, by: blockSize) {
-                var changedInBlock = 0
-                for row in blockTop..<min(blockTop + blockSize, height) {
-                    for column in blockLeft..<min(blockLeft + blockSize, width) where changedPixels[row * width + column] {
-                        changedInBlock += 1
-                    }
+        // One plain pass that keeps only the changed pixels: this runs on
+        // every frame, and closures over all 5,760 pixels were slow.
+        var changedPixelIndices: [Int] = []
+        first.withUnsafeBufferPointer { firstPixels in
+            second.withUnsafeBufferPointer { secondPixels in
+                for pixelIndex in 0..<firstPixels.count {
+                    let difference = Int(firstPixels[pixelIndex]) - Int(secondPixels[pixelIndex])
+                    if difference > 12 || difference < -12 { changedPixelIndices.append(pixelIndex) }
                 }
-                if changedInBlock >= 6 { return false }
             }
+        }
+        if changedPixelIndices.count >= max(1, first.count / 200) { return false }
+        let changedPixelsForABlock = 6
+        // Fewer changed pixels than one block needs can't fill any block.
+        if changedPixelIndices.count < changedPixelsForABlock { return true }
+        let blockSize = 8
+        let blocksAcross = (width + blockSize - 1) / blockSize
+        var changedPixelsPerBlock: [Int: Int] = [:]
+        for pixelIndex in changedPixelIndices {
+            let blockIndex = (pixelIndex / width / blockSize) * blocksAcross + (pixelIndex % width) / blockSize
+            let changedInBlock = changedPixelsPerBlock[blockIndex, default: 0] + 1
+            if changedInBlock >= changedPixelsForABlock { return false }
+            changedPixelsPerBlock[blockIndex] = changedInBlock
         }
         return true
     }

@@ -145,6 +145,16 @@ struct WatchMeTests {
         var cursorBlink = blank
         cursorBlink[12 * width + 40] = 200
         #expect(Plan.isSameScreen(blank, cursorBlink))
+        // Eight specks in eight different blocks: more than a block needs, none filling one.
+        var scatteredSpecks = blank
+        for speckNumber in 0..<8 { scatteredSpecks[(speckNumber * 8 + 2) * width + speckNumber * 9] = 200 }
+        #expect(Plan.isSameScreen(blank, scatteredSpecks))
+        // Five changed pixels in one block stay one short of a change; the sixth makes it.
+        var almostABlock = blank
+        for column in 0..<5 { almostABlock[3 * width + column] = 200 }
+        #expect(Plan.isSameScreen(blank, almostABlock))
+        almostABlock[4 * width + 0] = 200
+        #expect(!Plan.isSameScreen(blank, almostABlock))
         #expect(!Plan.isSameScreen(blank, [UInt8](repeating: 220, count: width * height)))
         #expect(!Plan.isSameScreen(blank, [1, 2, 3]))
     }
