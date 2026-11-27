@@ -93,6 +93,9 @@ struct DottieAppTask: Codable, Equatable, Identifiable {
     var lastUsed: Date
     /// False until the naming call answered (the name is the request's start).
     var isNamed: Bool
+    /// The user showed it while Dottie watched (watch me): worth one try
+    /// from memory before it has worked in a job.
+    var learnedByWatching: Bool? = nil
 }
 
 /// A short card on how one app or site works.
@@ -374,7 +377,26 @@ enum DottieAppTaskPlan {
         guard let recordedText = step.text, !recordedText.isEmpty else { return step.text }
         guard step.textCameFromRequest else { return recordedText }
         if let slotText = slotValue(oldRequest: oldRequest, oldText: recordedText, newRequest: newRequest) { return slotText }
+        if let sameSpotText = sameSpotWords(oldRequest: oldRequest, oldText: recordedText, newRequest: newRequest) { return sameSpotText }
         return textCameFromRequest(recordedText, requestText: newRequest) ? recordedText : nil
+    }
+
+    /// The new request's words in the same places as `oldText`'s words in
+    /// the old one, when both have as many words and at least half of them
+    /// match. A watched "add a patient named Jane Doe" typed "Jane" and
+    /// "Doe" into two boxes; "add a patient named John Smith" types "John"
+    /// and "Smith" there (slotValue only handles one gap).
+    static func sameSpotWords(oldRequest: String, oldText: String, newRequest: String) -> String? {
+        let oldWords = tidiedRequest(oldRequest).split(separator: " ").map { $0.lowercased() }
+        let newWords = tidiedRequest(newRequest).split(separator: " ").map(String.init)
+        let textWords = tidiedRequest(oldText).split(separator: " ").map { $0.lowercased() }
+        guard !textWords.isEmpty, oldWords.count == newWords.count, oldWords.count >= textWords.count else { return nil }
+        let matchingWordCount = zip(oldWords, newWords).filter { $0 == $1.lowercased() }.count
+        guard matchingWordCount * 2 >= oldWords.count else { return nil }
+        for start in 0...(oldWords.count - textWords.count) where Array(oldWords[start..<(start + textWords.count)]) == textWords {
+            return newWords[start..<(start + textWords.count)].joined(separator: " ")
+        }
+        return nil
     }
 
     /// The part of the new request that sits where `oldText` sat in the old
@@ -430,7 +452,10 @@ enum DottieAppTaskPlan {
     /// Whether the task's steps are worth doing again: they worked at
     /// least once and haven't failed most of the time lately.
     static func isWorthReplaying(_ task: DottieAppTask) -> Bool {
-        guard !task.steps.isEmpty, task.timesSucceeded >= 1 else { return false }
+        guard !task.steps.isEmpty else { return false }
+        // Shown by the user while Dottie watched: tried once before it has worked.
+        if task.learnedByWatching == true && task.timesRun == 0 { return true }
+        guard task.timesSucceeded >= 1 else { return false }
         if task.timesRun >= 3 && Double(task.timesSucceeded) / Double(task.timesRun) < 0.5 { return false }
         return true
     }
@@ -733,7 +758,7 @@ final class DottieAppTasks: ObservableObject {
     }
 
     /// Named tasks follow app memory's own switch (on unless turned off);
-    /// they come from Dottie's own finished jobs, not from watching.
+    /// they come from Dottie's own finished jobs and from watch me.
     var isOn: Bool { DottieAppMemory.shared.isSwitchedOn }
 
     /// The task and card for a job, looked up once as it starts.
@@ -781,6 +806,17 @@ final class DottieAppTasks: ObservableObject {
     func noteJevHandedOver(request: String, replayedTaskID: UUID, problem: DottieAppTaskProblem?) {
         guard isOn, let task = tasks.first(where: { $0.id == replayedTaskID }) else { return }
         keep(DottieAppTaskPlan.taskAfterFailure(task, request: request, problem: problem, now: Date()))
+    }
+
+    /// Tasks the user showed while Dottie watched (watch me), already
+    /// named by the watcher. Returns how many were kept.
+    @discardableResult
+    func noteWatchedTasks(_ watchedTasks: [DottieAppTask]) -> Int {
+        guard isOn, !watchedTasks.isEmpty else { return 0 }
+        tasks = DottieWatchPlan.tasksAfterWatching(tasks, adding: watchedTasks)
+        saveTasks()
+        DottieLog.notice("🗂️ Kept \(public: watchedTasks.count) task(s) the user showed Dottie")
+        return watchedTasks.count
     }
 
     func forget(taskID: UUID) {

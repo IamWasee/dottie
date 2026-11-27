@@ -994,8 +994,10 @@ enum DottieJevDriver {
         var pathReplay = taskToReplay.map { DottieAppTaskPathReplay(task: $0) }
         var pathProblem: DottieAppTaskProblem?
         var lastMoveCameFromSavedTask = false
+        // The task's own notes go first, so the cut at 4,500 characters
+        // drops the general lessons rather than them (the watch me review).
         if usesAppMemory, !startKnowledge.taskText.isEmpty {
-            knownHowTo += "\n" + startKnowledge.taskText
+            knownHowTo = startKnowledge.taskText + "\n" + knownHowTo
         }
         // Every move that changed the screen, kept as a named task when Jev finishes.
         var recording = DottieAppTaskRecording()

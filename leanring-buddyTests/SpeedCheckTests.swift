@@ -357,4 +357,25 @@ struct SpeedCheckTests {
         }
         #expect(median < 50, "20 steps of hover moves and glides took \(median) ms")
     }
+
+    /// Watch me compares every frame with the last (every 2 s) and cuts a
+    /// long tour into parts once, both on the Mac.
+    @Test func watchMeFrameChecksAndTourPartsStayQuick() {
+        let pixelCount = DottieWatchPlan.fingerprintWidth * DottieWatchPlan.fingerprintHeight
+        let firstFrame = (0..<pixelCount).map { UInt8($0 % 200) }
+        var secondFrame = firstFrame
+        secondFrame[pixelCount / 2] = 255
+        let actions = (0..<1000).map { index in
+            DottieWatchedAction(kind: index % 12 == 0 ? .narration : .click, label: "Item \(index)", text: "note",
+                                pageTitle: "Page \(index / 40)", placeKey: "localhost", secondsIntoWatch: Double(index))
+        }
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                _ = DottieWatchPlan.isSameScreen(firstFrame, secondFrame)
+            }
+            _ = DottieWatchPlan.tourParts(of: actions)
+            _ = DottieWatchPlan.steps(from: actions, exampleRequest: "add a patient named Jane Doe")
+        }
+        #expect(median < 60, "20 frame checks and a 1,000-action tour took \(median) ms")
+    }
 }

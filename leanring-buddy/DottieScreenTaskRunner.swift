@@ -330,10 +330,11 @@ final class DottieScreenTaskRunner {
             }
         }
         // What the user showed Dottie about this kind of job (watch and
-        // learn) helps both the guess and the screenshot steps.
-        let watchedHowTo = DottieWatchAndLearn.shared.howToText(forTask: taskText, appName: jobContext.appName)
+        // learn) helps both the guess and the screenshot steps. It goes
+        // first, before the general lessons, so Jev's cut never drops it.
+        let watchedHowTo = DottieWatchAndLearn.shared.howToText(forTask: taskText, context: jobContext)
         if !watchedHowTo.isEmpty {
-            lessonsText += "\n" + watchedHowTo
+            lessonsText = watchedHowTo + "\n" + lessonsText
         }
         // Guess first: most apps are laid out the way everyone knows, so
         // the steps are tried by name (menus, shortcuts, controls) before

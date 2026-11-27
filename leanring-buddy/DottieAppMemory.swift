@@ -325,8 +325,8 @@ final class DottieAppMemory {
     /// The front window as a page, or nil when Dottie shouldn't look. A
     /// screen job passes the step's own read of the front app (`context`),
     /// so a browser's window isn't walked again for its address.
-    private func frontPage(context givenContext: DottieReplayContext? = nil) -> FrontPage? {
-        guard isEnabled, AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
+    private func frontPage(context givenContext: DottieReplayContext? = nil, whileWatched: Bool = false) -> FrontPage? {
+        guard whileWatched ? isSwitchedOn : isEnabled, AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
               let frontApplication = NSWorkspace.shared.frontmostApplication,
               let bundleIdentifier = frontApplication.bundleIdentifier,
               bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
@@ -544,6 +544,13 @@ final class DottieAppMemory {
     /// times a step, the app memory review found).
     func frontPageForScreenJob(context: DottieReplayContext) -> FrontPage? {
         frontPage(context: context)
+    }
+
+    /// The front window as a page while the user shows Dottie something
+    /// (watch me): app memory's own switch is enough then, since the user
+    /// asked her to watch (Wasee, 27 Nov: it should be on while watching).
+    func frontPageWhileWatched(context: DottieReplayContext) -> FrontPage? {
+        frontPage(context: context, whileWatched: true)
     }
 
     /// What Dottie remembers about a page, when she's seen it.
