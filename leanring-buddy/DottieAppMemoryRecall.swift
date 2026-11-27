@@ -112,6 +112,10 @@ enum DottieAppMemoryRecallPlan {
                     "\"\($0.label)\" at (\(Int($0.centerX.rounded())), \(Int($0.centerY.rounded()))) → \"\($0.resultPageTitle)\""
                 }.joined(separator: "; "))
             }
+            let missLines = DottieAppMemoryPlan.missLines(on: page, now: Date())
+            if !missLines.isEmpty {
+                pageLines.append("Mistakes here before: " + missLines.joined(separator: " "))
+            }
             let controls = page.controls ?? []
             if !controls.isEmpty {
                 pageLines.append("Controls: " + controls.prefix(40).map {

@@ -463,8 +463,17 @@ final class DottieScreenTaskRunner {
             if didActSinceLastLook,
                let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
                 screenNote += "\nThe screen looks exactly the same as before your last action, so it probably didn't work (or it was already done). Don't repeat it: look at what's really on screen and try a different way, like pressing return, clicking a different spot or result, closing a popup, scrolling, or waiting."
-                // Clicks that changed nothing aren't part of the replay.
+                // Clicks that changed nothing aren't part of the replay, and
+                // are remembered on their page so the next job skips them.
+                let frontPageNow = DottieAppMemory.shared.frontPageForScreenJob(context: DottieReplayContext.current())
                 for index in unconfirmedStepIndices.sorted(by: >) where index < recordedSteps.count {
+                    let missedStep = recordedSteps[index]
+                    if let frontPageNow, missedStep.action == "click",
+                       let missedLabel = [missedStep.target?.title, missedStep.target?.nearbyText, missedStep.target?.descriptionText, missedStep.target?.label]
+                           .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }) {
+                        DottieAppMemory.shared.noteMiss(bundleIdentifier: frontPageNow.bundleIdentifier, pageKey: frontPageNow.key,
+                                                        label: missedLabel, centerX: 0, centerY: 0)
+                    }
                     recordedSteps.remove(at: index)
                 }
                 escalateModelIfSimple()

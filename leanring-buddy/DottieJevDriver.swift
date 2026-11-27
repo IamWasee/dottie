@@ -1052,6 +1052,9 @@ enum DottieJevDriver {
         // App memory: the click this job made last, waiting to see which
         // page it opened, and the labels clicked so far (never twice from memory).
         var clickWaitingForResult: (bundleIdentifier: String, pageKey: String, label: String, centerX: Double, centerY: Double)?
+        /// This job's clicks that changed nothing or didn't work, per page,
+        /// waiting for the click that works there (the fix).
+        var missedClickLabelsByPageKey: [String: [String]] = [:]
         var labelsClickedFromMemory = Set<String>()
         // Every move, and which round of a repeated job this is.
         var jobMemory = DottieJobMemory(taskText: taskText)
@@ -1279,11 +1282,25 @@ enum DottieJevDriver {
             // window for its address each time (the app memory review).
             let stepContext = DottieReplayContext.current()
             let frontPage = appMemory.frontPageForScreenJob(context: stepContext)
+            let clickJustMade = clickWaitingForResult
             if let clickWaitingForResult, let frontPage,
                frontPage.key != clickWaitingForResult.pageKey {
                 appMemory.noteClick(bundleIdentifier: clickWaitingForResult.bundleIdentifier, fromPageKey: clickWaitingForResult.pageKey,
                                     centerX: clickWaitingForResult.centerX, centerY: clickWaitingForResult.centerY,
                                     label: clickWaitingForResult.label, toPageKey: frontPage.key, toPageTitle: frontPage.title)
+                // It led on after wrong clicks on that page: the fix is kept with them.
+                if let missedLabels = missedClickLabelsByPageKey[clickWaitingForResult.pageKey], !missedLabels.isEmpty {
+                    appMemory.noteFix(bundleIdentifier: clickWaitingForResult.bundleIdentifier, pageKey: clickWaitingForResult.pageKey,
+                                      fixLabel: clickWaitingForResult.label, missedLabels: missedLabels)
+                    missedClickLabelsByPageKey[clickWaitingForResult.pageKey] = nil
+                }
+            }
+            // A click that changed nothing is remembered on its page, so the
+            // next job doesn't make the same mistake.
+            if let clickJustMade, lastMoveChangedNothing, (frontPage?.key ?? clickJustMade.pageKey) == clickJustMade.pageKey {
+                appMemory.noteMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey,
+                                   label: clickJustMade.label, centerX: clickJustMade.centerX, centerY: clickJustMade.centerY)
+                missedClickLabelsByPageKey[clickJustMade.pageKey, default: []].append(clickJustMade.label)
             }
             clickWaitingForResult = nil
             let screenControls = readControls(onDisplay: screen.displayFrame)
@@ -1411,7 +1428,11 @@ enum DottieJevDriver {
                 isBrowserInFront: DottieBrowser.isBrowser(bundleIdentifier: frontAppBundleIdentifier),
                 frontAppBundleIdentifier: frontAppBundleIdentifier
             )
-            let options = knownPage.map { DottieAppMemoryPlan.optionsNotingRememberedClicks(builtOptions, on: $0) } ?? builtOptions
+            // Remembered clicks say what they opened; past misses are struck
+            // off or say what worked instead.
+            let options = knownPage.map {
+                DottieAppMemoryPlan.optionsNotingMisses(DottieAppMemoryPlan.optionsNotingRememberedClicks(builtOptions, on: $0), on: $0, now: Date())
+            } ?? builtOptions
             // The advisor steps in before Jev only when this step needs it: the
             // job is stuck, the user just said something, a time shows on
             // screen, or a moment the advisor's brief named is here.
@@ -1502,6 +1523,13 @@ enum DottieJevDriver {
                     if DottieJevDriverPlan.lastMoveFailed(answer, screenChangedAfterMove: !lastMoveChangedNothing) {
                         failedStepChecksInARow += 1
                         failedSignaturesThisRound.insert(checkedMove.signature)
+                        // A click that changed the screen but didn't work, on
+                        // the same page, is a miss to remember too.
+                        if let clickJustMade, !lastMoveChangedNothing, frontPage?.key == clickJustMade.pageKey {
+                            appMemory.noteMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey,
+                                               label: clickJustMade.label, centerX: clickJustMade.centerX, centerY: clickJustMade.centerY)
+                            missedClickLabelsByPageKey[clickJustMade.pageKey, default: []].append(clickJustMade.label)
+                        }
                         openedSignaturesThisRound.remove(checkedMove.signature)
                         if lastRecordedMoveSignature == checkedMove.signature {
                             recording.dropLastStep()
