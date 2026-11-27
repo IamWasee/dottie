@@ -185,6 +185,14 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
     }
 
+    /// Escape stops everything only when the user pressed it. A screen job
+    /// presses Escape itself (to close a date picker or a menu), and on the
+    /// OpenEMR demo (27 Nov) that key stopped the job it came from. Keys
+    /// Dottie posts carry her own process id; the keyboard's carry 0.
+    static func isEscapeFromTheUser(sourceProcessID: Int64, ownProcessID: Int64) -> Bool {
+        sourceProcessID != ownProcessID
+    }
+
     private func handleGlobalEventTap(
         eventType: CGEventType,
         event: CGEvent
@@ -198,7 +206,9 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
 
         let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
 
-        if eventType == .keyDown && eventKeyCode == Self.escapeKeyCode {
+        if eventType == .keyDown && eventKeyCode == Self.escapeKeyCode,
+           Self.isEscapeFromTheUser(sourceProcessID: event.getIntegerValueField(.eventSourceUnixProcessID),
+                                    ownProcessID: Int64(ProcessInfo.processInfo.processIdentifier)) {
             escapeKeyPressedPublisher.send(())
         }
 
