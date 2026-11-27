@@ -179,7 +179,7 @@ enum DottieJevAdvisorPlan {
         return """
         You advise Jev on one step of a job on a Mac screen. Jev picks moves but can't judge, reason or wait.
         The job: \(taskText)\(appKnowledgeLines(appKnowledge))
-        Why you're asked: \(trigger.reasonText)
+        Why you're asked: \(trigger.reasonText)\(stuckLine(for: trigger))
         \(jobStateText)
         Text on the screen now, top to bottom, (x,y) from 0 to 100:
         \(shownLines.joined(separator: "\n"))
@@ -193,6 +193,18 @@ enum DottieJevAdvisorPlan {
         {"do":"done"} when the moves so far and the screen show every part of the job is already done;
         {"do":"none"} when you can't help.
         """
+    }
+
+    /// When Jev is stuck, a note doesn't move it: on the OpenEMR demo (27
+    /// Nov) the advisor wrote "find and click the new patient form" and Jev,
+    /// still unsure, handed the job over. A stuck job needs a move.
+    static func stuckLine(for trigger: Trigger) -> String {
+        switch trigger {
+        case .jevUnsure, .moveFailed:
+            return "\nJev is stuck and can't act on a note: answer with pick or click (name the exact thing to click), or done or wait."
+        case .checkpoint, .userHint, .timeShown:
+            return ""
+        }
     }
 
     static func advice(fromAnswer answerText: String, optionCount: Int) -> Advice? {

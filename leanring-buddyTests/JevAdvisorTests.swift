@@ -405,6 +405,15 @@ struct JevAdvisorAlongsideTests {
         #expect(prompt.contains("right of DOB"))
     }
 
+    @Test func aStuckJevGetsAMoveNotANote() {
+        let stuckPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .jevUnsure, screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(stuckPrompt.contains("can't act on a note"))
+        let failedPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .moveFailed, screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(failedPrompt.contains("can't act on a note"))
+        let hintPrompt = Advisor.advicePrompt(taskText: "add a patient", trigger: .userHint("use the menu"), screenLines: [], optionDescriptions: [], jobStateText: "")
+        #expect(!hintPrompt.contains("can't act on a note"))
+    }
+
     @Test func aSpotPointedAtWhileJevWentOnCountsOnlyOnTheSameScreen() {
         let pointed = DottieJevAdvisorSession.Help.clickThing(description: "the box right of DOB", typeText: "1990-05-12")
         #expect(Advisor.use(of: pointed, askedOnSameScreen: true, currentOptions: []) == .clickThing(description: "the box right of DOB", typeText: "1990-05-12"))
