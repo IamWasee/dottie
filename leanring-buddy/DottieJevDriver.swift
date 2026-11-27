@@ -989,6 +989,12 @@ enum DottieJevDriver {
     /// What the last run did (moves, Jev and advisor calls, steps done from
     /// memory), for the screen job's report.
     private(set) static var lastRunStats = DottieJevRunStats()
+    /// What the last run did, for keeping the job as a task when Claude
+    /// finishes it after Jev handed over: the moves Jev recorded (round 1),
+    /// the saved task's problem, and whether Jev already kept the task.
+    private(set) static var lastRecording = DottieAppTaskRecording()
+    private(set) static var lastPathProblem: DottieAppTaskProblem?
+    private(set) static var lastRunKeptItsTask = false
 
     static func run(
         taskText: String, knownHowTo givenHowTo: String,
@@ -1011,6 +1017,8 @@ enum DottieJevDriver {
         // Every move that changed the screen, kept as a named task when Jev finishes.
         var recording = DottieAppTaskRecording()
         var lastRecordedMoveSignature: String?
+        // Kept once per job: after round 1 of a repeated job, or at the finish.
+        var taskWasKept = false
         var runStats = DottieJevRunStats(savedTaskSteps: taskToReplay?.steps.count ?? 0)
         let requestTextPieces = DottieJevDriverPlan.textPieces(from: taskText)
         var textPieces = requestTextPieces
@@ -1073,6 +1081,9 @@ enum DottieJevDriver {
             // The brief, and every advice call this job made.
             runStats.advisorCalls = 1 + DottieJevAdvisorPlan.adviceCallBudget(rounds: jobMemory.totalRounds) - advisor.adviceCallsLeft
             lastRunStats = runStats
+            lastRecording = recording
+            lastPathProblem = pathProblem
+            lastRunKeptItsTask = taskWasKept
         }
 
         func handOver(_ reason: String, jevPartWorked: Bool = false) -> Outcome {
@@ -1115,8 +1126,10 @@ enum DottieJevDriver {
 
         /// Jev finished: the job is kept as a named task (or counted on its saved one).
         func keepFinishedTask() {
+            guard !taskWasKept else { return }
+            taskWasKept = true
             recording.finalPageTitle = DottieReplayContext.current().windowTitle
-            DottieAppTasks.shared.noteJevFinished(request: taskText, matchedTaskID: startKnowledge.task?.id,
+            DottieAppTasks.shared.noteJobFinished(request: taskText, matchedTaskID: startKnowledge.task?.id,
                                                   recording: recording, pathProblem: pathProblem)
         }
 
@@ -1540,6 +1553,9 @@ enum DottieJevDriver {
                 // this one left: nothing is struck off from the last round.
                 DottieMouseHold.releaseNow(reason: "a round ended")
                 heldMouse = nil
+                // Round 1 worked: it's the task's recipe, kept now so a
+                // long job that stops later still teaches Dottie the task.
+                if jobMemory.currentRound == 1 { keepFinishedTask() }
                 jobMemory.finishRound()
                 advisor.startRound()
                 triedSignaturesByScreen = [:]

@@ -362,6 +362,11 @@ final class DottieScreenTaskRunner {
                 break
             }
         }
+        // What Jev recorded before handing over, so a job Claude finishes
+        // is kept as a named task with Jev's moves and its own.
+        var jevRecording = DottieAppTaskRecording()
+        var jevPathProblem: DottieAppTaskProblem?
+        var taskKeptThisJob = false
         // Jev drives: every step it picks the next move from everything
         // Dottie could do now (screen texts, the request's words, sites,
         // apps). The step model below only carries on where Jev got unsure.
@@ -385,6 +390,9 @@ final class DottieScreenTaskRunner {
             let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, startKnowledge: startKnowledge,
                                                        usesAppMemory: usesAppMemory, actions: jevActions)
             jobReport.addJevRun(DottieJevDriver.lastRunStats)
+            jevRecording = DottieJevDriver.lastRecording
+            jevPathProblem = DottieJevDriver.lastPathProblem
+            taskKeptThisJob = DottieJevDriver.lastRunKeptItsTask
             if Task.isCancelled { return .stopped }
             switch jevOutcome {
             case .finished(let stepCount):
@@ -569,6 +577,12 @@ final class DottieScreenTaskRunner {
                 // fresh, so doing the same clicks again isn't "repeating".
                 if functionName == "round_done" {
                     if jobMemory.finishRound() {
+                        // Round 1 worked: kept as the task now, so a long job
+                        // that stops later still teaches Dottie the task.
+                        if jobMemory.currentRound == 2, !taskKeptThisJob, referenceImageParts.isEmpty {
+                            taskKeptThisJob = keepJobAsTask(taskText: taskText, jevRecording: jevRecording, stepModelSteps: recordedSteps,
+                                                            matchedTaskID: startKnowledge.task?.id, pathProblem: jevPathProblem)
+                        }
                         recentActionSignatures = []
                         onProgress?(stepNumber, "round \(jobMemory.currentRound) of \(jobMemory.totalRounds)")
                         respond("round \(jobMemory.currentRound - 1) done. Now round \(jobMemory.currentRound) of \(jobMemory.totalRounds): do the same steps as round 1 for the next one.")
@@ -634,6 +648,10 @@ final class DottieScreenTaskRunner {
                         DottieScreenLessons.shared.add(lesson, task: taskText, appName: NSWorkspace.shared.frontmostApplication?.localizedName, cameFromSuccess: didSucceed)
                     }
                     let finalAnswer = answer.isEmpty ? "All done." : answer
+                    if didSucceed, referenceImageParts.isEmpty, !taskKeptThisJob {
+                        taskKeptThisJob = keepJobAsTask(taskText: taskText, jevRecording: jevRecording, stepModelSteps: recordedSteps,
+                                                        matchedTaskID: startKnowledge.task?.id, pathProblem: jevPathProblem)
+                    }
                     if didSucceed, referenceImageParts.isEmpty, !recordedSteps.isEmpty {
                         saveReplay(taskText: taskText, context: jobContext, steps: recordedSteps, answer: finalAnswer, replacing: replayUsed)
                         if replayedStepCount > 0 {
@@ -807,6 +825,32 @@ final class DottieScreenTaskRunner {
     static func resultLooksDone(_ result: String) -> Bool {
         let lowercasedResult = result.lowercased()
         return !["error", "couldn't", "unknown", "refused", "not clicked", "stopped"].contains { lowercasedResult.hasPrefix($0) }
+    }
+
+    /// Keeps a job the step model finished (or a repeated job's first
+    /// round) as a named task: Jev's moves first, then the step model's,
+    /// on the app or site in front now (never Dottie's own window).
+    /// Returns whether there was anything to keep.
+    @discardableResult
+    private func keepJobAsTask(taskText: String, jevRecording: DottieAppTaskRecording, stepModelSteps: [DottieReplay.Step],
+                               matchedTaskID: UUID?, pathProblem: DottieAppTaskProblem?) -> Bool {
+        var recording = jevRecording
+        let frontContext = DottieReplayContext.current()
+        if let bundleIdentifier = frontContext.appBundleIdentifier, bundleIdentifier != Bundle.main.bundleIdentifier {
+            let placeKey = DottieAppTaskPlan.placeKey(siteHost: frontContext.siteHost, bundleIdentifier: bundleIdentifier)
+            let placeName = frontContext.siteHost ?? frontContext.appName ?? bundleIdentifier
+            for replayStep in stepModelSteps {
+                guard let step = DottieAppTaskPlan.step(fromReplayStep: replayStep, requestText: taskText) else { continue }
+                recording.note(step, placeKey: placeKey, placeName: placeName, bundleIdentifier: bundleIdentifier)
+            }
+        }
+        guard !recording.steps.isEmpty else {
+            DottieLog.notice("🗂️ A finished job had no steps to keep as a task")
+            return false
+        }
+        recording.finalPageTitle = frontContext.windowTitle
+        DottieAppTasks.shared.noteJobFinished(request: taskText, matchedTaskID: matchedTaskID, recording: recording, pathProblem: pathProblem)
+        return true
     }
 
     private func saveReplay(taskText: String, context: DottieReplayContext, steps: [DottieReplay.Step], answer: String, replacing earlierReplay: DottieReplay?) {
