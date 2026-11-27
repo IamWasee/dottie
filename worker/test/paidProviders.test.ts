@@ -55,14 +55,24 @@ describe("imageBlockFromDataURL", () => {
 describe("toAnthropicRequest", () => {
   it("puts the system text on its own and starts with the user", () => {
     const request = toAnthropicRequest({ messages: [{ role: "system", content: "Be brief." }, { role: "user", content: "hi" }] });
-    expect(request.system).toBe("Be brief.");
+    expect(request.system).toEqual([{ type: "text", text: "Be brief.", cache_control: { type: "ephemeral" } }]);
     expect(request.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
     expect(request.max_tokens).toBe(DEFAULT_ANTHROPIC_ANSWER_TOKENS);
   });
 
+  it("caches the instructions after the tools, so a job's later steps pay a tenth for them", () => {
+    const request = toAnthropicRequest({
+      messages: [{ role: "system", content: "You run screen jobs." }, { role: "user", content: "step" }],
+      tools: [{ type: "function", function: { name: "click", parameters: { type: "object", properties: {} } } }],
+    });
+    expect((request.system as any[])[0].cache_control).toEqual({ type: "ephemeral" });
+    expect((request.tools as any[])[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(toAnthropicRequest({ messages: [{ role: "user", content: "hi" }] }).system).toBeUndefined();
+  });
+
   it("reads a system message given as parts", () => {
     const request = toAnthropicRequest({ messages: [{ role: "system", content: [{ type: "text", text: "rules" }] }, { role: "user", content: "x" }] });
-    expect(request.system).toBe("rules");
+    expect((request.system as any[])[0].text).toBe("rules");
   });
 
   it("adds a user turn when the conversation starts with the assistant or is empty", () => {
@@ -121,7 +131,7 @@ describe("toAnthropicRequest", () => {
     expect(required.tool_choice).toEqual({ type: "any" });
     expect(required.max_tokens).toBe(99);
     expect(required.temperature).toBe(1);
-    expect(required.system).toContain("only the JSON object");
+    expect((required.system as any[])[0].text).toContain("only the JSON object");
     expect(toAnthropicRequest({ ...base, tool_choice: "none" }).tool_choice).toEqual({ type: "none" });
     expect(toAnthropicRequest({ ...base, tool_choice: "auto", temperature: -1 })).toMatchObject({ tool_choice: { type: "auto" }, temperature: 0 });
   });
@@ -134,7 +144,7 @@ describe("toAnthropicRequest", () => {
       toolConfig: { functionCallingConfig: { mode: "ANY" } },
     });
     const request = toAnthropicRequest(chatRequest);
-    expect(request.system).toBe("You run screen jobs.");
+    expect((request.system as any[])[0].text).toBe("You run screen jobs.");
     expect((request.messages as any[])[0].content.map((block: any) => block.type)).toEqual(["text", "image"]);
     expect((request.tools as any[])[0].input_schema.properties.x.type).toBe("number");
     expect(request.tool_choice).toEqual({ type: "any" });
@@ -154,7 +164,7 @@ describe("fromAnthropicResponse", () => {
       { id: "t2", type: "function", function: { name: "noinput", arguments: "{}" } },
     ]);
     expect(chat.choices[0].finish_reason).toBe("stop");
-    expect(chat.usage).toEqual({ prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 });
+    expect(chat.usage).toEqual({ prompt_tokens: 15, completion_tokens: 5, total_tokens: 20, cache_read_tokens: 3, cache_write_tokens: 2 });
   });
 
   it("marks a cut-off answer and copes with an empty one", () => {

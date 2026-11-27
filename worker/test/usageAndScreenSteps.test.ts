@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { answerUsage, answerWithProvider, DEFAULT_MODEL_PRICES, groqProvider, modelPrices, zaiProvider } from "../src/chatCompletions";
+import { answerUsage, answerWithProvider, DEFAULT_MODEL_PRICES, groqProvider, modelPrices, toGeminiResponse, zaiProvider } from "../src/chatCompletions";
 import worker, { DEFAULT_SCREEN_STEP_ATTEMPT_SECONDS, DEFAULT_SCREEN_STEP_SCREENSHOTS, keepingNewestScreenshots, screenStepAttemptMilliseconds, screenStepScreenshotCount, withAttemptLimit } from "../src/index";
 import type { Env } from "../src/index";
 import { chatAnswer, fakeFetch, imagePart, jsonAnswer, makeEnv, pngBase64, sseJSON } from "./helpers";
@@ -200,6 +200,27 @@ describe("answer usage", () => {
     expect(answerUsage("groq", "openai/gpt-oss-20b", { promptTokenCount: 10, candidatesTokenCount: 5 }, 800).estimatedDollars).toBeNull();
     // GLM-5.3-Flash has its regular price built in now.
     expect(answerUsage("glm", "glm-5.3-flash", { promptTokenCount: 1_000_000, candidatesTokenCount: 1_000_000 }, 800).estimatedDollars).toBeCloseTo(0.65);
+  });
+
+  it("prices cached input at a tenth to read and a quarter more to write", () => {
+    // 1M input: 600k read from the cache, 100k written to it, 300k plain.
+    const usage = answerUsage("claude", "claude-haiku-5-5",
+      { promptTokenCount: 1_000_000, candidatesTokenCount: 0, cachedContentTokenCount: 600_000, cacheWriteTokenCount: 100_000 }, 1);
+    expect(usage.inputTokens).toBe(1_000_000);
+    expect(usage.estimatedDollars).toBeCloseTo((300_000 + 60_000 + 125_000) * 0.1 / 1_000_000, 8);
+    // Cache numbers larger than the input are capped, never negative.
+    const odd = answerUsage("claude", "claude-haiku-5-5", { promptTokenCount: 100, cachedContentTokenCount: 500, cacheWriteTokenCount: 50 }, 1);
+    expect(odd.estimatedDollars).toBeCloseTo(100 * 0.1 * 0.1 / 1_000_000, 10);
+  });
+
+  it("carries Claude's cache numbers from its answer to the usage", () => {
+    const geminiResponse = toGeminiResponse({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22, cache_read_tokens: 12, cache_write_tokens: 3 },
+    }, "claude-haiku-5-5") as any;
+    expect(geminiResponse.usageMetadata).toEqual({ promptTokenCount: 20, candidatesTokenCount: 2, totalTokenCount: 22, cachedContentTokenCount: 12, cacheWriteTokenCount: 3 });
+    const plain = toGeminiResponse({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1 } }, "m") as any;
+    expect(plain.usageMetadata.cachedContentTokenCount).toBeUndefined();
   });
 
   it("uses a price from the setting", () => {

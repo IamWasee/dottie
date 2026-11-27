@@ -310,7 +310,15 @@ export function fittedForProvider(
 
 // MARK: - Usage and cost per answer
 
-type AnswerUsageMetadata = { promptTokenCount?: number; candidatesTokenCount?: number };
+type AnswerUsageMetadata = {
+  promptTokenCount?: number; candidatesTokenCount?: number;
+  /** Claude's prompt cache: input read from it, and input written to it (both inside promptTokenCount). */
+  cachedContentTokenCount?: number; cacheWriteTokenCount?: number;
+};
+
+/** What reading and writing cached input costs, against the input price (Anthropic's prompt caching). */
+export const CACHE_READ_PRICE_SHARE = 0.1;
+export const CACHE_WRITE_PRICE_SHARE = 1.25;
 
 /**
  * Dollars per million tokens (input/output) for the models Dottie uses.
@@ -357,15 +365,20 @@ export interface AnswerUsage {
 export function answerUsage(
   providerName: string,
   model: string,
-  usageMetadata: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined,
+  usageMetadata: AnswerUsageMetadata | undefined,
   milliseconds: number,
   pricesSetting?: string
 ): AnswerUsage {
   const inputTokens = usageMetadata?.promptTokenCount ?? 0;
   const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
+  const cacheReadTokens = Math.min(usageMetadata?.cachedContentTokenCount ?? 0, inputTokens);
+  const cacheWriteTokens = Math.min(usageMetadata?.cacheWriteTokenCount ?? 0, inputTokens - cacheReadTokens);
+  // Input at the full price, except what came from or went into the cache.
+  const pricedInputTokens = inputTokens - cacheReadTokens - cacheWriteTokens
+    + cacheReadTokens * CACHE_READ_PRICE_SHARE + cacheWriteTokens * CACHE_WRITE_PRICE_SHARE;
   const price = modelPrices(pricesSetting)[model.toLowerCase()];
   const estimatedDollars = price
-    ? Math.round(((inputTokens * price.inputDollarsPerMillion + outputTokens * price.outputDollarsPerMillion) / 1_000_000) * 1e8) / 1e8
+    ? Math.round(((pricedInputTokens * price.inputDollarsPerMillion + outputTokens * price.outputDollarsPerMillion) / 1_000_000) * 1e8) / 1e8
     : null;
   return { provider: providerName, model, inputTokens, outputTokens, seconds: Math.round(milliseconds / 10) / 100, estimatedDollars };
 }
@@ -693,6 +706,8 @@ export function toGeminiResponse(chatResponse: Record<string, unknown>, answerin
       promptTokenCount: usage.prompt_tokens ?? 0,
       candidatesTokenCount: usage.completion_tokens ?? 0,
       totalTokenCount: usage.total_tokens ?? 0,
+      ...(usage.cache_read_tokens ? { cachedContentTokenCount: usage.cache_read_tokens } : {}),
+      ...(usage.cache_write_tokens ? { cacheWriteTokenCount: usage.cache_write_tokens } : {}),
     },
     modelVersion: answeringModel,
   };
