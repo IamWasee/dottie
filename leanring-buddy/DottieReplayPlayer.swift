@@ -93,6 +93,14 @@ final class DottieReplayPlayer {
             await flyAndClick(at: point, clickCount: flag("double_click") ? 2 : 1, isRightClick: flag("right_click"))
             return nil
 
+        case "hover":
+            guard let target = step.target else { return "no saved target" }
+            onProgress?(progressPrefix + "pointing at \(target.label ?? target.title ?? "it")")
+            guard let point = await locate(target) else { return "couldn't find \(target.label ?? target.title ?? "the thing to point at")" }
+            await DottieScreenActionPerformer.glidePointer(to: point, isHover: true)
+            try? await Task.sleep(nanoseconds: UInt64(DottieScreenJobPointerPlan.hoverRestSeconds * 1_000_000_000))
+            return nil
+
         case "type_text":
             guard let typedText = arguments["text"], !typedText.isEmpty else { return "nothing to type" }
             if let target = step.target {
@@ -148,6 +156,10 @@ final class DottieReplayPlayer {
 
     private func flyAndClick(at point: CGPoint, clickCount: Int, isRightClick: Bool) async {
         let displayFrame = NSScreen.screens.first(where: { $0.frame.contains(point) })?.frame ?? NSScreen.main?.frame ?? .zero
+        // From a hover menu, glide to the item so the menu stays open on the way.
+        if DottieScreenJobPointer.restsOnHoverSpot {
+            await DottieScreenActionPerformer.glidePointer(to: point, isHover: false)
+        }
         await onWillClick?(point, displayFrame)
         if Task.isCancelled { return }
         DottieScreenActionPerformer.click(at: point, clickCount: clickCount, isRightClick: isRightClick)

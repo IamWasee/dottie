@@ -128,6 +128,8 @@ final class DottieScreenTaskRunner {
     private(set) var currentGoal: DottieTaskGoal?
     /// A long job gets a plan and a done check before it may finish.
     private var isLongJob = false
+    /// What this job did and cost, logged and kept when it ends (DottieJobReport).
+    private var jobReport = DottieJobReport()
     /// How many times a finish was sent back because it wasn't done yet.
     private var finishRejectionCount = 0
     private static let maximumFinishRejections = 2
@@ -151,6 +153,8 @@ final class DottieScreenTaskRunner {
     private var lastScreenshotPixelSize: CGSize = .zero
 
     var isRunning: Bool { runTask != nil }
+    /// The running job's turn with the pointer (DottieScreenJobPointer).
+    private var currentPointerJobNumber = 0
 
     /// A job this long gets a short memory of its own steps with each look.
     static let stepsBeforeJobMemoryNote = 8
@@ -190,10 +194,19 @@ final class DottieScreenTaskRunner {
                 ["inlineData": ["mimeType": "image/jpeg", "data": referenceImage.jpegData.base64EncodedString()]]
             ]
         }
+        jobReport = DottieJobReport()
+        let jobStartedAt = Date()
+        let dollarsBeforeJob = DottieAskUsageLog.dollarsSinceLaunch
+        // The pointer stays where the job last acted until it ends (a hover
+        // menu stays open), then goes back to where the user had it.
+        let pointerJobNumber = DottieScreenJobPointer.beginJob()
+        currentPointerJobNumber = pointerJobNumber
         runTask = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.run(taskText: taskText)
+            self.finishJobReport(outcome: outcome, startedAt: jobStartedAt, dollarsBeforeJob: dollarsBeforeJob)
             DottieMouseHold.releaseNow(reason: "the job ended")
+            DottieScreenJobPointer.endJob(pointerJobNumber)
             guard !Task.isCancelled else { return }
             DottieScreenJobHints.shared.jobIsRunning = false
             if case .finished = outcome {
@@ -206,6 +219,20 @@ final class DottieScreenTaskRunner {
         }
     }
 
+    /// One report line per job, kept for the memory trial in Home → Admin.
+    private func finishJobReport(outcome: Outcome, startedAt: Date, dollarsBeforeJob: Double) {
+        var finishedReport = jobReport
+        finishedReport.seconds = Date().timeIntervalSince(startedAt)
+        finishedReport.dollars = max(0, DottieAskUsageLog.dollarsSinceLaunch - dollarsBeforeJob)
+        switch outcome {
+        case .finished: finishedReport.outcome = "finished"
+        case .stopped: finishedReport.outcome = "stopped"
+        case .failed: finishedReport.outcome = "failed"
+        }
+        finishedReport.finishedAt = Date()
+        DottieJobReports.shared.add(finishedReport)
+    }
+
     /// Stops after the current action. Returns true if a task was running.
     @discardableResult
     func stop() -> Bool {
@@ -215,6 +242,7 @@ final class DottieScreenTaskRunner {
         DottieScreenJobQuestions.shared.resolve(with: nil)
         DottieScreenJobClaudeBrain.shared.stop()
         DottieMouseHold.releaseNow(reason: "the job stopped")
+        DottieScreenJobPointer.endJob(currentPointerJobNumber)
         DottieScreenJobHints.shared.reset()
         DottieScreenJobHints.shared.jobIsRunning = false
         runTask.cancel()
@@ -266,6 +294,16 @@ final class DottieScreenTaskRunner {
             isLongJob = true
             setUpGoal(taskText: taskText, appName: jobContext.appName)
         }
+        // App memory, looked up once as the job starts (the app memory
+        // review): a task Dottie has done before here (its steps, done check
+        // and problems) and the app's card. The memory trial in Home → Admin
+        // can run a job without them, to compare.
+        let usesAppMemory = DottieAppMemoryTrial.usesMemoryThisJob()
+        let startKnowledge = DottieAppTasks.shared.knowledgeAtJobStart(forTask: taskText, context: jobContext)
+        let appKnowledgeText = usesAppMemory ? startKnowledge.fullText : ""
+        let hasSavedTaskToReplay = usesAppMemory && startKnowledge.taskToReplay != nil
+        jobReport.memoryArm = usesAppMemory ? "on" : "off"
+        jobReport.appName = jobContext.siteHost ?? jobContext.appName ?? "unknown"
         var recordedSteps: [DottieReplay.Step] = []
         var unconfirmedStepIndices: [Int] = []
         var replayUsed: DottieReplay?
@@ -292,10 +330,11 @@ final class DottieScreenTaskRunner {
             }
         }
         // What the user showed Dottie about this kind of job (watch and
-        // learn) helps both the guess and the screenshot steps.
-        let watchedHowTo = DottieWatchAndLearn.shared.howToText(forTask: taskText, appName: jobContext.appName)
+        // learn) helps both the guess and the screenshot steps. It goes
+        // first, before the general lessons, so Jev's cut never drops it.
+        let watchedHowTo = DottieWatchAndLearn.shared.howToText(forTask: taskText, context: jobContext)
         if !watchedHowTo.isEmpty {
-            lessonsText += "\n" + watchedHowTo
+            lessonsText = watchedHowTo + "\n" + lessonsText
         }
         // Guess first: most apps are laid out the way everyone knows, so
         // the steps are tried by name (menus, shortcuts, controls) before
@@ -304,8 +343,11 @@ final class DottieScreenTaskRunner {
         // through Accessibility, which web pages mostly don't fill in, so
         // it only cost a model call before Jev started.
         let namesAWebsite = !DottieJevDriverPlan.siteAddresses(from: taskText).isEmpty
-        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short, !namesAWebsite {
-            let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: lessonsText) { [weak self] progressLine in
+        // A task Dottie has done before here goes to Jev, which does its
+        // saved steps again, so it skips the guess.
+        if referenceImageParts.isEmpty, replayUsed == nil, jobSize != .short, !namesAWebsite, !hasSavedTaskToReplay {
+            let guessKnownHowTo = appKnowledgeText.isEmpty ? lessonsText : lessonsText + "\n" + appKnowledgeText
+            let guessOutcome = await DottieScreenJobGuesser.shared.guessAndRun(taskText: taskText, knownHowTo: guessKnownHowTo) { [weak self] progressLine in
                 self?.onProgress?(0, progressLine)
             }
             if Task.isCancelled { return .stopped }
@@ -329,6 +371,9 @@ final class DottieScreenTaskRunner {
                 click: { [weak self] point, label, clickCount, isRightClick, screen, stepNumber in
                     _ = await self?.performClick(at: point, label: label, isDoubleClick: clickCount == 2, isRightClick: isRightClick, screen: screen, stepNumber: stepNumber)
                 },
+                hover: { [weak self] point, label, screen, stepNumber in
+                    _ = await self?.performHover(at: point, label: label, screen: screen, stepNumber: stepNumber)
+                },
                 openSite: { [weak self] address, stepNumber, inSameTab in
                     if inSameTab {
                         _ = await self?.performOpenURLInFrontTab(address: address, stepNumber: stepNumber)
@@ -337,7 +382,9 @@ final class DottieScreenTaskRunner {
                     }
                 }
             )
-            let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, actions: jevActions)
+            let jevOutcome = await DottieJevDriver.run(taskText: taskText, knownHowTo: lessonsText, startKnowledge: startKnowledge,
+                                                       usesAppMemory: usesAppMemory, actions: jevActions)
+            jobReport.addJevRun(DottieJevDriver.lastRunStats)
             if Task.isCancelled { return .stopped }
             switch jevOutcome {
             case .finished(let stepCount):
@@ -350,6 +397,10 @@ final class DottieScreenTaskRunner {
                 break
             }
         }
+        // The step model gets the app's card and the saved task's notes too.
+        if !appKnowledgeText.isEmpty {
+            lessonsText += "\n" + appKnowledgeText
+        }
         // How hard the job is decides the model; asked while the first
         // screenshot is taken.
         let tierTask = Task { () -> DottieModelPicker.Tier in
@@ -361,6 +412,7 @@ final class DottieScreenTaskRunner {
             if Task.isCancelled { return .stopped }
             stepLimit = Self.stepLimit(isLongJob: isLongJob)
             if stepNumber > stepLimit { break }
+            jobReport.stepModelSteps += 1
 
             // Before looking: if the last click opened something in an app
             // behind this one, bring it forward so the screenshot shows it.
@@ -718,7 +770,7 @@ final class DottieScreenTaskRunner {
     /// A step as it can be done again: its arguments, and for clicks and
     /// fields, everything that finds the target again.
     private func replayStep(functionName: String, arguments: [String: Any], screen: DottieDisplayCapture.Screenshot) async -> DottieReplay.Step? {
-        let replayableActions: Set<String> = ["open_app", "open_url", "click", "type_text", "press_keys", "scroll", "wait", "wait_for_video_end"]
+        let replayableActions: Set<String> = ["open_app", "open_url", "click", "hover", "type_text", "press_keys", "scroll", "wait", "wait_for_video_end"]
         guard replayableActions.contains(functionName) else { return nil }
         var storedArguments: [String: String] = [:]
         for key in ["double_click", "right_click", "select_all_first", "press_enter"] {
@@ -737,10 +789,10 @@ final class DottieScreenTaskRunner {
             }
         }
         var target: DottieReplay.Target?
-        if ["click", "type_text", "scroll"].contains(functionName), let point = Self.clickPoint(arguments: arguments, screen: screen) {
+        if ["click", "hover", "type_text", "scroll"].contains(functionName), let point = Self.clickPoint(arguments: arguments, screen: screen) {
             target = await DottieReplayTargets.capture(at: point, label: arguments["label"] as? String, screen: screen)
         }
-        if functionName == "click", target == nil { return nil }
+        if ["click", "hover"].contains(functionName), target == nil { return nil }
         return DottieReplay.Step(action: functionName, arguments: storedArguments, target: target)
     }
 
@@ -1049,6 +1101,9 @@ final class DottieScreenTaskRunner {
             }
             return await performClick(at: finalClickPoint, label: text("label") ?? "it", isDoubleClick: flag("double_click"), isRightClick: flag("right_click"), screen: screen, stepNumber: stepNumber)
 
+        case "hover":
+            return await performHover(at: clickPoint(), label: text("label") ?? "it", screen: screen, stepNumber: stepNumber)
+
         case "type_text":
             return await performTypeText(arguments: arguments, fieldPoint: clickPoint(), selectsAllFirst: flag("select_all_first"), pressesEnter: flag("press_enter"), screen: screen, stepNumber: stepNumber)
 
@@ -1158,11 +1213,28 @@ final class DottieScreenTaskRunner {
     private func performClick(at clickPoint: CGPoint?, label: String, isDoubleClick: Bool, isRightClick: Bool, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
         guard let point = clickPoint else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
         onProgress?(stepNumber, "clicking \(label)")
+        // From a hover menu, glide to the item so the menu stays open on the way.
+        if DottieScreenJobPointer.restsOnHoverSpot {
+            await DottieScreenActionPerformer.glidePointer(to: point, isHover: false)
+        }
         await onWillClick?(point, screen.displayFrame)
         if Task.isCancelled { return "stopped" }
         windowsBeforeLastClick = Self.windowSnapshot()
         DottieScreenActionPerformer.click(at: point, clickCount: isDoubleClick ? 2 : 1, isRightClick: isRightClick)
         return "clicked \(label)"
+    }
+
+    /// Points the mouse at something without clicking, for menus and
+    /// controls that only show while the mouse is over them. The pointer
+    /// stays there until the next move.
+    private func performHover(at hoverPoint: CGPoint?, label: String, screen: DottieDisplayCapture.Screenshot, stepNumber: Int) async -> String {
+        guard let point = hoverPoint else { return "error: box_2d must be [ymin, xmin, ymax, xmax] from 0 to 1000" }
+        onProgress?(stepNumber, "pointing at \(label)")
+        await DottieScreenActionPerformer.glidePointer(to: point, isHover: true)
+        await onWillClick?(point, screen.displayFrame)
+        if Task.isCancelled { return "stopped" }
+        try? await Task.sleep(nanoseconds: UInt64(DottieScreenJobPointerPlan.hoverRestSeconds * 1_000_000_000))
+        return "the mouse is over \(label) now and stays there. If a menu or controls opened, they're on the next screenshot: click the one you need."
     }
 
     /// Types text, after clicking the field when a box came with it. Passwords are typed only when the user gave them.
@@ -1535,6 +1607,14 @@ final class DottieScreenTaskRunner {
                     "label": ["type": "string", "description": "The element's visible text or a short name."],
                     "double_click": ["type": "boolean"],
                     "right_click": ["type": "boolean"]
+                ], "required": ["box_2d", "label"]]
+            ],
+            [
+                "name": "hover",
+                "description": "Point the mouse at an element without clicking, for menus, submenus and controls that only appear while the mouse is over something (a site's top menu, a video's settings). The mouse stays there until your next move, so the menu stays open: then click its item.",
+                "parameters": ["type": "object", "properties": [
+                    "box_2d": boxProperty,
+                    "label": ["type": "string", "description": "The element's visible text or a short name."]
                 ], "required": ["box_2d", "label"]]
             ],
             [

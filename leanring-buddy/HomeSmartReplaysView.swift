@@ -12,6 +12,9 @@ import SwiftUI
 
 struct HomeSmartReplaysView: View {
     @ObservedObject var smartReplayStore: DottieSmartReplayStore
+    /// Watch me's privacy switch (the watch me review): off keeps what the
+    /// user types off the model's page; private-looking values never go.
+    @AppStorage(DottieWatchPlan.sendsTypedTextDefaultsKey) private var watchMeSendsTypedText = true
 
     var body: some View {
         ScrollView {
@@ -25,6 +28,20 @@ struct HomeSmartReplaysView: View {
                         .foregroundColor(DS.Colors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Toggle(isOn: $watchMeSendsTypedText) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch me reads what I type")
+                            .font(.system(size: 12))
+                            .foregroundColor(DS.Colors.textPrimary)
+                        Text("When Dottie watches you (\u{201C}watch me\u{201D}), the words you type go to the AI model with the screen so it can learn the job. Turn this off to send only that you typed. Passwords, SSNs, birth dates, phone numbers and other private-looking values are never sent.")
+                            .font(.system(size: 11))
+                            .foregroundColor(DS.Colors.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .pointerCursor()
 
                 if smartReplayStore.replays.isEmpty {
                     HomeCard(title: "No smart replays yet") {

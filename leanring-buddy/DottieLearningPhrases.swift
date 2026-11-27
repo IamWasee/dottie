@@ -13,7 +13,9 @@
 import Foundation
 
 enum DottieLearningPhrase: Equatable {
-    case startWatching(seconds: Int?)
+    /// `note` is what the user said the job is ("add a patient"); a tour
+    /// ("let me show you around OpenEMR") watches until "done".
+    case startWatching(seconds: Int?, note: String? = nil, isTour: Bool = false)
     case stopWatching
     case startReplay(kind: String)
     case stopReplay
@@ -28,9 +30,11 @@ enum DottieLearningPhrase: Equatable {
 
     var toolArguments: [String: Any] {
         switch self {
-        case .startWatching(let seconds):
+        case .startWatching(let seconds, let note, let isTour):
             var arguments: [String: Any] = ["action": "start"]
             if let seconds { arguments["seconds"] = seconds }
+            if let note, !note.isEmpty { arguments["note"] = note }
+            if isTour { arguments["mode"] = "tour" }
             return arguments
         case .stopWatching, .stopReplay:
             return ["action": "stop"]
@@ -39,12 +43,26 @@ enum DottieLearningPhrase: Equatable {
         }
     }
 
-    private static let watchPattern = #"^(?:watch|observe|look at|see) (?:me|what i do|how i do (?:this|it)|this)(?: (?:do|doing) (?:this|it|something))?(?: for (?:(\d+)|(a|an|one|two|three|half a)) (seconds?|secs?|minutes?|mins?))?(?: and (?:learn|remember)(?: (?:it|this|how))?)?$"#
+    /// " for 30 seconds", " for five minutes", " for half an hour".
+    private static let durationPattern = #"(?: for (\d+|half an|half a|a couple of|a few|twenty|nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one|thirty|forty|fifty|sixty|ninety|a|an) (seconds?|secs?|minutes?|mins?|hours?))?"#
+    private static let watchPattern = #"^(?:watch|observe|look at|see) (?:me|what i do|how i do (?:this|it)|this)(?: (?:do|doing) (?:this|it|something))?"#
+        + durationPattern + #"(?: and (?:learn|remember)(?: (?:it|this|how))?)?$"#
+    /// "watch me add a patient", "watch me give you a tour of openemr".
+    private static let watchWithJobPattern = #"^(?:watch|observe) me(?: while i| as i| i'll| i will)? ((?:show you|give you a tour|tour|walk you through|go through|add|create|book|make|fill in|fill out|enter|edit|update|set up|schedule|register|rename|export|search for|sort|filter|organize|clean up|do)(?: .+?)?)"#
+        + durationPattern + "$"
+    /// "let me show you how to book an appointment", "I'll show you around".
+    private static let showYouPattern = #"^(?:i'm going to|i am going to|i'm gonna|let me|i'll|i will|i want to|i wanna) show you ((?:how to|how i|around|a tour of|the|my|what i do|everything)(?: .+?)?)"#
+        + durationPattern + "$"
+    private static let startWatchingPattern = #"^start watching(?: me)?"# + durationPattern + "$"
     private static let replayPattern = #"^(?:create|make|record|start|do) (?:a |an )?(smart|commercial) replay(?: of (?:me doing )?(?:this|it|what i do))?$"#
     private static let stopWords: Set<String> = [
         "done", "i'm done", "im done", "i am done", "finished", "i'm finished", "all done", "that's it", "thats it",
-        "stop watching", "stop recording", "you can stop", "ok done", "okay done"
+        "stop watching", "stop recording", "you can stop", "ok done", "okay done", "stop", "that's all", "thats all",
+        "we're done", "end of the tour", "end of tour", "that's the end of the tour", "that's the end", "the tour is over",
+        "tour's over", "the tour's over", "tour over", "that was the tour", "you can stop watching"
     ]
+    /// Words that make a watch a tour of a whole app.
+    private static let tourWords = ["tour", "around", "walk you through", "go through", "everything"]
 
     /// What an already-normalized ask means, or nil when it isn't one of
     /// these. "done" only counts while watching or recording.
@@ -56,7 +74,16 @@ enum DottieLearningPhrase: Equatable {
             return .startReplay(kind: replayMatch[1] ?? "smart")
         }
         if let watchMatch = firstMatch(of: watchPattern, in: normalizedText) {
-            return .startWatching(seconds: seconds(number: watchMatch[1], word: watchMatch[2], unit: watchMatch[3]))
+            return .startWatching(seconds: seconds(amount: watchMatch[1], unit: watchMatch[2]))
+        }
+        for pattern in [watchWithJobPattern, showYouPattern] {
+            guard let jobMatch = firstMatch(of: pattern, in: normalizedText), let jobText = jobMatch[1] else { continue }
+            let note = jobText.trimmingCharacters(in: .whitespaces)
+            let isTour = tourWords.contains { (" " + note + " ").contains(" " + $0 + " ") }
+            return .startWatching(seconds: seconds(amount: jobMatch[2], unit: jobMatch[3]), note: note, isTour: isTour)
+        }
+        if let startMatch = firstMatch(of: startWatchingPattern, in: normalizedText) {
+            return .startWatching(seconds: seconds(amount: startMatch[1], unit: startMatch[2]))
         }
         return nil
     }
@@ -69,7 +96,9 @@ enum DottieLearningPhrase: Equatable {
         case .startWatching:
             guard lowercasedResult.hasPrefix("watching for") else { return Self.sentenceCased(Self.firstSentence(of: toolResult)) }
             let secondsText = toolResult.components(separatedBy: ".").first ?? toolResult
-            return Self.sentenceCased(secondsText) + ". Go ahead and do it the way you normally would."
+            // A cut ask, a missing permission or the demo data notice is shown as written.
+            let noteText = Self.text(in: toolResult, after: "note for the user: ", before: " tell the user").map { " " + $0 } ?? ""
+            return Self.sentenceCased(secondsText) + "." + noteText + " Go ahead and do it the way you normally would."
         case .stopWatching:
             if let summary = Self.text(in: toolResult, after: "what you understood: ", before: " tell the user") {
                 return "Learned it: \(summary)"
@@ -88,19 +117,18 @@ enum DottieLearningPhrase: Equatable {
 
     // MARK: - Helpers
 
-    private static func seconds(number: String?, word: String?, unit: String?) -> Int? {
-        let amount: Double?
-        if let number, let parsedNumber = Double(number) {
-            amount = parsedNumber
-        } else if let word {
-            let wordAmounts: [String: Double] = ["a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "half a": 0.5]
-            amount = wordAmounts[word]
-        } else {
-            amount = nil
-        }
-        guard let amount, let unit else { return nil }
-        let isMinutes = unit.hasPrefix("min")
-        return Int(isMinutes ? amount * 60 : amount)
+    private static let wordAmounts: [String: Double] = [
+        "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+        "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "ninety": 90,
+        "half a": 0.5, "half an": 0.5, "a couple of": 2, "a few": 3
+    ]
+
+    private static func seconds(amount amountText: String?, unit: String?) -> Int? {
+        guard let amountText, let unit else { return nil }
+        guard let amount = Double(amountText) ?? wordAmounts[amountText] else { return nil }
+        if unit.hasPrefix("hour") { return Int(amount * 3600) }
+        return Int(unit.hasPrefix("min") ? amount * 60 : amount)
     }
 
     /// The whole match's capture groups, index 0 being the whole match.

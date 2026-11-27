@@ -56,8 +56,11 @@ export interface Env {
   TEXT_PROVIDER_ORDER?: string;
   HELPER_PROVIDER_ORDER?: string;
   GROQ_TALK_MODELS?: string;
+  /** "off" turns off the talker's built-in web search (Groq's browser_search on GPT-OSS). */
+  GROQ_TALK_WEB_SEARCH?: string;
   REQUEST_PROVIDER_ORDER?: string;
   PLAN_PROVIDER_ORDER?: string;
+  ADVISOR_PROVIDER_ORDER?: string;
   SCREEN_PROVIDER_ORDER?: string;
   /** Seconds one model may take on a screen-job step before the next provider answers; 8 by default. */
   SCREEN_STEP_ATTEMPT_SECONDS?: string;
@@ -169,7 +172,7 @@ function tooManyRequestsResponse(): Response {
 const SERVER_ERROR_MESSAGE = "Something went wrong on Dottie's server.";
 
 import { handleJev } from "./jev";
-import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fittedForProvider, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
+import { anthropicProvider, answerWithProvider, canAnswer, estimatedTokens, fittedForProvider, groqBrowserSearchTools, groqProvider, imageCount, nimProvider, zaiProvider, type ChatProvider } from "./chatCompletions";
 import { isSameSecret, jsonResponse, readJSONObject } from "./http";
 import { handlePhoneRelay } from "./phoneRelay";
 import { handleSearch } from "./search";
@@ -357,6 +360,9 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   // Jev does the deciding and GLM is the cheaper backup.
   let forcedOrder: string | undefined;
   if (wantedRole === "plan") forcedOrder = env.PLAN_PROVIDER_ORDER || DEFAULT_PLAN_PROVIDER_ORDER;
+  // Jev's advisor (text only: the screen's words and Jev's options): Claude
+  // Haiku (Wasee, 27 Nov), never GLM unless ADVISOR_PROVIDER_ORDER says so.
+  if (wantedRole === "advisor") forcedOrder = env.ADVISOR_PROVIDER_ORDER || DEFAULT_ADVISOR_PROVIDER_ORDER;
   if (wantedRole === "screen") forcedOrder = env.SCREEN_PROVIDER_ORDER || DEFAULT_SCREEN_PROVIDER_ORDER;
   const answer = await answerWithAnyProvider(env, routedBody, true, "/chat", attemptLimitMilliseconds, forcedOrder);
   return answer ?? jsonResponse({ error: NO_MODEL_ANSWERED_MESSAGE }, 503);
@@ -364,6 +370,9 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
 /** The order a screen job's plan (`"provider": "plan"`) asks the paid providers in. */
 export const DEFAULT_PLAN_PROVIDER_ORDER = "glm,claude";
+
+/** The order Jev's advisor (`"provider": "advisor"`) asks the paid providers in. */
+export const DEFAULT_ADVISOR_PROVIDER_ORDER = "claude";
 
 /** The order a screen step (`"provider": "screen"`) asks the paid providers in. */
 export const DEFAULT_SCREEN_PROVIDER_ORDER = "glm";
@@ -514,8 +523,13 @@ async function answerWithPaidProviders(
   return undefined;
 }
 
-/** Groq's small talk models, cheapest first; text only, so no vision models. */
-export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-20b,qwen/qwen3.8-27b";
+/**
+ * Groq's talk models, best first; text only, so no vision models. GPT-OSS
+ * 120B first: the 20B kept answering asks it should have handed to Claude
+ * (Wasee, 27 Nov), and the 120B still answers a short reply in well under a
+ * second on Groq. The 20B is the backup when the 120B is busy.
+ */
+export const DEFAULT_GROQ_TALK_MODELS = "openai/gpt-oss-120b,openai/gpt-oss-20b";
 
 /**
  * Dottie's talker: Groq alone answers small talk or says the ask is a
@@ -526,6 +540,11 @@ async function answerTalk(env: Env, requestBody: Record<string, unknown>): Promi
   if (!env.GROQ_API_KEY) return jsonResponse({ error: "talking needs GROQ_API_KEY" }, 503);
   const talkModels = env.GROQ_TALK_MODELS || DEFAULT_GROQ_TALK_MODELS;
   const groq = groqProvider(env.GROQ_API_KEY, talkModels, talkModels, env.GROQ_MAX_REQUEST_TOKENS);
+  // Wasee (27 Nov): the talker searches the web itself for quick facts
+  // (weather, news, scores) with Groq's own browser search.
+  if (env.GROQ_TALK_WEB_SEARCH?.trim().toLowerCase() !== "off") {
+    groq.builtInToolsForModel = groqBrowserSearchTools;
+  }
   if (!canAnswer(groq, requestBody)) return jsonResponse({ error: "too big to talk about" }, 413);
   const groqResponse = await answerWithProvider(groq, requestBody, true, { pricesSetting: env.MODEL_PRICES });
   return groqResponse ?? jsonResponse({ error: "Groq couldn't answer" }, 503);

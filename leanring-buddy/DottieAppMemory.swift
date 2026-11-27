@@ -161,7 +161,13 @@ enum DottieAppMemoryPlan {
         // A label made only of the task's action words ("Search", "Open")
         // isn't safe to click from memory: on YouTube's home page "Search"
         // led to results last time, but this time the words aren't typed yet.
+        // Read the same first (cheap); then alike enough (counts, numbers
+        // and dates left out, DottieLooseLabels).
         let visibleComparableLabels = Set(visibleLabels.map(comparableWords))
+        func isVisible(_ clickLabel: String) -> Bool {
+            visibleComparableLabels.contains(comparableWords(clickLabel))
+                || visibleLabels.contains { DottieLooseLabels.similarity($0, clickLabel) >= DottieLooseLabels.sameControlScore }
+        }
         return page.clicks
             .filter { click in
                 let labelWords = comparableWords(click.label).split(separator: " ").map(String.init)
@@ -169,10 +175,54 @@ enum DottieAppMemoryPlan {
                     && labelWords.allSatisfy { taskWords.contains($0) }
                     && labelWords.contains { !actionWords.contains($0) }
                     && click.resultPageKey != page.key
-                    && visibleComparableLabels.contains(comparableWords(click.label))
+                    && isVisible(click.label)
                     && !alreadyClickedLabels.contains(comparableWords(click.label))
             }
             .max { ($0.timesSeen, $0.lastSeen) < ($1.timesSeen, $1.lastSeen) }
+    }
+
+    /// Jev's click options on a remembered page, each noting what clicking
+    /// it did before ("it opened \"Edit column\""): the remembered controls
+    /// in Jev's own list instead of a page of text it can't use.
+    static func optionsNotingRememberedClicks(_ options: [DottieJevDriverPlan.Option], on page: DottieAppPage) -> [DottieJevDriverPlan.Option] {
+        let leadingClicks = page.clicks.filter { $0.resultPageKey != page.key }
+            .map { (click: $0, words: Set(DottieLooseLabels.coreWords($0.label))) }
+        guard !leadingClicks.isEmpty else { return options }
+        return options.map { option -> DottieJevDriverPlan.Option in
+            let clickedLabel: String?
+            switch option.move {
+            case .click(let label, _, _), .clickControl(let label, _, _, _), .doubleClick(let label, _, _): clickedLabel = label
+            default: clickedLabel = nil
+            }
+            guard let clickedLabel else { return option }
+            let clickedWords = Set(DottieLooseLabels.coreWords(clickedLabel))
+            guard let rememberedClick = leadingClicks
+                      .filter({ DottieLooseLabels.similarity($0.click.label, $0.words, clickedLabel, clickedWords) >= DottieLooseLabels.sameControlScore })
+                      .max(by: { $0.click.timesSeen < $1.click.timesSeen })?.click else { return option }
+            var notedOption = option
+            notedOption.memoryNote = "Dottie clicked this here before and it opened \"\(rememberedClick.resultPageTitle)\""
+            return notedOption
+        }
+    }
+
+    /// Short lines on one app's or site's pages for its card: each page's
+    /// title, the clicks that led on from it and a few of its controls.
+    static func cardLines(pages: [DottieAppPage], siteHost: String?) -> [String] {
+        let wantedHost = (siteHost ?? "").lowercased()
+        let pagesOfPlace = pages.filter { page -> Bool in
+            let keyParts = page.key.components(separatedBy: "|")
+            return keyParts.count >= 2 && keyParts[1] == wantedHost
+        }
+        return pagesOfPlace.sorted { $0.lastSeen > $1.lastSeen }.prefix(12).map { page -> String in
+            var line = "Page \"\(page.title)\""
+            let leadingClicks = page.clicks.filter { $0.resultPageKey != page.key }.prefix(5)
+            if !leadingClicks.isEmpty {
+                line += "; clicking " + leadingClicks.map { "\"\($0.label)\" opens \"\($0.resultPageTitle)\"" }.joined(separator: ", ")
+            }
+            let controlNames = (page.controls ?? []).prefix(8).map { "\($0.kind) \"\($0.label)\"" }
+            if !controlNames.isEmpty { line += "; controls: " + controlNames.joined(separator: ", ") }
+            return line
+        }
     }
 
     /// A short name for a page's screenshot that stays the same between
@@ -262,16 +312,28 @@ final class DottieAppMemory {
         return parts.joined(separator: "+")
     }
 
-    /// The front window as a page, or nil when Dottie shouldn't look.
-    private func frontPage() -> (bundleIdentifier: String, appName: String, key: String, title: String, isFullView: Bool, displayFrame: CGRect)? {
-        guard isEnabled, AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
+    /// The window in front, as a page of an app.
+    struct FrontPage {
+        let bundleIdentifier: String
+        let appName: String
+        let key: String
+        let title: String
+        let isFullView: Bool
+        let displayFrame: CGRect
+    }
+
+    /// The front window as a page, or nil when Dottie shouldn't look. A
+    /// screen job passes the step's own read of the front app (`context`),
+    /// so a browser's window isn't walked again for its address.
+    private func frontPage(context givenContext: DottieReplayContext? = nil, whileWatched: Bool = false) -> FrontPage? {
+        guard whileWatched ? isSwitchedOn : isEnabled, AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
               let frontApplication = NSWorkspace.shared.frontmostApplication,
               let bundleIdentifier = frontApplication.bundleIdentifier,
               bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
         let appName = frontApplication.localizedName ?? bundleIdentifier
         let excludedApps = UserDefaults.standard.stringArray(forKey: DottieScreenMemory.excludedAppsDefaultsKey) ?? DottieScreenMemory.defaultExcludedApps
         guard !excludedApps.contains(where: { $0.caseInsensitiveCompare(appName) == .orderedSame }) else { return nil }
-        let context = DottieReplayContext.current()
+        let context = givenContext ?? DottieReplayContext.current()
         let applicationElement = AXUIElementCreateApplication(frontApplication.processIdentifier)
         guard let window = DottieAX.element(applicationElement, kAXFocusedWindowAttribute),
               let windowFrame = Self.globalFrame(of: window),
@@ -279,7 +341,8 @@ final class DottieAppMemory {
         let title = context.windowTitle ?? ""
         let key = DottieAppMemoryPlan.pageKey(bundleIdentifier: bundleIdentifier, siteHost: context.siteHost, windowTitle: title)
         let isFullView = DottieAppMemoryPlan.isFullView(windowFrame: windowFrame, displayFrame: screen.frame)
-        return (bundleIdentifier, appName, key, title, isFullView, screen.frame)
+        return FrontPage(bundleIdentifier: bundleIdentifier, appName: appName, key: key, title: title,
+                         isFullView: isFullView, displayFrame: screen.frame)
     }
 
     private func lookAtFrontPage() async {
@@ -308,8 +371,10 @@ final class DottieAppMemory {
         let controls = DottieJevDriver.readControls(onDisplay: screenshot.displayFrame).map {
             DottieAppPage.Control(label: $0.label, kind: $0.kind, centerX: $0.centerX, centerY: $0.centerY)
         }
+        // No screenshot is kept: only a close reading of the page uses one,
+        // and it takes a fresh one then (most pages are never read closely).
         notePage(bundleIdentifier: page.bundleIdentifier, appName: page.appName, key: page.key, title: page.title,
-                 elements: elements, controls: controls, screenshotJPEG: screenshot.jpegData)
+                 elements: elements, controls: controls, screenshotJPEG: nil)
     }
 
     private func noteUserClick(at globalPoint: CGPoint) {
@@ -471,8 +536,26 @@ final class DottieAppMemory {
 
     /// The page in front right now, when Dottie knows it.
     func knownFrontPage() -> DottieAppPage? {
-        guard let page = frontPage() else { return nil }
-        return file(for: page.bundleIdentifier, appName: page.appName).pages[page.key]
+        frontPage().flatMap(knownPage(for:))
+    }
+
+    /// The front window as a page, read once per screen-job step from the
+    /// step's own read of the front app (it used to be read up to four
+    /// times a step, the app memory review found).
+    func frontPageForScreenJob(context: DottieReplayContext) -> FrontPage? {
+        frontPage(context: context)
+    }
+
+    /// The front window as a page while the user shows Dottie something
+    /// (watch me): app memory's own switch is enough then, since the user
+    /// asked her to watch (Wasee, 27 Nov: it should be on while watching).
+    func frontPageWhileWatched(context: DottieReplayContext) -> FrontPage? {
+        frontPage(context: context, whileWatched: true)
+    }
+
+    /// What Dottie remembers about a page, when she's seen it.
+    func knownPage(for frontPage: FrontPage) -> DottieAppPage? {
+        file(for: frontPage.bundleIdentifier, appName: frontPage.appName).pages[frontPage.key]
     }
 
     /// The front page's key and title, for noting a screen job's click.
@@ -481,8 +564,8 @@ final class DottieAppMemory {
     }
 
     /// A screen job saw this page: keeps where its text sits (full view only).
-    func notePageFromScreenJob(elements: [DottieAppPage.Element], controls: [DottieAppPage.Control] = []) {
-        guard let page = frontPage(), page.isFullView else { return }
+    func notePageFromScreenJob(on page: FrontPage, elements: [DottieAppPage.Element], controls: [DottieAppPage.Control] = []) {
+        guard page.isFullView else { return }
         // Seen this minute already: skip the save, a screen job looks every step.
         if let knownPage = file(for: page.bundleIdentifier, appName: page.appName).pages[page.key],
            Date().timeIntervalSince(knownPage.lastSeen) < 60 { return }
@@ -504,6 +587,13 @@ final class DottieAppMemory {
         ))
         appFile.pages[fromPageKey] = page
         save(appFile, bundleIdentifier: bundleIdentifier)
+    }
+
+    /// What app memory saw in one app or site, as short lines for the
+    /// card on how it works (DottieAppTasks).
+    func cardMaterial(bundleIdentifier: String, siteHost: String?) -> [String] {
+        let appFile = file(for: bundleIdentifier, appName: bundleIdentifier)
+        return DottieAppMemoryPlan.cardLines(pages: Array(appFile.pages.values), siteHost: siteHost)
     }
 
     // MARK: - Storage

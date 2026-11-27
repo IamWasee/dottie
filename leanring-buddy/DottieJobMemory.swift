@@ -8,14 +8,24 @@
 //  what's left. Jev and the step model only saw the last few moves, and
 //  the "you already did this" checks fought repeating on purpose, so round
 //  one went perfectly and round two got lost. Kept short so steps stay
-//  quick. Pure, so it can be unit tested.
+//  quick. A job can run for thousands of moves (Wasee, 27 Nov: enterprise
+//  jobs), so only what still matters is kept: round 1 (the recipe), the
+//  last few rounds and this round; older rounds become a count. Every 100
+//  moves the driver saves this to a file and starts again from that file
+//  (DottieJobLedger), so a long job's state never fills with old details.
+//  Pure, so it can be unit tested.
 //
 
 import Foundation
 
 struct DottieJobMemory: Equatable {
     /// A job never repeats more than this, whatever the words say.
-    static let maximumRounds = 20
+    static let maximumRounds = 1_000
+    /// Finished rounds after round 1 kept move by move; older ones are counted.
+    static let recentRoundsKept = 3
+    /// Moves of one round kept move by move: the first few and the newest.
+    static let firstMovesKeptPerRound = 4
+    static let newestMovesKeptPerRound = 30
     /// The longest the memory text gets, so it never slows a step down.
     static let maximumStateCharacters = 1500
     /// Moves shown in full; longer lists keep the first few and the newest.
@@ -23,8 +33,19 @@ struct DottieJobMemory: Equatable {
 
     let totalRounds: Int
     private(set) var currentRound = 1
-    /// The moves of each round, in order: index 0 is round 1.
-    private(set) var movesByRound: [[String]] = [[]]
+    /// Round 1's moves: the recipe every later round follows.
+    private(set) var recipe: [String] = []
+    /// The newest finished rounds after round 1, oldest first.
+    private(set) var recentRounds: [[String]] = []
+    /// Finished rounds after round 1 no longer kept move by move.
+    private(set) var roundsForgotten = 0
+    private(set) var movesInForgottenRounds = 0
+    /// This round's moves (its first few and newest when it runs long).
+    private(set) var movesThisRound: [String] = []
+    /// Moves of this round left out of the middle of `movesThisRound`.
+    private(set) var movesDroppedThisRound = 0
+    /// Every move the job made, kept or not.
+    private(set) var totalMovesNoted = 0
 
     init(totalRounds: Int) {
         self.totalRounds = min(max(totalRounds, 1), Self.maximumRounds)
@@ -34,15 +55,38 @@ struct DottieJobMemory: Equatable {
         self.init(totalRounds: Self.roundCount(in: taskText))
     }
 
+    /// Rebuilt from a saved page: nothing that isn't in the page comes back.
+    init(ledgerPage: DottieJobLedger.Page) {
+        self.init(totalRounds: ledgerPage.totalRounds)
+        currentRound = min(max(ledgerPage.currentRound, 1), totalRounds)
+        recipe = ledgerPage.recipe
+        recentRounds = Array(ledgerPage.recentRounds.suffix(Self.recentRoundsKept))
+        roundsForgotten = ledgerPage.roundsForgotten
+        movesInForgottenRounds = ledgerPage.movesInForgottenRounds
+        movesThisRound = ledgerPage.movesThisRound
+        movesDroppedThisRound = ledgerPage.movesDroppedThisRound
+        totalMovesNoted = ledgerPage.totalMoves
+    }
+
     var isRepeatedJob: Bool { totalRounds > 1 }
     var hasRoundsLeft: Bool { currentRound < totalRounds }
-    var movesThisRound: [String] { movesByRound.last ?? [] }
-    var allMoves: [String] { movesByRound.flatMap { $0 } }
+    /// The moves still kept, in order (round 1, recent rounds, this round).
+    var allMoves: [String] {
+        let earlierRounds = currentRound > 1 ? [recipe] + recentRounds : []
+        return earlierRounds.flatMap { $0 } + movesThisRound
+    }
 
     mutating func noteMove(_ moveSummary: String) {
         let trimmedSummary = moveSummary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSummary.isEmpty else { return }
-        movesByRound[movesByRound.count - 1].append(trimmedSummary)
+        totalMovesNoted += 1
+        movesThisRound.append(trimmedSummary)
+        // A long round keeps its first moves (how it started) and the newest.
+        let keptLimit = Self.firstMovesKeptPerRound + Self.newestMovesKeptPerRound
+        if movesThisRound.count > keptLimit {
+            movesThisRound.remove(at: Self.firstMovesKeptPerRound)
+            movesDroppedThisRound += 1
+        }
     }
 
     /// Closes the round in progress and starts the next. False (and nothing
@@ -52,8 +96,19 @@ struct DottieJobMemory: Equatable {
     @discardableResult
     mutating func finishRound() -> Bool {
         guard hasRoundsLeft, !movesThisRound.isEmpty else { return false }
+        if currentRound == 1 {
+            recipe = movesThisRound
+        } else {
+            recentRounds.append(movesThisRound)
+            if recentRounds.count > Self.recentRoundsKept {
+                let forgottenRound = recentRounds.removeFirst()
+                roundsForgotten += 1
+                movesInForgottenRounds += forgottenRound.count
+            }
+        }
         currentRound += 1
-        movesByRound.append([])
+        movesThisRound = []
+        movesDroppedThisRound = 0
         return true
     }
 
@@ -63,19 +118,19 @@ struct DottieJobMemory: Equatable {
         let lowercasedTask = taskText.lowercased()
         let numberWords: [String: Int] = [
             "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-            "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20
+            "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "hundred": 100
         ]
         if lowercasedTask.range(of: #"\btwice\b"#, options: .regularExpression) != nil { return 2 }
         if lowercasedTask.range(of: #"\bthrice\b"#, options: .regularExpression) != nil { return 3 }
-        let timesPattern = #"\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s+(?:more\s+)?times\b"#
+        let timesPattern = #"\b(\d{1,3}(?:,\d{3})|\d{1,5}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred)\s+(?:more\s+)?times\b"#
         // "x3" only: "2x" is usually a speed or a size.
-        let multiplierPattern = #"\bx\s?(\d{1,2})\b"#
+        let multiplierPattern = #"\bx\s?(\d{1,4})\b"#
         for pattern in [timesPattern, multiplierPattern] {
             guard let expression = try? NSRegularExpression(pattern: pattern),
                   let match = expression.firstMatch(in: lowercasedTask, range: NSRange(lowercasedTask.startIndex..., in: lowercasedTask)) else { continue }
             for groupIndex in 1..<match.numberOfRanges {
                 guard let range = Range(match.range(at: groupIndex), in: lowercasedTask) else { continue }
-                let countText = String(lowercasedTask[range])
+                let countText = String(lowercasedTask[range]).replacingOccurrences(of: ",", with: "")
                 if let count = Int(countText) ?? numberWords[countText], count >= 2 {
                     return min(count, maximumRounds)
                 }
@@ -95,33 +150,60 @@ struct DottieJobMemory: Equatable {
     }
 
     /// What Jev's state and the step model's note say about the job so far.
+    /// Where this round is and what to do next always fit; the recipe gives
+    /// way when the text runs long (it used to be cut from the end, which
+    /// dropped "this round so far" on long jobs).
     func stateText() -> String {
-        var lines: [String] = []
+        var headLines: [String] = []
+        var recipeLine: String?
+        var tailLines: [String] = []
         if isRepeatedJob {
-            lines.append("This job is the same task \(totalRounds) times in a row. Now on round \(currentRound) of \(totalRounds).")
-            if movesByRound.count > 1 {
-                let firstRound = movesByRound[0]
-                lines.append("Round 1 is done and worked (\(firstRound.count) moves): \(Self.compactList(firstRound)). Do the same steps again for the next one.")
+            headLines.append("This job is the same task \(totalRounds) times in a row. Now on round \(currentRound) of \(totalRounds).")
+            if currentRound > 1 {
+                recipeLine = "Round 1 is done and worked (\(recipe.count) moves): \(Self.compactList(recipe)). Do the same steps again for the next one."
                 if currentRound > 2 {
-                    let doneRounds = movesByRound[1..<(movesByRound.count - 1)]
-                    let doneCounts = doneRounds.map { "\($0.count)" }.joined(separator: ", ")
-                    lines.append("Rounds 2 to \(currentRound - 1) are done too (\(doneCounts) moves).")
+                    tailLines.append(laterRoundsLine())
                 }
             }
-            if movesThisRound.isEmpty {
-                lines.append("This round: nothing done yet.")
-            } else {
-                lines.append("This round so far: \(Self.compactList(movesThisRound)).")
-            }
-            lines.append(hasRoundsLeft
+            tailLines.append(thisRoundLine(emptyText: "This round: nothing done yet.", prefix: "This round so far"))
+            tailLines.append(hasRoundsLeft
                 ? "When this round is done, say so (\"this round is done\") and start round \(currentRound + 1)."
                 : "This is the last round: when it's done, the whole job is done.")
-        } else if allMoves.isEmpty {
-            lines.append("Nothing has been done yet.")
         } else {
-            lines.append("Done so far, in order (\(allMoves.count) moves): \(Self.compactList(allMoves)).")
+            headLines.append(thisRoundLine(emptyText: "Nothing has been done yet.", prefix: "Done so far, in order"))
         }
-        let stateText = lines.joined(separator: "\n")
-        return stateText.count > Self.maximumStateCharacters ? String(stateText.prefix(Self.maximumStateCharacters)) + "…" : stateText
+        let fixedText = (headLines + tailLines).joined(separator: "\n")
+        guard let recipeLine else { return Self.clipped(fixedText, to: Self.maximumStateCharacters) }
+        let roomForRecipe = Self.maximumStateCharacters - fixedText.count - 2
+        guard roomForRecipe > 40 else { return Self.clipped(fixedText, to: Self.maximumStateCharacters) }
+        return (headLines + [Self.clipped(recipeLine, to: roomForRecipe)] + tailLines).joined(separator: "\n")
+    }
+
+    /// Rounds 2 to the last finished one, short: how many and how long they took.
+    private func laterRoundsLine() -> String {
+        let keptMoveCount = recentRounds.reduce(0) { $0 + $1.count }
+        let laterRoundCount = roundsForgotten + recentRounds.count
+        let averageMoves = laterRoundCount > 0 ? Double(movesInForgottenRounds + keptMoveCount) / Double(laterRoundCount) : 0
+        var line = "Rounds 2 to \(currentRound - 1) are done too (about \(Int(averageMoves.rounded())) moves each)."
+        if let lastRound = recentRounds.last, !lastRound.isEmpty {
+            line += " Round \(currentRound - 1) ended with: \(Self.compactList(Array(lastRound.suffix(3))))."
+        }
+        return line
+    }
+
+    private func thisRoundLine(emptyText: String, prefix: String) -> String {
+        guard !movesThisRound.isEmpty else { return emptyText }
+        let roundMoveCount = movesThisRound.count + movesDroppedThisRound
+        let firstMoves = movesThisRound.prefix(Self.firstMovesKeptPerRound)
+        let newestMoves = movesThisRound.suffix(Self.movesShownInFull - Self.firstMovesKeptPerRound)
+        let hiddenMoveCount = roundMoveCount - firstMoves.count - newestMoves.count
+        let keptList = movesThisRound.count <= Self.movesShownInFull && movesDroppedThisRound == 0
+            ? movesThisRound.joined(separator: "; ")
+            : firstMoves.joined(separator: "; ") + "; … \(hiddenMoveCount) more …; " + newestMoves.joined(separator: "; ")
+        return isRepeatedJob ? "\(prefix): \(keptList)." : "\(prefix) (\(roundMoveCount) moves): \(keptList)."
+    }
+
+    private static func clipped(_ text: String, to characterLimit: Int) -> String {
+        text.count > characterLimit ? String(text.prefix(max(characterLimit, 0))) + "…" : text
     }
 }

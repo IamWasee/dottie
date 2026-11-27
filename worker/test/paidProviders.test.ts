@@ -9,7 +9,9 @@ import {
 import {
   anthropicProvider,
   answerWithProvider,
+  groqBrowserSearchTools,
   toChatRequest,
+  withBuiltInTools,
   zaiProvider,
   DEFAULT_ANTHROPIC_MODELS,
   DEFAULT_ZAI_MODELS,
@@ -380,13 +382,26 @@ describe("/gemini (helpers) with paid keys", () => {
 describe("talking and requests", () => {
   const talkBody = { provider: "talk", contents: [userText("hey dottie, how are you?")], generationConfig: { maxOutputTokens: 120 } };
 
-  it("answers talk from Groq's small model only, even with paid keys", async () => {
+  it("answers talk from Groq's GPT-OSS 120B only, even with paid keys", async () => {
     const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "Doing great!" })]]);
     const response = await call("/chat", talkBody, { GROQ_API_KEY: "g", ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("Doing great!");
     expect(calls).toHaveLength(1);
-    expect(calls[0].json.model).toBe("openai/gpt-oss-20b");
+    expect(calls[0].json.model).toBe("openai/gpt-oss-120b");
     expect(calls[0].json.reasoning_effort).toBe("low");
+  });
+
+  it("falls back from GPT-OSS 120B to 20B when the 120B is busy", async () => {
+    // fakeFetch keeps answering with the first matching rule, so the answer depends on the model asked.
+    const calls = fakeFetch([
+      ["api.groq.com", (recorded) => (recorded.json as { model: string }).model === "openai/gpt-oss-120b"
+        ? new Response("busy", { status: 503 })
+        : chatAnswer({ content: "hi" })],
+    ]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect(response.status).toBe(200);
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("hi");
+    expect(calls.map((recorded) => recorded.json.model)).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   });
 
   it("gives Groq its one hand_to_claude control and hands the call back as a function call", async () => {
@@ -404,6 +419,70 @@ describe("talking and requests", () => {
     expect(calls).toHaveLength(1);
     expect(new URL(calls[0].url).host).toBe("api.groq.com");
     expect(calls[0].json.tools[0].function.name).toBe("hand_to_claude");
+  });
+
+  it("adds built-in tools after the request's own and keeps a bigger answer budget", () => {
+    const extras = { reasoning_effort: "low" };
+    expect(withBuiltInTools(extras, { max_tokens: 160 }, [])).toBe(extras);
+    expect(withBuiltInTools(extras, { tools: [{ type: "function" }], max_tokens: 160 }, [{ type: "browser_search" }]))
+      .toEqual({ reasoning_effort: "low", tools: [{ type: "function" }, { type: "browser_search" }], max_tokens: 1024 });
+    expect(withBuiltInTools({}, { max_tokens: 4000 }, [{ type: "browser_search" }]).max_tokens).toBe(4000);
+    expect(withBuiltInTools({}, {}, [{ type: "browser_search" }]).max_tokens).toBe(1024);
+    expect(groqBrowserSearchTools("openai/gpt-oss-20b")).toEqual([{ type: "browser_search" }]);
+    expect(groqBrowserSearchTools("qwen/qwen3.8-27b")).toEqual([]);
+  });
+
+  it("gives the talker Groq's own browser search beside hand_to_claude, with room for the search", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "it's 31 degrees and sunny in dhaka【0†weather.com】" })]]);
+    const body = {
+      ...talkBody,
+      contents: [userText("what's the weather in dhaka")],
+      tools: [{ functionDeclarations: [{ name: "hand_to_claude", description: "Give this ask to Claude.", parameters: { type: "OBJECT", properties: {} } }] }],
+      generationConfig: { maxOutputTokens: 160 },
+    };
+    const response = await call("/chat", body, { GROQ_API_KEY: "g" });
+    const parts = (await sseJSON(response)).candidates[0].content.parts;
+    expect(parts[0].text).toBe("it's 31 degrees and sunny in dhaka");
+    expect(calls[0].json.tools.map((tool: { type: string; function?: { name: string } }) => tool.function?.name ?? tool.type))
+      .toEqual(["hand_to_claude", "browser_search"]);
+    expect(calls[0].json.max_tokens).toBe(1024);
+    expect(calls[0].json.reasoning_effort).toBe("low");
+  });
+
+  it("gives browser search even when the talker sends no tools of its own", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect(calls[0].json.tools).toEqual([{ type: "browser_search" }]);
+  });
+
+  it("asks again without browser search when Groq turns it down", async () => {
+    const calls = fakeFetch([
+      ["api.groq.com", (recorded) => Array.isArray((recorded.json as { tools?: unknown[] }).tools)
+        ? new Response(JSON.stringify({ error: { message: "browser_search not supported" } }), { status: 400 })
+        : chatAnswer({ content: "hey there" })],
+    ]);
+    const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("hey there");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].json.tools).toBeUndefined();
+    expect(calls[1].json.model).toBe("openai/gpt-oss-120b");
+  });
+
+  it("leaves browser search off with GROQ_TALK_WEB_SEARCH=off and for models that aren't GPT-OSS", async () => {
+    let calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g", GROQ_TALK_WEB_SEARCH: " OFF " });
+    expect(calls[0].json.tools).toBeUndefined();
+    expect(calls[0].json.max_tokens).toBe(120);
+    calls = fakeFetch([["api.groq.com", chatAnswer({ content: "hi" })]]);
+    await call("/chat", talkBody, { GROQ_API_KEY: "g", GROQ_TALK_MODELS: "qwen/qwen3.8-27b" });
+    expect(calls[0].json.tools).toBeUndefined();
+  });
+
+  it("never gives browser search to Groq outside the talker", async () => {
+    const calls = fakeFetch([["api.groq.com", chatAnswer({ content: "a quick answer" })]]);
+    await call("/chat", { provider: "groq", contents: [userText("summarize this")] }, { GROQ_API_KEY: "g" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].json.tools).toBeUndefined();
   });
 
   it("follows GROQ_TALK_MODELS, trying the next when one fails", async () => {
@@ -427,6 +506,7 @@ describe("talking and requests", () => {
     const toolUseFailed = JSON.stringify({ error: { code: "tool_use_failed", failed_generation: "REQUEST SCREEN" } });
     const calls = fakeFetch([["api.groq.com", new Response(toolUseFailed, { status: 400 })]]);
     const response = await call("/chat", talkBody, { GROQ_API_KEY: "g" });
+    console.log("DEBUG", response.status, await response.clone().text(), JSON.stringify(calls.map((c) => c.json.model)));
     expect(response.status).toBe(200);
     expect((await sseJSON(response)).candidates[0].content.parts[0].text).toBe("REQUEST SCREEN");
     expect(calls).toHaveLength(1);
@@ -477,6 +557,25 @@ describe("talking and requests", () => {
     const claudeOnly = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "{}" }])]]);
     await call("/chat", { provider: "plan", contents: [userText("open numbers")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", PLAN_PROVIDER_ORDER: "claude" });
     expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+  });
+
+  it("asks only Claude for Jev's advisor, and follows ADVISOR_PROVIDER_ORDER", async () => {
+    const claudeOnly = fakeFetch([["api.anthropic.com", claudeAnswer([{ type: "text", text: "{\"do\":\"none\"}" }])]]);
+    const advised = await call("/chat", { provider: "advisor", contents: [userText("which email is newest?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect((await sseJSON(advised)).candidates[0].content.parts[0].text).toContain("none");
+    expect(claudeOnly.map((recorded) => new URL(recorded.url).host)).toEqual(["api.anthropic.com"]);
+
+    const claudeDown = fakeFetch([
+      ["api.anthropic.com", new Response("busy", { status: 529 })],
+      ["api.z.ai", chatAnswer({ content: "glm" })],
+    ]);
+    const failed = await call("/chat", { provider: "advisor", contents: [userText("which email?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z" });
+    expect(failed.ok).toBe(false);
+    expect(claudeDown.some((recorded) => recorded.url.includes("api.z.ai"))).toBe(false);
+
+    const glmChosen = fakeFetch([["api.z.ai", chatAnswer({ content: "glm" })]]);
+    await call("/chat", { provider: "advisor", contents: [userText("which email?")] }, { ANTHROPIC_API_KEY: "a", ZAI_API_KEY: "z", ADVISOR_PROVIDER_ORDER: "glm" });
+    expect(glmChosen.map((recorded) => new URL(recorded.url).host)).toEqual(["api.z.ai"]);
   });
 
   it("keeps Claude first for other text asks", async () => {

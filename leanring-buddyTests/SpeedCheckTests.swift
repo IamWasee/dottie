@@ -319,4 +319,63 @@ struct SpeedCheckTests {
         }
         #expect(median < 5, "the last job's record took \(median) ms")
     }
+
+    /// Every screen-job step may do a saved task's step and note remembered
+    /// clicks on Jev's options; on a busy screen (400 texts, 255 options,
+    /// 40 remembered clicks) both must cost next to nothing.
+    @Test func savedStepsAndRememberedClickNotesStayQuick() {
+        let screenTexts = (0..<400).map { DottieJevDriverPlan.ScreenText(text: "Row \($0) of the sheet (\($0) items)", centerX: 500, centerY: Double($0) * 2) }
+        let savedStep = DottieAppTaskPlan.step(from: .click(label: "Row 399 of the sheet (3 items)", centerX: 500, centerY: 798),
+                                               pageTitle: "Sheet", requestText: "open row")!
+        let options = (0..<255).map { DottieJevDriverPlan.Option(key: "o\($0)", move: .click(label: "Button number \($0)", centerX: 1, centerY: 1)) }
+        let clicks = (0..<DottieAppMemoryPlan.maximumClicksPerPage).map {
+            DottieAppPage.Click(label: "Button number \($0)", centerX: 10, centerY: Double($0), resultPageKey: "page \($0)",
+                                resultPageTitle: "Page", timesSeen: $0, lastSeen: Date())
+        }
+        let memoryPage = DottieAppPage(key: "home", title: "Home", elements: [], clicks: clicks, lastSeen: Date(), screenshotFileName: nil)
+        let median = medianMilliseconds {
+            for _ in 0..<5 {
+                _ = DottieAppTaskPlan.replayStep(savedStep, recordedForRequest: "open row", newRequest: "open row",
+                                                 screenTexts: screenTexts, screenControls: [], frontSiteHost: nil, frontAppName: nil)
+                _ = DottieAppMemoryPlan.optionsNotingRememberedClicks(options, on: memoryPage)
+            }
+        }
+
+        #expect(median < 300, "5 steps of saved-task checks and option notes took \(median) ms")
+    }
+
+    /// Jev's hover moves on a packed screen that talks about menus, and the
+    /// pointer's glide, as each step builds them.
+    @Test func hoverMovesAndPointerGlidesStayQuick() {
+        let screenTexts = (0..<300).map { DottieJevDriverPlan.ScreenText(text: "Menu \($0)", centerX: Double($0 % 30) * 30, centerY: Double($0)) }
+        let screenControls = (0..<100).map { DottieJevDriverPlan.ScreenControl(label: "Tool \($0)", kind: "menu", centerX: 900, centerY: Double($0)) }
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                _ = DottieJevDriverPlan.hoverMoves(screenTexts: screenTexts, screenControls: screenControls, taskText: "open the file menu and pick export")
+                _ = DottieScreenJobPointerPlan.glidePath(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 2000, y: 1200))
+            }
+        }
+        #expect(median < 50, "20 steps of hover moves and glides took \(median) ms")
+    }
+
+    /// Watch me compares every frame with the last (every 2 s) and cuts a
+    /// long tour into parts once, both on the Mac.
+    @Test func watchMeFrameChecksAndTourPartsStayQuick() {
+        let pixelCount = DottieWatchPlan.fingerprintWidth * DottieWatchPlan.fingerprintHeight
+        let firstFrame = (0..<pixelCount).map { UInt8($0 % 200) }
+        var secondFrame = firstFrame
+        secondFrame[pixelCount / 2] = 255
+        let actions = (0..<1000).map { index in
+            DottieWatchedAction(kind: index % 12 == 0 ? .narration : .click, label: "Item \(index)", text: "note",
+                                pageTitle: "Page \(index / 40)", placeKey: "localhost", secondsIntoWatch: Double(index))
+        }
+        let median = medianMilliseconds {
+            for _ in 0..<20 {
+                _ = DottieWatchPlan.isSameScreen(firstFrame, secondFrame)
+            }
+            _ = DottieWatchPlan.tourParts(of: actions)
+            _ = DottieWatchPlan.steps(from: actions, exampleRequest: "add a patient named Jane Doe")
+        }
+        #expect(median < 60, "20 frame checks and a 1,000-action tour took \(median) ms")
+    }
 }

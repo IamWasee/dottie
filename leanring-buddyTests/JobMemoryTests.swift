@@ -30,7 +30,10 @@ struct JobMemoryTests {
     }
 
     @Test func roundsAreCapped() {
-        #expect(DottieJobMemory.roundCount(in: "click it 99 times") == DottieJobMemory.maximumRounds)
+        #expect(DottieJobMemory.roundCount(in: "click it 99 times") == 99)
+        #expect(DottieJobMemory.roundCount(in: "click it 5000 times") == DottieJobMemory.maximumRounds)
+        #expect(DottieJobMemory.roundCount(in: "send it 1,000 times") == 1_000)
+        #expect(DottieJobMemory.roundCount(in: "like a hundred times") == 100)
         #expect(DottieJobMemory(totalRounds: 0).totalRounds == 1)
     }
 
@@ -145,7 +148,8 @@ struct JobMemoryTests {
     @Test func repeatedJobsGetMoreSteps() {
         #expect(Plan.stepBudget(rounds: 1) == Plan.maximumSteps)
         #expect(Plan.stepBudget(rounds: 3) == Plan.maximumSteps * 3)
-        #expect(Plan.stepBudget(rounds: 20) == Plan.maximumStepsForRepeatedJobs)
+        #expect(Plan.stepBudget(rounds: 400) == Plan.maximumSteps * 400)
+        #expect(Plan.stepBudget(rounds: 5_000) == Plan.maximumStepsForRepeatedJobs)
     }
 
     /// The same task 3 times: each round clicks Like then Next, the round
@@ -198,6 +202,8 @@ struct JobMemoryTests {
         #expect(roundsEnded == 2)
         #expect(finished)
         #expect(memory.currentRound == 3)
-        #expect(memory.movesByRound == [["clicked Like", "clicked Next"], ["clicked Like", "clicked Next"], ["clicked Like", "clicked Next"]])
+        #expect(memory.recipe == ["clicked Like", "clicked Next"])
+        #expect(memory.recentRounds == [["clicked Like", "clicked Next"]])
+        #expect(memory.movesThisRound == ["clicked Like", "clicked Next"])
     }
 }

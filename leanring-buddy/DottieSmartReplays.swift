@@ -173,31 +173,69 @@ final class DottieSmartReplayStore: ObservableObject {
 // MARK: - Recording
 
 /// Watches the user's clicks and typing while they show Dottie a job, and
-/// turns them into steps by meaning when they're done.
+/// turns them into steps by meaning when they're done. Watch me uses it
+/// too, and gets each action with what's needed to save it as a task step
+/// (DottieWatchedAction), hovers before a click elsewhere, and typed notes
+/// told apart from form typing.
 @MainActor
 final class DottieSmartReplayRecorder {
     static let shared = DottieSmartReplayRecorder()
 
+    /// What's under the pointer, read through Accessibility.
+    struct PointedElement {
+        let role: String
+        let label: String?
+        /// "the button \"Search\"", or where it was when it has no name.
+        let description: String
+    }
+
     private(set) var isRecording = false
     private(set) var recordingKind: DottieSmartReplay.Kind = .smart
+    /// Watch me: every action with its place, spot and field, for tasks.
+    private(set) var watchedActions: [DottieWatchedAction] = []
+    /// Actions past the cap, not kept (said at the end so nothing is lost silently).
+    private(set) var droppedActionCount = 0
+    /// How many notes were typed so far; the watcher reads the screen after each.
+    private(set) var narrationCount = 0
+    /// A tour reads long sentences about the screen as notes too.
+    private var isTour = false
     private var eventMonitors: [Any] = []
     private var appActivationObserver: NSObjectProtocol?
+    private var pointerTimer: Timer?
     /// What the user did, one line per action, in order.
     private var actionLines: [String] = []
     private var typedTextBuffer = ""
+    private var typedFieldLabel: String?
     private var didTypeIntoPasswordField = false
     private var lastPlaceLine: String?
+    private var lastContext: DottieReplayContext?
+    private var lastClickPosition: (centerX: Double, centerY: Double)?
+    private var startedAt = Date()
+    private var hoverTracker = DottieWatchHoverTracker()
+    /// What the pointer rested on last, waiting for a click elsewhere.
+    private var restedElement: (rest: DottieWatchHoverTracker.Rest, element: PointedElement, position: (centerX: Double, centerY: Double)?)?
     private static let describingModel = DottieModelPicker.normalModelName
-    private static let maximumActionLines = 200
+    private static let maximumActionLines = DottieWatchPlan.maximumActions
+    private static let pointerSampleSeconds = 0.3
 
-    func start(kind: DottieSmartReplay.Kind) -> Bool {
+    func start(kind: DottieSmartReplay.Kind, isTour: Bool = false) -> Bool {
         guard !isRecording else { return false }
         guard AXIsProcessTrusted() else { return false }
         recordingKind = kind
+        self.isTour = isTour
         actionLines = []
+        watchedActions = []
+        droppedActionCount = 0
+        narrationCount = 0
         typedTextBuffer = ""
+        typedFieldLabel = nil
         didTypeIntoPasswordField = false
         lastPlaceLine = nil
+        lastContext = nil
+        lastClickPosition = nil
+        hoverTracker = DottieWatchHoverTracker()
+        restedElement = nil
+        startedAt = Date()
         isRecording = true
         // Global monitors see input going to other apps, never Dottie's own.
         if let clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
@@ -224,11 +262,17 @@ final class DottieSmartReplayRecorder {
                 self?.notePlaceIfChanged()
             }
         }
+        // The pointer, a few times a second, only while recording: a rest on
+        // something just before a click elsewhere is a hover (a menu).
+        pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerSampleSeconds, repeats: true) { _ in
+            Task { @MainActor in DottieSmartReplayRecorder.shared.samplePointer() }
+        }
         notePlaceIfChanged()
         return true
     }
 
     /// Ends the recording. The raw actions, or nil when nothing was done.
+    /// `watchedActions` keeps the same actions for watch me until the next start.
     func stop() -> [String]? {
         guard isRecording else { return nil }
         flushTypedText()
@@ -240,10 +284,15 @@ final class DottieSmartReplayRecorder {
             NSWorkspace.shared.notificationCenter.removeObserver(appActivationObserver)
         }
         appActivationObserver = nil
+        pointerTimer?.invalidate()
+        pointerTimer = nil
         isRecording = false
-        let recordedActionLines = actionLines
+        var recordedActionLines = actionLines
         actionLines = []
         let hasAnyAction = recordedActionLines.contains { !$0.hasPrefix("[in ") }
+        if droppedActionCount > 0 {
+            recordedActionLines.append("(\(droppedActionCount) more actions after these weren't kept)")
+        }
         return hasAnyAction ? recordedActionLines : nil
     }
 
@@ -251,39 +300,113 @@ final class DottieSmartReplayRecorder {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
     }
 
-    private func append(_ actionLine: String) {
-        guard actionLines.count < Self.maximumActionLines else { return }
+    private var secondsSinceStart: Double {
+        Date().timeIntervalSince(startedAt)
+    }
+
+    private func append(_ actionLine: String, watched watchedAction: DottieWatchedAction) {
+        guard actionLines.count < Self.maximumActionLines else {
+            droppedActionCount += 1
+            return
+        }
         actionLines.append(actionLine)
+        watchedActions.append(watchedAction)
+    }
+
+    /// An action with the place it happened in and when.
+    private func makeAction(_ kind: DottieWatchedAction.Kind, label: String, role: String? = nil,
+                            position: (centerX: Double, centerY: Double)? = nil, text: String? = nil,
+                            fieldLabel: String? = nil, isHiddenBecausePrivate: Bool = false) -> DottieWatchedAction {
+        let context = lastContext
+        let placeKey = context?.appBundleIdentifier.map { DottieAppTaskPlan.placeKey(siteHost: context?.siteHost, bundleIdentifier: $0) } ?? ""
+        return DottieWatchedAction(
+            kind: kind, label: label, role: role, centerX: position?.centerX, centerY: position?.centerY, text: text,
+            fieldLabel: fieldLabel, isHiddenBecausePrivate: isHiddenBecausePrivate, pageTitle: context?.windowTitle ?? "",
+            placeKey: placeKey, placeName: context?.siteHost ?? context?.appName ?? "", secondsIntoWatch: secondsSinceStart
+        )
+    }
+
+    /// Where a point is, 0-1000 across and down its screen.
+    private static func screenPosition(of appKitPoint: CGPoint) -> (centerX: Double, centerY: Double)? {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(appKitPoint) }),
+              screen.frame.width > 0, screen.frame.height > 0 else { return nil }
+        let centerX = Double((appKitPoint.x - screen.frame.minX) / screen.frame.width * 1000)
+        let centerY = Double((screen.frame.maxY - appKitPoint.y) / screen.frame.height * 1000)
+        return (centerX, centerY)
     }
 
     /// "[in Safari: instagram.com]", added when the app or site changes.
     private func notePlaceIfChanged() {
         guard !isDottieInFront else { return }
         let context = DottieReplayContext.current()
+        lastContext = context
         let placeText = [context.appName, context.siteHost ?? context.windowTitle.map { String($0.prefix(60)) }]
             .compactMap { $0 }
             .joined(separator: ": ")
         let placeLine = "[in \(placeText)]"
         guard placeLine != lastPlaceLine else { return }
         lastPlaceLine = placeLine
-        append(placeLine)
+        append(placeLine, watched: makeAction(.place, label: placeText))
     }
 
-    private func flushTypedText() {
+    /// Writes down what was typed since the last key that ends typing.
+    /// Returns true when it was a note about the screen, not form typing.
+    @discardableResult
+    private func flushTypedText() -> Bool {
         if didTypeIntoPasswordField {
-            append("typed a password (not saved)")
+            append("typed a password (not saved)", watched: makeAction(.password, label: ""))
             didTypeIntoPasswordField = false
         }
-        guard !typedTextBuffer.isEmpty else { return }
-        append("typed \"\(typedTextBuffer)\"")
+        guard !typedTextBuffer.isEmpty else { return false }
+        let typedText = typedTextBuffer
+        let fieldLabel = typedFieldLabel
         typedTextBuffer = ""
+        typedFieldLabel = nil
+        if DottieWatchPlan.isNarration(typedText, isTour: isTour) {
+            let narrationText = DottieWatchPlan.narrationText(typedText)
+            narrationCount += 1
+            append("wrote a note: \"\(narrationText)\"", watched: makeAction(.narration, label: "", text: narrationText))
+            return true
+        }
+        // Private-looking values (an SSN, a birth date, a phone number)
+        // never reach watch me's model; smart replays keep the text to type.
+        let isPrivate = DottieWatchPlan.looksPrivate(fieldLabel: fieldLabel, value: typedText)
+        append("typed \"\(typedText)\"", watched: makeAction(
+            .typed, label: fieldLabel ?? "", position: lastClickPosition, text: isPrivate ? nil : typedText,
+            fieldLabel: fieldLabel, isHiddenBecausePrivate: isPrivate
+        ))
+        return false
     }
 
     private func noteClick(isRightClick: Bool) {
         guard !isDottieInFront else { return }
         flushTypedText()
         notePlaceIfChanged()
-        append("\(isRightClick ? "right-clicked" : "clicked") \(Self.describeElementUnderPointer())")
+        let mouseLocation = NSEvent.mouseLocation
+        let position = Self.screenPosition(of: mouseLocation)
+        lastClickPosition = position
+        let pointedElement = Self.readElementUnderPointer()
+        // The pointer rested on a menu, then clicked one of its items.
+        if let hoverRest = hoverTracker.restBeforeClick(pointX: Double(mouseLocation.x), pointY: Double(mouseLocation.y), at: secondsSinceStart),
+           let restedElement, restedElement.rest == hoverRest,
+           let restedLabel = restedElement.element.label, !restedLabel.isEmpty, restedLabel != pointedElement.label {
+            append("pointed the mouse at \(restedElement.element.description) (a menu opened)", watched: makeAction(
+                .hover, label: restedLabel, role: restedElement.element.role, position: restedElement.position
+            ))
+        }
+        restedElement = nil
+        append("\(isRightClick ? "right-clicked" : "clicked") \(pointedElement.description)", watched: makeAction(
+            isRightClick ? .rightClick : .click, label: pointedElement.label ?? "", role: pointedElement.role, position: position
+        ))
+    }
+
+    /// A pointer sample: when the pointer has just come to rest, what's
+    /// under it is read once, for a hover if a click elsewhere follows.
+    private func samplePointer() {
+        guard isRecording, !isDottieInFront else { return }
+        let mouseLocation = NSEvent.mouseLocation
+        guard let rest = hoverTracker.notePointer(pointX: Double(mouseLocation.x), pointY: Double(mouseLocation.y), at: secondsSinceStart) else { return }
+        restedElement = (rest, Self.readElementUnderPointer(), Self.screenPosition(of: mouseLocation))
     }
 
     private func noteKey(_ event: NSEvent) {
@@ -297,34 +420,39 @@ final class DottieSmartReplayRecorder {
             if modifierFlags.contains(.option) { modifierNames.append("option") }
             if modifierFlags.contains(.shift) { modifierNames.append("shift") }
             if modifierFlags.contains(.command) { modifierNames.append("cmd") }
-            append("pressed \((modifierNames + [keyCharacters.uppercased()]).joined(separator: "+"))")
+            append("pressed \((modifierNames + [keyCharacters.uppercased()]).joined(separator: "+"))",
+                   watched: makeAction(.pressed, label: (modifierNames + [keyCharacters]).joined(separator: "+")))
             notePlaceIfChanged()
             return
         }
         switch event.keyCode {
         case 36, 76:
-            flushTypedText()
-            append("pressed return")
+            // Return that ends a typed note isn't a step.
+            if !flushTypedText() {
+                append("pressed return", watched: makeAction(.pressed, label: "return"))
+            }
         case 48:
             flushTypedText()
-            append("pressed tab")
+            append("pressed tab", watched: makeAction(.pressed, label: "tab"))
         case 53:
             flushTypedText()
-            append("pressed escape")
+            append("pressed escape", watched: makeAction(.pressed, label: "escape"))
         case 51:
             if typedTextBuffer.isEmpty {
-                append("pressed delete")
+                append("pressed delete", watched: makeAction(.pressed, label: "delete"))
             } else {
                 typedTextBuffer.removeLast()
             }
         case 123, 124, 125, 126:
             flushTypedText()
-            append("pressed the \(["left", "right", "down", "up"][Int(event.keyCode) - 123]) arrow")
+            let arrowName = ["left", "right", "down", "up"][Int(event.keyCode) - 123]
+            append("pressed the \(arrowName) arrow", watched: makeAction(.pressed, label: arrowName))
         default:
             // Passwords are never written down, only that one was typed.
             if Self.isPasswordFieldFocused() {
                 didTypeIntoPasswordField = true
             } else if let typedCharacters = event.characters, !typedCharacters.isEmpty {
+                if typedTextBuffer.isEmpty { typedFieldLabel = Self.focusedFieldLabel() }
                 typedTextBuffer += typedCharacters
             }
         }
@@ -337,14 +465,27 @@ final class DottieSmartReplayRecorder {
         return DottieAX.string(focusedElement, kAXSubroleAttribute) == (kAXSecureTextFieldSubrole as String)
     }
 
-    /// "the button \"Search\"", from Accessibility, or where in the window
-    /// the click was when the thing has no name.
-    private static func describeElementUnderPointer() -> String {
+    /// The name of the text box being typed into ("First Name"), when
+    /// Accessibility gives one.
+    private static func focusedFieldLabel() -> String? {
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+              let focusedElement = DottieAccessibilityCast.element(focusedValue) else { return nil }
+        let label = [kAXTitleAttribute, kAXDescriptionAttribute, "AXLabel", "AXPlaceholderValue", kAXHelpAttribute]
+            .lazy
+            .compactMap { DottieAX.string(focusedElement, $0)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return label.map { String($0.prefix(80)) }
+    }
+
+    /// What's under the pointer, from Accessibility, or where in the window
+    /// it was when the thing has no name.
+    private static func readElementUnderPointer() -> PointedElement {
         let axPoint = DottieAX.axPoint(fromAppKit: NSEvent.mouseLocation)
         var hitElement: AXUIElement?
         guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(axPoint.x), Float(axPoint.y), &hitElement) == .success,
               let hitElement else {
-            return "somewhere Dottie couldn't read"
+            return PointedElement(role: "thing", label: nil, description: "somewhere Dottie couldn't read")
         }
         // A label inside a button or link: describe the button or link.
         var describedElement = hitElement
@@ -366,14 +507,15 @@ final class DottieSmartReplayRecorder {
             .first { !$0.isEmpty }
             ?? DottieAX.string(hitElement, kAXValueAttribute)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let label, !label.isEmpty {
-            return "the \(role) \"\(label.prefix(80))\""
+            let shortLabel = String(label.prefix(80))
+            return PointedElement(role: role, label: shortLabel, description: "the \(role) \"\(shortLabel)\"")
         }
         if let window = DottieAX.enclosingWindow(of: hitElement), let windowFrame = DottieAX.axFrame(window), windowFrame.width > 0, windowFrame.height > 0 {
             let percentAcross = Int((axPoint.x - windowFrame.minX) / windowFrame.width * 100)
             let percentDown = Int((axPoint.y - windowFrame.minY) / windowFrame.height * 100)
-            return "an unnamed \(role) about \(percentAcross)% across and \(percentDown)% down the window"
+            return PointedElement(role: role, label: nil, description: "an unnamed \(role) about \(percentAcross)% across and \(percentDown)% down the window")
         }
-        return "an unnamed \(role)"
+        return PointedElement(role: role, label: nil, description: "an unnamed \(role)")
     }
 
     /// Turns the raw actions into a name and steps by meaning, like a

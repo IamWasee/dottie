@@ -160,6 +160,9 @@ final class CompanionManager: ObservableObject {
     /// While a guide waits for the user to click its target, the cursor
     /// keeps pointing at it instead of flying back after a few seconds.
     private(set) var keepsPointingUntilCleared = false
+    /// While a screen job runs, Dottie's cursor stays where the job last
+    /// clicked or pointed, and flies back to the mouse when the job ends.
+    var screenJobHoldsCursorAtItsLastSpot: Bool { screenTaskRunner.isRunning }
     /// The question Dottie handed the Brain, so she says its answer.
     var pendingSpokenBrainQuestion: String?
     private var currentGuideGoal: String?

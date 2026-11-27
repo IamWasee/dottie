@@ -25,6 +25,7 @@ nonisolated enum DottieCostCategory {
         "screen_job_steps": ["DottieScreenTaskRunner", "DottieScreenJobClaudeBrain"],
         "screen_job_plan": ["DottieScreenJobGuesser", "DottieTaskGoal", "DottieJevTextPieces"],
         "jev": ["DottieJev", "DottieJevDriver"],
+        "jev_advisor": ["DottieJevAdvisor"],
         "tv_jobs": ["DottieTVTaskRunner"],
         "guides": ["DottieGuide", "DottieGuideBrain"],
         "pointing": ["PointingRefiner", "PointingPrecision", "DottieReadClosely"],
@@ -40,7 +41,8 @@ nonisolated enum DottieCostCategory {
         "games": ["DottieGames"],
         "personality": ["DottieCustomPersonality"],
         "self_check": ["DottieSelfCheck"],
-        "app_memory": ["DottieAppMemory", "DottieAppMemoryRecall"]
+        "app_memory": ["DottieAppMemory", "DottieAppMemoryRecall"],
+        "app_tasks": ["DottieAppTasks"]
     ]
 
     private static let categoryByFileStem: [String: String] = {
