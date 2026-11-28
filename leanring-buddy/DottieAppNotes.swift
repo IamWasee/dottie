@@ -65,15 +65,60 @@ enum DottieAppNotesPlan {
     static func memoryPlaces(bundleIdentifier: String, appName: String, pages: [DottieAppPage]) -> [MemoryPlace] {
         var pagesByPlace: [String: [DottieAppPage]] = [:]
         for page in pages {
-            let keyParts = page.key.components(separatedBy: "|")
-            let siteHost = keyParts.count >= 2 ? keyParts[1] : ""
-            let placeKey = DottieAppTaskPlan.placeKey(siteHost: siteHost.isEmpty ? nil : siteHost, bundleIdentifier: bundleIdentifier)
-            pagesByPlace[placeKey, default: []].append(page)
+            pagesByPlace[placeKey(ofPageKey: page.key, bundleIdentifier: bundleIdentifier), default: []].append(page)
         }
         return pagesByPlace.map { placeKey, placePages in
             MemoryPlace(placeKey: placeKey, appName: placeKey == bundleIdentifier.lowercased() ? appName : placeKey,
                         pagesSeen: placePages.count, lastSeen: placePages.map(\.lastSeen).max())
         }
+    }
+
+    /// The place a remembered page belongs to: its site in a browser, else the app.
+    static func placeKey(ofPageKey pageKey: String, bundleIdentifier: String) -> String {
+        let keyParts = pageKey.components(separatedBy: "|")
+        let siteHost = keyParts.count >= 2 ? keyParts[1] : ""
+        return DottieAppTaskPlan.placeKey(siteHost: siteHost.isEmpty ? nil : siteHost, bundleIdentifier: bundleIdentifier)
+    }
+
+    // MARK: Forgetting a place (Home → Admin's Forget)
+
+    /// Tasks without the place: one done only there is dropped, one also
+    /// done elsewhere keeps its other places.
+    static func tasksAfterForgetting(_ tasks: [DottieAppTask], placeKey: String) -> [DottieAppTask] {
+        let forgottenKey = placeKey.lowercased()
+        return tasks.compactMap { task in
+            let taskPlaces = task.places.isEmpty ? [task.appName.lowercased()] : task.places.map { $0.lowercased() }
+            guard taskPlaces.contains(forgottenKey) else { return task }
+            let remainingPlaces = task.places.filter { $0.lowercased() != forgottenKey }
+            guard !remainingPlaces.isEmpty else { return nil }
+            var keptTask = task
+            keptTask.places = remainingPlaces
+            return keptTask
+        }
+    }
+
+    /// Watched how-tos without the place, the same way (how-tos with no
+    /// places saved are about no place and stay).
+    static func howTosAfterForgetting(_ howTos: [DottieWatchedHowTo], placeKey: String) -> [DottieWatchedHowTo] {
+        let forgottenKey = placeKey.lowercased()
+        return howTos.compactMap { howTo in
+            guard let howToPlaces = howTo.places, howToPlaces.contains(where: { $0.lowercased() == forgottenKey }) else { return howTo }
+            let remainingPlaces = howToPlaces.filter { $0.lowercased() != forgottenKey }
+            guard !remainingPlaces.isEmpty else { return nil }
+            var keptHowTo = howTo
+            keptHowTo.places = remainingPlaces
+            return keptHowTo
+        }
+    }
+
+    /// One app's remembered pages without the place's.
+    static func pagesAfterForgetting(_ pages: [String: DottieAppPage], bundleIdentifier: String, placeKey: String) -> [String: DottieAppPage] {
+        let forgottenKey = placeKey.lowercased()
+        return pages.filter { pageKey, _ in self.placeKey(ofPageKey: pageKey, bundleIdentifier: bundleIdentifier) != forgottenKey }
+    }
+
+    static func notesAfterForgetting(_ notes: [DottieAppNote], placeKey: String) -> [DottieAppNote] {
+        notes.filter { $0.placeKey.lowercased() != placeKey.lowercased() }
     }
 
     /// Every app and site Dottie learned anything about, newest first.
@@ -345,6 +390,19 @@ final class DottieAppNotes: ObservableObject {
             self.statusByPlace[placeKey] = "Learned: \(taskWords)." + (teaching.summary.isEmpty ? "" : " \(teaching.summary)")
             DottieLog.notice("📝 Learned from the user's notes about an app (\(public: taughtTasks.count) task(s))")
         }
+    }
+
+    /// Home → Admin's Forget: everything Dottie learned about one app or
+    /// site goes (pages, tasks, card, watched how-tos, notes). The skills a
+    /// watch saved for the Dots stay in Home → Skills.
+    func forgetEverything(aboutPlace placeKey: String) {
+        notes = DottieAppNotesPlan.notesAfterForgetting(notes, placeKey: placeKey)
+        statusByPlace[placeKey.lowercased()] = nil
+        save()
+        DottieAppTasks.shared.forget(placeKey: placeKey)
+        DottieWatchAndLearn.shared.forget(placeKey: placeKey)
+        DottieAppMemory.shared.forget(placeKey: placeKey)
+        DottieLog.notice("📝 Forgot everything about one app or site, as the user asked")
     }
 
     func forget(noteID: UUID) {

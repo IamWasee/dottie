@@ -40,8 +40,18 @@ struct ScreenSettleTests {
 
     // MARK: Settled
 
-    @Test func oneMatchingLookIsNotEnough() {
-        #expect(!Settle.isSettled(matchingLooksInARow: 1, pageLoad: .loaded))
+    @Test func oneMatchingLookIsNotEnoughWhenNothingSaysThePageLoaded() {
+        #expect(!Settle.isSettled(matchingLooksInARow: 1, pageLoad: .unknown))
+    }
+
+    @Test func oneMatchingLookOnALoadedPageSettles() {
+        #expect(Settle.isSettled(matchingLooksInARow: 1, pageLoad: .loaded))
+        #expect(!Settle.isSettled(matchingLooksInARow: 0, pageLoad: .loaded))
+    }
+
+    @Test func looksComeQuickly() {
+        #expect(Settle.firstLookDelaySeconds <= 0.25)
+        #expect(Settle.secondsBetweenLooks <= 0.2)
     }
 
     @Test func twoMatchingLooksOnALoadedPageSettle() {
@@ -59,8 +69,8 @@ struct ScreenSettleTests {
 
     // MARK: Time limits
 
-    @Test func ordinaryMovesWaitUpToTwoSeconds() {
-        #expect(Settle.maximumWaitSeconds(opensSomethingNew: false, pageLoad: .loaded) == 2)
+    @Test func ordinaryMovesWaitUpToOneAndAHalfSeconds() {
+        #expect(Settle.maximumWaitSeconds(opensSomethingNew: false, pageLoad: .loaded) == 1.5)
     }
 
     @Test func movesThatOpenSomethingWaitUpToFiveSeconds() {
@@ -69,7 +79,7 @@ struct ScreenSettleTests {
 
     @Test func aLoadingPageGetsExtraTime() {
         #expect(Settle.maximumWaitSeconds(opensSomethingNew: true, pageLoad: .loading) == 5 + Settle.extraSecondsWhilePageLoads)
-        #expect(Settle.maximumWaitSeconds(opensSomethingNew: false, pageLoad: .loading) == 2 + Settle.extraSecondsWhilePageLoads)
+        #expect(Settle.maximumWaitSeconds(opensSomethingNew: false, pageLoad: .loading) == 1.5 + Settle.extraSecondsWhilePageLoads)
     }
 
     // MARK: Target region
@@ -169,17 +179,37 @@ struct ScreenSettleTests {
         var pageLoad = Settle.PageLoad.loading
         matchingLooks += 2
         #expect(!Settle.isSettled(matchingLooksInARow: matchingLooks, pageLoad: pageLoad))
-        // The page finishes and draws: the next look differs, then two match.
+        // The page finishes and draws: the next look differs, then one matches.
         pageLoad = .loaded
         matchingLooks = 0
         #expect(!Settle.isSettled(matchingLooksInARow: matchingLooks, pageLoad: pageLoad))
-        matchingLooks = 2
+        matchingLooks = 1
         #expect(Settle.isSettled(matchingLooksInARow: matchingLooks, pageLoad: pageLoad))
         // Jev picks a click, but a banner pushes the page down before it lands.
         let picked = [UInt8](repeating: 220, count: 256)
         let now = [UInt8](repeating: 60, count: 256)
         let changed = Settle.targetRegionChanged(pickedOn: picked, now: now)
         #expect(Settle.shouldDropStaleMove(targetRegionChanged: changed, staleMovesDroppedInARow: 0))
+    }
+
+    // MARK: Fixed waits
+
+    @Test func theCursorFlightBeforeAClickIsShortUnlessFilmed() {
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: false) == 0.3)
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: true) == 0.15)
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: true, isReplaying: true) == 1.2)
+        // It was 0.75 s on every click.
+        #expect(Settle.cursorFlightPauseSeconds(isCommercial: false, isReplaying: false) < 0.75)
+    }
+
+    @Test func onlyVideoSitesGetTheSecondMouseNudge() {
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "www.youtube.com"))
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "m.youtube.com"))
+        #expect(Settle.showsControlsOnlyOnHover(siteHost: "twitch.tv"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: "localhost"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: "notyoutube.com"))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: nil))
+        #expect(!Settle.showsControlsOnlyOnHover(siteHost: ""))
     }
 
     // MARK: Speed

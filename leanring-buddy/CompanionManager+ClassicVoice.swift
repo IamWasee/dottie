@@ -150,6 +150,10 @@ extension CompanionManager {
         inputKind: ConversationEntry.InputKind = .voice,
         checksInstantLane: Bool = true
     ) {
+        // The answer to a screen job's question goes straight to it, on the Mac.
+        if passAnswerToWaitingScreenJobIfGiven(transcript, inputKind: inputKind) {
+            return
+        }
         // Guidance for the screen job that's running goes to it, not to a new turn.
         if passHintToRunningScreenJobIfGiven(transcript, inputKind: inputKind) {
             return

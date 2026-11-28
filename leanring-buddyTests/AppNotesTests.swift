@@ -5,7 +5,8 @@
 //  Teaching Dottie by typing in Home → Admin: every app and site she knows
 //  listed once from app memory, tasks, how-tos and notes; a typed name
 //  turned into a place; the teaching call's prompt and answer; taught tasks
-//  merged into the ones she has; and the user's words reaching a job.
+//  merged into the ones she has; the user's words reaching a job; and
+//  forgetting one app or site everywhere.
 //
 
 import Foundation
@@ -203,6 +204,72 @@ struct AppNotesTests {
                                                   userNotes: "What the user told Dottie about OpenEMR:\nFees is under the top menu")
         #expect(prompt.contains("Fees is under the top menu"))
         #expect(!DottieAppTaskPlan.cardPrompt(appName: "OpenEMR", memoryLines: [], tasks: []).contains("Keep what the user said"))
+    }
+
+    // MARK: Forgetting a place
+
+    @Test func forgettingAPlaceDropsItsOwnTasksAndKeepsSharedOnes() {
+        let onlyHere = task("Add a patient", places: ["localhost"])
+        let shared = task("Search", places: ["localhost", "youtube.com"])
+        let elsewhere = task("Play a video", places: ["youtube.com"])
+        let noPlace = task("Rename a column", places: [], appName: "Numbers")
+        let kept = Plan.tasksAfterForgetting([onlyHere, shared, elsewhere, noPlace], placeKey: "LOCALHOST")
+        #expect(kept.map(\.id) == [shared.id, elsewhere.id, noPlace.id])
+        #expect(kept[0].places == ["youtube.com"])
+        #expect(Plan.tasksAfterForgetting([noPlace], placeKey: "numbers").isEmpty)
+    }
+
+    @Test func forgettingAPlaceDropsHowTosWatchedOnlyThere() {
+        func howTo(_ name: String, places: [String]?) -> DottieWatchedHowTo {
+            DottieWatchedHowTo(learnedAt: now, name: name, appName: "OpenEMR", summary: "", goal: "", method: [],
+                               interfaceNotes: [], worksFor: "", places: places)
+        }
+        let tour = howTo("Tour", places: ["localhost"])
+        let both = howTo("Both", places: ["localhost", "notion.so"])
+        let old = howTo("Old", places: nil)
+        let kept = Plan.howTosAfterForgetting([tour, both, old], placeKey: "localhost")
+        #expect(kept.map(\.name) == ["Both", "Old"])
+        #expect(kept[0].places == ["notion.so"])
+    }
+
+    @Test func forgettingASiteKeepsTheBrowsersOtherPages() {
+        let pages = [
+            "com.google.chrome|localhost|patient finder": page("com.google.chrome|localhost|patient finder", lastSeen: now),
+            "com.google.chrome|www.youtube.com|youtube": page("com.google.chrome|www.youtube.com|youtube", lastSeen: now),
+            "com.google.chrome||new tab": page("com.google.chrome||new tab", lastSeen: now)
+        ]
+        let withoutSite = Plan.pagesAfterForgetting(pages, bundleIdentifier: "com.google.Chrome", placeKey: "localhost")
+        #expect(Set(withoutSite.keys) == ["com.google.chrome|www.youtube.com|youtube", "com.google.chrome||new tab"])
+        let withoutYouTube = Plan.pagesAfterForgetting(pages, bundleIdentifier: "com.google.Chrome", placeKey: "youtube.com")
+        #expect(withoutYouTube.count == 2)
+        let withoutApp = Plan.pagesAfterForgetting(pages, bundleIdentifier: "com.google.Chrome", placeKey: "com.google.chrome")
+        #expect(withoutApp.count == 2)
+        #expect(Plan.pagesAfterForgetting(pages, bundleIdentifier: "com.google.Chrome", placeKey: "notion.so").count == 3)
+    }
+
+    @Test func forgettingAPlaceDropsItsNotesOnly() {
+        let kept = Plan.notesAfterForgetting([note("a"), note("b", placeKey: "notion.so")], placeKey: "Localhost")
+        #expect(kept.map(\.text) == ["b"])
+    }
+
+    @Test func aForgottenPlaceLeavesTheList() {
+        let tasks = [task("Add a patient", places: ["localhost"]), task("Play", places: ["youtube.com"], appName: "youtube.com")]
+        let notes = [note("left menu")]
+        let memory = [Plan.MemoryPlace(placeKey: "localhost", appName: "localhost", pagesSeen: 3, lastSeen: now)]
+        let before = Plan.knownPlaces(tasks: tasks, howTos: [], memoryPlaces: memory, notes: notes, cardPlaceKeys: ["localhost"])
+        #expect(before.map(\.placeKey).contains("localhost"))
+        let after = Plan.knownPlaces(tasks: Plan.tasksAfterForgetting(tasks, placeKey: "localhost"), howTos: [], memoryPlaces: [],
+                                     notes: Plan.notesAfterForgetting(notes, placeKey: "localhost"), cardPlaceKeys: [])
+        #expect(after.map(\.placeKey) == ["youtube.com"])
+    }
+
+    @Test func forgettingIsQuick() {
+        let tasks = (0..<300).map { task("Task \($0)", places: ["site\($0 % 40).example", "shared.example"]) }
+        let startedAt = Date()
+        for index in 0..<40 {
+            _ = Plan.tasksAfterForgetting(tasks, placeKey: "site\(index).example")
+        }
+        #expect(Date().timeIntervalSince(startedAt) < 1.0)
     }
 
     @Test func listingPlacesIsQuick() {

@@ -1790,6 +1790,15 @@ final class CompanionManager: ObservableObject {
             DottieFunPack.shared.noteScreenJobWaitingForUnlock(job.text)
             return "the mac's screen is locked, so this waits in line and starts by itself as soon as the user unlocks. say that in a few words."
         }
+        // The model turned the user's answer or tip for the running job into
+        // a new job: it goes to the running job instead of the line.
+        if screenTaskRunner.isRunning, DottieScreenJobQuestions.shared.answer(job.text) {
+            return "that was the answer to the running job's question, so it went to that job, which carries on. say okay in two or three words."
+        }
+        if screenTaskRunner.isRunning, DottieScreenJobHintPlan.isGuidance(job.text) {
+            DottieScreenJobHints.shared.add(job.text)
+            return "that was a tip for the running job, so it went to that job, which tries it next. say okay in two or three words."
+        }
         if screenTaskRunner.isRunning {
             queuedScreenTasks.append(job)
             DottieLog.notice("🧭 Screen task queued (\(queuedScreenTasks.count) waiting): \(job.text)")
@@ -1835,8 +1844,9 @@ final class CompanionManager: ObservableObject {
             self.detectedElementDisplayFrame = displayFrame
             // A replay already knows its target, so the flight is quicker.
             // A commercial run is filmed, so it lingers long enough to see.
-            let pauseNanoseconds: UInt64 = job.isCommercial ? 1_200_000_000 : (self.screenTaskRunner.isReplaying ? 400_000_000 : 750_000_000)
-            try? await Task.sleep(nanoseconds: pauseNanoseconds)
+            let pauseSeconds = DottieScreenSettle.cursorFlightPauseSeconds(isCommercial: job.isCommercial,
+                                                                           isReplaying: self.screenTaskRunner.isReplaying)
+            try? await Task.sleep(nanoseconds: UInt64(pauseSeconds * 1_000_000_000))
         }
         currentScreenTaskText = taskText
         currentScreenJob = job
@@ -1882,6 +1892,7 @@ final class CompanionManager: ObservableObject {
             }
             return
         }
+        DottieScreenJobQuestions.shared.noteAskedAloud()
         speakWhenFree(
             recordedUserText: "(job asks: \(question))",
             instructionText: "the on-screen job you're doing needs one thing from the user before it can carry on. ask them this in one short line, in your own voice: \"\(question)\". then stop talking. when they answer, call answer_screen_job with their answer, word for word. don't start a new job."
@@ -2010,6 +2021,21 @@ final class CompanionManager: ObservableObject {
                 return
             }
         }
+    }
+
+    /// The user's words while a screen job waits on its question are the
+    /// answer: handed to the job on the Mac, never through a model that
+    /// could start a new job instead. True when it was taken.
+    func passAnswerToWaitingScreenJobIfGiven(_ text: String, inputKind: ConversationEntry.InputKind) -> Bool {
+        guard DottieScreenJobQuestions.shared.isWaitingForAnswer,
+              DottieScreenJobHintPlan.isAnswerToWaitingQuestion(text),
+              DottieScreenJobQuestions.shared.answer(text) else { return false }
+        DottieLog.notice("🧭 Passed the user's answer to the waiting screen job")
+        voiceState = .idle
+        conversationStore.append(userText: text, clickyText: "Got it, carrying on.", inputKind: inputKind)
+        notchPresenter.showScreenTaskStep("carrying on with your answer", title: screenTaskTitle)
+        NSSound(named: "Pop")?.play()
+        return true
     }
 
     /// "No, use the search bar, it's faster" said or typed while a screen

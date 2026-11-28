@@ -53,6 +53,8 @@ struct DottieJevRunStats: Equatable {
     var moves = 0
     var jevCalls = 0
     var advisorCalls = 0
+    /// Form boxes typed at once without asking Jev (DottieFormFillPlan).
+    var formBoxesFilled = 0
 }
 
 enum DottieAppMemoryTrial {

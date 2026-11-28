@@ -25,9 +25,17 @@ enum DottieScreenSettle {
         case unknown
     }
 
-    /// Looks in a row that must match before the screen counts as settled.
-    /// One match let a blank page that hadn't started drawing pass.
+    /// Looks in a row that must match before the screen counts as settled
+    /// when nothing says the page loaded. One match let a blank page that
+    /// hadn't started drawing pass.
     static let matchingLooksNeeded = 2
+    /// When the browser says its page loaded, one matching look is enough:
+    /// the second look cost every move about half a second (Wasee, 28 Nov:
+    /// "it got way too slow").
+    static let matchingLooksNeededOnALoadedPage = 1
+    /// How long after a move the first look waits, and between looks.
+    static let firstLookDelaySeconds = 0.25
+    static let secondsBetweenLooks = 0.2
     /// Extra time given while the browser still says it's loading.
     static let extraSecondsWhilePageLoads = 6.0
     /// A click aimed at a spot that changed is dropped at most this many
@@ -43,6 +51,28 @@ enum DottieScreenSettle {
     /// a blinking caret or a hover tint doesn't drop a good click.
     static let targetRegionChangeThreshold = 12.0
 
+    /// How long the blue cursor flies before a screen-job click. It was
+    /// 0.75 s on every click, about a tenth of a 9-minute job (the speed
+    /// review, 28 Nov); the cursor still finishes its flight after the click.
+    /// A commercial is filmed, so it lingers long enough to see.
+    static func cursorFlightPauseSeconds(isCommercial: Bool, isReplaying: Bool) -> Double {
+        if isCommercial { return 1.2 }
+        return isReplaying ? 0.15 : 0.3
+    }
+
+    /// Video players show their controls only while the mouse moves, so on
+    /// these sites the mouse is nudged again right before a click is checked.
+    /// Elsewhere that second nudge only cost time on every click.
+    private static let hostsWithHoverOnlyControls = [
+        "youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "netflix.com", "dailymotion.com",
+        "primevideo.com", "disneyplus.com", "hulu.com", "max.com", "tv.apple.com", "kick.com", "rumble.com"
+    ]
+
+    static func showsControlsOnlyOnHover(siteHost: String?) -> Bool {
+        guard let siteHost = siteHost?.lowercased(), !siteHost.isEmpty else { return false }
+        return hostsWithHoverOnlyControls.contains { siteHost == $0 || siteHost.hasSuffix("." + $0) }
+    }
+
     static func pageLoad(loadedAttribute: Bool?, loadingProgress: Double?) -> PageLoad {
         if let loadingProgress, loadingProgress < 0.999 { return .loading }
         if let loadedAttribute { return loadedAttribute ? .loaded : .loading }
@@ -51,11 +81,17 @@ enum DottieScreenSettle {
     }
 
     static func isSettled(matchingLooksInARow: Int, pageLoad: PageLoad) -> Bool {
-        pageLoad != .loading && matchingLooksInARow >= matchingLooksNeeded
+        switch pageLoad {
+        case .loading: return false
+        case .loaded: return matchingLooksInARow >= matchingLooksNeededOnALoadedPage
+        case .unknown: return matchingLooksInARow >= matchingLooksNeeded
+        }
     }
 
+    /// A screen that never stops moving (a playing video) used to make
+    /// every move wait the whole time; ordinary moves now wait 1.5 s at most.
     static func maximumWaitSeconds(opensSomethingNew: Bool, pageLoad: PageLoad) -> Double {
-        let baseSeconds = opensSomethingNew ? 5.0 : 2.0
+        let baseSeconds = opensSomethingNew ? 5.0 : 1.5
         return pageLoad == .loading ? baseSeconds + extraSecondsWhilePageLoads : baseSeconds
     }
 

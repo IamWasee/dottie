@@ -281,6 +281,19 @@ enum DottieScreenActionPerformer {
         return ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"].contains(role)
     }
 
+    /// What the selected text box holds, or nil when no text box is
+    /// selected or it doesn't say (a later round's replayed typing is checked with it).
+    static var focusedTextFieldValue: String? {
+        guard isTextFieldFocused else { return nil }
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var focusedElementValue: CFTypeRef?
+        var textValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElementValue) == .success,
+              let focusedElement = DottieAccessibilityCast.element(focusedElementValue),
+              AXUIElementCopyAttributeValue(focusedElement, kAXValueAttribute as CFString, &textValue) == .success else { return nil }
+        return textValue as? String
+    }
+
     /// Types with Unicode keyboard events, a few characters at a time, which
     /// works in native, web and Electron fields without touching the clipboard.
     static func type(_ text: String) async {

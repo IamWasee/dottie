@@ -132,6 +132,10 @@ final class DottieScreenTaskRunner {
     private var jobReport = DottieJobReport()
     /// How many times a finish was sent back because it wasn't done yet.
     private var finishRejectionCount = 0
+    /// Jev's "not done yet" on a fresh screen held a finish back this job.
+    private var jevHeldBackAFinish = false
+    /// The job running now repeats a task (several rounds).
+    private var isRepeatedJobRunning = false
     private static let maximumFinishRejections = 2
     /// Passwords and codes the user gave during this job, by placeholder
     /// ("{{code}}"). The model types the placeholder and Dottie fills in the
@@ -179,6 +183,7 @@ final class DottieScreenTaskRunner {
         currentGoal = nil
         isLongJob = false
         finishRejectionCount = 0
+        jevHeldBackAFinish = false
         userSecrets = [:]
         approvedRiskyLabels = []
         usesClaudeForThisJob = DottieScreenJobClaudeBrain.shared.isWorthTrying
@@ -269,6 +274,7 @@ final class DottieScreenTaskRunner {
         var actionLog: [String] = []
         // Every action and tool call, and which round of a repeated job this is.
         var jobMemory = DottieJobMemory(taskText: taskText)
+        isRepeatedJobRunning = jobMemory.isRepeatedJob
         var earlyFinishRejectionCount = 0
         var unfinishedFinishRejectionCount = 0
         lastJobMoveSummaries = []
@@ -457,8 +463,17 @@ final class DottieScreenTaskRunner {
             if didActSinceLastLook,
                let previousScreenFingerprint, Self.isSameScreen(previousScreenFingerprint, screenFingerprint) {
                 screenNote += "\nThe screen looks exactly the same as before your last action, so it probably didn't work (or it was already done). Don't repeat it: look at what's really on screen and try a different way, like pressing return, clicking a different spot or result, closing a popup, scrolling, or waiting."
-                // Clicks that changed nothing aren't part of the replay.
+                // Clicks that changed nothing aren't part of the replay, and
+                // are remembered on their page so the next job skips them.
+                let frontPageNow = DottieAppMemory.shared.frontPageForScreenJob(context: DottieReplayContext.current())
                 for index in unconfirmedStepIndices.sorted(by: >) where index < recordedSteps.count {
+                    let missedStep = recordedSteps[index]
+                    if let frontPageNow, missedStep.action == "click",
+                       let missedLabel = [missedStep.target?.title, missedStep.target?.nearbyText, missedStep.target?.descriptionText, missedStep.target?.label]
+                           .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }) {
+                        DottieAppMemory.shared.noteMiss(bundleIdentifier: frontPageNow.bundleIdentifier, pageKey: frontPageNow.key,
+                                                        label: missedLabel, centerX: 0, centerY: 0)
+                    }
                     recordedSteps.remove(at: index)
                 }
                 escalateModelIfSimple()
@@ -1038,11 +1053,15 @@ final class DottieScreenTaskRunner {
         }
         // A second opinion from Jev on a fresh screen: only a clear "no" holds
         // the finish back, so a slow or unsure Jev never stops a done job.
-        if let specificDoneWhen = currentGoal?.doneWhen, !specificDoneWhen.isEmpty,
+        // It holds back once at most, and never on a repeated job, whose
+        // done-when (every new patient added) can't show on one screen.
+        if !jevHeldBackAFinish, !isRepeatedJobRunning,
+           let specificDoneWhen = currentGoal?.doneWhen, !specificDoneWhen.isEmpty,
            let freshScreen = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: Self.maximumScreenshotDimension),
            let doneProbability = await DottieJev.probability(of: specificDoneWhen, in: freshScreen.image),
            DottieJevProtocol.clearlyNotDone(probability: doneProbability) {
             DottieLog.notice("🎯 Jev says the job isn't done yet")
+            jevHeldBackAFinish = true
             return "a check of the screen says it isn't done yet (done when: \(doneWhen)). Look at the next screenshot and keep going; finish only once it shows."
         }
         return nil

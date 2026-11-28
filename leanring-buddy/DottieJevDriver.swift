@@ -783,6 +783,22 @@ enum DottieJevDriverPlan {
         return URL(string: withScheme)?.host?.lowercased()
     }
 
+    /// The "done?" question Jev answers every step. A finished job rarely
+    /// shows the whole request on one screen (the last of two new patients
+    /// is on screen, not both), so the last round of a repeated job asks
+    /// about that round alone, and a single job counts its result showing
+    /// (saved, sent, added, a success message) as done (Wasee, 28 Nov: jobs
+    /// that really finished never said so).
+    static func doneQuestionInstructions(jobMemory: DottieJobMemory?) -> String {
+        if let jobMemory, jobMemory.isRepeatedJob {
+            if jobMemory.hasRoundsLeft {
+                return "Is round \(jobMemory.currentRound) of the task finished on this screen?"
+            }
+            return "This is the last round (round \(jobMemory.currentRound) of \(jobMemory.totalRounds)); the earlier rounds are already done. Is this last round finished on this screen?"
+        }
+        return "Is the user's request fully done on this screen already? Say yes when the moves so far did every part of it and this screen shows the result: the thing saved, sent, added, created or opened, a success message, or the new item on its own page or in a list."
+    }
+
     static func requestBody(
         goal: String,
         movesSoFar: [String],
@@ -824,9 +840,7 @@ enum DottieJevDriverPlan {
             ],
             doneQuestionName: [
                 "type": "noul",
-                "instructions": jobMemory.map { $0.hasRoundsLeft } == true
-                    ? "Is round \(jobMemory?.currentRound ?? 1) of the task finished on this screen?"
-                    : "Is the user's request fully done on this screen already?"
+                "instructions": doneQuestionInstructions(jobMemory: jobMemory)
             ]
         ]
         if let lastMoveSummary, !lastMoveSummary.isEmpty {
@@ -1009,6 +1023,9 @@ enum DottieJevDriver {
         var pathReplay = taskToReplay.map { DottieAppTaskPathReplay(task: $0) }
         var pathProblem: DottieAppTaskProblem?
         var lastMoveCameFromSavedTask = false
+        // Rounds 2 to N of a repeated job: round 1's own steps done again
+        // with that round's details (DottieRoundReplayPlan), not a saved task.
+        var pathReplayIsRoundRecipe = false
         // The task's own notes go first, so the cut at 4,500 characters
         // drops the general lessons rather than them (the watch me review).
         if usesAppMemory, !startKnowledge.taskText.isEmpty {
@@ -1024,7 +1041,11 @@ enum DottieJevDriver {
         var textPieces = requestTextPieces
         // The text a job needs typed, written once in the background while
         // Jev starts (DottieJevTextPieces); picked up as soon as it's ready.
-        var textPieceWriter: Task<[String], Never>?
+        var textPieceWriter: Task<DottieJevTextPieces.Written, Never>?
+        // A form's boxes and values from the same call (DottieFormFillPlan),
+        // and the boxes already typed this round.
+        var formBoxes: [DottieFormFillPlan.FormBox] = []
+        var filledFormBoxLabels = Set<String>()
         if DottieJevTextPieces.jobNeedsTyping(taskText) {
             textPieceWriter = Task { await DottieJevTextPieces.write(forTask: taskText) }
         }
@@ -1038,6 +1059,9 @@ enum DottieJevDriver {
         // App memory: the click this job made last, waiting to see which
         // page it opened, and the labels clicked so far (never twice from memory).
         var clickWaitingForResult: (bundleIdentifier: String, pageKey: String, label: String, centerX: Double, centerY: Double)?
+        /// This job's clicks that changed nothing or didn't work, per page,
+        /// waiting for the click that works there (the fix).
+        var missedClickLabelsByPageKey: [String: [String]] = [:]
         var labelsClickedFromMemory = Set<String>()
         // Every move, and which round of a repeated job this is.
         var jobMemory = DottieJobMemory(taskText: taskText)
@@ -1090,7 +1114,7 @@ enum DottieJevDriver {
             if let taskToReplay, !jevPartWorked {
                 DottieAppTasks.shared.noteJevHandedOver(
                     request: taskText, replayedTaskID: taskToReplay.id,
-                    problem: pathProblem ?? pathReplay?.problemWithCurrentStep("Jev handed the job over: \(reason)", now: Date())
+                    problem: pathProblem ?? (pathReplayIsRoundRecipe ? nil : pathReplay?.problemWithCurrentStep("Jev handed the job over: \(reason)", now: Date()))
                 )
             }
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: handedOverCountKey) + 1, forKey: handedOverCountKey)
@@ -1118,10 +1142,30 @@ enum DottieJevDriver {
         /// The saved steps stopped fitting: Jev carries on with a note.
         func dropSavedTask(_ problem: DottieAppTaskProblem, reason: String) {
             guard let activeReplay = pathReplay else { return }
+            pathReplay = nil
+            if pathReplayIsRoundRecipe {
+                // Only this round goes to Jev: the next round tries round 1's steps again.
+                pathReplayIsRoundRecipe = false
+                movesSoFar.append("round 1's steps stopped fitting at step \(problem.stepNumber) (\(reason)); Jev does the rest of this round")
+                DottieLog.notice("🔁 Round 1's steps stopped fitting at step \(public: problem.stepNumber) of \(activeReplay.task.name); Jev does the rest of it")
+                return
+            }
             pathProblem = problem
             knownHowTo += "\n" + activeReplay.noteForJev(reason: reason)
-            pathReplay = nil
             DottieLog.notice("🗂️ A saved task stopped fitting the screen at step \(public: problem.stepNumber); Jev carries on")
+        }
+
+        /// The next round of a repeated job starts on round 1's own steps,
+        /// with this round's details typed and clicked where round 1's were.
+        func startRoundFromRoundOne() {
+            guard jobMemory.currentRound >= 2,
+                  let roundTask = DottieRoundReplayPlan.roundTask(
+                      roundOneSteps: recording.steps, round: jobMemory.currentRound, totalRounds: jobMemory.totalRounds,
+                      taskText: taskText, appName: recording.mainPlaceName ?? "", places: recording.places, now: Date()
+                  ) else { return }
+            pathReplay = DottieAppTaskPathReplay(task: roundTask)
+            pathReplayIsRoundRecipe = true
+            DottieLog.notice("🔁 Round \(public: jobMemory.currentRound) starts on round 1's \(public: roundTask.steps.count) steps, no Jev call per step")
         }
 
         /// Jev finished: the job is kept as a named task (or counted on its saved one).
@@ -1207,7 +1251,18 @@ enum DottieJevDriver {
             let screenThumbnail = thumbnail(of: screen.image)
             // Exploring: a move that left the screen as it was is struck
             // off for that screen, so Jev's next best pick gets its turn.
-            let lastMoveChangedNothing = previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? false
+            let screenLooksTheSame = previousScreenThumbnail.map { DottieJevDriverPlan.isSameScreen($0, screenThumbnail) } ?? false
+            // Clicking into a text box barely changes the screen (a caret),
+            // but it worked: it isn't struck off, dropped from the recording
+            // or remembered as a miss (the speed review, 28 Nov: round 1
+            // taught memory that its own good field clicks were wrong).
+            let lastMoveWasAClick: Bool
+            switch lastMove {
+            case .some(.click), .some(.clickControl), .some(.doubleClick): lastMoveWasAClick = true
+            default: lastMoveWasAClick = false
+            }
+            let lastClickFocusedATextBox = screenLooksTheSame && lastMoveWasAClick && DottieScreenActionPerformer.isTextFieldFocused
+            let lastMoveChangedNothing = screenLooksTheSame && !lastClickFocusedATextBox
             // A key press can work without changing the screen (copy); any
             // other move that changed nothing isn't a step of the task, and a
             // saved step that changed nothing means the saved way went stale.
@@ -1265,11 +1320,30 @@ enum DottieJevDriver {
             // window for its address each time (the app memory review).
             let stepContext = DottieReplayContext.current()
             let frontPage = appMemory.frontPageForScreenJob(context: stepContext)
+            let clickJustMade = clickWaitingForResult
             if let clickWaitingForResult, let frontPage,
                frontPage.key != clickWaitingForResult.pageKey {
                 appMemory.noteClick(bundleIdentifier: clickWaitingForResult.bundleIdentifier, fromPageKey: clickWaitingForResult.pageKey,
                                     centerX: clickWaitingForResult.centerX, centerY: clickWaitingForResult.centerY,
                                     label: clickWaitingForResult.label, toPageKey: frontPage.key, toPageTitle: frontPage.title)
+                // It led on after wrong clicks on that page: the fix is kept with them.
+                if let missedLabels = missedClickLabelsByPageKey[clickWaitingForResult.pageKey], !missedLabels.isEmpty {
+                    appMemory.noteFix(bundleIdentifier: clickWaitingForResult.bundleIdentifier, pageKey: clickWaitingForResult.pageKey,
+                                      fixLabel: clickWaitingForResult.label, missedLabels: missedLabels)
+                    missedClickLabelsByPageKey[clickWaitingForResult.pageKey] = nil
+                }
+            }
+            // A click that changed the screen on its own page worked: an old
+            // miss of it is forgiven.
+            if let clickJustMade, !lastMoveChangedNothing, frontPage?.key == clickJustMade.pageKey {
+                appMemory.forgiveMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey, label: clickJustMade.label)
+            }
+            // A click that changed nothing is remembered on its page, so the
+            // next job doesn't make the same mistake.
+            if let clickJustMade, lastMoveChangedNothing, (frontPage?.key ?? clickJustMade.pageKey) == clickJustMade.pageKey {
+                appMemory.noteMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey,
+                                   label: clickJustMade.label, centerX: clickJustMade.centerX, centerY: clickJustMade.centerY)
+                missedClickLabelsByPageKey[clickJustMade.pageKey, default: []].append(clickJustMade.label)
             }
             clickWaitingForResult = nil
             let screenControls = readControls(onDisplay: screen.displayFrame)
@@ -1287,7 +1361,9 @@ enum DottieJevDriver {
             // name); on the first screen there's usually nothing to type into.
             if let pendingWriter = textPieceWriter,
                stepNumber >= 2 || screenControls.contains(where: { $0.kind == "text box" }) || DottieScreenActionPerformer.isTextFieldFocused {
-                textPieces = DottieJevTextPieces.merged(requestTextPieces, await pendingWriter.value)
+                let written = await pendingWriter.value
+                textPieces = DottieJevTextPieces.merged(requestTextPieces, written.pieces)
+                formBoxes = written.formBoxes
                 textPieceWriter = nil
             }
 
@@ -1300,13 +1376,36 @@ enum DottieJevDriver {
                     frontSiteHost: stepContext.siteHost, frontAppName: stepContext.appName
                 ) {
                 case .move(let savedMove):
+                    let savedMoveTypes: Bool
+                    switch savedMove {
+                    case .typeText, .typeIntoField: savedMoveTypes = true
+                    default: savedMoveTypes = false
+                    }
+                    // Never typed from memory into a password box.
+                    if savedMoveTypes, DottieScreenActionPerformer.isFocusedFieldSecure {
+                        dropSavedTask(activeReplay.problemWithCurrentStep("a password box was selected", now: Date()),
+                                      reason: "a password box was selected")
+                        break
+                    }
                     activeReplay.advance()
                     pathReplay = activeReplay
                     runStats.replayedSteps += 1
-                    actions.progress(stepNumber, "doing \"\(activeReplay.task.name)\" from memory, step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count)")
-                    DottieLog.notice("🗂️ Did step \(public: activeReplay.nextStepIndex) of a saved task without asking Jev")
+                    if pathReplayIsRoundRecipe {
+                        actions.progress(stepNumber, "\(activeReplay.task.name), step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count) the way round 1 went")
+                        DottieLog.notice("🔁 Did step \(public: activeReplay.nextStepIndex) of \(activeReplay.task.name) from round 1 without asking Jev")
+                    } else {
+                        actions.progress(stepNumber, "doing \"\(activeReplay.task.name)\" from memory, step \(activeReplay.nextStepIndex) of \(activeReplay.task.steps.count)")
+                        DottieLog.notice("🗂️ Did step \(public: activeReplay.nextStepIndex) of a saved task without asking Jev")
+                    }
                     await perform(savedMove, screen: screen, stepNumber: stepNumber, taskText: taskText, movesSoFar: movesSoFar, actions: actions,
                                   frontSiteHost: stepContext.siteHost, hostsOpenedByThisJob: hostsOpenedByThisJob)
+                    // A later round typed into a box that stayed empty: the
+                    // typing went nowhere, so the rest of the round is Jev's.
+                    if pathReplayIsRoundRecipe, savedMoveTypes,
+                       DottieRoundReplayPlan.typingWentNowhere(focusedFieldValue: DottieScreenActionPerformer.focusedTextFieldValue) {
+                        dropSavedTask(activeReplay.problemWithStepJustDone("the box stayed empty after typing", now: Date()),
+                                      reason: "the box stayed empty after typing")
+                    }
                     if let openedHost = DottieJevDriverPlan.openedHost(of: savedMove) { hostsOpenedByThisJob.insert(openedHost) }
                     noteDone(savedMove)
                     record(savedMove, context: stepContext)
@@ -1373,6 +1472,39 @@ enum DottieJevDriver {
                 await waitForScreenToSettle(opensSomethingNew: move.opensSomethingNew)
                 continue
             }
+            // A form whose boxes and values are known: two or more of them on
+            // screen are typed now, one after another, without asking Jev.
+            // Round 1 only: later rounds replay these steps with their own details.
+            if heldMouse == nil, jobMemory.currentRound == 1, pathReplay?.isDone ?? true, !formBoxes.isEmpty {
+                let boxesToFill = DottieFormFillPlan.boxesToFill(formBoxes: formBoxes, screenControls: screenControls,
+                                                                 alreadyFilledLabels: filledFormBoxLabels)
+                if !boxesToFill.isEmpty {
+                    actions.progress(stepNumber, "filling in \(boxesToFill.count) boxes")
+                    DottieLog.notice("📝 Filling \(public: boxesToFill.count) form boxes at once without asking Jev")
+                    var lastFilledMove: DottieJevDriverPlan.Move?
+                    for boxToFill in boxesToFill {
+                        filledFormBoxLabels.insert(DottieAppMemoryPlan.comparableWords(boxToFill.box.label))
+                        let fillMove = DottieJevDriverPlan.Move.typeIntoField(
+                            fieldLabel: boxToFill.control.label, centerX: boxToFill.control.centerX, centerY: boxToFill.control.centerY,
+                            text: boxToFill.box.value, pressesReturn: false
+                        )
+                        let filled = await fillFormBox(boxToFill, screen: screen, stepNumber: stepNumber, actions: actions)
+                        // A password box got selected: Jev takes it from here.
+                        guard filled else { break }
+                        runStats.formBoxesFilled += 1
+                        noteDone(fillMove)
+                        record(fillMove, context: stepContext)
+                        lastFilledMove = fillMove
+                    }
+                    if let lastFilledMove {
+                        lastMove = lastFilledMove
+                        previousScreenThumbnail = screenKey
+                        lastMoveSignature = lastFilledMove.signature
+                        await waitForScreenToSettle(opensSomethingNew: false)
+                        continue
+                    }
+                }
+            }
             let alreadyTriedSignatures = (triedSignaturesByScreen[screenKey] ?? [])
                 .union(openedSignaturesThisRound).union(failedSignaturesThisRound)
             let frontSiteHost = stepContext.siteHost
@@ -1397,7 +1529,11 @@ enum DottieJevDriver {
                 isBrowserInFront: DottieBrowser.isBrowser(bundleIdentifier: frontAppBundleIdentifier),
                 frontAppBundleIdentifier: frontAppBundleIdentifier
             )
-            let options = knownPage.map { DottieAppMemoryPlan.optionsNotingRememberedClicks(builtOptions, on: $0) } ?? builtOptions
+            // Remembered clicks say what they opened; past misses are struck
+            // off or say what worked instead.
+            let options = knownPage.map {
+                DottieAppMemoryPlan.optionsNotingMisses(DottieAppMemoryPlan.optionsNotingRememberedClicks(builtOptions, on: $0), on: $0, now: Date())
+            } ?? builtOptions
             // The advisor steps in before Jev only when this step needs it: the
             // job is stuck, the user just said something, a time shows on
             // screen, or a moment the advisor's brief named is here.
@@ -1488,6 +1624,13 @@ enum DottieJevDriver {
                     if DottieJevDriverPlan.lastMoveFailed(answer, screenChangedAfterMove: !lastMoveChangedNothing) {
                         failedStepChecksInARow += 1
                         failedSignaturesThisRound.insert(checkedMove.signature)
+                        // A click that changed the screen but didn't work, on
+                        // the same page, is a miss to remember too.
+                        if let clickJustMade, !lastMoveChangedNothing, frontPage?.key == clickJustMade.pageKey {
+                            appMemory.noteMiss(bundleIdentifier: clickJustMade.bundleIdentifier, pageKey: clickJustMade.pageKey,
+                                               label: clickJustMade.label, centerX: clickJustMade.centerX, centerY: clickJustMade.centerY)
+                            missedClickLabelsByPageKey[clickJustMade.pageKey, default: []].append(clickJustMade.label)
+                        }
                         openedSignaturesThisRound.remove(checkedMove.signature)
                         if lastRecordedMoveSignature == checkedMove.signature {
                             recording.dropLastStep()
@@ -1558,6 +1701,7 @@ enum DottieJevDriver {
                 if jobMemory.currentRound == 1 { keepFinishedTask() }
                 jobMemory.finishRound()
                 advisor.startRound()
+                startRoundFromRoundOne()
                 triedSignaturesByScreen = [:]
                 movesWithoutChange = 0
                 labelsClickedFromMemory = []
@@ -1599,7 +1743,7 @@ enum DottieJevDriver {
                    DottieScreenSettle.shouldDropStaleMove(
                        targetRegionChanged: await targetRegionChanged(
                            around: aimedPoint, pickedOn: screen.image,
-                           wakesHoverControls: heldMouse == nil && DottieBrowser.isBrowser(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+                           wakesHoverControls: heldMouse == nil && DottieScreenSettle.showsControlsOnlyOnHover(siteHost: frontSiteHost)
                        ),
                        staleMovesDroppedInARow: staleMovesDroppedInARow
                    ) {
@@ -1717,7 +1861,7 @@ enum DottieJevDriver {
     /// pressed keys before a video had loaded (Wasee's tests, 27 Nov).
     private static func waitForScreenToSettle(opensSomethingNew: Bool) async {
         let startedAt = Date()
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.firstLookDelaySeconds * 1_000_000_000))
         var lastThumbnail: [UInt8]?
         var matchingLooksInARow = 0
         while !Task.isCancelled {
@@ -1733,7 +1877,7 @@ enum DottieJevDriver {
             }
             if DottieScreenSettle.isSettled(matchingLooksInARow: matchingLooksInARow, pageLoad: pageLoad) { return }
             lastThumbnail = lookThumbnail
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.secondsBetweenLooks * 1_000_000_000))
         }
     }
 
@@ -1743,7 +1887,7 @@ enum DottieJevDriver {
         var lastThumbnail: [UInt8]?
         var matchingLooksInARow = 0
         while Date().timeIntervalSince(startedAt) < maximumSeconds, !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(DottieScreenSettle.secondsBetweenLooks * 1_000_000_000))
             guard let look = await DottieDisplayCapture.captureActiveDisplay(maximumDimension: 320) else { return }
             let lookThumbnail = thumbnail(of: look.image)
             if let lastThumbnail, DottieJevDriverPlan.isSameScreen(lastThumbnail, lookThumbnail) {
@@ -1801,7 +1945,7 @@ enum DottieJevDriver {
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
         // The controls fade in: give them a moment before the screenshot.
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        try? await Task.sleep(nanoseconds: 80_000_000)
     }
 
     /// Whether the spot a move aims at looks different now from the
@@ -1832,6 +1976,24 @@ enum DottieJevDriver {
             return true
         }
         return didDraw ? pixels : []
+    }
+
+    /// Types one form box: clicks it, replaces whatever it held, types the
+    /// value. False when a password box got selected (nothing is typed).
+    private static func fillFormBox(_ boxToFill: DottieFormFillPlan.BoxToFill, screen: DottieDisplayCapture.Screenshot,
+                                    stepNumber: Int, actions: Actions) async -> Bool {
+        let control = boxToFill.control
+        await actions.click(screen.globalPoint(normalizedX: control.centerX, normalizedY: control.centerY), control.label, 1, false, screen, stepNumber)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        if DottieScreenActionPerformer.isFocusedFieldSecure { return false }
+        // A box that already holds something (an edit form) is replaced, not added to.
+        if let currentValue = DottieScreenActionPerformer.focusedTextFieldValue,
+           !currentValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            DottieScreenActionPerformer.press(keyCombination: "cmd+a")
+        }
+        actions.progress(stepNumber, "typing \(control.label)")
+        await DottieScreenActionPerformer.type(boxToFill.box.value)
+        return true
     }
 
     private static func perform(_ move: DottieJevDriverPlan.Move, screen: DottieDisplayCapture.Screenshot, stepNumber: Int, taskText: String, movesSoFar: [String], actions: Actions,

@@ -66,6 +66,16 @@ enum DottieScreenJobHintPlan {
 
     /// Whether something the user said while a job runs guides that job,
     /// rather than stopping it or asking about something else.
+    /// While a screen job waits on a question, the user's next words are
+    /// the answer (Wasee, 28 Nov: an answer to the job's question became a
+    /// new job queued behind it), unless they say to stop.
+    static func isAnswerToWaitingQuestion(_ text: String) -> Bool {
+        let lowercasedText = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lowercasedText.isEmpty, lowercasedText.count <= 1000 else { return false }
+        let paddedText = " " + lowercasedText.replacingOccurrences(of: #"[^a-z0-9' ]"#, with: " ", options: .regularExpression) + " "
+        return !stoppingPhrases.contains(where: { paddedText.hasPrefix(" \($0) ") })
+    }
+
     static func isGuidance(_ text: String) -> Bool {
         let lowercasedText = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard lowercasedText.count >= 4, lowercasedText.count <= maximumHintCharacters else { return false }
